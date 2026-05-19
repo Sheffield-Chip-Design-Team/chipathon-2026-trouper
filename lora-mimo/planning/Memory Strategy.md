@@ -34,13 +34,15 @@ Linker/runtime rule:
 
 ### Post-extraction timing verification
 
-**Post-layout extraction simulations are required for both SRAM types before RTL sign-off.**
+**Parasitic-extracted SPICE simulations are required for both SRAM types. No verified 3.3 V timing exists for either macro — do not treat the 2-cycle multicycle path as confirmed until extraction is complete.**
 
-- **`gf180mcu_fd_ip_sram__sram512x8m8wm1` (DSP SRAMs, "5V Green" macro operated at 3.3 V):** The 55.6 ns minimum cycle time figure is from the datasheet characterisation at 3.3 V. Post-extraction sim must confirm actual access time and cycle time at 3.3 V, 32 MHz, worst-case process corner (slow-slow) and temperature (+85 °C). If extracted propagation delay shows tCYC > 62.5 ns (i.e. the 2-cycle budget is violated), the Frontend Buffer Controller access protocol must move to 3 cycles per byte, which halves the R=32 slack to zero.
+> **Action item:** Assign parasitic-extracted SPICE simulation of both SRAM macros at 3.3 V, SS corner, −40 °C (worst-case cold for CMOS Vth). This is a blocking prerequisite for sign-off on the SDC multicycle path constraints.
 
-- **`gf180mcu_ocd_ip_sram__sram1024x8m8wm1` (CPU unified SRAM, experimental macro):** No datasheet characterisation exists for this macro. Post-extraction sim is the only basis for a confirmed cycle time at 3.3 V. The 2-cycle multicycle path on the PicoRV32 AHB-Lite bus is assumed to be sufficient; if extracted delay shows tCYC > 62.5 ns, a 3-cycle path is needed and the firmware loop timing budget must be recalculated.
+- **`gf180mcu_fd_ip_sram__sram512x8m8wm1` (DSP SRAMs, 5V macro operated at 3.3 V):** The `ip/gf180mcu_fd_ip_sram` submodule specs characterise this macro at 4.5 V and 5.5 V only. Worst-case Tcyc from those specs is **11.89 ns at SS/4.5 V/−40 °C**. No 3.3 V data exists. Operating below the rated supply degrades timing; the degree of derating at 3.3 V is unknown without extraction. At 4–5× derating the Tcyc would be roughly 48–60 ns — within the 62.5 ns two-cycle budget, but with little margin at the pessimistic end. **Two cycles is the current assumption; extraction must confirm tCYC ≤ 62.5 ns at 3.3 V.** If violated, the Frontend Buffer Controller must move to 3 cycles per byte, which brings R=32 (1 MS/s debug mode) SRAM utilisation to 75% — tight but workable; all production sample rates remain well within budget.
 
-Both simulations must be run at slow-slow corner, 1.62 V (minimum supply), and +85 °C to establish worst-case timing.
+- **`gf180mcu_ocd_ip_sram__sram1024x8m8wm1` (CPU unified SRAM, 3.3 V experimental macro):** The `ip/gf180mcu_ocd_ip_sram` submodule contains spec files, but they are **byte-for-byte identical to the `fd_ip_sram` 5V specs** (4.5 V / 5.5 V corners). No independent 3.3 V characterisation has been performed. This macro is a native 3.3 V design, so its intrinsic timing at 3.3 V is expected to be comparable to the `fd` macro at its rated 4.5 V supply — suggesting a worst-case Tcyc in the 12–20 ns range — but this is not confirmed. The 2-cycle multicycle path on the PicoRV32 AHB-Lite bus is therefore assumed rather than verified; extraction is required before the constraint is locked.
+
+Both simulations must be run at slow-slow corner, 3.3 V supply, and −40 °C (cold Vth worst case for CMOS). Also run at +85 °C to bound the full operating envelope. Results determine whether 2-cycle or 3-cycle paths are needed, and whether the 32 MHz clock target can be held.
 
 ---
 
@@ -48,7 +50,7 @@ Both simulations must be run at slow-slow corner, 1.62 V (minimum supply), and +
 
 **The core logic supply is 3.3 V.** The current memory plan intentionally uses a **mixed SRAM library strategy**: official GF `gf180mcu_fd_ip_sram` macros for the DSP/frontend buffer, and experimental `gf180mcu_ocd_ip_sram` macros for the CPU unified SRAM. All selected macros are intended to run at 3.3 V. Running the core at 3.3 V places all logic and all SRAMs on the same rail, eliminating any need for level shifters at SRAM interfaces. It also allows `VDD_CORE` and `VDD_IO` to share a supply (both 3.3 V), simplifying the board power tree.
 
-3.3 V standard cells have shorter propagation delay than 1.8 V equivalents (higher overdrive current), so timing closure at 32 MHz is expected to be straightforward for the combinational logic. The SRAM macros have a minimum cycle time of **55.6 ns** (~18 MHz) at 3.3 V — this is an intrinsic macro limit, not a voltage issue. AHB-Lite accesses to IMEM/DMEM therefore require a 2-cycle multi-cycle path constraint in the timing flow; PicoRV32's `mem_valid`/`mem_ready` handshake handles this naturally without a separate divided clock.
+3.3 V standard cells have shorter propagation delay than 1.8 V equivalents (higher overdrive current), so timing closure at 32 MHz is expected to be straightforward for the combinational logic. **SRAM cycle time at 3.3 V has not been characterised for either macro** — see the post-extraction timing verification section above. AHB-Lite accesses to IMEM/DMEM are provisioned with a 2-cycle multi-cycle path constraint in the timing flow pending extraction results; PicoRV32's `mem_valid`/`mem_ready` handshake handles variable-latency memory naturally, so extending to 3 cycles requires only an SDC change and a firmware timing re-check.
 
 ### SRAM macro source
 
@@ -76,13 +78,13 @@ The Frontend Buffer SRAMs (SRAM0, SRAM1) are in the real-time acquisition critic
 
 The `gf180mcu_fd_ip_sram__sram512x8m8wm1` macro size exactly matches the required 2-channel × 128-sample rolling window at 8-bit storage. No level shifters are required — core logic and SRAM share the 3.3 V rail.
 
-The 55.6 ns SRAM cycle time requires **2 clock cycles per byte access** at 32 MHz (2 × 31.25 ns = 62.5 ns > 55.6 ns). No divided clock is needed — the Frontend Buffer Controller FSM holds each address stable for 2 cycles before advancing, exactly as the CPU SRAM multicycle path does. Each sample time requires 4 reads + 4 writes = 16 cycles total (was previously documented as 8 cycles — that was incorrect). At the primary sample rates (R=256/128/64) the SRAM utilisation is 6–25%; at R=32 (1 MS/s debug mode) it is 50%, leaving 16 idle cycles per sample for control logic.
+**2 clock cycles per byte access** at 32 MHz (budget = 62.5 ns) is the current assumption, pending parasitic-extracted SPICE confirmation — see post-extraction timing verification above. No divided clock is needed — the Frontend Buffer Controller FSM holds each address stable for 2 cycles before advancing. Each sample time requires 4 reads + 4 writes = 16 cycles total (was previously documented as 8 cycles — that was incorrect). At the primary sample rates (R=256/128/64) the SRAM utilisation is 6–25%; at R=32 (1 MS/s debug mode) it is 50%, leaving 16 idle cycles per sample for control logic. If extraction shows 3 cycles are needed, R=32 utilisation rises to 75% — workable but worth noting.
 
 ### CPU SRAMs — experimental macros at 3.3 V
 
 IMEM and DMEM are not in any sample-rate path. Their only hard timing requirement is AHB-Lite read latency (≤ 2 cycles at 32 MHz). Both macros are reloaded or re-initialised on every power cycle: IMEM is written by the host over SPI before CPU reset is released; DMEM is initialised by the C runtime at boot. A partial fault is therefore recoverable without hardware modification (see Fallback strategy below).
 
-The 55.6 ns SRAM cycle time requires a **2-cycle multi-cycle path** on all IMEM/DMEM accesses at 32 MHz. PicoRV32's `mem_valid`/`mem_ready` handshake already supports variable-latency memory — the SRAM controller holds `mem_ready` low for one extra cycle on every access. No divided clock is needed. This must be captured as a multicycle path exception in the SDC constraints file.
+A **2-cycle multi-cycle path** on all IMEM/DMEM accesses at 32 MHz is provisioned pending extraction — see post-extraction timing verification above. PicoRV32's `mem_valid`/`mem_ready` handshake already supports variable-latency memory; the SRAM controller holds `mem_ready` low for one extra cycle on every access. No divided clock is needed. This must be captured as a multicycle path exception in the SDC constraints file, and the cycle count must be updated once extraction results are available.
 
 **Firmware footprint target: ≤4 KB total (text + data + stack).** PicoRV32 firmware handles: W vector computation from Z_j (MRC weights), TDD antenna switching, AGC loop, SX1257 init via SPI master. These tasks are simple fixed-point loops with no OS, no floating point, and minimal data structures. The unified 4 KB SRAM provides comfortable headroom for both code and data.
 
