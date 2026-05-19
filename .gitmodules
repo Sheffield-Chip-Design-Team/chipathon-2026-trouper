@@ -1,0 +1,9 @@
+[submodule "lora-mimo/ip/gf180mcu_ocd_ip_sram"]
+	path = lora-mimo/ip/gf180mcu_ocd_ip_sram
+	url = https://github.com/RTimothyEdwards/gf180mcu_ocd_ip_sram
+[submodule "lora-mimo/ip/gf180mcu_fd_ip_sram"]
+	path = lora-mimo/ip/gf180mcu_fd_ip_sram
+	url = https://github.com/google/globalfoundries-pdk-ip-gf180mcu_fd_ip_sram
+[submodule "lora-mimo/ip/picorv32"]
+	path = lora-mimo/ip/picorv32
+	url = https://github.com/YosysHQ/picorv32
