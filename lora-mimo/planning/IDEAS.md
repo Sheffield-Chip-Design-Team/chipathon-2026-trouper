@@ -41,65 +41,6 @@ A 4–8 sample deep FIFO would be needed to absorb burst overlap. This is why th
 
 ## In Progress
 
-### Capture handoff implementation risks
-
-**Status:** Planning contract drafted; RTL details still need closure.
-
-**Current handoff contract:**
-
-```
-capture_start = timing_ref - M/2
-capture_len   = 9M samples per antenna
-fft_start     = timing_ref
-```
-
-`timing_ref` is the estimated preamble-start sample index in `iq_valid` units. `sc_lock` arms capture; `capture_window_ready` triggers FFT.
-
-**Risks / decisions to close:**
-
-1. **`timing_ref` ambiguity:** Every block must treat `timing_ref` as the preamble-start estimate, not the Schmidl-Cox lock-edge sample counter. If one block treats it as the lock edge, FFT reads roughly three symbols late.
-
-2. **Early packet after RX enable:** The 0.5M pre-guard assumes the circular capture buffer has already been running for at least `M/2` samples. Add a `capture_warm` state, or ignore SC locks until the capture buffer has enough valid history.
-
-3. **Modulo arithmetic:** `timing_ref`, `capture_start`, and `capture_end` should use the free-running unsigned sample counter modulo 2^32. Window-ready comparisons must use wrap-safe subtraction, not ordinary greater-than comparisons.
-
-4. **Capture freeze policy:** Freezing the 288 KB capture window prevents overwrite while FFT or host readback consumes it. Define the policy for a second packet during `fft_active` or host readback: drop, overwrite after timeout, ping-pong capture, or set overflow.
-
-5. **Post-guard latency:** Waiting for the 0.5M post-guard delays FFT start. With a two-hit SC detector:
-
-   ```
-   capture_end = timing_ref + 8.5M - 1
-   lock_edge   ~= timing_ref + 3M - 1
-   wait        ~= 5.5M samples
-   ```
-
-   At SF12/BW125k this is about 180 ms. Decide whether this guarded capture path is diagnostic-only or live acquisition.
-
-   Candidate split:
-
-   ```
-   fft_ready_at             = timing_ref + 8M - 1
-   diagnostic_capture_done  = timing_ref + 8.5M - 1
-   ```
-
-   This preserves the guard without delaying RCTSL/FFT.
-
-6. **LoRa preamble structure:** Stage 4 assumes 8 usable upchirps starting at `timing_ref`. Confirm behavior for configured preamble lengths, sync words, SFD/downchirps, and late SC lock cases.
-
-7. **SRAM macro practicality:** A single 544 KB OpenRAM macro may be awkward. Prefer planning for split macros: 256 KB FFT staging plus 288 KB capture, with address decode logic. If optional 2× padded diagnostics are dropped, live FFT staging falls to 128 KB.
-
-8. **Address packing:** Docs mix sample indices and byte addresses. RTL needs one explicit layout, for example:
-
-   ```
-   byte_addr = 0x40000 + sample_offset * NR * 2 + ant * 2 + iq_byte
-   ```
-
-   Capture writer, FFT reader, and SPI readback must all use the same packing.
-
-9. **SC threshold and false locks:** The notebook uses a lower active threshold at low SNR, while the hardware reset/default threshold is 0.90. Verify detection probability and false-lock rate across CFO, interference, gain saturation, and multi-antenna fades.
-
-10. **FFT timing budget:** Live SF12 RCTSL should use the unpadded 32,768-point transform. Target completion for all 4 antennas is ≤30 ms at 32 MHz, with ≤15 ms as the stretch goal. Use at least 2 butterfly lanes; 4 lanes are preferred if SRAM banking and area allow.
-
 ### Sub-bin CFO interpolation for coherent preamble averaging
 
 **Status:** Analysis done in notebook (CFO sensitivity cell after Stage 4), implementation pending.

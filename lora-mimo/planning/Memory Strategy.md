@@ -337,8 +337,7 @@ Power-on
     │      ├─ One fails  → NR=2 degraded mode
     │      └─ Both fail  → bypass mode only
     │
-    ├─ IMEM BIST → IMEM_BIST_PASS, IMEM_BIST_FAIL_ADDR/BITS
-    ├─ DMEM BIST → DMEM_BIST_PASS, DMEM_BIST_FAIL_ADDR/BITS
+    ├─ CPU SRAM BIST (March C-) → SRAM_BIST_PASS, SRAM_BIST_FAIL_ADDR/BITS, per-bank PASS flags
     │
     └─ Host reads BIST results via SPI
            │
@@ -373,18 +372,9 @@ These registers live in the main register map at `0x10000` (AHB-Lite peripheral 
 | `SRAM1_BAD_SAMPLE_COUNT` | TBD | R | Number of bad sample-time addresses in SRAM1 |
 | `SRAM1_ZERO_SUB_n_ADDR` (n=0..15) | TBD | R/W | SRAM1 zero-sub CAM entry n: sample-time address (7-bit) |
 | `SRAM1_ZERO_SUB_n_VALID` (n=0..15) | TBD | R/W | SRAM1 zero-sub CAM entry n enable |
-| `IMEM_BIST_PASS` | TBD | R | IMEM March C- result (1=pass) |
-| `IMEM_BIST_FAIL_ADDR` | TBD | R | First failing IMEM word address |
-| `IMEM_BIST_FAIL_BITS` | TBD | R | Failing bit mask at `IMEM_BIST_FAIL_ADDR` |
-| `DMEM_BIST_PASS` | TBD | R | DMEM March C- result (1=pass) |
-| `DMEM_BIST_FAIL_ADDR` | TBD | R | First failing DMEM word address |
-| `DMEM_BIST_FAIL_BITS` | TBD | R | Failing bit mask at `DMEM_BIST_FAIL_ADDR` |
-| `IMEM_OVERLAY_n_ADDR` (n=0..15) | TBD | R/W | IMEM overlay CAM entry n address |
-| `IMEM_OVERLAY_n_DATA` (n=0..15) | TBD | R/W | IMEM overlay CAM entry n data word |
-| `IMEM_OVERLAY_n_VALID` (n=0..15) | TBD | R/W | IMEM overlay CAM entry n enable |
-| `DMEM_OVERLAY_n_ADDR` (n=0..15) | TBD | R/W | DMEM overlay CAM entry n address |
-| `DMEM_OVERLAY_n_DATA` (n=0..15) | TBD | R/W | DMEM overlay CAM entry n data word |
-| `DMEM_OVERLAY_n_VALID` (n=0..15) | TBD | R/W | DMEM overlay CAM entry n enable |
+| `SRAM_OVERLAY_n_ADDR` (n=0..15) | TBD | R/W | CPU SRAM overlay CAM entry n word address |
+| `SRAM_OVERLAY_n_DATA` (n=0..15) | TBD | R/W | CPU SRAM overlay CAM entry n data word |
+| `SRAM_OVERLAY_n_VALID` (n=0..15) | TBD | R/W | CPU SRAM overlay CAM entry n enable |
 | `BIST_CTRL` | TBD | R/W | Bit 0: re-run BIST; Bit 1: BIST in progress (R) |
 
 ---
@@ -394,4 +384,4 @@ These registers live in the main register map at `0x10000` (AHB-Lite peripheral 
 - [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md) — DSP SRAM BIST and degraded-mode policy
 - [PicoRV32 Integration](blocks/PicoRV32%20Integration.md) — CPU SRAM BIST, overlay, boot sequence
 - [Register Map](Register%20Map.md) — BIST and overlay register addresses (TBD)
-- [SWD TAP](blocks/SWD%20TAP.md) — diagnostic complement to overlay
+- [JTAG TAP](blocks/JTAG%20TAP.md) — diagnostic complement to overlay

@@ -36,39 +36,37 @@ Deliverables:
 - Python reference model for SC and energy estimation
 - correlation against live hardware captured from the [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
 
-## 2. Preamble FFT / Channel Estimation
+## 2. Training Accumulator & Weight Generation
 
 Blocks:
 
-- `FFT Engine`
-- `Baseband SRAM`
-- capture handoff logic in `Packet Control FSM`
+- `Training Accumulator`
+- `Weight Generation`
+- `Frontend Buffer Controller`
 
 Subblocks:
 
-- capture read / address generation
-- dechirp / pre-rotation front end
-- pass controller / acquisition FSM
-- FFT datapath core
-- working-buffer / SRAM interface
-- peak search / magnitude engine
-- RCTSL interpolation block
-- channel accumulation block
-- result / status export
+- preamble window and symbol boundary tracker
+- per-branch cross-correlation accumulator (`Z_j`)
+- reference-branch energy accumulation (`E_ref`)
+- `training_done` signal and handoff to weight generation
+- hardware weight path: SHIFT → CALIBRATE → COMPUTE → SCALE
+- software weight path: IRQ-driven `W_SHADOW` / `W_COMMIT`
+- `W_HW` readback registers for firmware EMA smoothing
+- `WGT_AUTO_COMMIT` policy and safe-switch gating
 
 Responsibilities:
 
-- implement the 3-pass acquisition path
-- preserve the guarded capture window
-- keep live FFT timing within budget
-- export `eps_sub`, `H`, and debug status
-- resolve the SRAM macro path early if the GF180MCU macro flow needs work
+- deliver `Z_j` and `training_done` after `sc_lock`
+- ensure hardware weight commit within ~50 cycles of `training_done`
+- keep `W_HW` readable for firmware at all times
+- handle late SC lock and reduced preamble accumulation cases
 
 Deliverables:
 
-- live unpadded RCTSL path
-- capture/readback path
-- Python-to-RTL comparison for `eps_sub` and `H`
+- stable `Z_j` and per-packet channel estimate
+- hardware weight commit timing verified against SF6 payload window
+- Python-to-RTL comparison for `Z_j`, `W_HW`, and EMA smoothing
 
 ## 3. Live Combining / Remodulation
 
