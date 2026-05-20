@@ -37,11 +37,10 @@ def test_fs_out():
 def test_integer_samples_per_symbol():
     for bw in [125e3, 250e3, 500e3]:
         r = decimation_ratio(bw)
-        fs_out = FS_ADC / r
         for sf in range(6, 13):
-            m = fs_out / bw * (2 ** sf)
-            assert m == int(m), \
-                f"BW={bw/1e3}kHz SF{sf}: non-integer M={m}"
+            dec = SigmaDeltaDecimator(ratio=r)
+            m = dec.samples_per_symbol(sf)
+            assert m == 2 ** sf, f"BW={bw/1e3}kHz SF{sf}: expected {2**sf}, got {m}"
     print("PASS  samples/symbol = 2^SF (integer) for all BW × SF combinations")
 
 
@@ -60,9 +59,10 @@ def test_1ms_mode():
     dec = SigmaDeltaDecimator(ratio=RATIO_1MS)
     assert dec.fs_out == 1e6, f"Expected 1 MS/s, got {dec.fs_out}"
     assert RATIO_1MS == 32
+    assert dec.samples_per_symbol(7) == 256
     out = dec.process(make_bitstream(RATIO_1MS * CYCLES))
     assert len(out) == CYCLES
-    print("PASS  R=32 → 1 MS/s (decim_ratio=3): fs_out and output length correct")
+    print("PASS  R=32 → 1 MS/s (decim_ratio=3): fs_out, output length, and 2× oversampling correct")
 
 
 if __name__ == "__main__":

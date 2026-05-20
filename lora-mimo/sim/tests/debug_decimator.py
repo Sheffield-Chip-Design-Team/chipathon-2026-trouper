@@ -1,18 +1,19 @@
 import numpy as np
-from sim.models.lora import modulate, demodulate
-from sim.models.decimator import SigmaDeltaDecimator
+from sim.models.decimator import SigmaDeltaDecimator, decimation_ratio
 
-def test_decimator_preservation():
-    M = 128
-    b = 42
-    s = modulate(b, M)
-    
-    # Decimator with ratio 1 (should just pass through)
-    decimator = SigmaDeltaDecimator(ratio=1, output_bits=16)
-    s_dec = decimator.process(s)
-    
-    b_rx = demodulate(s_dec)
-    print(f"TX: {b}, RX: {b_rx}")
+
+def debug_decimator_dc():
+    """
+    Quick CIC+FIR smoke test using the one input the model should preserve:
+    a constant 1-bit stream. This avoids the invalid assumption that ratio=1
+    behaves like a transparent LoRa symbol path.
+    """
+    ratio = decimation_ratio(500e3)
+    decimator = SigmaDeltaDecimator(ratio=ratio, output_bits=16)
+    bitstream = np.ones(ratio * 128, dtype=np.complex128)
+    s_dec = decimator.process(bitstream)
+    print(f"ratio={ratio}, mean={s_dec[10:].real.mean():.4f}, "
+          f"min={s_dec.real.min():.4f}, max={s_dec.real.max():.4f}")
 
 if __name__ == "__main__":
-    test_decimator_preservation()
+    debug_decimator_dc()

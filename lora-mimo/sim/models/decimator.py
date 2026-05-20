@@ -1,7 +1,14 @@
 import numpy as np
+from scipy.signal import lfilter
 from .fixed import quantize
 
 FS_ADC = 32e6  # Hz — SX1257 CLK_OUT
+
+# 9-tap symmetric CIC compensation FIR (Q1.14 coefficients, scale = 2^14 = 16384)
+# Least-squares fit of 1/sinc^3(F) over F in [0, 0.45·fs_out]; valid for all R>=32
+# Combined CIC+FIR passband ripple: 0.50 dB p-p
+FIR_COEFFS = np.array([470, -1111, 2623, -7089, 26862, -7089, 2623, -1111, 470],
+                      dtype=np.float64) / 16384.0
 
 # 1× Nyquist decimation ratios for each LoRa BW.
 # samples/symbol = 2^SF exactly at all BWs (integer M).
@@ -13,6 +20,7 @@ RATIO_FOR_BW = {
     250e3: 128,
     500e3:  64,
 }
+BW_FOR_RATIO = {ratio: bw for bw, ratio in RATIO_FOR_BW.items()}
 
 # R=32 → 1 MS/s: 2× oversampled 500 kHz BW (decim_ratio=3).
 # Not a 1× Nyquist mode — use for debug / wideband capture only.
@@ -73,16 +81,31 @@ class SigmaDeltaDecimator:
     def nyquist_hz(self) -> float:
         return self.fs_out / 2
 
-    def samples_per_symbol(self, sf: int) -> int:
+    def samples_per_symbol(self, sf: int, bw_hz: float | None = None) -> int:
         """
         Samples per LoRa symbol at this decimation ratio.
-        For 1× oversampling: samples/symbol = 2^SF (always integer).
+
+        For the supported 1× Nyquist modes, samples/symbol = 2^SF exactly.
+        The R=32 debug mode is the 2× oversampled 500 kHz path, so it returns
+        2 * 2^SF. Custom ratios must supply bw_hz explicitly.
         """
-        return int(self.fs_out / (FS_ADC / self.ratio / (2 ** sf / (FS_ADC / self.ratio))))
+        if sf < 0:
+            raise ValueError("sf must be >= 0")
+
+        if bw_hz is None:
+            if self.ratio == RATIO_1MS:
+                bw_hz = 500e3
+            else:
+                bw_hz = BW_FOR_RATIO.get(self.ratio)
+
+        if bw_hz is None or bw_hz <= 0:
+            raise ValueError("bw_hz must be provided for custom decimation ratios")
+
+        return int(round((self.fs_out / bw_hz) * (2 ** sf)))
 
     def process(self, rx_bitstream: np.ndarray) -> np.ndarray:
         """
-        Decimate the input bitstream (32 MS/s) via CIC + normalisation.
+        Decimate the input bitstream (32 MS/s) via CIC + FIR + normalisation.
 
         Parameters
         ----------
@@ -102,12 +125,21 @@ class SigmaDeltaDecimator:
         # Downsample
         decimated = acc[self.ratio - 1 :: self.ratio][:n_output]
 
+        # Comb stages at output rate: (1 - z^-1)^N cancels integrator drift,
+        # leaving an N-fold cascaded moving-average response.
+        for _ in range(self.stages):
+            decimated = np.diff(decimated, prepend=0.0 + 0.0j)
+
         # Normalise: remove CIC gain R^N
         normalized = decimated / (self.ratio ** self.stages)
 
+        # 9-tap FIR compensation filter (causal, matches RTL serialised MAC)
+        re_fir = lfilter(FIR_COEFFS, 1.0, normalized.real)
+        im_fir = lfilter(FIR_COEFFS, 1.0, normalized.imag)
+
         # Quantise to output_bits
         scale = 2 ** (self.output_bits - 1)
-        re = quantize(normalized.real * scale, self.output_bits) / scale
-        im = quantize(normalized.imag * scale, self.output_bits) / scale
+        re = quantize(re_fir * scale, self.output_bits) / scale
+        im = quantize(im_fir * scale, self.output_bits) / scale
 
         return re + 1j * im
