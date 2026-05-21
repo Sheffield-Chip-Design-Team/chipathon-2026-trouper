@@ -48,7 +48,7 @@ This implements the timing-handoff guard:
 | `we` | in | 1 | Write enable |
 | `req` | in | 2 | Request from [0]=FFT, [1]=PicoRV32 |
 | `grant` | out | 2 | Grant to each requester |
-| `clk` | in | — | 32 MHz |
+| `clk` | in | — | 16 MHz |
 | `rst_n` | in | — | — |
 
 Word-addressed access: byte address >> 2 = word address. Byte enables optional (add if needed for partial writes).

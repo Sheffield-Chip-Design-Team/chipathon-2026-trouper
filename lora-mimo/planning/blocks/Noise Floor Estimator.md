@@ -40,7 +40,7 @@ This follows the same shadow/commit/source-select pattern as the weight generati
 
 | Port | Direction | Width | Rate | Description |
 |---|---|---|---|---|
-| `clk_32m` | in | — | 32 MHz | Master clock |
+| `clk_16m` | in | — | 16 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset. Clears EMA accumulators and `sigma2_valid`. |
 | `energy_sum_j[3:0]` | in | 4×32 unsigned | per symbol | Σ\|x\|² per branch per symbol window from Energy Measurement |
 | `noise_sample_en` | in | 1 | per symbol | Pulse from Packet Control FSM: IDLE, !sc_lock, all energy < NOISE_THRESH |
@@ -96,7 +96,7 @@ The EMA accumulator is `W_SIGMA + NOISE_ALPHA_SHIFT_MAX = 23` bits to hold the f
 
 One-cycle pipeline latency from `noise_sample_en` to `sigma2_hw_j` update (the output registers on the clock edge following the pulse). `sigma2_active_j` is a combinational mux of `sigma2_hw_j` and `sigma2_sw_active_j`.
 
-`noise_sample_en` pulses once per symbol window (64–128 cycles at SF6–SF7 at 32 MHz). There is no timing pressure on the update path.
+`noise_sample_en` pulses once per symbol window (32–64 cycles at SF6–SF7 at 16 MHz). There is no timing pressure on the update path.
 
 ---
 

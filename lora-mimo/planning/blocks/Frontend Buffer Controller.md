@@ -30,11 +30,11 @@ Dedicated frontend SRAM is always the primary acquisition buffer. Any use of CPU
 
 ## Sample Rate
 
-The decimator delivers samples at **125 kS/s** (32 MHz / R=256, 1× Nyquist — see [ΣΔ Decimator](ΣΔ%20Decimator.md)). At SF6 (M = 2^6 = 64 samples/symbol) and 32 MHz system clock:
+The decimator delivers samples at **125 kS/s** (32 MHz / R=256, 1× Nyquist — see [ΣΔ Decimator](ΣΔ%20Decimator.md)). At SF6 (M = 2^6 = 64 samples/symbol) and 16 MHz system clock:
 
 ```
-iq_valid period  = 32 MHz / 125 kS/s = 256 clock cycles
-Symbol period    = 64 × 256 = 16,384 cycles = 512 µs
+iq_valid period  = 16 MHz / 125 kS/s = 128 clock cycles
+Symbol period    = 64 × 128 = 8,192 cycles = 512 µs
 Buffer depth     = 128 sample times = 2 symbols  (8-bit storage)
 ```
 
@@ -191,44 +191,44 @@ Both SRAM0 and SRAM1 use the same `wr_ptr` and physical address sequence, access
 
 ## Access Protocol
 
-The `gf180mcu_fd_ip_sram__sram512x8m8wm1` is **single-port** with a minimum cycle time of **55.6 ns** at 3.3 V. At 32 MHz (31.25 ns/cycle) this means each byte access must occupy **2 clock cycles** — a new address may not be issued until the current one has been held for 2 cycles.
+The `gf180mcu_fd_ip_sram__sram512x8m8wm1` is **single-port** with a minimum cycle time of **55.6 ns** at 3.3 V. At 16 MHz (62.5 ns/cycle), the 55.6 ns minimum fits within a **single clock cycle** — no multi-cycle hold required. Each byte address may advance on the following cycle.
 
-Each sample time requires 4 byte reads (delayed sample) then 4 byte writes (current sample) — **16 cycles total**, both macros in lockstep. **No divided clock is needed;** the FSM holds the address stable for 2 cycles before advancing. This mirrors the CPU SRAM multicycle path approach.
+Each sample time requires 4 byte reads (delayed sample) then 4 byte writes (current sample) — **8 cycles total**, both macros in lockstep.
 
 **Timing margin per decimation ratio:**
 
 | R | f_s | Cycles/iq_valid | SRAM active | Slack | Utilisation |
 |---|---|---|---|---|---|
-| 256 | 125 kHz | 256 | 16 | 238 | 6% |
-| 128 | 250 kHz | 128 | 16 | 110 | 13% |
-| 64 | 500 kHz | 64 | 16 | 46 | 25% |
-| 32 | 1 MS/s | 32 | 16 | **~14** | **50%** |
+| 256 | 125 kHz | 128 | 8 | ~118 | 6% |
+| 128 | 250 kHz | 64 | 8 | ~54 | 13% |
+| 64 | 500 kHz | 32 | 8 | ~22 | 27% |
+| 32 | 1 MS/s | 16 | 8 | **~6** | **56%** |
 
 Slack = cycles/iq_valid − SRAM active − ~2 cycles of pipelined control overhead (sample latch, address compute, wr_ptr increment).
 
-**R=32 constraint (debug/wideband capture mode only):** The binding requirement is that the write phase completes before the next `iq_valid`, 32 cycles later. With writes finishing at cycle 16, there are 16 cycles before the next `iq_valid` — this holds, but the RTL must pipeline address computation and overlap the `wr_ptr` increment with the final write cycle. A naively sequential implementation that serialises latch → compute → read → write → increment would exceed 32 cycles. R=32 is not a production mode; this constraint must be noted in the RTL implementation plan.
+**R=32 constraint (debug/wideband capture mode only):** At 1 MS/s, `iq_valid` arrives every 16 cycles and the SRAM sequence consumes 8 cycles, leaving ~6 cycles of slack. The RTL must pipeline address computation and overlap the `wr_ptr` increment with the final write cycle — a naively sequential implementation would exceed the 16-cycle budget. R=32 is not a production mode; this constraint must be noted in the RTL implementation plan.
 
 ### Per-sample-time sequence (D = M, read-before-write)
 
 With D = M, read and write target the **same** base address. Reads run first so the M-old delayed data is captured before it is overwritten.
 
 ```
-Cycle 0:    iq_valid asserts. Latch incoming raw sample.
-              base = 4 * (wr_ptr mod M)    // same address for read and write
+Cycle 0:  iq_valid asserts. Latch incoming raw sample.
+            base = 4 * (wr_ptr mod M)    // same address for read and write
 
-Cycles 1–2:  Read byte 0 (CEN=0, GWEN=1, A=base+0; hold 2 cycles).
-               Q → ch0_I_del (SRAM0), ch2_I_del (SRAM1). Latch at cycle 2.
-Cycles 3–4:  Read byte 1 (A=base+1). Q → ch0_Q_del, ch2_Q_del.
-Cycles 5–6:  Read byte 2 (A=base+2). Q → ch1_I_del, ch3_I_del.
-Cycles 7–8:  Read byte 3 (A=base+3). Q → ch1_Q_del, ch3_Q_del.
-               All 4 delayed bytes captured and held for SC correlator.
+Cycle 1:  Read byte 0 (CEN=0, GWEN=1, A=base+0; 1-cycle access at 16 MHz).
+            Q → ch0_I_del (SRAM0), ch2_I_del (SRAM1). Latch at cycle 1.
+Cycle 2:  Read byte 1 (A=base+1). Q → ch0_Q_del, ch2_Q_del.
+Cycle 3:  Read byte 2 (A=base+2). Q → ch1_I_del, ch3_I_del.
+Cycle 4:  Read byte 3 (A=base+3). Q → ch1_Q_del, ch3_Q_del.
+            All 4 delayed bytes captured and held for SC correlator.
 
-Cycles 9–10:  Write byte 0 (CEN=0, GWEN=0, A=base+0, D=ch0_I_cur / ch2_I_cur).
-Cycles 11–12: Write byte 1 (A=base+1, D=ch0_Q_cur / ch2_Q_cur).
-Cycles 13–14: Write byte 2 (A=base+2, D=ch1_I_cur / ch3_I_cur).
-Cycles 15–16: Write byte 3 (A=base+3, D=ch1_Q_cur / ch3_Q_cur).
+Cycle 5:  Write byte 0 (CEN=0, GWEN=0, A=base+0, D=ch0_I_cur / ch2_I_cur).
+Cycle 6:  Write byte 1 (A=base+1, D=ch0_Q_cur / ch2_Q_cur).
+Cycle 7:  Write byte 2 (A=base+2, D=ch1_I_cur / ch3_I_cur).
+Cycle 8:  Write byte 3 (A=base+3, D=ch1_Q_cur / ch3_Q_cur).
 
-Cycles 17+:  CEN=1 (macros idle) until next iq_valid.
+Cycles 9+: CEN=1 (macros idle) until next iq_valid.
 ```
 
 **Why read-before-write is safe.** The SRAM outputs the value stored at `base` during cycles 1–8 — this is the sample written M `iq_valid` periods ago (the desired delayed sample). The write on cycles 9–16 then replaces it with the current sample. No data hazard.
@@ -294,7 +294,7 @@ Provides host-readable access to the frozen SRAM contents after `sc_lock`. Captu
 After `sc_lock` and before the payload starts, the window available for a dump is approximately **5M samples** at SF7/125 kHz = **5 ms**. A full dual-macro dump takes:
 
 ```
-2 macros × 512 bytes × 2 cycles/byte = 2048 cycles = 64 µs
+2 macros × 512 bytes × 1 cycle/byte = 1024 cycles = 64 µs
 ```
 
 The SPI readback is the bottleneck: 1024 bytes at 10 MHz SPI = ~820 µs. Both fit within the 5 ms window.
@@ -318,7 +318,7 @@ The dump controller exposes a register-mapped byte-access interface. The host co
 4. Repeat with incremented address.
 ```
 
-Step 3 is always safe: the minimum SPI transaction time (at 10 MHz, 16-bit transaction ≈ 1.6 µs) is much longer than the 2-cycle SRAM read (62.5 ns). No polling of `SRAM_DUMP_DONE` is needed for single-byte reads; it is useful only if the host pipelines address writes.
+Step 3 is always safe: the minimum SPI transaction time (at 10 MHz, 16-bit transaction ≈ 1.6 µs) is much longer than the 1-cycle SRAM read (62.5 ns). No polling of `SRAM_DUMP_DONE` is needed for single-byte reads; it is useful only if the host pipelines address writes.
 
 ### Full dump sequence
 
@@ -357,9 +357,9 @@ k = 0..127 gives 128 sample times = 1 full symbol of rolling history across all 
 
 | Port | Dir | Width | Description |
 |---|---|---|---|
-| `clk` | in | 1 | 32 MHz system clock |
+| `clk` | in | 1 | 16 MHz system clock |
 | `rst_n` | in | 1 | Active-low reset |
-| `iq_valid` | in | 1 | Decimator sample strobe — 125 kS/s, one pulse per 256 clock cycles at SF6 |
+| `iq_valid` | in | 1 | Decimator sample strobe — 125 kS/s, one pulse per 128 clock cycles at SF6 |
 | `sample_in[NR][8]` | in | 4×8 | Incoming DC-removed samples, 8-bit signed I+Q per component |
 | `sf` | in | 3 | Spreading factor; sets M = 2^SF |
 | `sc_lock` | in | 1 | From SC detector; triggers freeze |

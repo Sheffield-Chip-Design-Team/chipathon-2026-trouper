@@ -764,6 +764,76 @@ FFT of re-modulator output at each BW setting, overlaid with the LoRaWAN spectra
 
 ---
 
+## Implementation / Physical Design
+
+### Two-clock architecture: 32 MHz front-end, 16 MHz DSP
+
+The ASIC uses two clock domains derived from a single 32 MHz GPS TCXO input:
+
+| Domain | Clock | Blocks |
+|--------|-------|--------|
+| `clk_32m` | 32 MHz (primary input) | CIC decimator, ΣΔ re-modulator, SX1302 SPI interface |
+| `clk_16m` | 16 MHz (/2 toggle FF) | mrc_combiner, weight_gen, training_accum, FFT engine, PicoRV32 |
+
+**Rationale:** The decimator and remod are tightly coupled to the 32 MHz front-end sample clock (SX1257 sigma-delta bitstream in, remod bitstream out). All DSP arithmetic blocks have multi-cycle paths that fail at 32 MHz SS 3.3V corners but close with margin at 16 MHz. Running the DSP at 16 MHz halves dynamic power in the dominant logic area.
+
+**CDC boundaries:**
+- Decimator → DSP (32 MHz → 16 MHz): one new sample every 256 clk_32m cycles (125 kS/s). 2-FF synchroniser or registered valid/ready handshake.
+- DSP → remod (16 MHz → 32 MHz): one new sample every 128 clk_16m cycles. Same.
+
+Both crossings have data valid rates far below either clock — no FIFO needed.
+
+**SDC:** `create_generated_clock` on the /2 net. `set_max_delay -datapath_only` on both CDC directions to bound analysis without over-constraining.  
+File: `rtl-test/top_two_domain.sdc`
+
+**RTL change:** `mrc_combiner` clock port renamed `clk_32m` → `clk_16m`. Pipeline register added between final accumulation (state 4) and saturation (state 5). Output latency 5 → 6 cycles at 16 MHz.
+
+### Switch CPU IMEM/DMEM to ocd_ip_sram for single-cycle access
+
+The `gf180mcu_fd_ip_sram` macros (64–512×8) have a behavioural model with `Tcyc = 55.6 ns` and `ta = 45 ns` (conservative SS-corner values applied uniformly). These require a 2-cycle multicycle path at 32 MHz.
+
+The `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` at 3.3V has corner-aware timing:
+
+| Corner | Tcyc | ta (CLK→Q) |
+|--------|------|------------|
+| TT 3.3V 25°C | 9.2 ns | 6.2 ns |
+| SS worst | 18.3 ns | 7.2 ns |
+
+Both fit comfortably within one 31.25 ns period — **single-cycle access is viable at all 3.3V corners**. Four `ocd_ip_sram` 1024×8 macros in parallel give a 1 kB × 32-bit IMEM/DMEM. This would eliminate the 2-cycle stall penalty on every PicoRV32 fetch and load/store, potentially doubling CPU throughput on memory-bound code.
+
+**Action:** check if the ocd_ip_sram macro is available for this shuttle and whether four-wide instantiation fits the floorplan.
+
+### Timing corner policy — check with PD team
+
+STA on `dut_nr_outer` (16×32 multiply, the tightest path in `weight_gen`) at GF180MCU 3.3V shows:
+
+| Corner | Slack |
+|--------|-------|
+| TT 3.3V 25°C | +8.3 ns (MET) |
+| SS 3.0V −40°C | +0.4 ns (barely MET) |
+| SS 3.0V 25°C | ~−5 ns (VIOLATED, interpolated) |
+| SS 3.0V 125°C | −12.7 ns (VIOLATED) |
+
+`mrc_combiner` (dual 16×8 MAC + accumulator + saturation in one cycle) is tighter still — violates even TT 3.3V by −0.774 ns and SS 3.0V/125°C by −32.8 ns. Needs at least one pipeline register between multiply and accumulate/saturate stages regardless of clock target.
+
+**Question for PD team:** Does the chipathon / IDEAS flow sign off on TT-only, or is full SS closure required? If SS is required, options are:
+- Lower clock to ~27 MHz (closes SS/25°C for `dut_nr_outer`; `mrc_combiner` still needs pipelining)
+- Pipeline the critical paths over 2 cycles (keeps 32 MHz, 1-cycle latency added)
+
+**ws-run1 benchmark (GF180MCU shuttle, 2024):**
+
+| Design | Clock |
+|--------|-------|
+| RISCBoy-180 (game console SoC) | 50 MHz |
+| Chess move generator | 25 MHz |
+| FazyRV 1–2 bit variants | 20–25 MHz |
+| FazyRV 8-bit wide | ~15 MHz |
+| Racquet / FazyRV top-level SoC | 10 MHz |
+
+Range: 10–50 MHz. CPU-heavy designs ran 10 MHz; 20–25 MHz is the safe unpipelined zone for non-trivial datapaths at GF180MCU 3.3V SS. Our 32 MHz target is achievable but requires pipelining of multi-cycle arithmetic paths to close at SS corners.
+
+---
+
 ## Multi-Packet / System Level
 
 ### EMA smoothing gain

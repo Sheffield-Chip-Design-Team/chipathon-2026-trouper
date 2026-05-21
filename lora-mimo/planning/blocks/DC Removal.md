@@ -36,7 +36,7 @@ I and Q channels use the same shift parameter and identical update structure. Ea
 | `raw_i[3:0]` | in | 4×W_IN signed | f_s | I from decimator (W_IN = 12 or 16, TBD) |
 | `raw_q[3:0]` | in | 4×W_IN signed | f_s | Q from decimator |
 | `raw_valid` | in | 1 | f_s | Sample strobe from decimator |
-| `clk_32m` | in | — | 32 MHz | Master clock |
+| `clk_16m` | in | — | 16 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset. Clears dc_est to 0. |
 | `dc_alpha_shift` | in | 4 | static | Right-shift applied to error term. Reset value: `DC_ALPHA_SHIFT` parameter. |
 | `dc_bypass` | in | 1 | static | 1 = bypass filter (out = raw). Useful for bring-up diagnostics. |

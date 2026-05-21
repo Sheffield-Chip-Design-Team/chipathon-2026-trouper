@@ -93,7 +93,7 @@ All R values are power-of-2. Samples/symbol = 2^SF for all SF and all BW setting
 | Decimation ratios ($R$) | 256, 128, 64, 32 | Power-of-2; R=32 gives 1 MS/s (2× oversampled 500 kHz BW) |
 | CIC stages ($N$) | 3 | Balanced for area and stopband rejection |
 | Accumulator width | 25-bit | `1 + N·log₂(R_max) = 1 + 3·8 = 25` bits; covers all four ratios |
-| FIR taps | 32 | Single coefficient set — droop shape identical for all R values |
+| FIR taps | 9 (symmetric Type-I, 5 unique) | Single coefficient set — see FIR Compensation note below |
 | Output width | 8-bit signed | Convergent rounding from 25-bit CIC accumulator; normalisation right-shift 17 (R=256), 14 (R=128), 11 (R=64), 8 (R=32) |
 
 ---
@@ -120,13 +120,26 @@ R is set by `decim_ratio` (selects counter width 8, 7, or 6 bits for R=256/128/6
 Normalisation right-shift: `shift = N·log₂(R) − (W_out − 1)` with W_out = 8.
 * R=256 → shift 17; R=128 → shift 14; R=64 → shift 11; R=32 → shift 8.
 
-**FIR Compensation.** The normalised CIC droop is sinc³(f/fs_out). Since all three R values use 1× oversampling, the band edge always sits at Nyquist (f/fs_out = 0.5). One coefficient set corrects all three ratios.
+**FIR Compensation.** The normalised CIC response is:
+
+```
+H_norm(f_norm) = (sin(π·f_norm) / (R·sin(π·f_norm/R)))^N
+```
+
+For large R (≥64), `sin(π·f/R) ≈ π·f/R` across the passband, so the response collapses to sinc³(f/fs_out) — identical normalised droop for all large-R ratios, one coefficient set corrects all three (R=256, 128, 64).
+
+**R=32 (1 MS/s) is an exception.** The sinc approximation is less accurate at R=32; the true normalised passband droop differs slightly from sinc³. The current fixed coefficients (tuned for large R) will under-compensate the droop at 1 MS/s. For LoRa's chirp modulation this is expected to be acceptable (residual droop ≪ 1 dB across the LoRa BW), but it has not been verified. See open item below.
 
 **Clock domain.** Entire block runs at 32 MHz. `iq_valid` rate changes with `decim_ratio`. All downstream DSP must use `iq_valid` as their clock enable.
 
 ---
 
 ## Open items
+
+**FIR compensation accuracy at R=32 (1 MS/s).** The fixed 9-tap compensator coefficients are accurate for R≥64 (sinc³ approximation holds). At R=32 the normalised CIC droop shape diverges slightly, leaving a residual passband ripple. Two options:
+
+1. **Accept as-is** — simulate the R=32 path to measure actual droop error. If < ~0.5 dB across the LoRa passband, no change needed given LoRa's chirp resilience.
+2. **Per-rate coefficient ROM** — store 4 × 5 = 20 Q1.14 values (symmetric filter, 5 unique coefficients per ratio) indexed by `decim_ratio`. Negligible area (320 bits of registers). Required if option 1 shows meaningful sensitivity loss.
 
 **Confirm 8-bit precision with GNU Radio.** The 8-bit output width decision is based on Python simulations (sim/tests/test_bitwidth_sweep.py) showing no BER degradation vs float across SF=7, NR=4, SNR=-10 to +10 dB. Confidence is high (~90%) but the simulation uses an idealised channel model and assumed SC lock timing. Before RTL freeze, validate with GNU Radio (gr-lora or gr-lora_sdr) using:
 - Real or simulated LoRa packets decoded end-to-end through the 8-bit quantised chain

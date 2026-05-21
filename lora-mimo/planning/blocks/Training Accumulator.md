@@ -211,7 +211,7 @@ The reference branch samples `rx_r[n]` must be buffered for one clock cycle so a
 
 | Port | Dir | Width | Rate | Description |
 |---|---|---|---|---|
-| `clk` | in | 1 | 32 MHz | System clock |
+| `clk` | in | 1 | 16 MHz | System clock |
 | `rst_n` | in | 1 | — | Active-low reset |
 | `iq_valid` | in | 1 | f_s | Sample strobe |
 | `raw_j[3:0]` | in | 4×2×8 | f_s | DC-removed samples from decimator (8-bit signed per I/Q component) |

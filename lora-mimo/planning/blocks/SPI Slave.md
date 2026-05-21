@@ -24,11 +24,11 @@ SPI slave providing the RPi (SPI0 CS1) with:
 
 | Port | Direction | Width | Description |
 | --- | --- | --- | --- |
-| `HOST_CS` | in | 1 | Active-low chip select from RPi SPI0 CS1 |
-| `SPI_SCK` | in | 1 | SPI clock from RPi (up to 10 MHz) |
-| `SPI_MOSI` | in | 1 | Data from RPi |
-| `SPI_MISO` | out | 1 | Data to RPi |
-| `clk_32m` | in | — | Master clock (register domain) |
+| `HOST_CS` | in | 1 | Active-low chip select from RPi SPI0 CE1 |
+| `HOST_SCK` | in | 1 | SPI clock from RPi (up to 10 MHz) |
+| `HOST_MOSI` | in | 1 | Data from RPi |
+| `HOST_MISO` | out | 1 | Data to RPi |
+| `clk_16m` | in | — | Master clock (register domain) |
 | `rst_n` | in | — | Active-low reset |
 | `reg_addr` | out | 8 | Decoded register address |
 | `reg_wdata` | out | 8 | Write data |
@@ -188,11 +188,11 @@ sequenceDiagram
 
 ## Implementation notes
 
-**Clock domain crossing.** SPI clock (up to 10 MHz) and 32 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into `clk_32m` with a small handshake or async FIFO. Do not try to edge-detect `SPI_SCK` directly inside the 32 MHz domain.
+**Clock domain crossing.** SPI clock (up to 10 MHz) and 16 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into `clk_16m` with a small handshake or async FIFO. Do not try to edge-detect `HOST_SCK` directly inside the 16 MHz domain.
 
-**MISO tristate.** Drive `SPI_MISO` only when `HOST_CS` is asserted. Tristate (or drive low) otherwise — the line is shared with the ASIC's SPI master output via the shared SPI bus.
+**MISO drive.** Drive `HOST_MISO` only when `HOST_CS` is asserted. Tristate (or drive low) otherwise. In the full split pinout `HOST_MISO` is a dedicated pad so no bus contention with the SX1257 master path is possible. In condensed PCB-bridge mode the output-enable rule still applies, and the SX1257 SPI master must additionally mask its `SX_MOSI`/`SX_SCK` output enables while `HOST_CS` is low — see condensed SPI option in [Pinout](../Pinout.md).
 
-**Bus conflict.** `HOST_CS` and `SX1257_CS[3:0]` are mutually exclusive by design (RPi and PicoRV32 never assert simultaneously). No explicit arbitration needed if firmware protocol is respected.
+**Bus conflict.** In the full split pinout the host slave pads (`HOST_MOSI`, `HOST_SCK`, `HOST_CS`) and the SX1257 master pads (`SX_MOSI`, `SX_SCK`) are electrically independent — no contention is possible regardless of timing. In condensed mode, firmware must not initiate an SX1257 transaction while `HOST_CS` is asserted and vice versa.
 
 **Register bank.** Thin address decoder maps `reg_addr` to the register file. Writable registers latch `reg_wdata` on `reg_we`. Read-only registers ignore `reg_we`.
 

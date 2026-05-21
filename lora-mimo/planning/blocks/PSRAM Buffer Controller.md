@@ -209,10 +209,10 @@ When `PSRAM_EN=0` or `JTAG_OVERRIDE=1`: SIO[0–3] are tristated and JTAG operat
 
 Selected by `PSRAM_CTRL[1]` (`SAMPLE_WIDTH`):
 
-| Mode | Per-sample storage | Bandwidth at 1 MS/s | Max f_s |
-|---|---|---|---|
-| 0 — 16-bit I/Q (default) | 4ch × 16b = 8 bytes | 64 Mb/s | 1 MS/s |
-| 1 — 32-bit I/Q | 4ch × 32b = 16 bytes | 128 Mb/s | 500 kS/s |
+| Mode | Per-sample storage | Bandwidth at 1 MS/s | Max f_s (same-packet) | Max f_s (next-packet) |
+|---|---|---|---|---|
+| 0 — 16-bit I/Q (default) | 4ch × 16b = 8 bytes | 64 Mb/s | 500 kS/s | 1 MS/s |
+| 1 — 32-bit I/Q | 4ch × 32b = 16 bytes | 128 Mb/s | 500 kS/s | 500 kS/s |
 
 In 16-bit mode the decimator output is right-shifted by `(W_IN − 8)` before serialisation. With ~6 dB AGC headroom, effective SQNR ≈ 44 dB — well above the LoRa noise floor at any SF.
 
@@ -268,6 +268,23 @@ Command `0xEB`, 6 wait cycles, max 133 MHz:
 | tACLK — CLK to output delay | ≤ 5.5 ns | Sample on falling edge ✓ |
 
 At 32 MHz the device is running at 24% of its rated speed. No special signal integrity precautions beyond the datasheet-recommended 1 µF + 100 nF decoupling on VDD.
+
+### 16 MHz system clock — 1 MS/s constraint
+
+The system clock is 16 MHz (PicoRV32 confirmed at 16 MHz; PSRAM controller follows). At 16 MHz, a QPI write takes 24 cycles = **1.5 µs**. At 1 MS/s, `iq_valid` arrives every 16 cycles — write cannot complete before the next sample. **PSRAM same-packet replay is not achievable at 1 MS/s with a 16 MHz controller clock.**
+
+Consequence by mode:
+
+| f_s | iq_valid period (16 MHz) | Write cycles | Same-packet PSRAM | Next-packet |
+|---|---|---|---|---|
+| 125 kHz | 128 | 24 | ✓ | ✓ |
+| 250 kHz | 64 | 24 | ✓ | ✓ |
+| 500 kHz | 32 | 24 | ✓ tight | ✓ |
+| **1 MS/s** | **16** | **24** | **✗ — write overflow** | **✓ (no PSRAM capture needed)** |
+
+At 1 MS/s the system falls back to next-packet weight application: weights computed from packet N are committed before packet N+1 begins. PSRAM is not used for capture at this rate. This is acceptable since 1 MS/s is a debug/wideband mode, not the production path.
+
+If same-packet replay is ever required at 1 MS/s, the PSRAM SCK could be sourced directly from the board-level 32 MHz clock (independent of the 16 MHz system clock), keeping the controller logic at 16 MHz but running the SPI interface at 32 MHz. This would require a CDC on CE# and the write-complete strobe, and is not in scope for the baseline design.
 
 ### Refresh
 

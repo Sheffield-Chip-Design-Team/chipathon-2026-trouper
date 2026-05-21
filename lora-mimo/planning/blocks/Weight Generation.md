@@ -187,7 +187,7 @@ WRITE          — write W_HW[3:0]; if WGT_AUTO_COMMIT: write W_SHADOW, pulse W_
 IDLE
 ```
 
-Total hardware latency from `training_done` to `W_COMMIT`: ~30–40 cycles (~1.25 µs at 32 MHz). Removal of the CORDIC path reduces the COMPUTE state from ~20–30 cycles to ~15 cycles (MRC reciprocal only).
+Total hardware latency from `training_done` to `W_COMMIT`: ~30–40 cycles (~2.0–2.5 µs at 16 MHz). Removal of the CORDIC path reduces the COMPUTE state from ~20–30 cycles to ~15 cycles (MRC reciprocal only).
 
 ---
 
@@ -263,20 +263,20 @@ Hardware FSM: ~50 cycles → W_COMMIT
 Payload starts at timing_ref + 12.25M samples
 ```
 
-At SF6 (M=64, f_s = 125 kS/s, 256 clock cycles/sample):
+At SF6 (M=64, f_s = 125 kS/s, 128 clock cycles/sample at 16 MHz):
 
 ```
-training_done    =  timing_ref + 512 samples   =  131,072 cycles from preamble start
-payload start    =  timing_ref + 784 samples   =  200,704 cycles from preamble start
+training_done    =  timing_ref + 512 samples   =  65,536 cycles from preamble start
+payload start    =  timing_ref + 784 samples   =  100,352 cycles from preamble start
 
-commit window    =  272 samples  =  69,632 cycles  ≈  2.2 ms
+commit window    =  272 samples  =  34,816 cycles  ≈  2.2 ms
 ```
 
 | Path | Latency | Margin (cycles) | Margin (×) |
 |---|---|---|---|
-| Hardware FSM | ~40 cycles | 69,592 | ~1,740× |
-| Software (PicoRV32) | ~1,000–5,000 cycles | ~65,000–69,000 | ~14× |
-| Demo (16-symbol preamble) | ~5,000 cycles | ~200,000 | ~40× |
+| Hardware FSM | ~40 cycles | ~34,776 | ~869× |
+| Software (PicoRV32) | ~1,000–5,000 cycles | ~30,000–34,000 | ~7–30× |
+| Demo (16-symbol preamble) | ~5,000 cycles | ~100,000 | ~20× |
 
 The margin is the time available for weight computation in the baseline live path. Missing the window is not fatal: the Packet Control FSM sets `W_MISSED_PACKET` and activates the new weights at the next `safe_switch` (next packet idle boundary). The combiner uses the previous packet's weights or bypass for the current payload.
 
@@ -288,7 +288,7 @@ When `PSRAM_EN = 1`, this live-payload deadline is replaced by the replay deadli
 
 | Port | Dir | Width | Rate | Description |
 |---|---|---|---|---|
-| `clk` | in | 1 | 32 MHz | System clock |
+| `clk` | in | 1 | 16 MHz | System clock |
 | `rst_n` | in | 1 | — | Active-low reset |
 | `training_done` | in | 1 | per packet | Trigger from training accumulator |
 | `Z_j[3:0]` | in | 4×2×64 | per packet | Complex channel estimates (int64 I+Q per branch) |

@@ -157,7 +157,7 @@ Unlike the baseline live path, PSRAM replay does **not** require `W_commit` befo
 
 | Port | Dir | Width | Description |
 |---|---|---|---|
-| `clk` | in | 1 | 32 MHz system clock |
+| `clk` | in | 1 | 16 MHz system clock |
 | `rst_n` | in | 1 | Active-low reset |
 | `iq_valid` | in | 1 | Decimated sample strobe |
 | `sample_count` | in | 32 | Free-running iq_valid sample counter |

@@ -34,7 +34,7 @@ The RPi sets `JTAG_EN=1` via SPI and reconfigures its `TCK_IRQ` GPIO as input be
 | `gpio_out` | in | 3 | GPIO_0–2 output values (used when `JTAG_EN=0` and corresponding `gpio_dir` bit = 1) |
 | `gpio_dir` | in | 3 | GPIO_0–2 direction: 1=output, 0=input (used when `JTAG_EN=0`) |
 | `gpio_in` | out | 3 | GPIO_0–2 sampled input values (valid when `JTAG_EN=0` and `gpio_dir` bit = 0) |
-| `clk_32m` | in | — | Master clock (synchroniser) |
+| `clk_16m` | in | — | Master clock (synchroniser) |
 | `rst_n` | in | — | Active-low reset |
 | `cpu_halt` | out | 1 | Halts PicoRV32 for register access |
 | `cpu_reg_addr` | out | 5 | Register file address for read/write |
@@ -66,7 +66,7 @@ Abstract `Access Register` and program buffer execution are the key bring-up saf
 
 **TDO bidir.** `TDO_GPIO2` requires a bidirectional pad. In debug mode output-enable is always asserted (TAP always drives TDO). In normal mode output-enable follows `gpio_dir[2]`.
 
-**Clock domain.** TCK is asynchronous to 32 MHz. Synchronise TCK edges into the 32 MHz domain with a 2-FF synchroniser; alternatively implement the TAP FSM entirely in the TCK domain with handshake to PicoRV32.
+**Clock domain.** TCK is asynchronous to 16 MHz. Synchronise TCK edges into the 16 MHz domain with a 2-FF synchroniser; alternatively implement the TAP FSM entirely in the TCK domain with handshake to PicoRV32.
 
 **Post-silicon priority.** This block is a bring-up aid, not in the functional data path. If gate budget is tight, drop it and rely on SPI register readback for debugging.
 

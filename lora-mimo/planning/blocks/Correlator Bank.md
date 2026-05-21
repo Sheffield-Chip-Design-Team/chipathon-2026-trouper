@@ -55,12 +55,12 @@ where `current_j[n]` and `delayed_j[n]` are the current and M-sample-delayed raw
 
 ## Sample Rate and Timing
 
-The decimator delivers samples at **f_s = 125 kS/s** (32 MHz / R=256, 1× Nyquist). At the 32 MHz system clock:
+The decimator delivers samples at **f_s = 125 kS/s** (32 MHz / R=256, 1× Nyquist). At the 16 MHz system clock:
 
 ```
-iq_valid period  = 256 clock cycles  (32 MHz / 125 kS/s)
-SF6  M = 64 samples/symbol → symbol period = 64 × 256 = 16,384 cycles = 512 µs
-SF7  M = 128                → symbol period = 32,768 cycles = 1,024 µs
+iq_valid period  = 128 clock cycles  (16 MHz / 125 kS/s)
+SF6  M = 64 samples/symbol → symbol period = 64 × 128 = 8,192 cycles = 512 µs
+SF7  M = 128                → symbol period = 16,384 cycles = 1,024 µs
 ```
 
 Samples/symbol = 2^SF exactly for all SF (integer M — no fractional timing). All accumulator window lengths, timing back-calculations, and pointer arithmetic use integer M.
