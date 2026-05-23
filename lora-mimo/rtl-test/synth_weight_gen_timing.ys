@@ -1,0 +1,19 @@
+# synth_weight_gen_timing.ys — weight_gen: full tech mapping + timing netlist
+# Uses weight_gen_norecip.v which blackboxes the 256-entry recip_lut to prevent
+# ABC from hanging. The LUT path is non-critical (runs once per packet).
+# -D 31250  = 31.25 ns clock period (32 MHz target)
+
+read_verilog -sv /work/weight_gen_norecip.v
+
+hierarchy -check -top weight_gen
+
+synth -top weight_gen
+
+dfflibmap -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
+
+abc -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib -D 31250
+
+opt_clean -purge
+
+tee -o /work/out/stat_weight_gen_timing.txt stat -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
+write_verilog -noattr /work/out/netlist_weight_gen.v

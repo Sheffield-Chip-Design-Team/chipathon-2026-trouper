@@ -1,0 +1,7 @@
+create_clock -name clk_16m -period 62.5 [get_ports clk_16m]
+set_input_delay -max 2.0 -clock clk_16m [get_ports {x_i0 x_q0 x_i1 x_q1 x_i2 x_q2 x_i3 x_q3 x_valid W_re0 W_im0 W_re1 W_im1 W_re2 W_im2 W_re3 W_im3 W_valid mode bypass_ant}]
+set_input_delay -min 1.0 -clock clk_16m [get_ports {x_i0 x_q0 x_i1 x_q1 x_i2 x_q2 x_i3 x_q3 x_valid W_re0 W_im0 W_re1 W_im1 W_re2 W_im2 W_re3 W_im3 W_valid mode bypass_ant}]
+set_output_delay -max 2.0 -clock clk_16m [all_outputs]
+set_output_delay -min 0.0 -clock clk_16m [all_outputs]
+set_clock_uncertainty 0.25 [get_clocks clk_16m]
+set_false_path -from [get_ports rst_n]

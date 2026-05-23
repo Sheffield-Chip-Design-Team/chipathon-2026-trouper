@@ -52,6 +52,6 @@ All simulations are executed as modules from the project root:
   3. Schmidl-Cox trigger + energy measurement (Stage 3) — `sync.py`, `stages.py`
   4. Training accumulator — `training_accumulator.py`: `Z_j = Σ raw_j[n]·conj(chirp_ref[n mod M])`
   5. Weight computation from Z_j (MRC/EGC/SC/Bypass) — `training_accumulator.compute_weights()`
-  6. Complex combining: `y[n] = Σ_j w_j*·x_j[n]` — `receiver.nonfft_combine()`
+  6. Complex combining: `y[n] = Σ_j w_j·x_j[n]` — `receiver.nonfft_combine()` for float studies, or `receiver.nonfft_combine_rtl_int8()` to include RTL Q1.15 weights, fixed ÷2 guard shift, `COMB_POST_GAIN`, and int8 saturation; MRC weights are already conjugated by weight generation
   7. Re-modulator (Stage 8) — `converter.py`
 - **FFT path** (`receiver.estimate_channel`, `receiver.compute_weights`) is retained for reference and comparison but is not the current ASIC architecture. See `planning/DSP Flow.md` for why it was replaced.

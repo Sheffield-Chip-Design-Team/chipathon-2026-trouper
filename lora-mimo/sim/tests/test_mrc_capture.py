@@ -14,7 +14,7 @@ DSP chain per trial
 2. Training accumulator:  Z_j = Σ rx_j[n] · conj(rx_0[n])  (cross-correlation)
    using the known preamble window — isolates combining from sync errors
 3. Weight computation:  MRC weights from Z_j via WeightGenerator (hardware model)
-4. nonfft_combine: y[n] = Σ_j conj(w_j) · rx_j[n]
+4. nonfft_combine: y[n] = Σ_j w_j · rx_j[n]
 5. Dechirp → FFT → argmax per payload symbol
 6. SER vs truth symbols (decoded from original capture at native SNR)
 

@@ -196,13 +196,13 @@ See [Training Accumulator](blocks/Training%20Accumulator.md).
 
 Converts `Z_j` into combining weights `W` via a dual hardware/software path.
 
-**Hardware path (EGC/MRC, deterministic, ~50 cycles):**
+**Hardware path (SC/shift-MRC, deterministic, ~16 cycles):**
 
 ```
-SHIFT → CALIBRATE → COMPUTE (CORDIC or reciprocal) → SCALE → WRITE W_HW
+SHIFT → CALIBRATE → COMPUTE (SC metric or shared MRC shift) → SCALE → WRITE W_HW
 ```
 
-With `WGT_AUTO_COMMIT=1`, the hardware path commits weights within ~50 cycles of `training_done` — enabling same-packet weight application at SF6 (payload starts ~69,000 cycles after `training_done`).
+With `WGT_AUTO_COMMIT=1`, the hardware path commits weights within ~16 cycles of `training_done` in current RTL simulation — enabling same-packet weight application at SF6 (payload starts ~69,000 cycles after `training_done`). Exact normalized MRC remains a software/oracle option, not the hardened AUTO path.
 
 **Software path (firmware, ALMMSE / EMA smoothing):**
 

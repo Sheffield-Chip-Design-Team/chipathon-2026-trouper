@@ -4,6 +4,7 @@ from sim.models.weight_generation import (
     shift_normalise,
     apply_calibration,
     compute_weights_hw,
+    compute_exact_mrc_weights,
 )
 from sim.models.dc_removal import DCRemoval
 
@@ -13,11 +14,11 @@ from sim.models.dc_removal import DCRemoval
 # ---------------------------------------------------------------------------
 
 def test_shift_normalise_in_range():
-    Z_j = np.array([1e6 + 2e6j, -3e5 + 4e5j, 0j, 1e9 + 0j])
+    Z_j = np.array([1000 + 2000j, -300 + 400j, 0j, 12000 + 0j])
     H_j, K = shift_normalise(Z_j)
     assert K == 0
     assert np.allclose(H_j, Z_j)
-    print("PASS  shift_normalise: no shift when already in int32 range")
+    print("PASS  shift_normalise: no shift when already in Q1.15-friendly range")
 
 
 def test_shift_normalise_int64_input():
@@ -28,8 +29,8 @@ def test_shift_normalise_int64_input():
     val_large = float(2**34)
     Z_j = np.array([val_large + 0j, 0j, 0j, 0j])
     H_j, K = shift_normalise(Z_j)
-    assert K >= 3, f"Expected K>=3 for 2^34 input, got K={K}"
-    assert np.max(np.abs(H_j.real)) <= 2**31, "H_j out of int32 range after shift"
+    assert K >= 20, f"Expected K>=20 for 2^34 input, got K={K}"
+    assert np.max(np.abs(H_j.real)) <= 2**15, "H_j out of Q1.15-friendly range after shift"
     print(f"PASS  shift_normalise: 2^34 input → K={K}, max component = {np.max(np.abs(H_j.real)):.1e}")
 
 
@@ -60,11 +61,14 @@ def test_mrc_noiseless():
     Z_j = h * np.conj(h[0]) * 1000  # simulate n_acc=1000, ref=branch 0
     wgen = WeightGenerator(mode="mrc")
     w, _ = wgen.process(Z_j)
-    S = np.sum(np.abs(Z_j) ** 2)
-    w_ideal = np.conj(Z_j) / S
-    assert np.allclose(w.real, w_ideal.real, atol=2e-4), "MRC real weights mismatch"
-    assert np.allclose(w.imag, w_ideal.imag, atol=2e-4), "MRC imag weights mismatch"
-    print("PASS  WeightGenerator MRC: weights match conj(Z_j)/|Z_j|² within Q1.15 rounding")
+    for j in range(4):
+        expected_phase = -np.angle(Z_j[j])
+        actual_phase = np.angle(w[j])
+        assert abs(actual_phase - expected_phase) < 5e-3,             f"MRC phase wrong on branch {j}: expected {expected_phase:.4f}, got {actual_phase:.4f}"
+    ratios_hw = np.abs(w) / np.abs(w[0])
+    ratios_ref = np.abs(Z_j) / np.abs(Z_j[0])
+    assert np.allclose(ratios_hw, ratios_ref, atol=4e-2),         f"Shift-MRC should preserve branch ratios: got {ratios_hw}, expected {ratios_ref}"
+    print("PASS  WeightGenerator MRC: shift-MRC preserves conjugate phase and branch ratios")
 
 
 def test_egc_unit_magnitude():
@@ -126,24 +130,20 @@ def test_equal_branches_mrc():
     print("PASS  WeightGenerator MRC: equal branches → equal-magnitude weights")
 
 
-def test_mrc_eref_normalisation():
-    """E_ref normalisation gives |w_j| ≈ 1/NR ≈ 0.25 for equal unit channels."""
+def test_mrc_conservative_shift_equal_branches():
+    """Equal channels stay equal and receive 4-branch coherent-add headroom."""
     NR = 4
-    n_acc = 8 * 64   # SF6 full preamble
-    # h_j = 1 for all j, ref_sel=0 → Z_j = h_j·conj(h_0)·n_acc = n_acc
+    n_acc = 8 * 64
     Z_j = np.ones(NR, dtype=complex) * n_acc
-    # E_ref = |h_ref|^2 · n_acc = n_acc (unit channel, n_acc samples)
-    E_ref = float(n_acc)
     wgen = WeightGenerator(mode="mrc")
-    w, _ = wgen.process(Z_j, E_ref=E_ref)
-    expected = 1.0 / NR   # = 0.25
-    assert np.allclose(np.abs(w), expected, atol=2e-4), \
-        f"MRC with E_ref: expected |w_j|={expected:.4f}, got {np.abs(w)}"
-    print(f"PASS  WeightGenerator MRC+E_ref: equal unit channels → |w_j|={np.abs(w[0]):.4f} ≈ 1/NR={expected:.4f}")
+    w, _ = wgen.process(Z_j, E_ref=float(n_acc))
+    expected = (n_acc >> 2) / 2**15  # branch_headroom=2 for four enabled branches
+    assert np.allclose(np.abs(w), expected, atol=1 / 2**15),         f"Shift-MRC equal branches: expected |w_j|={expected:.6f}, got {np.abs(w)}"
+    print(f"PASS  WeightGenerator shift-MRC: equal branches -> |w_j|={np.abs(w[0]):.6f} with 4-branch headroom")
 
 
-def test_mrc_eref_vs_no_eref():
-    """With E_ref, MRC weights are O(1/NR); without, they are O(1/n_acc^2)."""
+def test_mrc_eref_ignored_by_hardware():
+    """Hardware shift-MRC does not use E_ref; exact/oracle MRC is separate."""
     NR = 4
     n_acc = 512
     Z_j = np.ones(NR, dtype=complex) * n_acc
@@ -152,14 +152,11 @@ def test_mrc_eref_vs_no_eref():
     wgen = WeightGenerator(mode="mrc")
     w_with, _ = wgen.process(Z_j, E_ref=E_ref)
     w_without, _ = wgen.process(Z_j, E_ref=None)
+    w_exact = compute_exact_mrc_weights(Z_j, E_ref=E_ref)
 
-    # With E_ref: |w_j| ≈ 0.25 — fits Q1.15
-    assert np.abs(w_with[0]) > 0.1, f"E_ref weights too small: {np.abs(w_with[0]):.6f}"
-    # Without E_ref: |w_j| ≈ 1/(NR·n_acc) — much smaller (rounds to ~0 in Q1.15)
-    assert np.abs(w_without[0]) < np.abs(w_with[0]) / 10, \
-        "Without E_ref, weights should be much smaller"
-    print(f"PASS  MRC E_ref vs no-E_ref: |w| with={np.abs(w_with[0]):.4f}, without={np.abs(w_without[0]):.6f}")
-
+    assert np.allclose(w_with, w_without), "Hardware MRC should ignore E_ref"
+    assert np.abs(w_exact[0]) > np.abs(w_with[0]) * 10,         "Exact/oracle MRC should remain distinguishable from shift-MRC"
+    print(f"PASS  MRC E_ref: hardware ignores E_ref (|w|={np.abs(w_with[0]):.6f}); exact helper gives {np.abs(w_exact[0]):.4f}")
 
 def test_int64_scale_shift_applied():
     # Verify shift_normalise fires for int64-range inputs (would overflow int32 without it)
@@ -233,8 +230,8 @@ if __name__ == "__main__":
     test_bypass_selects_lowest_enabled()
     test_disabled_antennas_zeroed()
     test_equal_branches_mrc()
-    test_mrc_eref_normalisation()
-    test_mrc_eref_vs_no_eref()
+    test_mrc_conservative_shift_equal_branches()
+    test_mrc_eref_ignored_by_hardware()
     test_int64_scale_shift_applied()
     test_dc_removal_removes_dc()
     test_dc_removal_passes_ac()

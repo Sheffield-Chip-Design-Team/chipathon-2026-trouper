@@ -6,8 +6,9 @@ Covers six experiments:
   1. BER vs SNR   — bypass / oracle / training / EGC / SC / post-detection (NR=4)
   2. NR scaling   — SER vs NR at fixed SNR for oracle and training
   3. Preamble len — oracle-training gap vs preamble_len at several SNRs
-  4. Doppler      — SER vs f_D for MRC oracle vs SC vs bypass
-  5. Hierarchical — flat NR=8 vs two-stage 2×NR=4 for oracle and training
+  4. Shift-MRC    — exact/oracle vs hardware shift-MRC under branch imbalance
+  5. Doppler      — SER vs f_D for MRC oracle vs SC vs bypass
+  6. Hierarchical — flat NR=8 vs two-stage 2×NR=4 for oracle and training
 
 Run:
     cd /path/to/chipathon-2026/lora-mimo
@@ -15,6 +16,7 @@ Run:
     python3 -m sim.sims.mimo_sweep --sweep ber
     python3 -m sim.sims.mimo_sweep --sweep nr
     python3 -m sim.sims.mimo_sweep --sweep preamble
+    python3 -m sim.sims.mimo_sweep --sweep shiftmrc
     python3 -m sim.sims.mimo_sweep --sweep doppler
     python3 -m sim.sims.mimo_sweep --sweep hierarchical
     python3 -m sim.sims.mimo_sweep -n 2000      # more trials per point
@@ -34,11 +36,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from sim.models.lora               import modulate, demodulate
 from sim.models.channel            import rayleigh_coefficients
-from sim.models.receiver           import nonfft_combine
+from sim.models.receiver           import (
+    nonfft_combine,
+    nonfft_combine_rtl_int8,
+    choose_comb_post_gain,
+    _quantize_q15_int,
+    _as_int8_pair,
+)
 from sim.models.training_accumulator import (
     training_accumulate,
     compute_weights,
 )
+from sim.models.weight_generation import compute_exact_mrc_weights
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,6 +79,17 @@ def _train_weights(rx_preamble: np.ndarray, M: int, preamble_len: int,
     Z, _, E  = training_accumulate(rx_preamble, sc_lock, timing, M,
                                    preamble_len=preamble_len)
     return compute_weights(Z, mode=mode, E_ref=E)
+
+
+def _branch_ladder_gains(NR: int, step_db: float) -> np.ndarray:
+    """
+    Deterministic branch imbalance profile.
+
+    branch 0 is strongest; each subsequent branch is attenuated by `step_db`.
+    This stresses shared-shift MRC headroom without changing branch order.
+    """
+    idx = np.arange(NR, dtype=float)
+    return 10.0 ** (-float(step_db) * idx / 20.0)
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +163,88 @@ def simulate_packet(
 
     y = nonfft_combine(rx_payload, w)
     return b_tx, demodulate(y)
+
+
+def _compare_shift_mrc_packet(
+    SF: int,
+    NR: int,
+    N0: float,
+    preamble_len: int = 8,
+    branch_step_db: float = 0.0,
+    adc_scale: float = 64.0,
+) -> dict[str, int | float | bool]:
+    """
+    One packet for the shift-MRC sweep.
+
+    This isolates the normalization choice by feeding the same training
+    estimate Z_j into both exact/oracle MRC and the hardware shift-MRC path.
+    """
+    M = 2 ** SF
+    ladder = _branch_ladder_gains(NR, branch_step_db)
+    h = rayleigh_coefficients(NR) * ladder
+
+    noise = lambda n: np.sqrt(N0 / 2) * (
+        np.random.randn(NR, n) + 1j * np.random.randn(NR, n)
+    )
+
+    chirp0 = modulate(0, M)
+    preamble = np.tile(chirp0, preamble_len)
+    rx_preamble = h[:, None] * preamble[None, :] + noise(preamble_len * M)
+
+    b_tx = np.random.randint(0, M)
+    rx_payload = h[:, None] * modulate(b_tx, M)[None, :] + noise(M)
+
+    Z, _, E_ref = training_accumulate(
+        rx_preamble,
+        2 * M,
+        0,
+        M,
+        preamble_len=preamble_len,
+    )
+
+    w_exact = compute_exact_mrc_weights(Z, E_ref=E_ref)
+    w_shift = compute_weights(Z, mode="mrc", E_ref=E_ref)
+    Z_z = Z.copy()
+    best = int(np.argmax(np.abs(Z_z)))
+    w_sc = np.zeros(NR, dtype=complex)
+    w_sc[best] = np.exp(-1j * np.angle(Z_z[best]))
+    w_bypass = np.zeros(NR, dtype=complex)
+    w_bypass[0] = 1.0
+
+    b_rx_exact = int(demodulate(nonfft_combine(rx_payload, w_exact)))
+    b_rx_shift = int(demodulate(nonfft_combine(rx_payload, w_shift)))
+    b_rx_sc = int(demodulate(nonfft_combine(rx_payload, w_sc)))
+    b_rx_bypass = int(demodulate(nonfft_combine(rx_payload, w_bypass)))
+
+    rx_payload_rtl = adc_scale * rx_payload
+    y_rtl0 = nonfft_combine_rtl_int8(rx_payload_rtl, w_shift, post_gain_shift=0)
+    comb_post_gain = choose_comb_post_gain(y_rtl0)
+
+    # Pre-saturation headroom metric: compute the raw guarded accumulator,
+    # then measure how many samples would exceed int8 before clipping.
+    x_i, x_q = _as_int8_pair(rx_payload_rtl)
+    w_re, w_im = _quantize_q15_int(w_shift)
+    acc_i = np.sum(w_re[:, None] * x_i - w_im[:, None] * x_q, axis=0)
+    acc_q = np.sum(w_re[:, None] * x_q + w_im[:, None] * x_i, axis=0)
+    raw_i = (acc_i >> 1) << int(comb_post_gain)
+    raw_q = (acc_q >> 1) << int(comb_post_gain)
+    peak = float(max(np.max(np.abs(raw_i)), np.max(np.abs(raw_q))))
+    sat = float(max(0.0, np.ceil(np.log2(max(peak / 127.0, 1.0)))))
+    y_rtl = nonfft_combine_rtl_int8(
+        rx_payload_rtl,
+        w_shift,
+        post_gain_shift=comb_post_gain,
+    )
+
+    return {
+        "b_tx": b_tx,
+        "exact": b_rx_exact,
+        "shift": b_rx_shift,
+        "sc": b_rx_sc,
+        "bypass": b_rx_bypass,
+        "comb_post_gain": comb_post_gain,
+        "rtl_sat": sat,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +414,106 @@ def sweep_preamble(SF=7, NR=4, N_packets=600, preamble_lens=None, snr_dbs=None):
 
 
 # ---------------------------------------------------------------------------
-# Sweep 4 — Doppler (Jakes time-varying channel)
+# Sweep 4 — Shift-MRC vs exact/oracle under branch imbalance
+# ---------------------------------------------------------------------------
+
+def sweep_shift_mrc(SF=7, NR=4, N_packets=500, snr_db=0.0,
+                    branch_step_dbs=None, adc_scale: float = 64.0):
+    if branch_step_dbs is None:
+        branch_step_dbs = [0, 2, 4, 6, 8, 10, 12]
+
+    exact_ser = []
+    shift_ser = []
+    sc_ser = []
+    bypass_ser = []
+    comb_gains = []
+    rtl_sat_rates = []
+
+    N0 = 10 ** (-snr_db / 10)
+    for step_db in branch_step_dbs:
+        print(f"  Shift-MRC branch step={step_db:+.0f} dB", flush=True)
+        errs_exact = errs_shift = errs_sc = errs_bypass = 0
+        gain_sum = 0
+        sat_sum = 0
+        for _ in range(N_packets):
+            result = _compare_shift_mrc_packet(
+                SF,
+                NR,
+                N0,
+                branch_step_db=float(step_db),
+                adc_scale=adc_scale,
+            )
+            b_tx = result["b_tx"]
+            errs_exact += int(b_tx != result["exact"])
+            errs_shift += int(b_tx != result["shift"])
+            errs_sc += int(b_tx != result["sc"])
+            errs_bypass += int(b_tx != result["bypass"])
+            gain_sum += int(result["comb_post_gain"])
+            sat_sum += float(result["rtl_sat"])
+
+        exact_ser.append(errs_exact / N_packets)
+        shift_ser.append(errs_shift / N_packets)
+        sc_ser.append(errs_sc / N_packets)
+        bypass_ser.append(errs_bypass / N_packets)
+        comb_gains.append(gain_sum / N_packets)
+        rtl_sat_rates.append(sat_sum / N_packets)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    ax = axes[0]
+    ax.semilogy(branch_step_dbs, np.clip(exact_ser, 1e-4, 1),
+                "o--", color="tab:green", linewidth=2.5, markersize=6,
+                markerfacecolor="white", markeredgewidth=1.5,
+                label="Exact/oracle MRC", zorder=4)
+    ax.semilogy(branch_step_dbs, np.clip(shift_ser, 1e-4, 1),
+                "o-", color="tab:blue", linewidth=2.0, markersize=5,
+                label="Shift-MRC (HW)", zorder=3)
+    ax.semilogy(branch_step_dbs, np.clip(sc_ser, 1e-4, 1),
+                "s-", color="tab:red", linewidth=1.6, markersize=4,
+                label="SC", zorder=2)
+    ax.semilogy(branch_step_dbs, np.clip(bypass_ser, 1e-4, 1),
+                "d-", color="gray", linewidth=1.4, markersize=4,
+                label="Bypass", zorder=1)
+    ax.set_xlabel("Per-branch attenuation step (dB)")
+    ax.set_ylabel("Symbol Error Rate")
+    ax.set_title(f"Shift-MRC vs exact/oracle  SF={SF}  NR={NR}  SNR={snr_db:+.0f} dB")
+    ax.grid(True, which="both", ls="--", alpha=0.4)
+    ax.legend(fontsize=8)
+    ax.set_ylim(5e-4, 1.05)
+
+    ax = axes[1]
+    ax.plot(branch_step_dbs, comb_gains, "o-", color="tab:blue", label="Mean COMB_POST_GAIN")
+    ax.set_xlabel("Per-branch attenuation step (dB)")
+    ax.set_ylabel("Mean COMB_POST_GAIN")
+    ax.set_title(f"RTL headroom policy  (adc_scale={adc_scale:.0f})")
+    ax.grid(True, ls="--", alpha=0.4)
+    ax.set_ylim(bottom=0)
+    ax2 = ax.twinx()
+    ax2.plot(branch_step_dbs, rtl_sat_rates, "s--", color="tab:red", label="Required extra shift bits")
+    ax2.set_ylabel("Extra right-shift bits needed")
+    ax2.set_ylim(bottom=0)
+
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines + lines2, labels + labels2, fontsize=8, loc="upper right")
+
+    outpath = "sim/plots/sweep_shift_mrc.png"
+    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  → {outpath}")
+    return {
+        "branch_step_dbs": branch_step_dbs,
+        "exact_ser": exact_ser,
+        "shift_ser": shift_ser,
+        "sc_ser": sc_ser,
+        "bypass_ser": bypass_ser,
+        "comb_post_gain": comb_gains,
+        "rtl_sat_rate": rtl_sat_rates,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sweep 5 — Doppler (Jakes time-varying channel)
 # ---------------------------------------------------------------------------
 
 def simulate_packet_doppler(SF: int, NR: int, N0: float, mode: str,
@@ -365,6 +566,88 @@ def simulate_packet_doppler(SF: int, NR: int, N0: float, mode: str,
 
     y = nonfft_combine(rx_payload, w)
     return b_tx, demodulate(y)
+
+
+def _compare_shift_mrc_packet(
+    SF: int,
+    NR: int,
+    N0: float,
+    preamble_len: int = 8,
+    branch_step_db: float = 0.0,
+    adc_scale: float = 64.0,
+) -> dict[str, int | float | bool]:
+    """
+    One packet for the shift-MRC sweep.
+
+    This isolates the normalization choice by feeding the same training
+    estimate Z_j into both exact/oracle MRC and the hardware shift-MRC path.
+    """
+    M = 2 ** SF
+    ladder = _branch_ladder_gains(NR, branch_step_db)
+    h = rayleigh_coefficients(NR) * ladder
+
+    noise = lambda n: np.sqrt(N0 / 2) * (
+        np.random.randn(NR, n) + 1j * np.random.randn(NR, n)
+    )
+
+    chirp0 = modulate(0, M)
+    preamble = np.tile(chirp0, preamble_len)
+    rx_preamble = h[:, None] * preamble[None, :] + noise(preamble_len * M)
+
+    b_tx = np.random.randint(0, M)
+    rx_payload = h[:, None] * modulate(b_tx, M)[None, :] + noise(M)
+
+    Z, _, E_ref = training_accumulate(
+        rx_preamble,
+        2 * M,
+        0,
+        M,
+        preamble_len=preamble_len,
+    )
+
+    w_exact = compute_exact_mrc_weights(Z, E_ref=E_ref)
+    w_shift = compute_weights(Z, mode="mrc", E_ref=E_ref)
+    Z_z = Z.copy()
+    best = int(np.argmax(np.abs(Z_z)))
+    w_sc = np.zeros(NR, dtype=complex)
+    w_sc[best] = np.exp(-1j * np.angle(Z_z[best]))
+    w_bypass = np.zeros(NR, dtype=complex)
+    w_bypass[0] = 1.0
+
+    b_rx_exact = int(demodulate(nonfft_combine(rx_payload, w_exact)))
+    b_rx_shift = int(demodulate(nonfft_combine(rx_payload, w_shift)))
+    b_rx_sc = int(demodulate(nonfft_combine(rx_payload, w_sc)))
+    b_rx_bypass = int(demodulate(nonfft_combine(rx_payload, w_bypass)))
+
+    rx_payload_rtl = adc_scale * rx_payload
+    y_rtl0 = nonfft_combine_rtl_int8(rx_payload_rtl, w_shift, post_gain_shift=0)
+    comb_post_gain = choose_comb_post_gain(y_rtl0)
+
+    # Pre-saturation headroom metric: compute the raw guarded accumulator,
+    # then measure how many samples would exceed int8 before clipping.
+    x_i, x_q = _as_int8_pair(rx_payload_rtl)
+    w_re, w_im = _quantize_q15_int(w_shift)
+    acc_i = np.sum(w_re[:, None] * x_i - w_im[:, None] * x_q, axis=0)
+    acc_q = np.sum(w_re[:, None] * x_q + w_im[:, None] * x_i, axis=0)
+    raw_i = (acc_i >> 1) << int(comb_post_gain)
+    raw_q = (acc_q >> 1) << int(comb_post_gain)
+    peak = float(max(np.max(np.abs(raw_i)), np.max(np.abs(raw_q))))
+    sat = float(max(0.0, np.ceil(np.log2(max(peak / 127.0, 1.0)))))
+    y_rtl = nonfft_combine_rtl_int8(
+        rx_payload_rtl,
+        w_shift,
+        post_gain_shift=comb_post_gain,
+    )
+
+    return {
+        "b_tx": b_tx,
+        "exact": b_rx_exact,
+        "shift": b_rx_shift,
+        "sc": b_rx_sc,
+        "bypass": b_rx_bypass,
+        "comb_post_gain": comb_post_gain,
+        "rtl_sat": sat,
+    }
 
 
 def sweep_doppler(SF=7, NR=4, snr_db=0.0, N_packets=500,
@@ -553,8 +836,8 @@ def sweep_hierarchical(SF=7, N_packets=500, snr_range=None):
 
 def main():
     parser = argparse.ArgumentParser(description="MIMO MRC sweep simulations")
-    parser.add_argument("--sweep", choices=["ber", "nr", "preamble", "doppler",
-                                             "hierarchical", "all"],
+    parser.add_argument("--sweep", choices=["ber", "nr", "preamble", "shiftmrc",
+                                             "doppler", "hierarchical", "all"],
                         default="all")
     parser.add_argument("-n", "--n-packets", type=int, default=500,
                         help="Monte Carlo trials per point (default 500)")
@@ -565,23 +848,27 @@ def main():
     run = args.sweep
 
     if run in ("ber", "all"):
-        print("\n[1/5] BER vs SNR sweep")
+        print("\n[1/6] BER vs SNR sweep")
         sweep_ber(N_packets=N)
 
     if run in ("nr", "all"):
-        print("\n[2/5] NR scaling sweep")
+        print("\n[2/6] NR scaling sweep")
         sweep_nr(N_packets=N)
 
     if run in ("preamble", "all"):
-        print("\n[3/5] Preamble length sweep")
+        print("\n[3/6] Preamble length sweep")
         sweep_preamble(N_packets=N)
 
+    if run in ("shiftmrc", "all"):
+        print("\n[4/6] Shift-MRC sweep")
+        sweep_shift_mrc(N_packets=N)
+
     if run in ("doppler", "all"):
-        print("\n[4/5] Doppler sweep")
+        print("\n[5/6] Doppler sweep")
         sweep_doppler(N_packets=N)
 
     if run in ("hierarchical", "all"):
-        print("\n[5/5] Hierarchical MRC sweep")
+        print("\n[6/6] Hierarchical MRC sweep")
         sweep_hierarchical(N_packets=N)
 
     print("\nDone. Plots saved to sim/plots/sweep_*.png")

@@ -16,8 +16,10 @@ The common CFO exp(j·ω·n) cancels exactly in the cross-product because
 |s[n]|² = 1 for a constant-amplitude LoRa upchirp. This holds at all CFO
 values — no Dirichlet attenuation, no integer-bin nulls.
 
-MRC combining using w_j = conj(Z_j) gives y[n] = h_ref · Σ|h_j|² · s[n],
-i.e. full MRC gain with h_ref as a common phase rotation (handled by SX1302).
+MRC combining uses weights proportional to conj(Z_j). The hardened hardware
+path applies a shared conservative power-of-two scale to fit Q1.15 and leave
+coherent-add headroom; exact normalized MRC is retained only as an oracle/helper
+for algorithm comparisons.
 """
 
 import numpy as np
@@ -97,8 +99,8 @@ def training_accumulate(
         Number of samples accumulated.
     E_ref : float
         Reference branch energy: Σ_n |rx_ref[n]|² over the accumulation window.
-        Used by WeightGenerator to normalise MRC weights to Q1.15-friendly range:
-        w_j = conj(Z_j) / (Σ|Z_j|² / E_ref)  →  |w_j| ≈ |h_j| / Σ|h_k|²  ≤ 1.
+        Retained for software/exact-MRC comparisons. The hardened hardware
+        WeightGenerator ignores E_ref and uses shift-based normalization.
 
     Notes
     -----
@@ -165,8 +167,8 @@ def compute_weights(
     mode      : 'mrc' | 'egc' | 'sc' | 'bypass'
     antenna_en: bitmask of enabled antennas (bit 0 = antenna 0)
     cal_j     : (NR,) complex Q1.15 calibration coefficients, or None
-    E_ref     : reference branch energy from training_accumulate(); enables
-                Q1.15-friendly MRC normalisation: |w_j| ≈ |h_j|/Σ|h_k|² ≤ 1
+    E_ref     : retained for API compatibility and exact-MRC comparisons;
+                ignored by the hardened hardware WeightGenerator
 
     Returns
     -------

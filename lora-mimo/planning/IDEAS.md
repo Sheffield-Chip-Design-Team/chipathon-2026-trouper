@@ -4,6 +4,13 @@ Open ideas for future notebook cells, model extensions, or verification experime
 
 ---
 
+## Loose Ends
+
+1. **[In progress]** Confirm post-route timing/DRC for `ol_weight_gen` — fanout constraint raised 2→4, SS corner target.
+2. **[In progress]** `ol_mrc_combiner` physical design — removed `(* keep *)` on multiply-input regs, fanout 2→4; SS timing was −11.85 ns with old RTL.
+
+---
+
 ## PSRAM Interface
 
 ### FIFO requirement analysis
@@ -182,18 +189,7 @@ at 10 Hz Doppler (walking speed, 868 MHz) across SF7–SF12.
 
 ## BER Sweeps
 
-### BER vs SNR — Full sweep
-
-Monte Carlo BER vs per-antenna SNR (−15 to +5 dB) across:
-- NT=1 MRC (estimated vs genie-aided)
-- NT=2 ALMMSE
-- Best single antenna baseline
-
-Parameterised by SF (7, 9, 12) and BW (125, 500 kHz). Validates combining gain and quantifies estimation loss.
-
-### BER vs SNR — Time-varying channel
-
-Same sweep but with a time-varying Jakes channel at `f_D = 10 Hz`. Highlights SF12 degradation and motivates Kalman tracking.
+*Done: BER vs SNR full sweep (`sweep_ber.png`), Doppler/time-varying channel (`sweep_doppler.png`), NR scaling (`sweep_nr.png`), preamble length (`sweep_preamble.png`), shift-MRC vs oracle (`sweep_shift_mrc.png`), full DSP chain with RTL int8 combiner (`full_chain_ber.png`).*
 
 ### NT=1 MRC robustness under Doppler
 
@@ -786,7 +782,7 @@ Both crossings have data valid rates far below either clock — no FIFO needed.
 **SDC:** `create_generated_clock` on the /2 net. `set_max_delay -datapath_only` on both CDC directions to bound analysis without over-constraining.  
 File: `rtl-test/top_two_domain.sdc`
 
-**RTL change:** `mrc_combiner` clock port renamed `clk_32m` → `clk_16m`. Pipeline register added between final accumulation (state 4) and saturation (state 5). Output latency 5 → 6 cycles at 16 MHz.
+**RTL:** `mrc_combiner` uses `clk_16m`. Pipeline register between accumulation and saturation (states 4→5→9). Output latency 9 cycles at 16 MHz.
 
 ### Switch CPU IMEM/DMEM to ocd_ip_sram for single-cycle access
 
@@ -803,22 +799,9 @@ Both fit comfortably within one 31.25 ns period — **single-cycle access is via
 
 **Action:** check if the ocd_ip_sram macro is available for this shuttle and whether four-wide instantiation fits the floorplan.
 
-### Timing corner policy — check with PD team
+### Timing corner reference
 
-STA on `dut_nr_outer` (16×32 multiply, the tightest path in `weight_gen`) at GF180MCU 3.3V shows:
-
-| Corner | Slack |
-|--------|-------|
-| TT 3.3V 25°C | +8.3 ns (MET) |
-| SS 3.0V −40°C | +0.4 ns (barely MET) |
-| SS 3.0V 25°C | ~−5 ns (VIOLATED, interpolated) |
-| SS 3.0V 125°C | −12.7 ns (VIOLATED) |
-
-`mrc_combiner` (dual 16×8 MAC + accumulator + saturation in one cycle) is tighter still — violates even TT 3.3V by −0.774 ns and SS 3.0V/125°C by −32.8 ns. Needs at least one pipeline register between multiply and accumulate/saturate stages regardless of clock target.
-
-**Question for PD team:** Does the chipathon / IDEAS flow sign off on TT-only, or is full SS closure required? If SS is required, options are:
-- Lower clock to ~27 MHz (closes SS/25°C for `dut_nr_outer`; `mrc_combiner` still needs pipelining)
-- Pipeline the critical paths over 2 cycles (keeps 32 MHz, 1-cycle latency added)
+Clock: **16 MHz** (62.5 ns). `mrc_combiner` pipeline register added between multiply and accumulate stages. `weight_gen` fanout constraint raised to 4 to eliminate buffer-chain cascades. SS corner closure still under iteration.
 
 **ws-run1 benchmark (GF180MCU shuttle, 2024):**
 

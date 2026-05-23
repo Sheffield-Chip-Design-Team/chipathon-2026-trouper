@@ -1,0 +1,10 @@
+# synth_weight_gen.ys — Synthesise weight_gen in isolation
+# Uses -noabc to skip technology mapping (the 256-entry recip LUT causes ABC to hang).
+# Area is estimated from post-synth gate counts using NAND2 = 10.976 um2 as reference.
+
+read_verilog -sv /work/weight_gen.v
+
+hierarchy -check -top weight_gen
+synth -top weight_gen -noabc
+
+tee -o /work/out/stat_weight_gen.txt stat

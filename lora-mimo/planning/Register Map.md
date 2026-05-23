@@ -60,7 +60,8 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x33` | `IRQ_CLEAR` | W | `0x00` | IRQ Controller | Write 1 to clear matching `IRQ_STATUS` bits |
 | `0x34` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | `PACKET_ACTIVE`, `PACKET_PHASE`, `TRAINING_DONE`, `W_PENDING`, `W_VALID`, `W_MISSED_PACKET` |
 | `0x35` | `WGT_CTRL` | R/W | `0x0E` | Weight Generation / Packet Control FSM / Combiner | `WGT_SRC`, `WGT_AUTO_COMMIT`, `WGT_MODE`, `W_COMMIT`, `W_VALID`, `W_PENDING`, `W_MISSED_PACKET` |
-| `0x36`–`0x3F` | — | — | — | — | Reserved for packet-FSM and weight-path expansion |
+| `0x36` | `COMB_POST_GAIN` | R/W | `0x00` | MRC Combiner | Post-combine left-shift gain after fixed guard divide-by-2 |
+| `0x37`–`0x3F` | — | — | — | — | Reserved for packet-FSM and weight-path expansion |
 | **Runtime Measurement / Live Observability** (`0x40`–`0x5F`) | | | | | |
 | `0x40` | `ENERGY_0_HI` | R | `0x00` | Energy Measurement | Antenna 0 energy snapshot [15:8] |
 | `0x41` | `ENERGY_0_LO` | R | `0x00` | Energy Measurement | Antenna 0 energy snapshot [7:0] |
@@ -84,7 +85,9 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x53` | `COND_NUM_LO` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: channel condition number [7:0] |
 | `0x54` | `SNR_0_HI` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: post-combining SNR [15:8] |
 | `0x55` | `SNR_0_LO` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: post-combining SNR [7:0] |
-| `0x56`–`0x5F` | — | — | — | — | Reserved; keep this page read-mostly live telemetry |
+| `0x56` | `NULL_QUALITY_HI` | R | `0x00` | PicoRV32 FW | Optional null-steering diagnostic: post-combining noise power ratio [15:8] (see register detail) |
+| `0x57` | `NULL_QUALITY_LO` | R | `0x00` | PicoRV32 FW | Optional null-steering diagnostic: post-combining noise power ratio [7:0] |
+| `0x58`–`0x5F` | — | — | — | — | Reserved; keep this page read-mostly live telemetry |
 | **Training and Estimation** (`0x60`–`0x8F`) | | | | | |
 | `0x60` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
 | `0x61` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [15:8] |
@@ -96,7 +99,8 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x67` | `C_POOL_Q_LO` | R | `0x00` | Schmidl-Cox | Pooled SC correlator imag part [7:0] |
 | `0x68` | `CFO_DIAG_HI` | R | `0x00` | Schmidl-Cox | Coarse CFO diagnostic [15:8] |
 | `0x69` | `CFO_DIAG_LO` | R | `0x00` | Schmidl-Cox | Coarse CFO diagnostic [7:0] |
-| `0x6A`–`0x6F` | — | — | — | — | Reserved for future training-derived metrics |
+| `0x6A` | `NOISE_WIN_CTRL` | R/W | `0x00` | Training Accumulator | [0] `NOISE_EN`: enable noise-window accumulation mode; [7:1] reserved |
+| `0x6B`–`0x6F` | — | — | — | — | Reserved for future training-derived metrics |
 | `0x70`–`0x73` | `Z0_I` | R | `0x00` | Training Accumulator | Branch 0 I component [31:0] |
 | `0x74`–`0x77` | `Z0_Q` | R | `0x00` | Training Accumulator | Branch 0 Q component [31:0] |
 | `0x78`–`0x7B` | `Z1_I` | R | `0x00` | Training Accumulator | Branch 1 I component [31:0] |
@@ -447,7 +451,7 @@ Sticky interrupt source bits.
 | [1] | `TRAINING_DONE` | Training accumulator complete; software path may inspect `Z_j` |
 | [2] | `W_MISSED_PACKET` | W was not committed before safe switch; current packet remains bypass |
 | [3] | `PACKET_DONE` | Packet Control FSM returned to `IDLE` |
-| [4] | — | Reserved |
+| [4] | `NOISE_READY` | Noise-window accumulation complete; `Z1`–`Z3` hold cross-correlations `R_10/R_20/R_30`; firmware may compute DOA and commit null weights |
 | [5] | `TX_PREP` | Host requested TX preparation |
 | [6] | `TX_DONE` | Host indicated TX complete |
 | [7] | — | Reserved |
@@ -485,11 +489,24 @@ Reset value `0x0E` selects the CPU-independent baseline:
 | --- | --- | --- |
 | [0] | `WGT_SRC` | 0 = hardware AUTO path, 1 = software path |
 | [1] | `WGT_AUTO_COMMIT` | When `WGT_SRC=0`: 1 = hardware commits automatically, 0 = hardware waits for software `W_COMMIT` |
-| [3:2] | `WGT_MODE` | 00=bypass, 01=SC, 10=EGC, 11=MRC |
+| [3:2] | `WGT_MODE` | 00=bypass, 01=SC, 10=reserved, 11=MRC |
 | [4] | `W_COMMIT` | Write-1 pulse after W shadow writes complete |
 | [5] | `W_VALID` | Read-only mirror of active W valid state |
 | [6] | `W_PENDING` | Read-only pending commit state |
 | [7] | `W_MISSED_PACKET` | Read-only late-commit indicator |
+
+---
+
+### `0x36` — COMB_POST_GAIN (read/write)
+
+Post-combine gain control for the MRC combiner. The combiner first applies its fixed guard divide-by-2, then left-shifts by this value before int8 saturation. Firmware should update this packet-to-packet; reset value `0` is the safe default.
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [2:0] | `COMB_POST_GAIN_SHIFT` | 0-7 bit left shift applied after the fixed guard divide-by-2 |
+| [7:3] | — | Reserved, read as zero |
+
+Reset value `0x00` is conservative. Firmware/host may increase this after observing output headroom.
 
 ---
 
@@ -517,9 +534,32 @@ These registers expose training-window bookkeeping and pooled SC diagnostics:
 - `C_POOL`
 - `CFO_DIAG`
 
+### `0x56`–`0x57` — NULL_QUALITY (read-only, firmware-written)
+
+Optional null-steering quality diagnostic. Firmware computes this after committing null weights and writes it as a firmware-visible register (same mechanism as `COND_NUM` / `SNR_0`). Holds the ratio of post-combining noise power without null vs with null applied, expressed as an unsigned int16 fixed-point value (Q8.8 — values >256 indicate >0 dB null improvement).
+
+A value of `0x0000` means the null steering firmware has not yet run. Firmware should reset this to zero if `NOISE_EN` is cleared.
+
+---
+
+### `0x6A` — NOISE_WIN_CTRL (read/write)
+
+Controls noise-window accumulation in the training accumulator.
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `NOISE_EN` | 1 = enable noise-window mode. When set, the training accumulator uses antenna 0 as its own reference (`x_ref = x_0`) instead of the chirp reference. Accumulation starts at the same trigger point as normal training but fires `IRQ_NOISE_READY` on completion rather than `IRQ_TRAINING_DONE`. The `Z_j` readback registers (`0x70`–`0x8F`) hold the cross-correlations: `Z0` = antenna 0 self-power (real); `Z1/Z2/Z3` = `R_10/R_20/R_30` (complex). |
+| [7:1] | — | Reserved, write 0 |
+
+**Interaction with normal training.** `NOISE_EN` and `WGT_SRC=SW` (`IRQ_TRAINING_DONE`) are mutually exclusive within one accumulation window — the hardware fires one or the other IRQ, not both. Firmware must clear `NOISE_EN` before the packet preamble starts if it wants the normal `Z_j` channel estimates for that packet. Typical flow: noise window fires `IRQ_NOISE_READY` → firmware computes null and commits W → firmware clears `NOISE_EN` → preamble training proceeds normally and fires `IRQ_TRAINING_DONE`.
+
+---
+
 ### `0x70`–`0x8F` — Z_j scaled readback (read-only)
 
 Training-accumulator output exposed for diagnostics or optional software weight computation. Values are the int64 `Z_j` right-shifted by common `Z_SHIFT` so they fit in signed int32 readback registers.
+
+When `NOISE_WIN_CTRL.NOISE_EN=1` these registers hold noise cross-correlations instead of channel estimates: `Z0` = antenna 0 self-power (imaginary part ~0), `Z1/Z2/Z3` = `R_10/R_20/R_30` for DOA estimation. See [PicoRV32 Integration — Null steering](PicoRV32%20Integration.md) for the firmware algorithm.
 
 ---
 

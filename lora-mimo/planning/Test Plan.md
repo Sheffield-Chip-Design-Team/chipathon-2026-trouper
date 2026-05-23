@@ -81,7 +81,7 @@
 
 **Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(8 - SC_HITS_REQ - 1) × M`.
 
-**Pass criterion (Weight Generation):** Weights match Python reference for all four combining modes (MRC, EGC, SC, Bypass) to within ±2 LSB Q1.15. W_COMMIT pulses within 70,400 cycles of `training_done` at SF6/125 kHz.
+**Pass criterion (Weight Generation):** Weights match the Python hardware reference for implemented modes (shift-MRC, SC, Bypass) to within ±2 LSB Q1.15. Exact normalized MRC is an oracle/software comparison only. W_COMMIT pulses within 70,400 cycles of `training_done` at SF6/125 kHz.
 
 **Test matrix:**
 
@@ -90,8 +90,8 @@
 | Noiseless single-path, SF6 | `Z_j / n_acc` matches `h_j` within rounding |
 | Noiseless single-path, SF7 | `Z_j / n_acc` matches `h_j` within rounding when the selected sample-memory mode is valid |
 | CFO immunity ±10 kHz | Weights correctly phase-aligned to h_j |
-| MRC all branches equal | Equal-magnitude weights, unit-norm sum |
-| EGC noiseless | \|w_j\| = 1, angle(w_j) = −angle(h_j) |
+| MRC all branches equal | Equal-magnitude shift-MRC weights with branch-count headroom; no clipping |
+| EGC noiseless | Software/oracle only unless WGT_MODE=10 is implemented in a future revision |
 | SC single strong branch | w_j = 1 on correct branch |
 | 8-bit saturation vs full-precision | SC lock timing unaffected at −10 dB SNR |
 | Strong signal saturation | SC lock and training accumulator degrade gracefully |

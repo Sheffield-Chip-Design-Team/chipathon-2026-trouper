@@ -29,7 +29,7 @@ PicoRV32 is therefore a non-critical enhancement block for:
 
 **Bus decision.** The project bus is now `AHB-Lite`. PicoRV32 is kept as the CPU, so the master side is a custom implementation rather than a native Wishbone integration.
 
-**Why RV32IM (not RV32I):** MRC weight computation requires computing `S = Σ|H_j|²` and then `w_j = conj(H_j) / S` — a 32-bit integer division plus four complex multiply-accumulates. Hardware MUL/DIV (the M extension) reduces this from ~1000 cycles to ~50 cycles. EGC normalisation uses the same multiply path.
+**Why RV32IM (not RV32I):** The hardened AUTO path uses shift-MRC and avoids division, but firmware still needs efficient multiply/divide for software-only exact MRC, NW-MRC, ALMMSE approximations, AGC statistics, and diagnostic calculations. Hardware MUL/DIV (the M extension) keeps those control-loop tasks within the packet/idle-time budget.
 
 ---
 
@@ -43,6 +43,7 @@ These are optional enhancements unless otherwise noted in the TX path. None of t
 | TX preparation (RX→TX) | `tx_prep` IRQ from TX_CTRL[0] | < 1 ms (LoRaWAN RX1 budget = 1 s) |
 | TX restore (TX→RX) | `tx_done` IRQ from TX_CTRL[1] | < 1 ms |
 | AGC loop | `corr_lock` IRQ (`IRQ_CORR_LOCK`) | < 1 packet |
+| Null steering — DOA estimation + null weight commit | `noise_ready` IRQ (`IRQ_NOISE_READY`) | < 1 ms — must complete before preamble training starts |
 | SX1257 init on power-up | Startup when CPU-managed mode is used | Before first RX |
 
 ### Weight computation override
@@ -317,6 +318,116 @@ void agc_update() {
 
 ---
 
+### Null steering — interference DOA and weight projection
+
+Interference suppression by placing a spatial null in the direction of the dominant interferer. Not MUSIC or ESPRIT (those require eigendecomposition, not feasible on PicoRV32) — uses inter-antenna cross-correlations and a single vector projection.
+
+**When it runs.** The noise window is the period before the SC correlator fires (`!sync_found`). The training accumulator runs in noise mode during this window (antenna 0 as self-reference instead of the chirp reference), accumulating cross-correlations R_10, R_20, R_30. When the window closes, `IRQ_NOISE_READY` fires. Firmware reads the three complex cross-correlations from `NOISE_Z` registers, computes the interferer angle, projects the MRC weights, and commits the null weights before preamble training begins.
+
+**This is not within-packet tracking.** Once the packet preamble starts, null weights are fixed for the duration of that packet. Inter-packet tracking is automatic — the noise window re-runs every inter-packet gap, so the null re-points each cycle. For a static or slow-moving interferer this converges in one gap (~100 ms or less). True within-packet tracking would require decision-directed feedback from the demodulator and is not implemented.
+
+**RTL requirements** (not yet in RTL):
+- Training accumulator: add `NOISE_MODE` control bit — when set, use `x_0` as the accumulator reference instead of the chirp reference.
+- New registers: `NOISE_WIN_CTRL` (enable + window length), `NOISE_Z_RE1/IM1`, `NOISE_Z_RE2/IM2`, `NOISE_Z_RE3/IM3` (int32 cross-correlations R_10, R_20, R_30).
+- New IRQ: `IRQ_NOISE_READY` — fires when the noise accumulation window closes.
+- Optional: `NULL_QUALITY` register — ratio of post-combining power with vs without null applied (16-bit, firmware-readable) for diagnostics.
+
+**Assumption — interferer must dominate thermal noise.** The cross-correlation `R_j0 = Σ x_j · conj(x_0)` has a coherent interferer contribution with magnitude proportional to interferer power, and an incoherent noise cross-term with variance `σ²_0 · σ²_j · N_acc`. The phase estimate is only reliable when the interferer-to-noise ratio (INR) at the antenna input is high enough that the coherent term dominates: `INR · N_acc >> 1`. If the dominant "noise" is thermal rather than a directional interferer, the estimated angle is meaningless and applying the null projection will degrade MRC gain. A quality gate on `|R_10|²` vs the hardware `SIGMA2` estimate guards against this — see code below.
+
+**Algorithm (firmware):**
+
+```c
+// DOA estimation constants
+// For a ULA with d = λ/2: phase between adjacent antennas = π·sin(θ)
+// Use a 64-entry sin/cos LUT at Q1.15 resolution.
+
+#define NULL_ANGLE_STEPS  64          // scan resolution; ~2.8° per step
+#define NULL_ENABLE_BIT   (1u << 0)   // NOISE_WIN_CTRL
+
+// Step 1: read cross-correlations R_j0 = E[x_j · conj(x_0)] (int32 I+Q)
+int32_t R_re[3], R_im[3];   // R_10, R_20, R_30
+
+void noise_ready_handler() {
+    R_re[0] = read_reg32(NOISE_Z_RE1);  R_im[0] = read_reg32(NOISE_Z_IM1);
+    R_re[1] = read_reg32(NOISE_Z_RE2);  R_im[1] = read_reg32(NOISE_Z_IM2);
+    R_re[2] = read_reg32(NOISE_Z_RE3);  R_im[2] = read_reg32(NOISE_Z_IM3);
+
+    // Quality gate: cross-correlation only gives reliable DOA when the interferer
+    // dominates thermal noise.  R_j0 = interferer_contribution + noise_cross_term;
+    // the noise cross-term has zero mean but variance σ²_0 · σ²_j · N_acc.
+    // Check |R_10|² > NULL_INR_THRESHOLD · σ²_ant0 · N_acc before proceeding.
+    // If the interferer is too weak, skip null steering and use plain MRC weights —
+    // projecting onto a noise-derived null would degrade combining gain for no benefit.
+    uint32_t inr_proxy = (uint32_t)(R_re[0]/256)*(R_re[0]/256)
+                       + (uint32_t)(R_im[0]/256)*(R_im[0]/256);  // |R_10|² scaled
+    uint32_t noise_ref = (uint32_t)read_reg16(SIGMA2_0_HW)
+                       * (uint32_t)read_reg16(N_ACC);             // σ²·N_acc
+    if (inr_proxy < NULL_INR_THRESHOLD * noise_ref) {
+        // Interferer below threshold — null would point at noise, not interferer.
+        // Commit plain MRC weights and return.
+        write_W_shadow_registers(W_re, W_im);
+        write_reg(WGT_CTRL, 1u << 4);
+        clear_irq(IRQ_NOISE_READY);
+        return;
+    }
+
+    // Step 2: estimate phase slope Δφ = π·sin(θ) from the three cross-correlation phases.
+    // Phase of R_j0 = j·Δφ for antenna j=1,2,3.  Weighted average reduces noise:
+    //   Δφ_est = (arg(R_10) + arg(R_20)/2 + arg(R_30)/3) / 3
+    // atan2 computed via a 256-entry Q1.15 LUT; shift right to bring into [-π, π).
+    int32_t phi1 = atan2_lut(R_im[0], R_re[0]);          // Q2.13 fixed-point
+    int32_t phi2 = atan2_lut(R_im[1], R_re[1]) / 2;
+    int32_t phi3 = atan2_lut(R_im[2], R_re[2]) / 3;
+    int32_t dphi = (phi1 + phi2 + phi3) / 3;             // Q2.13
+
+    // Step 3: build interference steering vector a(θ) = [1, e^(j·dphi), e^(j·2·dphi), e^(j·3·dphi)]
+    // sin/cos from LUT indexed by (dphi * 64 / π) modulo 64.
+    int16_t a_re[4], a_im[4];
+    a_re[0] = 0x7FFF; a_im[0] = 0;   // a[0] = 1+0j
+    for (int k = 1; k < 4; k++) {
+        int idx = ((int64_t)dphi * k * 64 / PI_Q213) & 63;
+        a_re[k] = cos_lut[idx];   // Q1.15
+        a_im[k] = sin_lut[idx];
+    }
+
+    // Step 4: null projection  w_null = w_mrc − (aᴴ·w_mrc / aᴴ·a) · a
+    // aᴴ·a = 4 (unit-magnitude elements, always 4 for a 4-element ULA)
+    // aᴴ·w_mrc: one complex dot product (4 multiply-adds)
+    int32_t dot_re = 0, dot_im = 0;
+    for (int j = 0; j < 4; j++) {
+        // aᴴ[j] = conj(a[j]) = a_re[j] - j·a_im[j]
+        dot_re += ((int64_t)a_re[j] * W_re[j] + (int64_t)a_im[j] * W_im[j]) >> 15;
+        dot_im += ((int64_t)a_re[j] * W_im[j] - (int64_t)a_im[j] * W_re[j]) >> 15;
+    }
+    // scalar = (aᴴ·w_mrc) / 4  (divide by aᴴ·a = 4)
+    int32_t sc_re = dot_re >> 2;
+    int32_t sc_im = dot_im >> 2;
+
+    // w_null[j] = w_mrc[j] − scalar · a[j]
+    int16_t W_null_re[4], W_null_im[4];
+    for (int j = 0; j < 4; j++) {
+        int32_t proj_re = ((int64_t)sc_re * a_re[j] - (int64_t)sc_im * a_im[j]) >> 15;
+        int32_t proj_im = ((int64_t)sc_re * a_im[j] + (int64_t)sc_im * a_re[j]) >> 15;
+        W_null_re[j] = sat16(W_re[j] - proj_re);
+        W_null_im[j] = sat16(W_im[j] - proj_im);
+    }
+
+    // Step 5: commit null weights via firmware override path
+    write_W_shadow_registers(W_null_re, W_null_im);
+    write_reg(WGT_CTRL, 1u << 4);   // pulse W_COMMIT
+
+    clear_irq(IRQ_NOISE_READY);
+}
+```
+
+**Timing.** The null projection is ~50 multiply-accumulate operations on int32 values. At 16 MHz with RV32IM hardware multiply: ~200 cycles = 12.5 µs — well within the budget before preamble training starts.
+
+**Null depth.** For a 4-element ULA with a single point source at an angle away from the desired signal: ~20–30 dB suppression at the null centre. Degrades if the interferer has angular spread wider than the null (~22° HPBW) or if the desired signal and interferer are within ~10° of each other.
+
+**Interaction with EMA.** Null weights replace MRC weights before the preamble, so `H_prev` (used for EMA) should be stored as the pre-null MRC weights, not the null weights. Otherwise the null projection accumulates across EMA rounds and distorts the channel estimate. Keep two weight buffers: `W_mrc[]` (EMA-smoothed MRC weights, internal firmware state) and `W_active[]` (null-projected, committed to hardware).
+
+**Null disable.** Set `NOISE_WIN_CTRL = 0` to disable noise accumulation. Firmware then skips `irq_handler` for `IRQ_NOISE_READY` and the standard MRC weights are committed as usual.
+
 ---
 
 ## Memory map
@@ -465,7 +576,7 @@ For DMEM faults: adjust stack pointer and linker `.data` / `.bss` placement to a
 - [SPI Master](SPI%20Master.md) — SX1257 config
 - [IRQ Controller](IRQ%20Controller.md) — `training_done`, `corr_lock`, and TX IRQs
 - [Packet Control FSM](Packet%20Control%20FSM.md) — packet phase, safe W commit, W missed status
-- [Training Accumulator](Training%20Accumulator.md) — Z_j source; triggers `IRQ_TRAINING_DONE`
+- [Training Accumulator](Training%20Accumulator.md) — Z_j source; triggers `IRQ_TRAINING_DONE`; noise-mode cross-correlations for null steering (`IRQ_NOISE_READY`)
 - [Weight Generation](Weight%20Generation.md) — weight computation detail (HW FSM option)
 - [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — W register target
 - [Register Map](../Register%20Map.md) — Z_j registers and training diagnostics

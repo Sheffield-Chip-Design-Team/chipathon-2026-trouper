@@ -13,7 +13,7 @@ Converts the complex channel estimates `Z_j` from the training accumulator into 
 
 Two parallel paths produce weights:
 
-- **Hardware path** — a hardened RTL state machine (FSM + reciprocal unit) that computes SC or MRC weights from `Z_j` with deterministic latency. Enables same-packet weight application.
+- **Hardware path** — a hardened RTL state machine that computes SC or approximate shift-MRC weights from `Z_j` with deterministic latency. Enables same-packet weight application.
 - **Software path** — PicoRV32 firmware reads `Z_j` from registers, computes any weight formula (ALMMSE, EMA-smoothed, custom), and writes `W_SHADOW` directly. Existing next-packet commit mechanism applies.
 
 A single register bit (`WGT_SRC`) selects which path commits to `W_ACTIVE`. Firmware can inspect the hardware-computed result at any time via read-only `W_HW` registers, regardless of which path is active.
@@ -36,7 +36,7 @@ With those defaults, `training_done` is sufficient to produce committed `W_ACTIV
 |---|---|---|
 | Bypass | 1 on lowest enabled antenna, 0 elsewhere | Immediate (no arithmetic) |
 | SC | 1 on max-power branch, 0 elsewhere | Hardware or software |
-| MRC | Conjugate h_j scaled by total power | Hardware (reciprocal LUT) or software |
+| MRC | Conjugate h_j scaled by a conservative shared power-of-two shift | Hardware or software |
 | ALMMSE | Matrix inversion: W = (H·H^H + λI)^{-1}·H^H | Software only (PicoRV32) |
 
 EGC is not implemented in hardware. See [Future extensions](#future-extensions).
@@ -52,7 +52,7 @@ Training Accumulator
         v
  ┌──────────────────────┐   W_HW[3:0]  ──────► read-only registers
  │  Hardware Weight Gen │   (Q1.15)             (firmware can read or copy)
- │  FSM + recip unit    │─────────────────────────────────────┐
+ │  FSM + shift scaler  │─────────────────────────────────────┐
  └──────────────────────┘                                     │
                                                               │  WGT_SRC = AUTO
         |  training_done IRQ                                  │
@@ -102,13 +102,13 @@ Layout: 4 branches × 2 words (I, Q) × int16 Q1.15 = 8 × 16-bit registers.
 
 ## Input normalisation
 
-The training accumulator outputs `Z_j` (int64 complex per branch) and `n_acc` (sample count). Since `n_acc` is a common scalar, dividing by it scales all `h_j` identically and cancels in weight ratios — the hardware path works directly with `Z_j`.
+The training accumulator outputs `Z_j` (signed int32 complex per branch) and `n_acc` (sample count). Since `n_acc` is a common scalar, dividing by it scales all `h_j` identically and cancels in weight ratios — the hardware path works directly with `Z_j`.
 
-int64 values are impractical for direct hardware arithmetic. Before weight computation, right-shift all `Z_j` by a common amount `K` to bring them into int32 range:
+Before calibration, right-shift all `Z_j` by a common amount `K` so the largest I/Q component fits in the signed Q1.15-friendly range:
 
 ```
-H_j = Z_j >> K
-K   = max(0, leading_zeros_reduction(max_j(|Z_j.I|, |Z_j.Q|), 32))
+H_j = Z_j >>> K
+K   = max(0, floor(log2(max_j(|Z_j.I|, |Z_j.Q|))) - 14)
 ```
 
 `K` is derived from the leading-zero count of the largest component across all branches. Common shift preserves relative magnitudes and phases exactly.
@@ -147,21 +147,34 @@ w_j    = 1  if j == j_best,  else  0
 
 Four magnitude-squared computations, 4-way compare. ~4 cycles.
 
-### MRC — Maximum Ratio Combining
+### MRC — Shift-Based Maximum Ratio Combining
 
 ```
-S   = Σ_k |H_k_cal|²         (real, int64)
-w_j = conj(H_j_cal) / S      (complex / real)
+peak       = max_j(|H_j_cal.I|, |H_j_cal.Q|)
+base_shift = max(0, floor(log2(peak)) - 14)
+headroom   = ceil_log2(number_of_enabled_antennas)   // 0, 1, or 2 for NR<=4
+mrc_shift  = base_shift + headroom
+w_j        = conj(H_j_cal) >>> mrc_shift
 ```
+
+This preserves the MRC branch ratios and conjugate phases while replacing exact division by a shared power-of-two scale. The `headroom` term is deliberately conservative: it leaves room for coherent addition of 2 or 4 strong branches and avoids relying on post-combine saturation as the normal operating point.
+
+The exact normalized form,
+
+```
+w_j = conj(H_j_cal) / Σ_k |H_k_cal|²
+```
+
+remains available in firmware/software simulations, but it is not hardened in the AUTO hardware path.
 
 Implementation:
 
-1. Four magnitude-squared values: `|H_j_cal.I|² + |H_j_cal.Q|²` → int64 each.
-2. Sum: `S = Σ |H_j_cal|²` → int64.
-3. Reciprocal of S via leading-zero normalise + 8-bit LUT + Newton-Raphson refinement (2 iterations, ~15 cycles). Sufficient precision for Q1.15 output.
-4. Scale: `conj(H_j_cal) · recip(S)` → int32 product → round to Q1.15.
+1. For each enabled branch, compute an approximate selection metric `|I| + |Q|` for SC and a peak component for MRC scaling.
+2. Track the maximum peak component across enabled branches.
+3. Compute `mrc_shift = base_shift + branch_headroom`.
+4. Emit rounded `conj(H_j_cal) >>> mrc_shift`, saturating to int16 Q1.15.
 
-Total hardware latency: ~30 cycles from inputs valid to weights written.
+Total hardware latency: ~16 cycles from `training_done` to `W_COMMIT` in RTL chain simulation.
 
 ### ALMMSE
 
@@ -178,7 +191,7 @@ SHIFT          — compute K, right-shift Z_j → H_j   (~4 cycles)
   ↓
 CALIBRATE      — H_j_cal = H_j · conj(cal_j)         (~8 cycles, 4 complex muls)
   ↓
-COMPUTE        — mode-dependent weight formula        (~4 cycles SC, ~15 cycles MRC)
+COMPUTE        — mode-dependent metric/shift compute  (~5 cycles)
   ↓
 SCALE          — round to Q1.15, saturate            (~2 cycles)
   ↓
@@ -187,7 +200,7 @@ WRITE          — write W_HW[3:0]; if WGT_AUTO_COMMIT: write W_SHADOW, pulse W_
 IDLE
 ```
 
-Total hardware latency from `training_done` to `W_COMMIT`: ~30–40 cycles (~2.0–2.5 µs at 16 MHz). Removal of the CORDIC path reduces the COMPUTE state from ~20–30 cycles to ~15 cycles (MRC reciprocal only).
+Total hardware latency from `training_done` to `W_COMMIT`: ~13–16 cycles in the current RTL chain simulations (under 1 µs at 16 MHz). Removing the reciprocal/divider path also removes the previous long arithmetic timing path.
 
 ---
 
@@ -199,7 +212,13 @@ All modes output int16 Q1.15 (range ±1.0, i.e. ±32767):
 w_j_Q15 = round(w_j · 2^15)   clamped to ±32767
 ```
 
-For MRC, the scaling is such that `Σ |w_j|² ≤ 1` (unit-norm weights), keeping combiner output power consistent across modes and antenna configurations.
+For hardware MRC, scaling is conservative rather than exact unit-norm. The shared shift preserves relative branch weights, and the branch-count headroom limits worst-case coherent addition. Final amplitude is adjusted by the combiner post-gain register (`COMB_POST_GAIN`, address `0x36`).
+
+### Why the hardware path avoids division
+
+A trial LibreLane physical-design run of the exact reciprocal/divide MRC implementation at the 16 MHz block clock showed post-CTS setup slack around -150 ns, far outside the 62.5 ns cycle. The issue was architectural, not placement tuning: exact normalization introduced wide reciprocal state and a 32×64 scale multiply on the weight path.
+
+The shift-MRC implementation keeps the important part of MRC, `w_j ∝ conj(H_j)`, while moving absolute gain control to cheap shifts and saturation. A quick generic Yosys comparison for `weight_gen` dropped from 32,799 cells for the reciprocal version to 17,516 cells for shift-MRC. This is the tapeout-oriented hardware path; exact normalized MRC remains a software/oracle model for analysis.
 
 ---
 
@@ -317,11 +336,10 @@ When `PSRAM_EN = 1`, this live-payload deadline is replaced by the replay deadli
    - 4 × complex multiply: H_j_cal = H_j · conj(cal_j)
    - Q1.15 calibration coefficients; result kept in int32
 
-3. **MRC reciprocal unit**
-   - Leading-zero normalise S → mantissa + exponent
-   - 8-bit mantissa LUT (256 entries) → initial estimate
-   - 2 Newton-Raphson iterations for ~15-bit precision
-   - Multiply conj(H_j_cal) × recip → scale to Q1.15
+3. **MRC shift scaler**
+   - Tracks peak calibrated I/Q component across enabled branches
+   - Adds branch-count headroom: 0 for one branch, 1 for two branches, 2 for three/four branches
+   - Emits rounded `conj(H_j_cal) >>> mrc_shift`
 
 4. **SC comparator**
    - 4 × magnitude-squared, 4-way maximum selector
@@ -343,8 +361,7 @@ When `PSRAM_EN = 1`, this live-payload deadline is replaced by the replay deadli
 |---|---|---|
 | `NR` | 4 | Number of receive branches |
 | `W_OUT_BITS` | 16 | Q1.15 output width |
-| `RECIP_LUT_BITS` | 8 | Mantissa LUT precision for MRC reciprocal |
-| `RECIP_NR_ITERS` | 2 | Newton-Raphson refinement iterations after LUT |
+| `MRC_BRANCH_HEADROOM` | enabled-count based | 0/1/2 bit coherent-add guard for 1/2/3-4 enabled branches |
 
 ---
 
@@ -352,7 +369,7 @@ When `PSRAM_EN = 1`, this live-payload deadline is replaced by the replay deadli
 
 | Test | Method | Pass criterion |
 |---|---|---|
-| MRC noiseless | Known h_j, exact Z_j | w_j matches conj(h_j)/Σ\|h\|² within Q1.15 rounding |
+| MRC noiseless | Known h_j, exact Z_j | w_j has phase `-angle(H_j_cal)` and preserves branch magnitude ratios after shared shift |
 | SC noiseless | One strong branch | w_j = 1 on correct branch, 0 elsewhere |
 | Bypass | Any input | w_j = 1 on lowest enabled antenna |
 | Calibration | Load non-unity cal_j | H_j_cal = H_j · conj(cal_j) before weight compute |
@@ -365,13 +382,14 @@ When `PSRAM_EN = 1`, this live-payload deadline is replaced by the replay deadli
 | Shift normalisation | Z_j with large dynamic range | K computed correctly; no overflow in H_j after shift |
 | All branches equal | \|Z_j\| identical for j=0..3 | MRC weights equal-magnitude across all branches |
 | Same-packet margin, baseline live path | SF6, WGT_AUTO_COMMIT=1 | W_COMMIT fires before payload start (timing_ref + 12.25·M samples) |
-| Reciprocal precision | S swept over full int64 range | \|1/S − recip(S)\| < 2^{−14} (14-bit accurate, sufficient for Q1.15) |
+| MRC shift scaling | Sweep peak and antenna_en | `mrc_shift = base_shift + branch_headroom`; disabled branches are zero |
 
 ---
 
 ## Known Limitations
 
 - **ALMMSE is software-only.** Matrix inversion for a 4×2 system is not hardened. `WGT_SRC` must be SW for ALMMSE. The hardware FSM still runs and writes W_HW (MRC result) as a diagnostic.
+- **No exact divide normalization in hardware path.** The hardware FSM uses proportional shift-MRC. Exact normalized MRC and NW-MRC are available via the SW path when firmware can spend the cycles.
 - **No per-branch noise weighting in hardware path.** The hardware FSM uses an equal per-branch noise assumption. NW-MRC (`w_j = conj(Z_j) / σ²_j`) is available via the SW path using estimates from the Noise Floor Estimator block. See noise floor estimation section below.
 - **Calibration is static.** Per-branch coefficients do not update at runtime. Temperature drift requires manual SPI recalibration.
 - **EMA smoothing is firmware responsibility.** Hardware computes fresh per-packet weights only. Cross-packet smoothing (EMA) must be implemented in firmware using the W_HW readback path.
@@ -415,7 +433,7 @@ The hardware path (`WGT_SRC=AUTO`) continues to use the equal-noise approximatio
 EGC (`w_j = conj(H_j_cal) / |H_j_cal|`) was considered for the hardware path and dropped in favour of MRC. Reasons:
 
 - MRC is the optimal linear combiner and is ~1 dB better than EGC at NR=4
-- EGC requires a 16-stage × 4-branch CORDIC (the largest datapath element), while MRC only needs the existing reciprocal LUT + Newton-Raphson unit
+- EGC requires a 16-stage × 4-branch CORDIC (the largest datapath element); the current hardware path intentionally avoids comparably wide normalization arithmetic
 - The one advantage of EGC — robustness to amplitude estimation noise — is not significant with 5+ preamble symbols of training
 - EGC is available via the software path (`WGT_SRC=SW`) for any deployment that needs it
 

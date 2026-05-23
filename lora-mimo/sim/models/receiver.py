@@ -8,7 +8,7 @@ Uses the training accumulator — see training_accumulator.py.
   Stage 3 — SC preamble detection → sc_lock, timing_ref
   Stage 4 — Training accumulator: Z_j = Σ raw_j[n]·conj(chirp_ref[n mod M])
   Stage 5 — Weight computation from Z_j (MRC/EGC/SC/Bypass)
-  Stage 6 — Complex combining: y[n] = Σ_j w_j* · x_j[n]
+  Stage 6 — Complex combining: y[n] = Σ_j w_j · x_j[n]
 
 FFT PATH (legacy reference — not used in current ASIC)
 -------------------------------------------------------
@@ -37,7 +37,10 @@ def nonfft_combine(
     """
     Complex sample-by-sample combining using weights from compute_weights_nonfft().
 
-    y[n] = Σ_j  w_j* · x_j[n]   (matched filter / MRC inner product)
+    y[n] = Σ_j  w_j · x_j[n]
+
+    WeightGenerator emits already-conjugated MRC weights, matching the RTL
+    multiply path in mrc_combiner.v. Do not conjugate them again here.
 
     Parameters
     ----------
@@ -48,7 +51,98 @@ def nonfft_combine(
     -------
     y : (n_samples,) combined signal
     """
-    return np.sum(np.conj(w)[:, None] * rx_payload, axis=0)
+    return np.sum(w[:, None] * rx_payload, axis=0)
+
+
+
+
+def _quantize_q15_int(w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return signed int16 Q1.15 real/imag components for complex weights."""
+    wr = np.clip(np.round(w.real * (2**15)), -32768, 32767).astype(np.int64)
+    wi = np.clip(np.round(w.imag * (2**15)), -32768, 32767).astype(np.int64)
+    return wr, wi
+
+
+def _as_int8_pair(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Round/saturate a complex payload to the RTL combiner's int8 inputs."""
+    xi = np.clip(np.round(x.real), -128, 127).astype(np.int64)
+    xq = np.clip(np.round(x.imag), -128, 127).astype(np.int64)
+    return xi, xq
+
+
+def _sat_int8(v: np.ndarray) -> np.ndarray:
+    return np.clip(v, -128, 127).astype(np.int8)
+
+
+def nonfft_combine_rtl_int8(
+    rx_payload: np.ndarray,
+    w: np.ndarray,
+    post_gain_shift: int = 0,
+    mode: str = "mrc",
+    bypass_ant: int = 0,
+) -> np.ndarray:
+    """
+    RTL-style int8 combiner model including COMB_POST_GAIN.
+
+    The RTL path uses Q1.15 weights, int8 input samples, a fixed guard
+    divide-by-2, then `post_gain_shift` bits of left-shift gain before int8
+    saturation. MRC weights are already conjugated by weight generation.
+
+    Parameters
+    ----------
+    rx_payload : (NR, n_samples) complex array, interpreted as int8 I/Q samples
+    w : (NR,) complex Q1.15 weights
+    post_gain_shift : 0..7, COMB_POST_GAIN[2:0]
+    mode : "mrc" or "bypass"
+    bypass_ant : branch used when mode="bypass"
+
+    Returns
+    -------
+    y : (n_samples,) complex array with int8-valued I/Q components
+    """
+    if not (0 <= int(post_gain_shift) <= 7):
+        raise ValueError("post_gain_shift must be in range 0..7")
+
+    x_i, x_q = _as_int8_pair(rx_payload)
+
+    if mode == "bypass":
+        j = int(bypass_ant)
+        return _sat_int8(x_i[j]).astype(float) + 1j * _sat_int8(x_q[j]).astype(float)
+    if mode != "mrc":
+        raise ValueError("mode must be 'mrc' or 'bypass'")
+
+    w_re, w_im = _quantize_q15_int(w)
+    acc_i = np.sum(w_re[:, None] * x_i - w_im[:, None] * x_q, axis=0)
+    acc_q = np.sum(w_re[:, None] * x_q + w_im[:, None] * x_i, axis=0)
+
+    shifted_i = (acc_i >> 1) << int(post_gain_shift)
+    shifted_q = (acc_q >> 1) << int(post_gain_shift)
+    return _sat_int8(shifted_i).astype(float) + 1j * _sat_int8(shifted_q).astype(float)
+
+
+def choose_comb_post_gain(
+    y: np.ndarray,
+    target_peak: int = 90,
+    max_shift: int = 7,
+    saturation_margin: int = 120,
+) -> int:
+    """
+    Conservative firmware/host policy for COMB_POST_GAIN.
+
+    Choose the largest left shift that keeps the observed complex I/Q component
+    peak at or below `target_peak`. If the observed output is already near
+    saturation, return zero. This policy is intended for packet-to-packet tuning:
+    start at zero, observe the combined int8 stream, then raise gain only when
+    there is clear headroom.
+    """
+    peak = int(max(np.max(np.abs(np.real(y))), np.max(np.abs(np.imag(y))))) if y.size else 0
+    if peak <= 0 or peak >= saturation_margin:
+        return 0
+
+    shift = 0
+    while shift < int(max_shift) and (peak << (shift + 1)) <= int(target_peak):
+        shift += 1
+    return shift
 
 
 # ---------------------------------------------------------------------------

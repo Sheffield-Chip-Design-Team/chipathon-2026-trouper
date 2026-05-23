@@ -6,10 +6,10 @@ Corresponds to planning/blocks/Weight Generation.md.
 Hardware FSM state sequence:
     IDLE → SHIFT → CALIBRATE → COMPUTE → SCALE → WRITE → IDLE
 
-The SHIFT state is the critical step absent from the raw training_accumulator
-compute_weights() helper: Z_j values are int64-range (up to ~2^42 for 4×
-int8 branches accumulated over 8×2^12 samples at SF12), so they must be
-right-shifted to int32 range before multiplication-heavy COMPUTE steps.
+The SHIFT state applies the same common right shift used by the RTL: the
+largest I/Q component is brought into the signed Q1.15-friendly range before
+calibration. Hardware MRC then preserves branch ratios with a conservative
+power-of-two scale rather than an exact reciprocal/divide.
 """
 
 import numpy as np
@@ -93,29 +93,55 @@ class NoiseFloorEstimator:
         return self._n_rejected
 
 
+def _norm_shift_from_peak(peak: float) -> int:
+    """RTL-compatible shift: keep the peak signed component below 2^15."""
+    peak_i = int(abs(round(float(peak))))
+    if peak_i <= 0x7FFF:
+        return 0
+    return max(0, int(np.floor(np.log2(float(peak_i)))) - 14)
+
+
+def _branch_headroom(mask: np.ndarray) -> int:
+    """Conservative coherent-add headroom used by hardware MRC."""
+    count = int(np.count_nonzero(mask))
+    if count <= 1:
+        return 0
+    if count == 2:
+        return 1
+    return 2
+
+
+def _round_ashr(v: float, sh: int) -> int:
+    """Match RTL round_ashr32(): add/subtract half-LSB before arithmetic shift."""
+    vi = int(round(float(v)))
+    if sh <= 0:
+        return vi
+    bias = 1 << (sh - 1)
+    if vi < 0:
+        return (vi - bias) >> sh
+    return (vi + bias) >> sh
+
+
 def shift_normalise(Z_j: np.ndarray) -> tuple[np.ndarray, int]:
     """
-    SHIFT state: reduce int64-range Z_j to int32 range via common right-shift K.
+    SHIFT state: reduce Z_j to the signed Q1.15-friendly range via common K.
 
-    K = max(0, ceil(log2(max_component)) - 31)
-
-    Common shift preserves relative magnitudes and phases exactly.
+    K is selected from the largest absolute I/Q component across all branches.
+    The same shift is applied to every branch, preserving relative magnitudes
+    and phases before calibration.
 
     Returns
     -------
-    H_j : (NR,) complex, values in int32 range
-    K   : int, bits shifted (0 if already in int32 range)
+    H_j : (NR,) complex, shifted channel estimates
+    K   : int, bits shifted (0 if already in range)
     """
-    INT32_MAX = 2**31 - 1
     max_component = float(max(
         np.max(np.abs(Z_j.real)),
         np.max(np.abs(Z_j.imag)),
     ))
     if max_component == 0.0:
         return np.zeros_like(Z_j, dtype=complex), 0
-    if max_component <= INT32_MAX:
-        return Z_j.astype(complex), 0
-    K = int(np.ceil(np.log2(max_component / INT32_MAX)))
+    K = _norm_shift_from_peak(max_component)
     return (Z_j / (2 ** K)).astype(complex), K
 
 
@@ -140,15 +166,17 @@ def compute_weights_hw(
     """
     COMPUTE + SCALE states: produce Q1.15 combining weights.
 
+    The hardware MRC path is intentionally approximate: it emits
+    conj(H_j_cal) shifted by a shared power-of-two scale. This preserves the
+    MRC branch ratios without a divider/reciprocal. E_ref_H is accepted for API
+    compatibility with older simulations but is not used by the hardware path.
+
     Parameters
     ----------
-    H_j_cal   : (NR,) complex calibrated channel estimates (int32-range floats)
+    H_j_cal   : (NR,) complex calibrated channel estimates after SHIFT
     mode      : 'mrc' | 'egc' | 'sc' | 'bypass'
     antenna_en: bitmask of enabled antennas (bit j = antenna j)
-    E_ref_H   : E_ref scaled to H space = E_ref / 2^K.
-                When provided, MRC uses w_j = conj(H) * E_ref_H / Σ|H|²,
-                giving |w_j| ≈ |h_j|/Σ|h_k|² (Q1.15-friendly).
-                When None, falls back to w_j = conj(H) / Σ|H|² (tiny for large inputs).
+    E_ref_H   : ignored by hardware MRC; exact/oracle MRC uses a separate helper
 
     Returns
     -------
@@ -183,15 +211,17 @@ def compute_weights_hw(
         return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
 
     if mode == "mrc":
-        S = float(np.sum(np.abs(H) ** 2))
-        if S == 0.0:
+        peak = float(max(np.max(np.abs(H.real)), np.max(np.abs(H.imag))))
+        if peak == 0.0:
             return np.zeros(NR, dtype=complex)
-        if E_ref_H is not None and E_ref_H > 0.0:
-            # E_ref normalisation: |w_j| ≈ |h_j|/Σ|h_k|² (fits Q1.15)
-            w = np.conj(H) * E_ref_H / S
-        else:
-            w = np.conj(H) / S
-        return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
+        mrc_shift = _norm_shift_from_peak(peak) + _branch_headroom(mask)
+        w_re = np.array([_round_ashr(h.real, mrc_shift) if en else 0
+                         for h, en in zip(H, mask)], dtype=float)
+        w_im = np.array([_round_ashr(-h.imag, mrc_shift) if en else 0
+                         for h, en in zip(H, mask)], dtype=float)
+        w_re = np.clip(w_re, -32768, 32767)
+        w_im = np.clip(w_im, -32768, 32767)
+        return (w_re / 2**15) + 1j * (w_im / 2**15)
 
     raise ValueError(f"Unknown mode {mode!r}. Use 'mrc', 'egc', 'sc', or 'bypass'.")
 
@@ -233,8 +263,8 @@ class WeightGenerator:
         Parameters
         ----------
         Z_j   : (NR,) complex channel estimates from training_accumulate()
-        E_ref : reference branch energy from training_accumulate(); when provided,
-                MRC weights are scaled to |w_j| ≈ |h_j|/Σ|h_k|² (Q1.15-friendly).
+        E_ref : retained for API compatibility. Hardware MRC ignores it because
+                normalization is a conservative shared shift, not an exact divide.
 
         Returns
         -------
@@ -243,11 +273,39 @@ class WeightGenerator:
         """
         H_j, K = shift_normalise(Z_j)
         H_j_cal = apply_calibration(H_j, self.cal_j)
-        # Scale E_ref to H space: H_j = Z_j / 2^K, so E_ref_H = E_ref / 2^K
-        E_ref_H = E_ref / (2 ** K) if (E_ref is not None and K >= 0) else None
         w = compute_weights_hw(H_j_cal, mode=self.mode, antenna_en=self.antenna_en,
-                               E_ref_H=E_ref_H)
+                               E_ref_H=None)
         return w, K
+
+
+def compute_exact_mrc_weights(
+    Z_j: np.ndarray,
+    antenna_en: int = 0xF,
+    cal_j: np.ndarray | None = None,
+    E_ref: float | None = None,
+) -> np.ndarray:
+    """
+    Exact/oracle normalized MRC retained for algorithm sweeps and comparison.
+
+    This is not the hardened hardware path. It represents firmware/offline MRC
+    that can afford division: w_j = conj(H_j) * E_ref_H / Σ|H_k|² when E_ref is
+    provided, otherwise w_j = conj(H_j) / Σ|H_k|².
+    """
+    H_j, K = shift_normalise(Z_j)
+    H = apply_calibration(H_j, cal_j)
+    NR = len(H)
+    mask = np.array([(antenna_en >> j) & 1 for j in range(NR)], dtype=bool)
+    H = H.copy()
+    H[~mask] = 0.0
+    S = float(np.sum(np.abs(H) ** 2))
+    if S == 0.0:
+        return np.zeros(NR, dtype=complex)
+    E_ref_H = E_ref / (2 ** K) if (E_ref is not None and K >= 0) else None
+    if E_ref_H is not None and E_ref_H > 0.0:
+        w = np.conj(H) * E_ref_H / S
+    else:
+        w = np.conj(H) / S
+    return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
 
 
 # ---------------------------------------------------------------------------

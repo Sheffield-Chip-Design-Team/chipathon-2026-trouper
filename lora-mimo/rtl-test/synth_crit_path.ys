@@ -1,0 +1,17 @@
+# synth_crit_path.ys — synthesise isolated critical-path modules from weight_gen
+# Each dut_* module = one clock cycle in the FSM.  ABC completes in seconds.
+# -D 31250 = 31.25 ns (32 MHz target), GF180MCU mcu7t5v0 TT 3.3V 25C
+
+read_verilog -sv /work/crit_path_test.v
+hierarchy -check
+
+synth
+
+dfflibmap -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
+
+abc -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib -D 31250
+
+opt_clean -purge
+
+tee -o /work/out/stat_crit_path.txt stat -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
+write_verilog -noattr /work/out/netlist_crit_path.v

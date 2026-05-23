@@ -27,5 +27,12 @@ build/
 .DS_Store
 Thumbs.db
 
-# RTL scratch directory
-rtl-test/
+# RTL build outputs (source files tracked; run results live on NFS via symlink)
+rtl-test/obj_dir*/
+rtl-test/out/
+rtl-test/*.vcd
+rtl-test/ol_*/runs
+rtl-test/ol_*/*.log
+rtl-test/picorv32_ip/
+rtl-test/*status*.txt
+rtl-test/tmp_*.tcl

@@ -74,9 +74,30 @@ Distributed antenna deployments (antennas hundreds of metres apart) are outside 
 
 **MAC structure.** Each complex MAC: `acc_re += W_re×x_i − W_im×x_q`, `acc_im += W_re×x_q + W_im×x_i`. Four complex MACs per sample.
 
-**Output headroom.** MRC coherently adds branch amplitudes. With unit-norm weights (Σ|w_j|² = 1) and NR=4 equal branches, output amplitude is √NR × input amplitude = 2× per branch (+6 dB). The combiner MRC output stage applies a fixed ÷2 right-shift (arithmetic right-shift 1 on the int32 accumulator) before saturating to int8. This absorbs the √NR combining gain so the re-modulator sees approximately per-branch amplitude. Bypass output is int8 directly — no ÷2 applied, preserving the full per-branch amplitude. The AGC owns the per-branch level constraint (−3 dBFS max per branch); see AGC headroom constraint. Int8 saturation is a safety net for AGC settling transients only.
+**Output headroom.** MRC coherently adds branch amplitudes. The hardware weight path now uses shift-MRC: weights are proportional to `conj(H_j)` with a shared conservative right shift and branch-count headroom. The combiner still applies a fixed ÷2 guard shift, then an optional `COMB_POST_GAIN` left shift before saturating to int8. Reset value `COMB_POST_GAIN=0` is conservative; firmware may increase it after observing output headroom. Bypass output is int8 directly, preserving the full per-branch amplitude. The AGC owns the per-branch level constraint (−3 dBFS max per branch); see AGC headroom constraint. Int8 saturation is a safety net for AGC settling transients only.
 
-**Accumulator saturation.** After the ÷2 right-shift, saturate to int8 bounds (±127) — do not allow 2's-complement wrap. This provides a safety net for AGC settling transients or unexpected strong signals, but should not be the normal operating condition.
+**Accumulator saturation.** After the fixed ÷2 guard shift and optional post-combine gain, saturate to int8 bounds (±127) — do not allow 2's-complement wrap. This provides a safety net for AGC settling transients or unexpected strong signals, but should not be the normal operating condition.
+
+### COMB_POST_GAIN policy
+
+`COMB_POST_GAIN` is a packet-to-packet amplitude recovery knob for shift-MRC. It is intentionally outside weight generation: weight generation stays conservative and timing-friendly, while firmware/host can recover output level when the combined stream has headroom.
+
+Register behavior:
+
+```
+y_guarded = mrc_accumulator >>> 1
+y_out     = sat8(y_guarded <<< COMB_POST_GAIN_SHIFT)
+```
+
+Reset/default is `0`. A conservative firmware policy is:
+
+1. Start every unknown channel/gain state at `COMB_POST_GAIN=0`.
+2. Observe the combined int8 stream peak over a packet or diagnostic window.
+3. If any I/Q component is near saturation, keep or return to `0`.
+4. Otherwise choose the largest shift such that `observed_peak << shift <= 90`.
+5. Apply the new shift for subsequent packets, not mid-packet.
+
+The `90` target preserves roughly -3 dBFS headroom for the ΣΔ re-modulator. Larger values may be useful in lab characterization, but should be treated as an explicit tradeoff against clipping margin.
 
 **Output latency and y_valid handshake.** The combiner propagates `x_valid` through its fixed-depth pipeline and asserts `y_valid` exactly P clock cycles later, where P is a constant determined by the RTL implementation (TBD — typically 1–4 cycles). The ΣΔ re-modulator downstream must consume samples on `y_valid` rather than assuming a fixed offset from `x_valid`. P must be recorded in the RTL as a parameter and exposed in the block's timing documentation once implementation begins. This removes the need to pre-specify latency in the spec and makes the interface self-describing.
 
