@@ -15,6 +15,20 @@ Converts the 1-bit sigma-delta bitstream from each SX1257 ΣΔ ADC into full-pre
 
 **Design note:** 8-bit was chosen over 12-bit after simulation showed no BER degradation at either width across the full operating SNR range (SF=7, NR=4, training accumulator path). The low-gain edge case (AGC at minimum, high channel power) is benign: quantization noise can exceed thermal noise only when SNR is high, so decoding is unaffected. 8-bit allows the training accumulator to use int32 instead of int64, and the Frontend Buffer write path requires no saturation shift. See sim/tests/test_bitwidth_sweep.py for the simulation. **Pending GNU Radio confirmation — see open item.**
 
+**Quantisation noise vs thermal noise budget (125 kHz BW, OSR=256):**
+
+The 8-bit absolute noise floor is fixed at −50 dBFS regardless of signal amplitude. The AGC is peak-based (`agc_target=0.4`); at the sensitivity limit the received signal is noise-dominated, so the AGC tracks the noise peak rather than the signal. For Gaussian noise the peak-to-RMS ratio is ~4× (12 dB), placing the thermal noise RMS at approximately:
+
+```
+0.4 FS / 4  ≈  0.1 FS  →  −20 dBFS
+```
+
+Headroom = −20 − (−50) ≈ **30 dB** between the thermal noise floor and the 8-bit quantisation floor. The ADC contributes negligible NF degradation (~0.1 dB) under normal operation.
+
+At 500 kHz BW (OSR=64) the limit is different: the 1st-order ΣΔ in-band noise (~37 dB SQNR at full scale, ~34 dB measured in Python sim at A=0.35) dominates over the 8-bit floor (~50 dB). Increasing to 12-bit would not improve sensitivity at 500 kHz — the sigma-delta noise shaping is the bottleneck there.
+
+Note: comparison to thermal noise must use the absolute ADC noise floor (−50 dBFS), not the SQNR at a test amplitude. SQNR at reduced amplitude (e.g. −9 dB back-off) understates the headroom by 9 dB.
+
 ---
 
 ## Clock and oversampling decision
@@ -132,6 +146,11 @@ For large R (≥64), `sin(π·f/R) ≈ π·f/R` across the passband, so the resp
 
 **Clock domain.** Entire block runs at 32 MHz. `iq_valid` rate changes with `decim_ratio`. All downstream DSP must use `iq_valid` as their clock enable.
 
+**Inter-instance latency coherence.** The training accumulator cross-correlates all 4 branches against a reference branch sample-by-sample; a one-sample offset in any instance produces a mis-aligned cross-correlation and corrupts the MRC weights. The RTL is safe at the logic level: all 4 instances share the same `clk_32m`, `clk_16m`, `rst_n`, and `decim_ratio`, and `decim_cnt` is a free-running counter that resets identically in every instance, so `cic_strobe` and `iq_valid` are coincident across all four. Two physical risks remain:
+
+1. **Clock skew.** P&R clock tree synthesis must balance `clk_32m` and `clk_16m` to all four decimator instances. Verify the CTS skew report after top-level LibreLane run — skew must be well below one `clk_32m` period (31.25 ns).
+2. **Reset skew.** If `rst_n` deassertion reaches the four instances on different clock cycles, `decim_cnt` starts from different phases and the instances are permanently offset by up to R−1 output samples. The reset net must be treated as a timing-critical path or synchronised through a reset synchroniser shared by all four instances.
+
 ---
 
 ## Open items
@@ -148,6 +167,8 @@ For large R (≥64), `sin(π·f/R) ≈ π·f/R` across the passband, so the resp
 
 If GNU Radio confirms no degradation, 8-bit is locked. If a sensitivity penalty is found at any operating point, revisit 12-bit (int64 training accumulator required — see Training Accumulator spec).
 
+**Inter-instance coherence (reset skew).** `rst_n` fan-out to four instances must be verified — see Implementation notes above. If the reset net is not balanced, `decim_cnt` can start on different phases and `iq_valid` will be permanently offset between instances, silently corrupting the training accumulator cross-correlation with no other visible symptom.
+
 ---
 
 ## Verification
@@ -159,6 +180,8 @@ If GNU Radio confirms no degradation, 8-bit is locked. If a sensitivity penalty 
 | DC Scaling | Inject all-ones at R=256 | `iq_out` does not overflow; reaches max positive value |
 | Sinc droop | Sweep input tone 0–62.5 kHz | FIR-corrected output flat within ±0.5 dB |
 | CFO aliasing | Inject LoRa with ±19 kHz CFO (20 ppm TX + 2 ppm RX worst case) | Aliasing loss < 1.5 dB; main chirp peak still detectable |
+| SQNR (RTL) | `sim/sims/run_sqnr_tb.py` — iverilog+vvp via iic-osic-tools Docker; 34816 ΣΔ bits, R=64, f=31.25 kHz, A=0.35; LSQ sine fit | SQNR ≥ 28 dB on I and Q channels |
+| Inter-instance alignment | Instantiate all 4 decimators in one TB, same clocks and reset; compare `iq_valid` edges and first output sample values | All 4 `iq_valid` coincident every cycle; output samples identical for identical input |
 
 ---
 
