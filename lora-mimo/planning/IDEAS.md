@@ -8,7 +8,13 @@ Open ideas for future notebook cells, model extensions, or verification experime
 
 1. **[DONE 2026-05-24]** `ol_weight_gen` SS timing closed — three-stage fix: (a) replaced `abs32`-based K lookup with n_acc-level lookup (eliminated 132 ns ripple adder); (b) 2-stage ST_CALIBRATE pipeline splitting shift+multiply+add across two cycles; (c) 16×8 cal multiply (upper byte only, Q1.7 precision) replacing 16×16 to halve adder-tree depth. Result: WNS = 0.0 ns at all three corners (SS/TT/FF), DRC = 0. Simulations 7/7 PASS.
 2. **[DONE 2026-05-24]** `ol_mrc_combiner` physical design — re-ran P&R with updated RTL; WNS = 0.0 ns at all corners, DRC = 0, no max-slew or max-cap violations.
-3. **[DONE 2026-05-24]** `sd_remod` / `sd_decimator` loopback — `tb_dsp_chain` and `tb_dsp_chain_real` both 7/7 PASS including sd_remod toggle test; `0.994` I/Q correlation on real-signal testbench. Architecture confirmed correct; no further output-swing work required.
+3. **[DONE 2026-05-24]** `sd_remod` / `sd_decimator` loopback — full DSP chain Verilator-verified across four testbenches:
+   - `tb_dsp_chain` (synthetic IQ, no sd_decimator): **7/7 PASS**
+   - `tb_dsp_chain_real` (real chip samples, no sd_decimator): **7/7 PASS**
+   - `tb_dsp_chain_real_probe` (real samples + sd_decimator, OSR=20): **6/6 PASS**
+   - `tb_dsp_chain_real_probe_osr256` (real samples + sd_decimator, OSR=256): **6/6 PASS**
+   
+   `sd_decimator` confirmed working at both normal and 256× oversampling. `0.994` I/Q correlation on real-signal loopback. Architecture correct; no further work required.
 4. **[Loose end]** Treat `sd_remod` `-3 dBFS` input limit as a hard AGC contract — 8-bit precision still leaves quantisation comfortably below thermal noise at that backoff, so the stability limit should be enforced rather than optimized away. Need a no-CPU/DSP-isolation policy as well: hardware must not overdrive `sd_remod` when PicoRV32 AGC is absent. Candidate protections are a reset-default remod backoff shift, a hard clamp around `±90`, or a minimal standalone hardware AGC mode.
 
 ---
