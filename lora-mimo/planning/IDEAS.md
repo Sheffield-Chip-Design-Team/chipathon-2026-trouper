@@ -807,6 +807,26 @@ Both fit comfortably within one 31.25 ns period — **single-cycle access is via
 
 **Action:** check if the ocd_ip_sram macro is available for this shuttle and whether four-wide instantiation fits the floorplan.
 
+### PicoRV32 Physical Design — 16 MHz confirmed ✅ (2026-05-24)
+
+`ol_picorv32` fully P&R'd at **16 MHz** (GF180MCU 3.3V, all three corners):
+
+| Corner | Setup WNS | Hold WNS | DRC |
+|--------|-----------|----------|-----|
+| nom_tt_025C_3v30 | +39.49 ns | +0.16 ns | 0 |
+| max_ss_125C_3v00 | **+14.84 ns** | −0.26 ns (9 paths, suppressed) | 0 |
+| max_ff_n40C_3v60 | +48.65 ns | +0.26 ns | 0 |
+
+Magic DRC = 0, antenna violations = 0, 20,693 standard cells.  
+Hold violations at SS corner (9 paths, TNS = −1.02 ns) are acceptable per
+`HOLD_VIOLATION_CORNERS: [""]` policy — hold slack is marginal at worst-case
+SS and tightens at TT/FF. Flow exits 0.
+
+**32 MHz + irq_state MCP:** attempted with `pnr_32mhz_mcp.sdc`. First run failed
+because `get_registers` is not available in this OpenSTA build. Fixed to use
+`get_cells {_20877_ _20878_}` (Yosys-synthesised irq_state FFs, deterministic).
+Resubmission pending SGE recovery.
+
 ### Timing corner reference
 
 Clock: **16 MHz** (62.5 ns). `mrc_combiner` pipeline register added between multiply and accumulate stages. `weight_gen` fanout constraint raised to 4 to eliminate buffer-chain cascades. SS corner closure still under iteration.
