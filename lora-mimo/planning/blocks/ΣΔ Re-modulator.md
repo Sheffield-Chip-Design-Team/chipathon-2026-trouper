@@ -9,7 +9,7 @@ RX path stage 9. See [DSP Flow](../DSP%20Flow.md) for context.
 
 ## Function
 
-3rd order feed-forward sigma-delta modulator converting int8 combined samples back to a 1-bit I+Q bitstream at 32 MS/s for the SX1302 Radio A input. Single instance.
+Page-37-style 3rd-order feed-forward sigma-delta modulator converting int8 combined samples back to a 1-bit I+Q bitstream at 32 MS/s for the SX1302 Radio A input. The chosen structure is three delayed, saturating integrators with a feed-forward summer into a 1-bit sign quantiser, matching the SX1257 datasheet diagram.
 
 ```
 Three cascaded ideal integrators (Z⁻¹/(1−Z⁻¹)) with feed-forward
@@ -52,7 +52,7 @@ OSR = 256 / 128 / 64 for 125 / 250 / 500 kHz BW respectively (32 MS/s / f_s). In
 
 ## Implementation notes
 
-**3rd order feed-forward structure.** Three integrators; output fed back to comparator only (not to integrators directly). Feed-forward coefficients set the noise transfer function (NTF) zeros. This topology avoids integrator saturation from large input and is preferred over feedback-only designs.
+**Page-37 feed-forward structure.** Three delayed integrators feed a weighted summer and a sign comparator. The quantiser output is fed back as a symmetric +127/−127 1-bit stream, while each integrator state saturates rather than wrapping. This is the architecture that now matches the datasheet diagram and the loopback probe result, so the remaining work is output swing tuning, not loop stability.
 
 **Integrator saturation.** Each integrator accumulator must clamp to ±(2^(width−1)−1) rather than wrap. Wrap-around causes instability that does not self-recover. Use saturating adders.
 

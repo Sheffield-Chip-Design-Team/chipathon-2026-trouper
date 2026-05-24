@@ -260,12 +260,14 @@ module tb_dsp_chain;
         .timing_ref     (timing_ref),
         .sf             (4'd7),
         .ref_sel        (2'd0),
+        .noise_en       (1'b0),
         .Z_i0           (Z_i0),  .Z_q0  (Z_q0),
         .Z_i1           (Z_i1),  .Z_q1  (Z_q1),
         .Z_i2           (Z_i2),  .Z_q2  (Z_q2),
         .Z_i3           (Z_i3),  .Z_q3  (Z_q3),
         .E_ref          (E_ref),
         .training_done  (training_done),
+        .noise_ready    (),
         .n_acc          (n_acc)
     );
 

@@ -106,7 +106,7 @@ All R values are power-of-2. Samples/symbol = 2^SF for all SF and all BW setting
 | --- | --- | --- |
 | Decimation ratios ($R$) | 256, 128, 64, 32 | Power-of-2; R=32 gives 1 MS/s (2× oversampled 500 kHz BW) |
 | CIC stages ($N$) | 3 | Balanced for area and stopband rejection |
-| Accumulator width | 25-bit | `1 + N·log₂(R_max) = 1 + 3·8 = 25` bits; covers all four ratios |
+| Accumulator width | 26-bit | `2 + N·log₂(R_max) = 2 + 3·8 = 26` bits; one extra positive-endpoint bit is required because a full-scale constant `+1` stream at `R=256` produces exactly `+2^24`, which does not fit in signed 25-bit |
 | FIR taps | 9 (symmetric Type-I, 5 unique) | Single coefficient set — see FIR Compensation note below |
 | Output width | 8-bit signed | Convergent rounding from 25-bit CIC accumulator; normalisation right-shift 17 (R=256), 14 (R=128), 11 (R=64), 8 (R=32) |
 

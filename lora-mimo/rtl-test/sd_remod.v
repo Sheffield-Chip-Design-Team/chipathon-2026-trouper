@@ -1,7 +1,7 @@
 // sd_remod.v
-// 3rd-order feed-forward sigma-delta re-modulator
-// Converts int8 baseband I+Q at sample rate to 1-bit 32 MS/s bitstreams
-// GF180MCU, 3.3V, 32 MHz single clock domain
+// 3rd-order single-bit feed-forward sigma-delta re-modulator
+// Based on SX1257 datasheet Figure 6-3: three delayed integrators,
+// symmetric 1-bit feedback, and a feed-forward summer into the sign quantizer.
 
 module sd_remod (
     input  wire        clk_32m,
@@ -14,88 +14,69 @@ module sd_remod (
     output reg         out_q
 );
 
-    // 12-bit signed saturating adder
-    function signed [11:0] sat12;
-        input signed [12:0] v;
+    function signed [15:0] sat16;
+        input signed [16:0] v;
         begin
-            if      (v > 13'sd2047)  sat12 = 12'sd2047;
-            else if (v < -13'sd2048) sat12 = -12'sd2048;
-            else                      sat12 = v[11:0];
+            if      (v > 17'sd32767)  sat16 = 16'sd32767;
+            else if (v < -17'sd32768) sat16 = -16'sd32768;
+            else                      sat16 = v[15:0];
         end
     endfunction
 
-    // Integrator state (12-bit signed saturating)
-    reg signed [11:0] acc1_i, acc2_i, acc3_i;
-    reg signed [11:0] acc1_q, acc2_q, acc3_q;
+    reg signed [15:0] s1_i, s2_i, s3_i;
+    reg signed [15:0] s1_q, s2_q, s3_q;
+    reg signed [7:0]  in_i_lat, in_q_lat;
 
-    // Latched input (hold between in_valid strobes)
-    reg signed [7:0] in_i_lat, in_q_lat;
+    wire signed [11:0] x_i = {{4{in_i_lat[7]}}, in_i_lat};
+    wire signed [11:0] x_q = {{4{in_q_lat[7]}}, in_q_lat};
+    wire signed [11:0] y_i_fb = out_i ? 12'sd127 : -12'sd127;
+    wire signed [11:0] y_q_fb = out_q ? 12'sd127 : -12'sd127;
 
-    // Previous integrator values for feed-forward
-    reg signed [11:0] acc1_i_prev, acc2_i_prev;
-    reg signed [11:0] acc1_q_prev, acc2_q_prev;
+    wire signed [12:0] e_i = $signed({x_i[11], x_i}) - $signed({y_i_fb[11], y_i_fb});
+    wire signed [12:0] e_q = $signed({x_q[11], x_q}) - $signed({y_q_fb[11], y_q_fb});
 
-    // Registered feedback error. Nonblocking updates used the previous output
-    // value for feedback; these flops preserve that timing while avoiding
-    // high fanout from the output pins back into the accumulator adders.
-    reg signed [7:0] err_i_r, err_q_r;
+    wire signed [16:0] s1_i_next = $signed({s1_i[15], s1_i}) + {{4{e_i[12]}}, e_i};
+    wire signed [16:0] s1_q_next = $signed({s1_q[15], s1_q}) + {{4{e_q[12]}}, e_q};
+    wire signed [16:0] s2_i_next = $signed({s2_i[15], s2_i}) + $signed({s1_i[15], s1_i});
+    wire signed [16:0] s2_q_next = $signed({s2_q[15], s2_q}) + $signed({s1_q[15], s1_q});
+    wire signed [16:0] s3_i_next = $signed({s3_i[15], s3_i}) + $signed({s2_i[15], s2_i});
+    wire signed [16:0] s3_q_next = $signed({s3_q[15], s3_q}) + $signed({s2_q[15], s2_q});
 
-    // Quantizer input: feed-forward sum
-    // v = acc1 + acc2 + acc3 + (in << 3)  (scale int8 to 12-bit range: *8)
-    wire signed [13:0] v_i = {{2{acc1_i[11]}}, acc1_i}
-                            + {{2{acc2_i[11]}}, acc2_i}
-                            + {{2{acc3_i[11]}}, acc3_i}
-                            + {{3{in_i_lat[7]}}, in_i_lat, 3'b000};
+    // Feed-forward summer into the sign quantizer. Keep unity weights first;
+    // coefficient tuning can follow once the loopback behaves correctly.
+    wire signed [18:0] v_i = {{6{e_i[12]}}, e_i}
+                           + {{3{s1_i[15]}}, s1_i}
+                           + {{3{s2_i[15]}}, s2_i}
+                           + {{3{s3_i[15]}}, s3_i};
+    wire signed [18:0] v_q = {{6{e_q[12]}}, e_q}
+                           + {{3{s1_q[15]}}, s1_q}
+                           + {{3{s2_q[15]}}, s2_q}
+                           + {{3{s3_q[15]}}, s3_q};
 
-    wire signed [13:0] v_q = {{2{acc1_q[11]}}, acc1_q}
-                            + {{2{acc2_q[11]}}, acc2_q}
-                            + {{2{acc3_q[11]}}, acc3_q}
-                            + {{3{in_q_lat[7]}}, in_q_lat, 3'b000};
-
-    // Comparator: MSB of sum (sign bit) determines output bit
-    wire q_i = !v_i[13]; // positive sum -> output 1
-    wire q_q = !v_q[13];
+    wire q_i = !v_i[18];
+    wire q_q = !v_q[18];
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            acc1_i <= 12'sd0; acc2_i <= 12'sd0; acc3_i <= 12'sd0;
-            acc1_q <= 12'sd0; acc2_q <= 12'sd0; acc3_q <= 12'sd0;
-            acc1_i_prev <= 12'sd0; acc2_i_prev <= 12'sd0;
-            acc1_q_prev <= 12'sd0; acc2_q_prev <= 12'sd0;
+            s1_i <= 16'sd0; s2_i <= 16'sd0; s3_i <= 16'sd0;
+            s1_q <= 16'sd0; s2_q <= 16'sd0; s3_q <= 16'sd0;
             in_i_lat <= 8'sd0; in_q_lat <= 8'sd0;
-            err_i_r <= -8'sd127; err_q_r <= -8'sd127;
             out_i <= 1'b0; out_q <= 1'b0;
         end else begin
-            // Latch input sample on in_valid strobe
             if (in_valid) begin
                 in_i_lat <= in_i;
                 in_q_lat <= in_q;
             end
 
-            // Save previous integrator outputs for acc2/acc3 update
-            acc1_i_prev <= acc1_i;
-            acc1_q_prev <= acc1_q;
-            acc2_i_prev <= acc2_i;
-            acc2_q_prev <= acc2_q;
+            s1_i <= sat16(s1_i_next);
+            s1_q <= sat16(s1_q_next);
+            s2_i <= sat16(s2_i_next);
+            s2_q <= sat16(s2_q_next);
+            s3_i <= sat16(s3_i_next);
+            s3_q <= sat16(s3_q_next);
 
-            // Update integrators
-            // acc1 = sat(acc1 + in_latched - err)
-            acc1_i <= sat12($signed({acc1_i[11], acc1_i}) + {{4{in_i_lat[7]}}, in_i_lat} - {{4{err_i_r[7]}}, err_i_r});
-            acc1_q <= sat12($signed({acc1_q[11], acc1_q}) + {{4{in_q_lat[7]}}, in_q_lat} - {{4{err_q_r[7]}}, err_q_r});
-
-            // acc2 = sat(acc2 + acc1_prev)
-            acc2_i <= sat12($signed({acc2_i[11], acc2_i}) + $signed({acc1_i_prev[11], acc1_i_prev}));
-            acc2_q <= sat12($signed({acc2_q[11], acc2_q}) + $signed({acc1_q_prev[11], acc1_q_prev}));
-
-            // acc3 = sat(acc3 + acc2_prev)
-            acc3_i <= sat12($signed({acc3_i[11], acc3_i}) + $signed({acc2_i_prev[11], acc2_i_prev}));
-            acc3_q <= sat12($signed({acc3_q[11], acc3_q}) + $signed({acc2_q_prev[11], acc2_q_prev}));
-
-            // Output: comparator result or forced low if !en
             out_i <= en ? q_i : 1'b0;
             out_q <= en ? q_q : 1'b0;
-            err_i_r <= en ? (q_i ? 8'sd127 : -8'sd127) : -8'sd127;
-            err_q_r <= en ? (q_q ? 8'sd127 : -8'sd127) : -8'sd127;
         end
     end
 

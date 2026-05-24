@@ -35,13 +35,13 @@ module sd_decimator (
     reg iq_in_i_r, iq_in_q_r;
     reg cic_bit_i_r, cic_bit_q_r;
 
-    reg signed [24:0] intg_i1, intg_i2, intg_i3;
-    reg signed [24:0] intg_q1, intg_q2, intg_q3;
+    reg signed [25:0] intg_i1, intg_i2, intg_i3;
+    reg signed [25:0] intg_q1, intg_q2, intg_q3;
 
-    reg signed [24:0] comb_i1_d, comb_i2_d, comb_i3_d;
-    reg signed [24:0] comb_q1_d, comb_q2_d, comb_q3_d;
-    reg signed [24:0] comb_i1_out, comb_i2_out, comb_i3_out;
-    reg signed [24:0] comb_q1_out, comb_q2_out, comb_q3_out;
+    reg signed [25:0] comb_i1_d, comb_i2_d, comb_i3_d;
+    reg signed [25:0] comb_q1_d, comb_q2_d, comb_q3_d;
+    reg signed [25:0] comb_i1_out, comb_i2_out, comb_i3_out;
+    reg signed [25:0] comb_q1_out, comb_q2_out, comb_q3_out;
 
     reg [7:0] decim_cnt;
     reg [7:0] R;
@@ -68,19 +68,19 @@ module sd_decimator (
 
     reg cic_strobe;
 
-    wire signed [24:0] intg_i1_next = cic_bit_i_r ? (intg_i1 + 25'sd1) : (intg_i1 - 25'sd2);
-    wire signed [24:0] intg_i2_next = intg_i2 + intg_i1;
-    wire signed [24:0] intg_i3_next = intg_i3 + intg_i2;
-    wire signed [24:0] intg_q1_next = cic_bit_q_r ? (intg_q1 + 25'sd1) : (intg_q1 - 25'sd2);
-    wire signed [24:0] intg_q2_next = intg_q2 + intg_q1;
-    wire signed [24:0] intg_q3_next = intg_q3 + intg_q2;
+    wire signed [25:0] intg_i1_next = cic_bit_i_r ? (intg_i1 + 26'sd1) : (intg_i1 - 26'sd1);
+    wire signed [25:0] intg_i2_next = intg_i2 + intg_i1;
+    wire signed [25:0] intg_i3_next = intg_i3 + intg_i2;
+    wire signed [25:0] intg_q1_next = cic_bit_q_r ? (intg_q1 + 26'sd1) : (intg_q1 - 26'sd1);
+    wire signed [25:0] intg_q2_next = intg_q2 + intg_q1;
+    wire signed [25:0] intg_q3_next = intg_q3 + intg_q2;
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
             iq_in_i_r <= 1'b0; iq_in_q_r <= 1'b0;
             cic_bit_i_r <= 1'b0; cic_bit_q_r <= 1'b0;
-            intg_i1 <= 25'sd0; intg_i2 <= 25'sd0; intg_i3 <= 25'sd0;
-            intg_q1 <= 25'sd0; intg_q2 <= 25'sd0; intg_q3 <= 25'sd0;
+            intg_i1 <= 26'sd0; intg_i2 <= 26'sd0; intg_i3 <= 26'sd0;
+            intg_q1 <= 26'sd0; intg_q2 <= 26'sd0; intg_q3 <= 26'sd0;
             decim_cnt  <= 8'd0;
             cic_strobe <= 1'b0;
         end else begin
@@ -108,17 +108,17 @@ module sd_decimator (
     // 32 MHz domain: CIC comb stages + normalisation
     // =========================================================
 
-    reg signed [24:0] intg_i3_lat, intg_q3_lat;
-    reg signed [24:0] shifted_i, shifted_q;
+    reg signed [25:0] intg_i3_lat, intg_q3_lat;
+    reg signed [25:0] shifted_i, shifted_q;
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            intg_i3_lat <= 25'sd0; intg_q3_lat <= 25'sd0;
-            comb_i1_d   <= 25'sd0; comb_i2_d   <= 25'sd0; comb_i3_d   <= 25'sd0;
-            comb_q1_d   <= 25'sd0; comb_q2_d   <= 25'sd0; comb_q3_d   <= 25'sd0;
-            comb_i1_out <= 25'sd0; comb_i2_out <= 25'sd0; comb_i3_out <= 25'sd0;
-            comb_q1_out <= 25'sd0; comb_q2_out <= 25'sd0; comb_q3_out <= 25'sd0;
-            shifted_i   <= 25'sd0; shifted_q   <= 25'sd0;
+            intg_i3_lat <= 26'sd0; intg_q3_lat <= 26'sd0;
+            comb_i1_d   <= 26'sd0; comb_i2_d   <= 26'sd0; comb_i3_d   <= 26'sd0;
+            comb_q1_d   <= 26'sd0; comb_q2_d   <= 26'sd0; comb_q3_d   <= 26'sd0;
+            comb_i1_out <= 26'sd0; comb_i2_out <= 26'sd0; comb_i3_out <= 26'sd0;
+            comb_q1_out <= 26'sd0; comb_q2_out <= 26'sd0; comb_q3_out <= 26'sd0;
+            shifted_i   <= 26'sd0; shifted_q   <= 26'sd0;
         end else if (cic_strobe) begin
             intg_i3_lat <= intg_i3;
             intg_q3_lat <= intg_q3;

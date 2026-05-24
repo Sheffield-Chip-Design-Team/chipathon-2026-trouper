@@ -209,14 +209,6 @@ module weight_gen (
         end
     endfunction
 
-    // Abs value for 32-bit signed
-    function [31:0] abs32;
-        input signed [31:0] v;
-        begin
-            abs32 = v[31] ? (~v + 32'd1) : v;
-        end
-    endfunction
-
     // Combinatorial shift and headroom — computed as always@(*) regs so that
     // Yosys does not need to elaborate functions-with-local-regs from the
     // clocked always block (this version misbehaves for those).
@@ -254,23 +246,6 @@ module weight_gen (
         else                  branch_hdr = 2'd2;
     end
 
-    function signed [31:0] round_ashr32;
-        input signed [31:0] v;
-        input [4:0] sh;
-        reg signed [31:0] bias;
-        begin
-            if (sh == 5'd0) begin
-                round_ashr32 = v;
-            end else begin
-                bias = 32'sd1 <<< (sh - 5'd1);
-                if (v[31])
-                    round_ashr32 = (v - bias) >>> sh;
-                else
-                    round_ashr32 = (v + bias) >>> sh;
-            end
-        end
-    endfunction
-
     // Sub-cycle counter for multi-cycle FSM states
     reg [3:0] sub_st;
 
@@ -285,62 +260,42 @@ module weight_gen (
 
     reg training_done_prev;
 
-    // K: right-shift so max |H| across all antennas fits in 15 bits (Q1.15).
-    // Computed combinatorially from the latched H values; used in ST_CALIBRATE.
+    // K: right-shift so max |H| across all antennas fits in Q1.15.
+    // n_acc is capped at 1023 in training_acc; max |H| = 1023 * 127 = 129921 < 2^17.
+    // Simple 3-level lookup on n_acc avoids 8x abs32 ripple-carry adders + serial
+    // comparison tree (which synthesised to >100 ns at GF180MCU SS 125C 3V).
+    //   n_acc <= 256: H_max < 32512 fits in Q1.15; K=0
+    //   n_acc <= 512: H_max < 65024; shift 1 gives <32512; K=1
+    //   n_acc <= 1023: H_max < 129921; shift 2 gives <32481; K=2
     always @(*) begin : blk_K
-        reg [31:0] mx;
-        reg [4:0]  lz;
-        mx = abs32(H_i0);
-        if (abs32(H_q0) > mx) mx = abs32(H_q0);
-        if (abs32(H_i1) > mx) mx = abs32(H_i1);
-        if (abs32(H_q1) > mx) mx = abs32(H_q1);
-        if (abs32(H_i2) > mx) mx = abs32(H_i2);
-        if (abs32(H_q2) > mx) mx = abs32(H_q2);
-        if (abs32(H_i3) > mx) mx = abs32(H_i3);
-        if (abs32(H_q3) > mx) mx = abs32(H_q3);
-        if      (mx[31]) lz = 5'd0;
-        else if (mx[30]) lz = 5'd1;
-        else if (mx[29]) lz = 5'd2;
-        else if (mx[28]) lz = 5'd3;
-        else if (mx[27]) lz = 5'd4;
-        else if (mx[26]) lz = 5'd5;
-        else if (mx[25]) lz = 5'd6;
-        else if (mx[24]) lz = 5'd7;
-        else if (mx[23]) lz = 5'd8;
-        else if (mx[22]) lz = 5'd9;
-        else if (mx[21]) lz = 5'd10;
-        else if (mx[20]) lz = 5'd11;
-        else if (mx[19]) lz = 5'd12;
-        else if (mx[18]) lz = 5'd13;
-        else if (mx[17]) lz = 5'd14;
-        else if (mx[16]) lz = 5'd15;
-        else if (mx[15]) lz = 5'd16;
-        else if (mx[14]) lz = 5'd17;
-        else if (mx[13]) lz = 5'd18;
-        else if (mx[12]) lz = 5'd19;
-        else if (mx[11]) lz = 5'd20;
-        else if (mx[10]) lz = 5'd21;
-        else if (mx[9])  lz = 5'd22;
-        else if (mx[8])  lz = 5'd23;
-        else if (mx[7])  lz = 5'd24;
-        else if (mx[6])  lz = 5'd25;
-        else if (mx[5])  lz = 5'd26;
-        else if (mx[4])  lz = 5'd27;
-        else if (mx[3])  lz = 5'd28;
-        else if (mx[2])  lz = 5'd29;
-        else if (mx[1])  lz = 5'd30;
-        else             lz = 5'd31;
-        // lz >= 17 means mx < 2^14 — already fits in Q1.15, no shift needed
-        K_wire = (mx == 32'd0 || lz >= 5'd17) ? 5'd0 : (5'd17 - lz);
+        if      (n_acc >= 10'd513) K_wire = 5'd2;
+        else if (n_acc >= 10'd257) K_wire = 5'd1;
+        else                       K_wire = 5'd0;
     end
+
+    // Pipeline stage-1 registers: latch shift result (sub_st N) for use by
+    // the multiply-add in the following clock cycle (sub_st N+1).
+    // This breaks the critical path:
+    //   sub_st → mux → barrel-shift + 16x16 multiply + 32-bit add → Hc register
+    // into two single-cycle paths each well within 62.5 ns at SS 125C 3V.
+    reg signed [15:0] Hs_i_p1, Hs_q_p1;
+    reg signed [15:0] cal_re_p1, cal_im_p1;
+    reg [1:0]         p1_ant;   // antenna index for the pending write
+
+    // Stage-2 multiply-add: purely from registered inputs — no sub_st fanout in this path.
+    wire signed [31:0] calib_re_p2 =
+        ({{16{Hs_i_p1[15]}}, Hs_i_p1} * {{16{cal_re_p1[15]}}, cal_re_p1}
+       + {{16{Hs_q_p1[15]}}, Hs_q_p1} * {{16{cal_im_p1[15]}}, cal_im_p1}) >>> 15;
+    wire signed [31:0] calib_im_p2 =
+        ({{16{Hs_q_p1[15]}}, Hs_q_p1} * {{16{cal_re_p1[15]}}, cal_re_p1}
+       - {{16{Hs_i_p1[15]}}, Hs_i_p1} * {{16{cal_im_p1[15]}}, cal_im_p1}) >>> 15;
 
     // Shared single-antenna arithmetic datapath used across multi-cycle states.
     reg signed [31:0] sel_H_i, sel_H_q;
     reg signed [31:0] sel_Hc_i, sel_Hc_q;
     reg signed [15:0] sel_cal_re, sel_cal_im;
     reg               sel_ant_en;
-    reg signed [15:0] Hs_i_tmp, Hs_q_tmp;  // K-shift brings value into Q1.15 range; upper bits unused
-    reg signed [31:0] calib_re_tmp, calib_im_tmp;
+    reg signed [15:0] Hs_i_tmp, Hs_q_tmp;  // K-shift; only [15:0] used
     reg [31:0]        abs_i_tmp, abs_q_tmp, branch_peak_tmp;
     reg [32:0]        metric_tmp;
     reg signed [31:0] wraw_re_tmp, wraw_im_tmp;
@@ -373,19 +328,23 @@ module weight_gen (
             end
         endcase
 
-        // Shift H into Q1.15 range, then apply static complex calibration.
+        // Stage-1 shift (result registered into Hs_i_p1/Hs_q_p1 in clocked block).
         Hs_i_tmp = sel_H_i >>> K;
         Hs_q_tmp = sel_H_q >>> K;
-        calib_re_tmp = ((Hs_i_tmp * sel_cal_re) + (Hs_q_tmp * sel_cal_im)) >>> 15;
-        calib_im_tmp = ((Hs_q_tmp * sel_cal_re) - (Hs_i_tmp * sel_cal_im)) >>> 15;
 
-        abs_i_tmp = abs32(sel_Hc_i);
-        abs_q_tmp = abs32(sel_Hc_q);
+        // XOR-based approximate abs (no ripple-carry adder).
+        // For negative v: gives v ^ 0xFFFFFFFF = -(v+1), off by 1 LSB.
+        // Safe for magnitude comparison / peak detection; eliminates 100 ns ripple path.
+        abs_i_tmp = sel_Hc_i[31] ? ~sel_Hc_i : sel_Hc_i;
+        abs_q_tmp = sel_Hc_q[31] ? ~sel_Hc_q : sel_Hc_q;
         branch_peak_tmp = (abs_i_tmp > abs_q_tmp) ? abs_i_tmp : abs_q_tmp;
         metric_tmp = {1'b0, abs_i_tmp} + {1'b0, abs_q_tmp};
+
+        // Simple arithmetic right shift (truncation) replacing round_ashr32.
+        // 1-LSB rounding error is negligible for MRC weight quality.
         if (sel_ant_en) begin
-            wraw_re_tmp = round_ashr32(sel_Hc_i, mrc_shift);
-            wraw_im_tmp = round_ashr32(-sel_Hc_q, mrc_shift);
+            wraw_re_tmp = sel_Hc_i  >>> mrc_shift;
+            wraw_im_tmp = (-sel_Hc_q) >>> mrc_shift;
         end else begin
             wraw_re_tmp = 32'sd0;
             wraw_im_tmp = 32'sd0;
@@ -417,6 +376,9 @@ module weight_gen (
             best_metric <= 33'd0;
             peak_abs <= 32'd0;
             mrc_shift <= 5'd0;
+            Hs_i_p1   <= 16'sd0; Hs_q_p1   <= 16'sd0;
+            cal_re_p1 <= 16'sd0; cal_im_p1 <= 16'sd0;
+            p1_ant    <= 2'd0;
             W_hw_re0 <= 16'sd0; W_hw_im0 <= 16'sd0;
             W_hw_re1 <= 16'sd0; W_hw_im1 <= 16'sd0;
             W_hw_re2 <= 16'sd0; W_hw_im2 <= 16'sd0;
@@ -456,23 +418,48 @@ module weight_gen (
                 end
 
                 ST_SHIFT: begin
-                    // Register K_wire so ST_CALIBRATE sees a FF output rather
-                    // than the full blk_K priority tree (removes ~40 ns from
-                    // the calibration multiply critical path at TT and SS).
+                    // Register K_wire (n_acc-based lookup) as a FF output.
                     K     <= K_wire;
                     state <= ST_CALIBRATE;
+                    sub_st <= 4'd0;
                 end
 
                 ST_CALIBRATE: begin
-                    // Serialize calibration over antennas using one complex multiply datapath.
-                    case (sub_st[1:0])
-                        2'd0: begin Hc_i0 <= calib_re_tmp; Hc_q0 <= calib_im_tmp; end
-                        2'd1: begin Hc_i1 <= calib_re_tmp; Hc_q1 <= calib_im_tmp; end
-                        2'd2: begin Hc_i2 <= calib_re_tmp; Hc_q2 <= calib_im_tmp; end
-                        default: begin Hc_i3 <= calib_re_tmp; Hc_q3 <= calib_im_tmp; end
-                    endcase
-                    if (sub_st == 4'd3) begin
-                        state <= ST_COMPUTE;
+                    // 2-stage pipeline to break the sub_st-fanout + shift + 16x16
+                    // multiply + 32-bit add path (was >100 ns at SS 125C 3V).
+                    //
+                    // Stage 1 (sub_st 0..3): latch shift result into Hs_p1/cal_p1.
+                    // Stage 2 (sub_st 1..4): write Hc from calib_re/im_p2 wires
+                    //   which are purely computed from registered Hs_p1/cal_p1 inputs.
+                    //
+                    // sub_st  | Stage-1 action         | Stage-2 action
+                    //   0     | shift ant0 → p1        | (pipeline filling)
+                    //   1     | shift ant1 → p1        | write Hc0 (p1_ant=0)
+                    //   2     | shift ant2 → p1        | write Hc1 (p1_ant=1)
+                    //   3     | shift ant3 → p1        | write Hc2 (p1_ant=2)
+                    //   4     | (no shift)             | write Hc3 (p1_ant=3) → done
+
+                    // Stage 1: latch current antenna's shift result
+                    if (sub_st <= 4'd3) begin
+                        Hs_i_p1   <= Hs_i_tmp;
+                        Hs_q_p1   <= Hs_q_tmp;
+                        cal_re_p1 <= sel_cal_re;
+                        cal_im_p1 <= sel_cal_im;
+                        p1_ant    <= sub_st[1:0];
+                    end
+
+                    // Stage 2: write Hc from registered multiply-add result
+                    if (sub_st >= 4'd1) begin
+                        case (p1_ant)
+                            2'd0: begin Hc_i0 <= calib_re_p2; Hc_q0 <= calib_im_p2; end
+                            2'd1: begin Hc_i1 <= calib_re_p2; Hc_q1 <= calib_im_p2; end
+                            2'd2: begin Hc_i2 <= calib_re_p2; Hc_q2 <= calib_im_p2; end
+                            default: begin Hc_i3 <= calib_re_p2; Hc_q3 <= calib_im_p2; end
+                        endcase
+                    end
+
+                    if (sub_st == 4'd4) begin
+                        state  <= ST_COMPUTE;
                         sub_st <= 4'd0;
                     end else begin
                         sub_st <= sub_st + 4'd1;

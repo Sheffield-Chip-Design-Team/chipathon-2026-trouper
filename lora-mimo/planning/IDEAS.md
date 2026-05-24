@@ -8,6 +8,8 @@ Open ideas for future notebook cells, model extensions, or verification experime
 
 1. **[In progress]** Confirm post-route timing/DRC for `ol_weight_gen` — fanout constraint raised 2→4, SS corner target.
 2. **[In progress]** `ol_mrc_combiner` physical design — removed `(* keep *)` on multiply-input regs, fanout 2→4; SS timing was −11.85 ns with old RTL.
+3. **[Loose end]** `sd_remod` / `sd_decimator` loopback mismatch — checked `resources/DS_SX1257_V1.2.pdf`; symmetric 1-bit sigma-delta stream is the right convention, and `sd_decimator` was updated from `0 -> -2` to `0 -> -1`. Rewrote `sd_remod` to a page-37-style 3rd-order feed-forward loop with saturating integrators. Constant-input isolate now reconstructs `-90` and `+90` cleanly and holds `0` near zero; full-scale `+127` still compresses/collapses, which is consistent with the datasheet stability limit below `-3 dBFS`. Real loopback probe now tracks MRC output closely with about `0.994` correlation on both `I` and `Q`; remaining work is output swing tuning, not basic architecture. Reproducer lives in the temporary NFS-only `tb_remod_decim_const.v` testbench.
+4. **[Loose end]** Treat `sd_remod` `-3 dBFS` input limit as a hard AGC contract — 8-bit precision still leaves quantisation comfortably below thermal noise at that backoff, so the stability limit should be enforced rather than optimized away. Need a no-CPU/DSP-isolation policy as well: hardware must not overdrive `sd_remod` when PicoRV32 AGC is absent. Candidate protections are a reset-default remod backoff shift, a hard clamp around `±90`, or a minimal standalone hardware AGC mode.
 
 ---
 

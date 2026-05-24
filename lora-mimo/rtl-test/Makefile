@@ -12,6 +12,7 @@ IFLAGS    = -g2012
 # Source files for the DSP chain (no PicoRV32)
 DSP_SRCS  = dc_removal.v frontend_buf_ctrl.v energy_meas.v noise_floor_est.v \
             sc_detector.v training_acc.v weight_gen.v mrc_combiner.v sd_remod.v
+DSP_SRCS_SD = $(DSP_SRCS) sd_decimator.v
 
 # -----------------------------------------------------------------------
 # DSP chain end-to-end testbench (Verilator)
@@ -34,7 +35,9 @@ tb_dsp_chain.vvp: tb_dsp_chain.v $(DSP_SRCS)
 # -----------------------------------------------------------------------
 # Real-capture DSP chain testbench (Verilator)
 # -----------------------------------------------------------------------
-.PHONY: sim_dsp_chain_real
+.PHONY: sim_dsp_chain_real sim_dsp_chain_loopback_probe \
+	sim_dsp_chain_real_probe sim_dsp_chain_real_probe_osr256 \
+	sim_remod_decim_const
 
 sim_dsp_chain_real: obj_dir_dsp_chain_real/Vtb_dsp_chain_real
 	$<
@@ -42,6 +45,34 @@ sim_dsp_chain_real: obj_dir_dsp_chain_real/Vtb_dsp_chain_real
 obj_dir_dsp_chain_real/Vtb_dsp_chain_real: tb_dsp_chain_real.v $(DSP_SRCS)
 	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_dsp_chain_real \
 	    --top-module tb_dsp_chain_real $^
+
+sim_dsp_chain_loopback_probe: obj_dir_loopback_probe/Vtb_dsp_chain_real
+	$<
+
+obj_dir_loopback_probe/Vtb_dsp_chain_real: tb_dsp_chain_loopback_probe.v $(DSP_SRCS_SD)
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_loopback_probe \
+	    --top-module tb_dsp_chain_real $^
+
+sim_dsp_chain_real_probe: obj_dir_dsp_chain_real_probe/Vtb_dsp_chain_real
+	$<
+
+obj_dir_dsp_chain_real_probe/Vtb_dsp_chain_real: tb_dsp_chain_real_probe.v $(DSP_SRCS_SD)
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_dsp_chain_real_probe \
+	    --top-module tb_dsp_chain_real $^
+
+sim_dsp_chain_real_probe_osr256: obj_dir_dsp_chain_real_probe_osr256/Vtb_dsp_chain_real
+	$<
+
+obj_dir_dsp_chain_real_probe_osr256/Vtb_dsp_chain_real: tb_dsp_chain_real_probe_osr256.v $(DSP_SRCS_SD)
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_dsp_chain_real_probe_osr256 \
+	    --top-module tb_dsp_chain_real $^
+
+sim_remod_decim_const: obj_dir_const/Vtb_remod_decim_const
+	$<
+
+obj_dir_const/Vtb_remod_decim_const: tb_remod_decim_const.v sd_remod.v sd_decimator.v
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_const \
+	    --top-module tb_remod_decim_const $^
 
 # -----------------------------------------------------------------------
 # Energy / noise-floor testbench (existing)
@@ -70,4 +101,6 @@ tb_sqnr.vvp: tb_sqnr.v sd_decimator.v
 # -----------------------------------------------------------------------
 
 clean:
-	rm -rf obj_dir_dsp_chain *.vvp *.vcd
+	rm -rf obj_dir_dsp_chain obj_dir_dsp_chain_real obj_dir_loopback_probe \
+		obj_dir_dsp_chain_real_probe obj_dir_dsp_chain_real_probe_osr256 \
+		obj_dir_const *.vvp *.vcd
