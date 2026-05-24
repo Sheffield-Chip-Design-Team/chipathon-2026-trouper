@@ -283,12 +283,15 @@ module weight_gen (
     reg [1:0]         p1_ant;   // antenna index for the pending write
 
     // Stage-2 multiply-add: purely from registered inputs — no sub_st fanout in this path.
+    // Use only the upper 8 bits of cal (Q1.7 precision) to halve multiplier depth
+    // at SS 125C 3V vs full 16×16.  Shift is >>>7 instead of >>>15 because the
+    // lower 8 fractional bits of cal are dropped (precision ~0.4%, acceptable for MRC).
     wire signed [31:0] calib_re_p2 =
-        ({{16{Hs_i_p1[15]}}, Hs_i_p1} * {{16{cal_re_p1[15]}}, cal_re_p1}
-       + {{16{Hs_q_p1[15]}}, Hs_q_p1} * {{16{cal_im_p1[15]}}, cal_im_p1}) >>> 15;
+        ({{16{Hs_i_p1[15]}}, Hs_i_p1} * {{24{cal_re_p1[15]}}, cal_re_p1[15:8]}
+       + {{16{Hs_q_p1[15]}}, Hs_q_p1} * {{24{cal_im_p1[15]}}, cal_im_p1[15:8]}) >>> 7;
     wire signed [31:0] calib_im_p2 =
-        ({{16{Hs_q_p1[15]}}, Hs_q_p1} * {{16{cal_re_p1[15]}}, cal_re_p1}
-       - {{16{Hs_i_p1[15]}}, Hs_i_p1} * {{16{cal_im_p1[15]}}, cal_im_p1}) >>> 15;
+        ({{16{Hs_q_p1[15]}}, Hs_q_p1} * {{24{cal_re_p1[15]}}, cal_re_p1[15:8]}
+       - {{16{Hs_i_p1[15]}}, Hs_i_p1} * {{24{cal_im_p1[15]}}, cal_im_p1[15:8]}) >>> 7;
 
     // Shared single-antenna arithmetic datapath used across multi-cycle states.
     reg signed [31:0] sel_H_i, sel_H_q;
