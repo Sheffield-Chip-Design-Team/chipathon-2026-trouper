@@ -1,0 +1,7 @@
+create_clock -name clk -period 62.5 [get_ports clk]
+set_input_delay -max 2.0 -clock clk [get_ports {resetn mem_ready mem_rdata pcpi_wr pcpi_rd pcpi_wait pcpi_ready irq}]
+set_input_delay -min 1.0 -clock clk [get_ports {resetn mem_ready mem_rdata pcpi_wr pcpi_rd pcpi_wait pcpi_ready irq}]
+set_output_delay -max 2.0 -clock clk [all_outputs]
+set_output_delay -min 0.0 -clock clk [all_outputs]
+set_clock_uncertainty 0.25 [get_clocks clk]
+set_false_path -from [get_ports resetn]
