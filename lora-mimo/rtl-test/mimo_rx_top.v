@@ -158,14 +158,14 @@ module mimo_rx_top (
     // =========================================================================
     // Stage 3a: Frontend Buffer Controller (rolling SRAM window)
     // =========================================================================
-    // Frontend buffer SRAMs — gf180mcu_ocd_ip_sram__sram512x8m8wm1 macros (3.3V)
+    // Frontend buffer SRAMs — gf180mcu_fd_ip_sram__sram512x8m8wm1 macros
     wire [8:0]  sram0_A, sram1_A;
     wire [7:0]  sram0_D, sram1_D;
     wire [7:0]  sram0_Q, sram1_Q;
     wire        sram0_CEN, sram1_CEN;
     wire        sram0_GWEN, sram1_GWEN;
 
-    gf180mcu_ocd_ip_sram__sram512x8m8wm1 u_sram0 (
+    gf180mcu_fd_ip_sram__sram512x8m8wm1 u_sram0 (
         .CLK  (clk),
         .CEN  (sram0_CEN),
         .GWEN (sram0_GWEN),
@@ -175,7 +175,7 @@ module mimo_rx_top (
         .Q    (sram0_Q)
     );
 
-    gf180mcu_ocd_ip_sram__sram512x8m8wm1 u_sram1 (
+    gf180mcu_fd_ip_sram__sram512x8m8wm1 u_sram1 (
         .CLK  (clk),
         .CEN  (sram1_CEN),
         .GWEN (sram1_GWEN),

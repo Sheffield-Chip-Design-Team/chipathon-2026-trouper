@@ -12,7 +12,7 @@
     "PL_TARGET_DENSITY_PCT": 42,
     "MAX_FANOUT_CONSTRAINT": 8,
     "SYNTH_STRATEGY": "DELAY 0",
-    "DRT_THREADS": 4,
+    "DRT_THREADS": 22,
     "ROUTING_OPT_ITERS": 32,
     "DEFAULT_CORNER": "nom_tt_025C_3v30",
     "STA_CORNERS": [
@@ -37,11 +37,6 @@
     "EXTRA_LEFS": [
         "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.lef"
     ],
-    "MACRO_PLACEMENT_CFG": "dir::macro_placement.cfg",
-    "FP_MACRO_HORIZONTAL_HALO": 10,
-    "FP_MACRO_VERTICAL_HALO": 10,
-    "PDN_HORIZONTAL_HALO": 5,
-    "PDN_VERTICAL_HALO": 5,
     "RUN_MAGIC_DRC": false,
     "RUN_LVS": false,
     "RUN_IRDROP_REPORT": false,
@@ -57,6 +52,11 @@
     "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
     "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
     "HOLD_VIOLATION_CORNERS": "",
+    "MACRO_PLACEMENT_CFG": "dir::macro_placement.cfg",
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 5,
+    "PDN_VERTICAL_HALO": 5,
     "PDN_MACRO_CONNECTIONS": [
         "u_cpu_sram_b0 VDD VSS VDD VSS",
         "u_cpu_sram_b1 VDD VSS VDD VSS",

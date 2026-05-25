@@ -5,11 +5,9 @@
 //   0x00000–0x00FFF  Unified SRAM (4 kB, text + data + stack)
 //   0x10000–0x103FF  AHB-Lite peripheral space (reg bank, SPI master, IRQ ctrl)
 //
-// The SRAM is a behavioural model here; it is replaced by the
-// gf180mcu_ocd_ip_sram macro in the physical implementation.
-//
-// Firmware is loaded via the fw_ld_* port (from spi_slave) while cpu_reset=1.
-// cpu_reset also gates the PicoRV32 reset_n input.
+// The unified SRAM is implemented as four 1024x8 hard macros, one per byte lane.
+// Firmware is loaded through the fw_ld_* port while cpu_reset=1, so the SRAM port
+// can be borrowed for host access without contending with the CPU.
 //
 // GF180MCU, 3.3V, 32 MHz single clock domain
 
@@ -35,23 +33,14 @@ module picorv32_wrap (
     input  wire        HRESP,
 
     // Firmware-load port (from spi_slave, byte-wide, SPI clock domain)
-    // fw_ld_we is a pulse from the SPI domain; the SRAM is written directly.
     input  wire [11:0] fw_ld_addr,
     input  wire [7:0]  fw_ld_wdata,
     input  wire        fw_ld_we,
     output wire [7:0]  fw_ld_rdata,
-    output wire        fw_ld_ready    // always 1 (SRAM write is always ready)
+    output wire        fw_ld_ready
 );
 
     assign fw_ld_ready = 1'b1;
-
-    // -----------------------------------------------------------------------
-    // Unified 4 kB CPU SRAM (behavioural; replaced by macro in layout)
-    // 4096 bytes = 1024 × 32-bit words
-    // -----------------------------------------------------------------------
-    reg [7:0] cpu_sram [0:4095];
-
-    assign fw_ld_rdata = cpu_sram[fw_ld_addr];
 
     // -----------------------------------------------------------------------
     // PicoRV32 native memory interface
@@ -67,78 +56,164 @@ module picorv32_wrap (
     // IRQ vector: map irq_in to IRQ[0] (PicoRV32 IRQ[31:0])
     wire [31:0] irq = {31'd0, irq_in};
 
-    // PicoRV32 instantiation (external IP; port names from upstream repo)
     picorv32 #(
-        .ENABLE_MUL    (1),
-        .ENABLE_DIV    (1),
-        .ENABLE_IRQ    (1),
+        .ENABLE_MUL           (1),
+        .ENABLE_DIV           (1),
+        .ENABLE_IRQ           (1),
         .ENABLE_REGS_DUALPORT (1),
-        .STACKADDR     (32'h00001000)   // stack top = end of 4 kB SRAM
+        .STACKADDR            (32'h00001000)
     ) u_cpu (
-        .clk           (clk_32m),
-        .resetn        (!cpu_reset && rst_n),
-        .mem_valid     (mem_valid),
-        .mem_instr     (mem_instr),
-        .mem_ready     (mem_ready),
-        .mem_addr      (mem_addr),
-        .mem_wdata     (mem_wdata),
-        .mem_wstrb     (mem_wstrb),
-        .mem_rdata     (mem_rdata),
-        .irq           (irq),
-        .eoi           ()
+        .clk       (clk_32m),
+        .resetn    (!cpu_reset && rst_n),
+        .mem_valid (mem_valid),
+        .mem_instr (mem_instr),
+        .mem_ready (mem_ready),
+        .mem_addr  (mem_addr),
+        .mem_wdata (mem_wdata),
+        .mem_wstrb (mem_wstrb),
+        .mem_rdata (mem_rdata),
+        .irq       (irq),
+        .eoi       ()
     );
 
     // -----------------------------------------------------------------------
     // Memory request router: SRAM (0x0000–0x0FFF) vs AHB-Lite peripherals
     // -----------------------------------------------------------------------
-    wire addr_is_sram  = (mem_addr[31:12] == 20'd0);         // 0x00000–0x00FFF
-    wire addr_is_periph = (mem_addr[31:10] == 22'h40);       // 0x10000–0x103FF
+    wire addr_is_sram   = (mem_addr[31:12] == 20'd0);
+    wire addr_is_periph = (mem_addr[31:10] == 22'h40);
 
     // -----------------------------------------------------------------------
-    // SRAM access (word-wide, 1-cycle; 2-cycle multicycle path for 32 MHz timing)
+    // Firmware loader CDC into the 32 MHz domain
     // -----------------------------------------------------------------------
-    reg sram_valid_r;
-    reg [31:0] sram_rdata_r;
+    reg        fw_we_sync0, fw_we_sync1, fw_we_sync2;
+    reg [11:0] fw_addr_meta, fw_addr_sync;
+    reg [7:0]  fw_wdata_meta, fw_wdata_sync;
 
-    // Word address from byte address (PicoRV32 is byte-addressed, word-aligned)
-    wire [9:0]  sram_waddr = mem_addr[11:2];
-    wire [11:0] sram_baddr = mem_addr[11:0];
-
-    // Read: 32-bit word assembled from 4 bytes
-    wire [31:0] sram_rdata_word = {
-        cpu_sram[{sram_waddr, 2'b11}],
-        cpu_sram[{sram_waddr, 2'b10}],
-        cpu_sram[{sram_waddr, 2'b01}],
-        cpu_sram[{sram_waddr, 2'b00}]
-    };
+    wire fw_we_pulse = fw_we_sync1 && !fw_we_sync2;
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            sram_valid_r  <= 1'b0;
-            sram_rdata_r  <= 32'd0;
+            fw_we_sync0   <= 1'b0;
+            fw_we_sync1   <= 1'b0;
+            fw_we_sync2   <= 1'b0;
+            fw_addr_meta  <= 12'd0;
+            fw_addr_sync  <= 12'd0;
+            fw_wdata_meta <= 8'd0;
+            fw_wdata_sync <= 8'd0;
         end else begin
-            sram_valid_r <= mem_valid && addr_is_sram;
-            // Firmware-load write (only while cpu_reset=1; CPU held in reset — mutually exclusive with CPU writes)
-            if (fw_ld_we && cpu_reset)
-                cpu_sram[fw_ld_addr] <= fw_ld_wdata;
-            if (mem_valid && addr_is_sram) begin
-                sram_rdata_r <= sram_rdata_word;
-                // Byte-enable write
-                if (mem_wstrb[0]) cpu_sram[{sram_waddr, 2'b00}] <= mem_wdata[7:0];
-                if (mem_wstrb[1]) cpu_sram[{sram_waddr, 2'b01}] <= mem_wdata[15:8];
-                if (mem_wstrb[2]) cpu_sram[{sram_waddr, 2'b10}] <= mem_wdata[23:16];
-                if (mem_wstrb[3]) cpu_sram[{sram_waddr, 2'b11}] <= mem_wdata[31:24];
-            end
+            fw_we_sync0   <= fw_ld_we;
+            fw_we_sync1   <= fw_we_sync0;
+            fw_we_sync2   <= fw_we_sync1;
+            fw_addr_meta  <= fw_ld_addr;
+            fw_addr_sync  <= fw_addr_meta;
+            fw_wdata_meta <= fw_ld_wdata;
+            fw_wdata_sync <= fw_wdata_meta;
         end
     end
 
     // -----------------------------------------------------------------------
+    // Unified 4 kB CPU SRAM using four 1024x8 macros
+    // -----------------------------------------------------------------------
+    wire [9:0] cpu_sram_addr = mem_addr[11:2];
+    wire [9:0] fw_sram_addr  = fw_addr_sync[11:2];
+    wire [1:0] fw_byte_sel   = fw_addr_sync[1:0];
+
+    wire       cpu_sram_req  = mem_valid && addr_is_sram;
+    wire       cpu_sram_wr   = |mem_wstrb;
+
+    wire [9:0] sram_addr = cpu_reset ? fw_sram_addr : cpu_sram_addr;
+
+    wire [7:0] lane0_q, lane1_q, lane2_q, lane3_q;
+
+    wire lane0_cen  = cpu_reset ? 1'b0 : !cpu_sram_req;
+    wire lane1_cen  = cpu_reset ? 1'b0 : !cpu_sram_req;
+    wire lane2_cen  = cpu_reset ? 1'b0 : !cpu_sram_req;
+    wire lane3_cen  = cpu_reset ? 1'b0 : !cpu_sram_req;
+
+    wire lane0_gwen = cpu_reset ? !(fw_we_pulse && (fw_byte_sel == 2'd0)) : !cpu_sram_wr;
+    wire lane1_gwen = cpu_reset ? !(fw_we_pulse && (fw_byte_sel == 2'd1)) : !cpu_sram_wr;
+    wire lane2_gwen = cpu_reset ? !(fw_we_pulse && (fw_byte_sel == 2'd2)) : !cpu_sram_wr;
+    wire lane3_gwen = cpu_reset ? !(fw_we_pulse && (fw_byte_sel == 2'd3)) : !cpu_sram_wr;
+
+    wire [7:0] lane0_wen = cpu_reset
+        ? ((fw_we_pulse && (fw_byte_sel == 2'd0)) ? 8'h00 : 8'hFF)
+        : (mem_wstrb[0] ? 8'h00 : 8'hFF);
+    wire [7:0] lane1_wen = cpu_reset
+        ? ((fw_we_pulse && (fw_byte_sel == 2'd1)) ? 8'h00 : 8'hFF)
+        : (mem_wstrb[1] ? 8'h00 : 8'hFF);
+    wire [7:0] lane2_wen = cpu_reset
+        ? ((fw_we_pulse && (fw_byte_sel == 2'd2)) ? 8'h00 : 8'hFF)
+        : (mem_wstrb[2] ? 8'h00 : 8'hFF);
+    wire [7:0] lane3_wen = cpu_reset
+        ? ((fw_we_pulse && (fw_byte_sel == 2'd3)) ? 8'h00 : 8'hFF)
+        : (mem_wstrb[3] ? 8'h00 : 8'hFF);
+
+    gf180mcu_ocd_ip_sram__sram1024x8m8wm1 u_cpu_sram_b0 (
+        .CLK  (clk_32m),
+        .CEN  (lane0_cen),
+        .GWEN (lane0_gwen),
+        .WEN  (lane0_wen),
+        .A    (sram_addr),
+        .D    (cpu_reset ? fw_wdata_sync : mem_wdata[7:0]),
+        .Q    (lane0_q)
+    );
+
+    gf180mcu_ocd_ip_sram__sram1024x8m8wm1 u_cpu_sram_b1 (
+        .CLK  (clk_32m),
+        .CEN  (lane1_cen),
+        .GWEN (lane1_gwen),
+        .WEN  (lane1_wen),
+        .A    (sram_addr),
+        .D    (cpu_reset ? fw_wdata_sync : mem_wdata[15:8]),
+        .Q    (lane1_q)
+    );
+
+    gf180mcu_ocd_ip_sram__sram1024x8m8wm1 u_cpu_sram_b2 (
+        .CLK  (clk_32m),
+        .CEN  (lane2_cen),
+        .GWEN (lane2_gwen),
+        .WEN  (lane2_wen),
+        .A    (sram_addr),
+        .D    (cpu_reset ? fw_wdata_sync : mem_wdata[23:16]),
+        .Q    (lane2_q)
+    );
+
+    gf180mcu_ocd_ip_sram__sram1024x8m8wm1 u_cpu_sram_b3 (
+        .CLK  (clk_32m),
+        .CEN  (lane3_cen),
+        .GWEN (lane3_gwen),
+        .WEN  (lane3_wen),
+        .A    (sram_addr),
+        .D    (cpu_reset ? fw_wdata_sync : mem_wdata[31:24]),
+        .Q    (lane3_q)
+    );
+
+    reg sram_req_r;
+
+    always @(posedge clk_32m or negedge rst_n) begin
+        if (!rst_n) begin
+            sram_req_r <= 1'b0;
+        end else if (cpu_reset) begin
+            sram_req_r <= 1'b0;
+        end else begin
+            sram_req_r <= cpu_sram_req;
+        end
+    end
+
+    wire [31:0] sram_rdata_word = {lane3_q, lane2_q, lane1_q, lane0_q};
+
+    assign fw_ld_rdata = (fw_byte_sel == 2'd0) ? lane0_q :
+                         (fw_byte_sel == 2'd1) ? lane1_q :
+                         (fw_byte_sel == 2'd2) ? lane2_q :
+                                                 lane3_q;
+
+    // -----------------------------------------------------------------------
     // AHB-Lite master bridge (peripheral accesses)
-    // PicoRV32 native interface → AHB-Lite
+    // PicoRV32 native interface -> AHB-Lite
     // -----------------------------------------------------------------------
     localparam AHB_IDLE = 2'd0;
-    localparam AHB_ADDR = 2'd1;   // address phase registered
-    localparam AHB_DATA = 2'd2;   // waiting for HREADY
+    localparam AHB_ADDR = 2'd1;
+    localparam AHB_DATA = 2'd2;
 
     reg [1:0]  ahb_state;
     reg [31:0] ahb_addr_lat;
@@ -147,23 +222,22 @@ module picorv32_wrap (
     reg        ahb_valid_r;
     reg [31:0] ahb_rdata_r;
 
-    // AHB-Lite master outputs
     assign HADDR  = (ahb_state == AHB_ADDR || ahb_state == AHB_DATA)
                     ? ahb_addr_lat : 32'd0;
-    assign HTRANS = (ahb_state == AHB_ADDR) ? 2'b10 : 2'b00;  // NONSEQ or IDLE
+    assign HTRANS = (ahb_state == AHB_ADDR) ? 2'b10 : 2'b00;
     assign HWRITE = ahb_write_lat;
-    assign HSIZE  = 3'b010;    // 32-bit
-    assign HBURST = 3'b000;    // SINGLE
+    assign HSIZE  = 3'b010;
+    assign HBURST = 3'b000;
     assign HWDATA = ahb_wdata_lat;
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            ahb_state    <= AHB_IDLE;
-            ahb_addr_lat <= 32'd0;
+            ahb_state     <= AHB_IDLE;
+            ahb_addr_lat  <= 32'd0;
             ahb_write_lat <= 1'b0;
             ahb_wdata_lat <= 32'd0;
-            ahb_valid_r  <= 1'b0;
-            ahb_rdata_r  <= 32'd0;
+            ahb_valid_r   <= 1'b0;
+            ahb_rdata_r   <= 32'd0;
         end else begin
             ahb_valid_r <= 1'b0;
 
@@ -178,13 +252,10 @@ module picorv32_wrap (
                 end
 
                 AHB_ADDR: begin
-                    // Address phase: HTRANS=NONSEQ, HADDR valid
-                    // Move to data phase on next cycle
                     ahb_state <= AHB_DATA;
                 end
 
                 AHB_DATA: begin
-                    // Data phase: wait for HREADY
                     if (HREADY) begin
                         ahb_rdata_r <= HRDATA;
                         ahb_valid_r <= 1'b1;
@@ -200,11 +271,11 @@ module picorv32_wrap (
     // -----------------------------------------------------------------------
     // mem_ready / mem_rdata mux
     // -----------------------------------------------------------------------
-    assign mem_ready = (addr_is_sram   && sram_valid_r) ||
-                       (addr_is_periph && ahb_valid_r)  ||
-                       (!addr_is_sram && !addr_is_periph && mem_valid);  // unmapped: instant 0
+    assign mem_ready = (addr_is_sram   && sram_req_r) ||
+                       (addr_is_periph && ahb_valid_r) ||
+                       (!addr_is_sram && !addr_is_periph && mem_valid);
 
-    assign mem_rdata = addr_is_sram   ? sram_rdata_r :
-                       addr_is_periph ? ahb_rdata_r  : 32'd0;
+    assign mem_rdata = addr_is_sram   ? sram_rdata_word :
+                       addr_is_periph ? ahb_rdata_r    : 32'd0;
 
 endmodule

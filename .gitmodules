@@ -7,3 +7,6 @@
 [submodule "lora-mimo/ip/picorv32"]
 	path = lora-mimo/ip/picorv32
 	url = https://github.com/YosysHQ/picorv32
+[submodule "lora-mimo/ip/sscs-chipathon-2026"]
+	path = lora-mimo/ip/sscs-chipathon-2026
+	url = https://github.com/sscs-ose/sscs-chipathon-2026.git

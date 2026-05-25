@@ -1,4 +1,4 @@
-create_clock -name clk_32m -period 31.25 [get_ports clk_32m]
+create_clock -name clk_32m -period 62.5 [get_ports clk_32m]
 set_input_delay -max 2.0 -clock clk_32m [get_ports {cpu_reset irq_in HRDATA HREADY HRESP fw_ld_addr fw_ld_wdata fw_ld_we}]
 set_input_delay -min 1.0 -clock clk_32m [get_ports {cpu_reset irq_in HRDATA HREADY HRESP fw_ld_addr fw_ld_wdata fw_ld_we}]
 set_output_delay -max 2.0 -clock clk_32m [all_outputs]

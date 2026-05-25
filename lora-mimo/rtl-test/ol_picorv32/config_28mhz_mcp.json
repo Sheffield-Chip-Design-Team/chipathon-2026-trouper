@@ -5,13 +5,13 @@
         "dir::picorv32_core.v"
     ],
     "CLOCK_PORT": "clk",
-    "CLOCK_PERIOD": 62.5,
+    "CLOCK_PERIOD": 35.714286,
     "FP_SIZING": "relative",
     "FP_CORE_UTIL": 35,
     "PL_TARGET_DENSITY_PCT": 42,
     "MAX_FANOUT_CONSTRAINT": 8,
     "SYNTH_STRATEGY": "DELAY 0",
-    "DRT_THREADS": 14,
+    "DRT_THREADS": 3,
     "DEFAULT_CORNER": "nom_tt_025C_3v30",
     "STA_CORNERS": [
         "nom_tt_025C_3v30",
@@ -32,8 +32,8 @@
     "RUN_MAGIC_DRC": true,
     "RUN_LVS": false,
     "RUN_IRDROP_REPORT": false,
-    "PNR_SDC_FILE": "dir::pnr.sdc",
-    "SIGNOFF_SDC_FILE": "dir::pnr.sdc",
+    "PNR_SDC_FILE": "dir::pnr_28mhz_mcp.sdc",
+    "SIGNOFF_SDC_FILE": "dir::pnr_28mhz_mcp.sdc",
     "ROUTING_OPT_ITERS": 32,
     "RUN_POST_GRT_DESIGN_REPAIR": true,
     "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 0,
@@ -46,5 +46,7 @@
     "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
     "GRT_ANTENNA_REPAIR_MARGIN": 90,
     "GRT_ANTENNA_REPAIR_ITERS": 5,
-    "HOLD_VIOLATION_CORNERS": [""]
+    "HOLD_VIOLATION_CORNERS": [
+        ""
+    ]
 }

@@ -549,6 +549,26 @@ For DMEM faults: adjust stack pointer and linker `.data` / `.bss` placement to a
 
 ---
 
+## Physical design status
+
+**Latest corrected LibreLane sweep (2026-05-25, GF180MCU 3.3V, MCP SDC):**
+
+| Target | Setup WNS (ns) | Setup violations | Hold WNS (ns) | Hold violations | Magic DRC | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 18 MHz | `+10.94` | `0` | `-0.262` | `9` | `0` | Setup clean |
+| 20 MHz | `+5.39` | `0` | `-0.262` | `9` | `0` | Setup clean |
+| 22 MHz | `+0.84` | `0` | `-0.262` | `9` | `0` | Setup clean |
+| 24 MHz | `-2.34` | `5` | `-0.224` | `8` | `0` | Setup fail |
+| 26 MHz | `-5.84` | `13` | `-0.264` | `9` | `0` | Setup fail |
+| 28 MHz | `-8.34` | `26` | `-0.287` | `11` | `0` | Setup fail |
+| 30 MHz | `-10.08` | `64` | `-0.292` | `8` | `0` | Setup fail |
+
+**Current conclusion:** `22 MHz` is the highest setup-clean operating point for the present PicoRV32 wrapper + MCP constraint set. `24 MHz` and above fail setup.
+
+**Hold note:** hold WNS stays negative across the entire sweep because the failing paths are the very short `irq[*] -> first internal flop` input paths, not the long CPU reg-to-reg datapaths. Relaxing the clock period helps setup but has little effect on same-edge hold checks. This is therefore an IRQ interface timing problem, not evidence that the core datapath still needs a lower frequency.
+
+---
+
 ## Verification
 
 | Test | Method | Pass criterion |
