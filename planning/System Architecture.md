@@ -353,7 +353,7 @@ The following boundaries require explicit CDC treatment:
 
 ## Gate count & area summary
 
-Measured figures from SGE job 1249 (AS cells, NR=4, CIC-only, ser-IQ mrc_combiner, energy_meas_coarse, no NFE):
+Measured figures from SGE job 1249 (AS cells, NR=4, CIC-only, no NFE). **Note:** RTL has changed since this run — `energy_meas_coarse` replaced by `noise_est` (Manhattan norm, smaller), `mrc_combiner_serIQ` replaced by `mrc_combiner`. Figures marked † are from the old RTL and will be refreshed on the next hierarchical P&R run.
 
 | Component | Measured µm² (NR=4) | NR=2 est. |
 | --- | --- | --- |
@@ -363,8 +363,8 @@ Measured figures from SGE job 1249 (AS cells, NR=4, CIC-only, ser-IQ mrc_combine
 | Weight Generation | 138,649 | ~70,000 |
 | Schmidl-Cox Detector | 112,631 | ~57,000 |
 | Register Bank | 99,306 | ~90,000 |
-| MRC Combiner (ser-IQ) | 97,632 | ~85,000 |
-| Energy Measurement (coarse) | 68,394 | ~34,000 |
+| MRC Combiner † | 97,632 | ~85,000 |
+| Noise Estimation (Manhattan, `noise_est`) † | ~68,000 est. | ~34,000 |
 | DC Removal | 50,009 | ~25,000 |
 | PSRAM Buffer Controller | 46,466 | 46,466 |
 | Packet Control FSM | 32,987 | 32,987 |
@@ -375,7 +375,7 @@ Measured figures from SGE job 1249 (AS cells, NR=4, CIC-only, ser-IQ mrc_combine
 | Top-level glue | 12,052 | 12,052 |
 | SPI Master | 10,241 | 10,241 |
 | IRQ Controller + AHB-Lite | 5,036 | 5,036 |
-| **Stdcell total** | **1,598,073 µm²** | **~1,167,000 µm²** |
+| **Stdcell total** | **~1,598,000 µm²** | **~1,167,000 µm²** |
 | Frontend Buffer SRAM (1 × OCD 512×8) | — | ~0.21 mm² |
 | CPU IMEM+DMEM (OCD 512×8 × 2) | — | ~0.21 mm² |
 | External APS6404L PSRAM (8 MB) | off-chip | off-chip |
