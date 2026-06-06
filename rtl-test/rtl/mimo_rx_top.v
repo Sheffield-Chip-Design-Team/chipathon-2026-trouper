@@ -352,11 +352,55 @@ module mimo_rx_top (
     assign sigma2_valid = sigma2_valid_r;
 
     // =========================================================================
-    // Stage 6: HW weight_gen removed — SW weight gen via firmware + reg_bank.
-    // Firmware writes 8-bit weights to the HIGH byte of each W shadow register,
-    // then strobes W_commit (reg_bank → rb_w_commit_pulse) to arm the combiner.
+    // Stage 6: Weight Generation
+    // wgt_src=0 → HW (EGC/MRC/SC computed from Z); wgt_src=1 → FW (firmware
+    // writes W shadow registers and strobes w_commit_pulse).
     // =========================================================================
-    wire W_commit_hw = rb_w_commit_pulse;
+    wire        rb_wgt_src, rb_wgt_auto_commit;
+    wire [1:0]  rb_wgt_mode;
+    wire [127:0] rb_cal_coeff;
+
+    wire signed [15:0] wg_W_re [0:3];
+    wire signed [15:0] wg_W_im [0:3];
+    wire W_commit_hw, wgen_hw_done, wgen_active;
+    wire [1:0] wgen_mode_dbg;
+
+    weight_gen u_wgen (
+        .clk             (clk),
+        .rst_n           (rst_n),
+        .training_done   (training_done),
+        .Z_i0 (Z_i[0]), .Z_q0 (Z_q[0]),
+        .Z_i1 (Z_i[1]), .Z_q1 (Z_q[1]),
+        .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
+        .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
+        .n_acc           (n_acc),
+        .sf              (rb_sf_cfg),
+        .wgt_src         (rb_wgt_src),
+        .wgt_auto_commit (rb_wgt_auto_commit),
+        .wgt_mode        (rb_wgt_mode),
+        .antenna_en      (active_antenna_en),
+        .cal_re0 (rb_cal_coeff[127:112]), .cal_im0 (rb_cal_coeff[111:96]),
+        .cal_re1 (rb_cal_coeff[95:80]),   .cal_im1 (rb_cal_coeff[79:64]),
+        .cal_re2 (rb_cal_coeff[63:48]),   .cal_im2 (rb_cal_coeff[47:32]),
+        .cal_re3 (rb_cal_coeff[31:16]),   .cal_im3 (rb_cal_coeff[15:0]),
+        .fw_W_re0 (rb_w_shadow[127:112]), .fw_W_im0 (rb_w_shadow[111:96]),
+        .fw_W_re1 (rb_w_shadow[95:80]),   .fw_W_im1 (rb_w_shadow[79:64]),
+        .fw_W_re2 (rb_w_shadow[63:48]),   .fw_W_im2 (rb_w_shadow[47:32]),
+        .fw_W_re3 (rb_w_shadow[31:16]),   .fw_W_im3 (rb_w_shadow[15:0]),
+        .fw_W_commit     (rb_w_commit_pulse),
+        .W_hw_re0 (wg_W_re[0]), .W_hw_im0 (wg_W_im[0]),
+        .W_hw_re1 (wg_W_re[1]), .W_hw_im1 (wg_W_im[1]),
+        .W_hw_re2 (wg_W_re[2]), .W_hw_im2 (wg_W_im[2]),
+        .W_hw_re3 (wg_W_re[3]), .W_hw_im3 (wg_W_im[3]),
+        .W_shadow_re0 (), .W_shadow_im0 (),
+        .W_shadow_re1 (), .W_shadow_im1 (),
+        .W_shadow_re2 (), .W_shadow_im2 (),
+        .W_shadow_re3 (), .W_shadow_im3 (),
+        .W_commit        (W_commit_hw),
+        .wgen_hw_done    (wgen_hw_done),
+        .wgen_active     (wgen_active),
+        .wgen_mode_dbg   (wgen_mode_dbg)
+    );
 
     // =========================================================================
     // Stage 7: Packet Control FSM
@@ -483,10 +527,10 @@ module mimo_rx_top (
         .x_i2 (comb_xi[2]), .x_q2 (comb_xq[2]),
         .x_i3 (comb_xi[3]), .x_q3 (comb_xq[3]),
         .x_valid  (comb_xvalid),
-        .W_re0 (rb_w_shadow[127:120]), .W_im0 (rb_w_shadow[111:104]),
-        .W_re1 (rb_w_shadow[95:88]),  .W_im1 (rb_w_shadow[79:72]),
-        .W_re2 (rb_w_shadow[63:56]),  .W_im2 (rb_w_shadow[47:40]),
-        .W_re3 (rb_w_shadow[31:24]),  .W_im3 (rb_w_shadow[15:8]),
+        .W_re0 (wg_W_re[0][15:8]), .W_im0 (wg_W_im[0][15:8]),
+        .W_re1 (wg_W_re[1][15:8]), .W_im1 (wg_W_im[1][15:8]),
+        .W_re2 (wg_W_re[2][15:8]), .W_im2 (wg_W_im[2][15:8]),
+        .W_re3 (wg_W_re[3][15:8]), .W_im3 (wg_W_im[3][15:8]),
         .W_valid   (W_valid),
         .mode      (active_mode[0]),    // 0=MRC, 1=bypass
         .bypass_ant(bypass_ant),
@@ -650,14 +694,14 @@ module mimo_rx_top (
         .tx_gain_0       (rb_tx_gain_0),
         .tx_gain_1       (rb_tx_gain_1),
         .rx_gain_commit  (rb_rx_gain_commit),
-        .wgt_src         (),
-        .wgt_auto_commit (),
-        .wgt_mode        (),
+        .wgt_src         (rb_wgt_src),
+        .wgt_auto_commit (rb_wgt_auto_commit),
+        .wgt_mode        (rb_wgt_mode),
         .w_commit_pulse  (rb_w_commit_pulse),
         .comb_post_gain_shift(rb_comb_post_gain_shift),
         .remod_backoff_shift(rb_remod_backoff_shift),
         .w_shadow        (rb_w_shadow),
-        .cal_coeff       (),
+        .cal_coeff       (rb_cal_coeff),
         .psram_ctrl      (rb_psram_ctrl),
         .sx_target       (rb_sx_target),
         .sx_addr         (rb_sx_addr),
