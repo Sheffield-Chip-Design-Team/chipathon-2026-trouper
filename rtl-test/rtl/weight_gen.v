@@ -62,11 +62,6 @@ module weight_gen (
     reg [4:0]  mrc_shift;
     reg [1:0]  j_best;
 
-    function signed [15:0] sat16;
-        input signed [31:0] v;
-        sat16 = (v > 32'sd32767)  ? 16'sd32767  :
-                (v < -32'sd32768) ? -16'sd32768 : v[15:0];
-    endfunction
 
     reg [4:0] mrc_norm_shift;
     always @(*) begin
@@ -414,20 +409,20 @@ module weight_gen (
                         2'b11: begin
                             case (sub_st[1:0])
                                 2'd0: begin
-                                    W_hw_re0 <= sat16({{14{wraw_re_tmp[17]}}, wraw_re_tmp});
-                                    W_hw_im0 <= sat16({{14{wraw_im_tmp[17]}}, wraw_im_tmp});
+                                    W_hw_re0 <= (wraw_re_tmp > 18'sd32767) ? 16'sd32767 : (wraw_re_tmp < -18'sd32768) ? -16'sd32768 : wraw_re_tmp[15:0];
+                                    W_hw_im0 <= (wraw_im_tmp > 18'sd32767) ? 16'sd32767 : (wraw_im_tmp < -18'sd32768) ? -16'sd32768 : wraw_im_tmp[15:0];
                                 end
                                 2'd1: begin
-                                    W_hw_re1 <= sat16({{14{wraw_re_tmp[17]}}, wraw_re_tmp});
-                                    W_hw_im1 <= sat16({{14{wraw_im_tmp[17]}}, wraw_im_tmp});
+                                    W_hw_re1 <= (wraw_re_tmp > 18'sd32767) ? 16'sd32767 : (wraw_re_tmp < -18'sd32768) ? -16'sd32768 : wraw_re_tmp[15:0];
+                                    W_hw_im1 <= (wraw_im_tmp > 18'sd32767) ? 16'sd32767 : (wraw_im_tmp < -18'sd32768) ? -16'sd32768 : wraw_im_tmp[15:0];
                                 end
                                 2'd2: begin
-                                    W_hw_re2 <= sat16({{14{wraw_re_tmp[17]}}, wraw_re_tmp});
-                                    W_hw_im2 <= sat16({{14{wraw_im_tmp[17]}}, wraw_im_tmp});
+                                    W_hw_re2 <= (wraw_re_tmp > 18'sd32767) ? 16'sd32767 : (wraw_re_tmp < -18'sd32768) ? -16'sd32768 : wraw_re_tmp[15:0];
+                                    W_hw_im2 <= (wraw_im_tmp > 18'sd32767) ? 16'sd32767 : (wraw_im_tmp < -18'sd32768) ? -16'sd32768 : wraw_im_tmp[15:0];
                                 end
                                 default: begin
-                                    W_hw_re3 <= sat16({{14{wraw_re_tmp[17]}}, wraw_re_tmp});
-                                    W_hw_im3 <= sat16({{14{wraw_im_tmp[17]}}, wraw_im_tmp});
+                                    W_hw_re3 <= (wraw_re_tmp > 18'sd32767) ? 16'sd32767 : (wraw_re_tmp < -18'sd32768) ? -16'sd32768 : wraw_re_tmp[15:0];
+                                    W_hw_im3 <= (wraw_im_tmp > 18'sd32767) ? 16'sd32767 : (wraw_im_tmp < -18'sd32768) ? -16'sd32768 : wraw_im_tmp[15:0];
                                 end
                             endcase
                             if (sub_st == 4'd3)
