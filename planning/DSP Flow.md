@@ -153,6 +153,8 @@ Mag_SC >= θ_SC² · Energy_Ref     (default θ_SC = 0.90)
 
 `sc_lock` is the terminal acquisition event in the non-FFT path. No downstream FFT or sync/downchirp refiner is needed — `timing_ref` alone locates the full packet.
 
+**Note — complex IQ required for CFO immunity.** The SC metric `|c_j|² = ci² + cq²` is magnitude-squared of the complex autocorrelation and is independent of carrier frequency offset (the CFO phase rotates `c_j` but not its magnitude). Using only the I channel collapses the metric to `Re{c_j}² = |c_j|²·cos²(2πΔf·M·Ts)`, which drops to zero when CFO causes a 90° phase shift. In practice, all SX1257s and the ASIC share a single TCXO, so CFO is entirely due to the remote transmitter; at ±10 ppm / 915 MHz (≈ ±9 kHz) and M=128 at 250 kS/s the phase error is < 0.03 rad, making I-only detection viable — but this relies on a hidden hardware assumption and should not be made a deliberate design choice. Both I and Q must be fed to `sc_detector`.
+
 See [Correlator Bank (SC)](blocks/Correlator%20Bank.md).
 
 ---
