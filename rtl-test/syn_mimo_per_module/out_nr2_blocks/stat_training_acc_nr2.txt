@@ -1,0 +1,47 @@
+
+10. Printing statistics.
+
+=== training_acc_nr2 ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+     2397        - wires
+     3106        - wire bits
+       46        - public wires
+      665        - public wire bits
+       17        - ports
+      213        - port bits
+     2948  9.9E+04 cells
+      270 4.15E+03   gf180mcu_as_sc_mcu7t3v3__and2_2
+       25   603.68   gf180mcu_as_sc_mcu7t3v3__ao211_2
+       49 1.08E+03   gf180mcu_as_sc_mcu7t3v3__ao21_2
+        2   74.637   gf180mcu_as_sc_mcu7t3v3__ao21b_2
+      261  6.3E+03   gf180mcu_as_sc_mcu7t3v3__ao22_2
+      237  5.2E+03   gf180mcu_as_sc_mcu7t3v3__ao31_2
+        8  245.862   gf180mcu_as_sc_mcu7t3v3__aoi211_2
+       35   768.32   gf180mcu_as_sc_mcu7t3v3__aoi21_2
+       10  285.376   gf180mcu_as_sc_mcu7t3v3__aoi21b_2
+       16  491.725   gf180mcu_as_sc_mcu7t3v3__aoi22_2
+        9  276.595   gf180mcu_as_sc_mcu7t3v3__aoi31_2
+        1   13.171   gf180mcu_as_sc_mcu7t3v3__buff_2
+      555 4.51E+04   gf180mcu_as_sc_mcu7t3v3__dfsrtp_2
+       32  1.9E+03   gf180mcu_as_sc_mcu7t3v3__dfxtp_2
+      183 1.61E+03   gf180mcu_as_sc_mcu7t3v3__inv_2
+      121  3187.43   gf180mcu_as_sc_mcu7t3v3__maj3_2
+      251 6.61E+03   gf180mcu_as_sc_mcu7t3v3__mux2_2
+      105 1.61E+03   gf180mcu_as_sc_mcu7t3v3__nand2_2
+       38  834.176   gf180mcu_as_sc_mcu7t3v3__nand2b_2
+       35  845.152   gf180mcu_as_sc_mcu7t3v3__nand3_2
+       10  307.328   gf180mcu_as_sc_mcu7t3v3__nand4_2
+      144 2.21E+03   gf180mcu_as_sc_mcu7t3v3__nor2_2
+       34  746.368   gf180mcu_as_sc_mcu7t3v3__nor2b_2
+        9  217.325   gf180mcu_as_sc_mcu7t3v3__nor3_2
+        8  263.424   gf180mcu_as_sc_mcu7t3v3__oai211_2
+       80 1.23E+03   gf180mcu_as_sc_mcu7t3v3__or2_2
+      335 1.03E+04   gf180mcu_as_sc_mcu7t3v3__xnor2_2
+       85 2.61E+03   gf180mcu_as_sc_mcu7t3v3__xor2_2
+
+   Chip area for module '\training_acc_nr2': 99047.424000
+     of which used for sequential elements: 46975.084800 (47.43%)
+

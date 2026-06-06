@@ -1,0 +1,10 @@
+read_verilog /foss/designs/lora-mimo/rtl-test/weight_gen.v
+read_verilog /tmp/weight_gen_nr2.v
+hierarchy -top weight_gen_nr2
+flatten
+synth -top weight_gen_nr2
+dfflibmap -liberty /foss/designs/lora-mimo/ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__tt_025C_3v30.lib
+abc -liberty /foss/designs/lora-mimo/ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__tt_025C_3v30.lib
+setundef -zero
+opt_clean -purge
+tee -o /foss/designs/lora-mimo/rtl-test/syn_mimo_per_module/out_nr2_blocks/stat_weight_gen_nr2.txt stat -liberty /foss/designs/lora-mimo/ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__tt_025C_3v30.lib -top weight_gen_nr2

@@ -1,0 +1,39 @@
+
+12. Printing statistics.
+
+=== picorv32_wrap ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+    19264        - wires
+    19387        - wire bits
+     2519        - public wires
+     2642        - public wire bits
+       18        - ports
+      141        - port bits
+    16838 7.23E+05 cells
+        4        -   gf180mcu_ocd_ip_sram__sram1024x8m8wm1
+      390  13759.2   gf180mcu_osu_sc_gp12t3v3__and2_1
+     2204 7.78E+04   gf180mcu_osu_sc_gp12t3v3__aoi21_1
+      433  19095.3   gf180mcu_osu_sc_gp12t3v3__aoi22_1
+       32   846.72   gf180mcu_osu_sc_gp12t3v3__buf_1
+      505  10392.9   gf180mcu_osu_sc_gp12t3v3__clkinv_1
+     2319 2.59E+05   gf180mcu_osu_sc_gp12t3v3__dff_1
+      143 2.27E+04   gf180mcu_osu_sc_gp12t3v3__dffsr_1
+     1990  52655.4   gf180mcu_osu_sc_gp12t3v3__nand2_1
+     3997  9.4E+04   gf180mcu_osu_sc_gp12t3v3__nor2_1
+     2974 9.62E+04   gf180mcu_osu_sc_gp12t3v3__oai21_1
+      633  27915.3   gf180mcu_osu_sc_gp12t3v3__oai22_1
+      257 1.06E+04   gf180mcu_osu_sc_gp12t3v3__oai31_1
+      370  11965.8   gf180mcu_osu_sc_gp12t3v3__or2_1
+      145   2984.1   gf180mcu_osu_sc_gp12t3v3__tieh
+        8   164.64   gf180mcu_osu_sc_gp12t3v3__tiel
+      268 1.42E+04   gf180mcu_osu_sc_gp12t3v3__xnor2_1
+      166  8784.72   gf180mcu_osu_sc_gp12t3v3__xor2_1
+
+   Area for cell type \gf180mcu_ocd_ip_sram__sram1024x8m8wm1 is unknown!
+
+   Chip area for module '\picorv32_wrap': 723051.840000
+     of which used for sequential elements: 281781.360000 (38.97%)
+

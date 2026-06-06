@@ -1,12 +1,12 @@
-[submodule "lora-mimo/ip/gf180mcu_ocd_ip_sram"]
-	path = lora-mimo/ip/gf180mcu_ocd_ip_sram
+[submodule "ip/gf180mcu_ocd_ip_sram"]
+	path = ip/gf180mcu_ocd_ip_sram
 	url = https://github.com/RTimothyEdwards/gf180mcu_ocd_ip_sram
-[submodule "lora-mimo/ip/gf180mcu_fd_ip_sram"]
-	path = lora-mimo/ip/gf180mcu_fd_ip_sram
+[submodule "ip/gf180mcu_fd_ip_sram"]
+	path = ip/gf180mcu_fd_ip_sram
 	url = https://github.com/google/globalfoundries-pdk-ip-gf180mcu_fd_ip_sram
-[submodule "lora-mimo/ip/picorv32"]
-	path = lora-mimo/ip/picorv32
+[submodule "ip/picorv32"]
+	path = ip/picorv32
 	url = https://github.com/YosysHQ/picorv32
-[submodule "lora-mimo/ip/sscs-chipathon-2026"]
-	path = lora-mimo/ip/sscs-chipathon-2026
+[submodule "ip/sscs-chipathon-2026"]
+	path = ip/sscs-chipathon-2026
 	url = https://github.com/sscs-ose/sscs-chipathon-2026.git

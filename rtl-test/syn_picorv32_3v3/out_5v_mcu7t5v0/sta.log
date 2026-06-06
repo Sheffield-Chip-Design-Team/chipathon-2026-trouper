@@ -1,0 +1,117 @@
+OpenSTA 2.7.0 857316ff00 Copyright (c) 2025, Parallax Software, Inc.
+License GPLv3: GNU GPL version 3 <http://gnu.org/licenses/gpl.html>
+
+This is free software, and you are free to change and redistribute it
+under certain conditions; type `show_copying' for details. 
+This program comes with ABSOLUTELY NO WARRANTY; for details type `show_warranty'.
+% read_liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
+1
+% read_liberty /foss/designs/lora-mimo/ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib
+1
+% read_verilog out_5v_mcu7t5v0/netlist.v
+1
+% link_design picorv32_wrap
+Warning: out_5v_mcu7t5v0/netlist.v line 78806, instance _20811_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78809, instance _20812_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78812, instance _20813_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78815, instance _20814_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78818, instance _20815_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78821, instance _20816_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78824, instance _20817_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78827, instance _20818_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78830, instance _20819_ port Y not found.
+Warning: out_5v_mcu7t5v0/netlist.v line 78833, instance _20820_ port Y not found.
+1
+% create_clock -name clk_32m -period 62.5 [get_ports clk_32m]
+% puts "----- WNS/TNS @ 62.5ns -----"
+----- WNS/TNS @ 62.5ns -----
+% report_wns
+wns max -4.27
+% report_tns
+tns max -146.06
+% puts "----- worst max path -----"
+----- worst max path -----
+% report_checks -path_delay max -digits 4
+Startpoint: _18923_ (rising edge-triggered flip-flop clocked by clk_32m)
+Endpoint: _20527_ (rising edge-triggered flip-flop clocked by clk_32m)
+Path Group: clk_32m
+Path Type: max
+
+    Delay      Time   Description
+-------------------------------------------------------------
+   0.0000    0.0000   clock clk_32m (rise edge)
+   0.0000    0.0000   clock network delay (ideal)
+   0.0000    0.0000 ^ _18923_/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+  37.4993   37.4993 ^ _18923_/Q (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+  17.6822   55.1815 v _09300_/ZN (gf180mcu_fd_sc_mcu7t5v0__clkinv_1)
+   6.1694   61.3509 v _16387_/Z (gf180mcu_fd_sc_mcu7t5v0__mux4_1)
+   0.3964   61.7473 ^ _16388_/ZN (gf180mcu_fd_sc_mcu7t5v0__nor2_1)
+   0.3564   62.1037 v _16389_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi21_1)
+   0.9651   63.0688 ^ _16392_/ZN (gf180mcu_fd_sc_mcu7t5v0__oai211_1)
+   0.3970   63.4658 v _17622_/ZN (gf180mcu_fd_sc_mcu7t5v0__oai211_1)
+   1.0683   64.5341 ^ _17623_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi222_1)
+   0.2799   64.8140 v _17624_/ZN (gf180mcu_fd_sc_mcu7t5v0__oai21_1)
+   0.4414   65.2554 ^ _17625_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi21_1)
+   0.1872   65.4427 v _17626_/ZN (gf180mcu_fd_sc_mcu7t5v0__nor2_1)
+   0.0000   65.4427 v _20527_/D (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+            65.4427   data arrival time
+
+  62.5000   62.5000   clock clk_32m (rise edge)
+   0.0000   62.5000   clock network delay (ideal)
+   0.0000   62.5000   clock reconvergence pessimism
+            62.5000 ^ _20527_/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+  -1.3276   61.1724   library setup time
+            61.1724   data required time
+-------------------------------------------------------------
+            61.1724   data required time
+           -65.4427   data arrival time
+-------------------------------------------------------------
+            -4.2703   slack (VIOLATED)
+
+
+% puts "----- worst reg-to-reg (exclude IO) -----"
+----- worst reg-to-reg (exclude IO) -----
+% report_checks -path_delay max -from [all_registers -clock_pins] -to [all_registers -data_pins] -digits 4
+Startpoint: _18923_ (rising edge-triggered flip-flop clocked by clk_32m)
+Endpoint: _20527_ (rising edge-triggered flip-flop clocked by clk_32m)
+Path Group: clk_32m
+Path Type: max
+
+    Delay      Time   Description
+-------------------------------------------------------------
+   0.0000    0.0000   clock clk_32m (rise edge)
+   0.0000    0.0000   clock network delay (ideal)
+   0.0000    0.0000 ^ _18923_/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+  37.4993   37.4993 ^ _18923_/Q (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+  17.6822   55.1815 v _09300_/ZN (gf180mcu_fd_sc_mcu7t5v0__clkinv_1)
+   6.1694   61.3509 v _16387_/Z (gf180mcu_fd_sc_mcu7t5v0__mux4_1)
+   0.3964   61.7473 ^ _16388_/ZN (gf180mcu_fd_sc_mcu7t5v0__nor2_1)
+   0.3564   62.1037 v _16389_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi21_1)
+   0.9651   63.0688 ^ _16392_/ZN (gf180mcu_fd_sc_mcu7t5v0__oai211_1)
+   0.3970   63.4658 v _17622_/ZN (gf180mcu_fd_sc_mcu7t5v0__oai211_1)
+   1.0683   64.5341 ^ _17623_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi222_1)
+   0.2799   64.8140 v _17624_/ZN (gf180mcu_fd_sc_mcu7t5v0__oai21_1)
+   0.4414   65.2554 ^ _17625_/ZN (gf180mcu_fd_sc_mcu7t5v0__aoi21_1)
+   0.1872   65.4427 v _17626_/ZN (gf180mcu_fd_sc_mcu7t5v0__nor2_1)
+   0.0000   65.4427 v _20527_/D (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+            65.4427   data arrival time
+
+  62.5000   62.5000   clock clk_32m (rise edge)
+   0.0000   62.5000   clock network delay (ideal)
+   0.0000   62.5000   clock reconvergence pessimism
+            62.5000 ^ _20527_/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+  -1.3276   61.1724   library setup time
+            61.1724   data required time
+-------------------------------------------------------------
+            61.1724   data required time
+           -65.4427   data arrival time
+-------------------------------------------------------------
+            -4.2703   slack (VIOLATED)
+
+
+% puts "----- area -----"
+----- area -----
+% report_design_area
+invalid command name "report_design_area"
+while evaluating report_design_area
+% 

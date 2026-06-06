@@ -1,0 +1,45 @@
+
+10. Printing statistics.
+
+=== mrc_combiner_nr2 ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+     1476        - wires
+     1803        - wire bits
+       40        - public wires
+      367        - public wire bits
+       18        - ports
+      123        - port bits
+     1695 5.55E+04 cells
+      120 1.84E+03   gf180mcu_as_sc_mcu7t3v3__and2_2
+       28  676.122   gf180mcu_as_sc_mcu7t3v3__ao211_2
+       15   329.28   gf180mcu_as_sc_mcu7t3v3__ao21_2
+        4  149.274   gf180mcu_as_sc_mcu7t3v3__ao21b_2
+       65 1.57E+03   gf180mcu_as_sc_mcu7t3v3__ao22_2
+       58 1.27E+03   gf180mcu_as_sc_mcu7t3v3__ao31_2
+        1   30.733   gf180mcu_as_sc_mcu7t3v3__aoi211_2
+       28  614.656   gf180mcu_as_sc_mcu7t3v3__aoi21_2
+       20  570.752   gf180mcu_as_sc_mcu7t3v3__aoi21b_2
+        8  245.862   gf180mcu_as_sc_mcu7t3v3__aoi22_2
+        1   30.733   gf180mcu_as_sc_mcu7t3v3__aoi31_2
+      259  2.1E+04   gf180mcu_as_sc_mcu7t3v3__dfsrtp_2
+       77  676.122   gf180mcu_as_sc_mcu7t3v3__inv_2
+      133  3.5E+03   gf180mcu_as_sc_mcu7t3v3__maj3_2
+      280 7.38E+03   gf180mcu_as_sc_mcu7t3v3__mux2_2
+       91  1.4E+03   gf180mcu_as_sc_mcu7t3v3__nand2_2
+       13  285.376   gf180mcu_as_sc_mcu7t3v3__nand2b_2
+        3   72.442   gf180mcu_as_sc_mcu7t3v3__nand3_2
+       10  307.328   gf180mcu_as_sc_mcu7t3v3__nand4_2
+       30  460.992   gf180mcu_as_sc_mcu7t3v3__nor2_2
+        7  153.664   gf180mcu_as_sc_mcu7t3v3__nor2b_2
+        8  193.178   gf180mcu_as_sc_mcu7t3v3__nor3_2
+        2   65.856   gf180mcu_as_sc_mcu7t3v3__oai211_2
+       48  737.587   gf180mcu_as_sc_mcu7t3v3__or2_2
+      286 8.79E+03   gf180mcu_as_sc_mcu7t3v3__xnor2_2
+      100  3073.28   gf180mcu_as_sc_mcu7t3v3__xor2_2
+
+   Chip area for module '\mrc_combiner_nr2': 55463.923200
+     of which used for sequential elements: 21036.601600 (37.93%)
+

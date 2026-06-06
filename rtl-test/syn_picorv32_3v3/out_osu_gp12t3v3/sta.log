@@ -1,0 +1,116 @@
+OpenSTA 2.7.0 857316ff00 Copyright (c) 2025, Parallax Software, Inc.
+License GPLv3: GNU GPL version 3 <http://gnu.org/licenses/gpl.html>
+
+This is free software, and you are free to change and redistribute it
+under certain conditions; type `show_copying' for details. 
+This program comes with ABSOLUTELY NO WARRANTY; for details type `show_warranty'.
+% read_liberty /foss/designs/lora-mimo/ip/gf180mcu_osu_sc/gf180mcu_osu_sc_gp12t3v3/lib/gf180mcu_osu_sc_gp12t3v3_TT_25C.ccs.lib
+Warning: /foss/designs/lora-mimo/ip/gf180mcu_osu_sc/gf180mcu_osu_sc_gp12t3v3/lib/gf180mcu_osu_sc_gp12t3v3_TT_25C.ccs.lib line 59715, timing group from output port.
+Warning: /foss/designs/lora-mimo/ip/gf180mcu_osu_sc/gf180mcu_osu_sc_gp12t3v3/lib/gf180mcu_osu_sc_gp12t3v3_TT_25C.ccs.lib line 62540, timing group from output port.
+Warning: /foss/designs/lora-mimo/ip/gf180mcu_osu_sc/gf180mcu_osu_sc_gp12t3v3/lib/gf180mcu_osu_sc_gp12t3v3_TT_25C.ccs.lib line 65485, timing group from output port.
+1
+% read_liberty /foss/designs/lora-mimo/ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib
+1
+% read_verilog out_osu_gp12t3v3/netlist.v
+1
+% link_design picorv32_wrap
+1
+% create_clock -name clk_32m -period 62.5 [get_ports clk_32m]
+% puts "----- WNS/TNS @ 62.5ns -----"
+----- WNS/TNS @ 62.5ns -----
+% report_wns
+wns max 0.00
+% report_tns
+tns max 0.00
+% puts "----- worst max path -----"
+----- worst max path -----
+% report_checks -path_delay max -digits 4
+Startpoint: _31540_ (rising edge-triggered flip-flop clocked by clk_32m)
+Endpoint: _33208_ (rising edge-triggered flip-flop clocked by clk_32m)
+Path Group: clk_32m
+Path Type: max
+
+    Delay      Time   Description
+-------------------------------------------------------------
+   0.0000    0.0000   clock clk_32m (rise edge)
+   0.0000    0.0000   clock network delay (ideal)
+   0.0000    0.0000 ^ _31540_/CLK (gf180mcu_osu_sc_gp12t3v3__dff_1)
+  23.1229   23.1229 v _31540_/Q (gf180mcu_osu_sc_gp12t3v3__dff_1)
+  12.3776   35.5005 ^ _16879_/Y (gf180mcu_osu_sc_gp12t3v3__clkinv_1)
+   0.3451   35.8456 v _27494_/Y (gf180mcu_osu_sc_gp12t3v3__oai21_1)
+   0.3889   36.2345 ^ _27495_/Y (gf180mcu_osu_sc_gp12t3v3__oai21_1)
+   0.1410   36.3755 ^ _27496_/Y (gf180mcu_osu_sc_gp12t3v3__or2_1)
+   0.0930   36.4685 v _27504_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.2149   36.6833 ^ _27505_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.1445   36.8279 v _27506_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.1134   36.9413 ^ _27507_/Y (gf180mcu_osu_sc_gp12t3v3__oai31_1)
+   0.1410   37.0823 ^ _27514_/Y (gf180mcu_osu_sc_gp12t3v3__and2_1)
+   0.1681   37.2504 v _27515_/Y (gf180mcu_osu_sc_gp12t3v3__oai21_1)
+   0.1415   37.3919 ^ _30289_/Y (gf180mcu_osu_sc_gp12t3v3__nor2_1)
+   0.0552   37.4471 v _30291_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.1622   37.6093 ^ _30292_/Y (gf180mcu_osu_sc_gp12t3v3__nor2_1)
+   0.0000   37.6093 ^ _33208_/D (gf180mcu_osu_sc_gp12t3v3__dff_1)
+            37.6093   data arrival time
+
+  62.5000   62.5000   clock clk_32m (rise edge)
+   0.0000   62.5000   clock network delay (ideal)
+   0.0000   62.5000   clock reconvergence pessimism
+            62.5000 ^ _33208_/CLK (gf180mcu_osu_sc_gp12t3v3__dff_1)
+  -0.8039   61.6961   library setup time
+            61.6961   data required time
+-------------------------------------------------------------
+            61.6961   data required time
+           -37.6093   data arrival time
+-------------------------------------------------------------
+            24.0868   slack (MET)
+
+
+% puts "----- worst reg-to-reg (exclude IO) -----"
+----- worst reg-to-reg (exclude IO) -----
+% report_checks -path_delay max -from [all_registers -clock_pins] -to [all_registers -data_pins] -digits 4
+Startpoint: _31540_ (rising edge-triggered flip-flop clocked by clk_32m)
+Endpoint: _33208_ (rising edge-triggered flip-flop clocked by clk_32m)
+Path Group: clk_32m
+Path Type: max
+
+    Delay      Time   Description
+-------------------------------------------------------------
+   0.0000    0.0000   clock clk_32m (rise edge)
+   0.0000    0.0000   clock network delay (ideal)
+   0.0000    0.0000 ^ _31540_/CLK (gf180mcu_osu_sc_gp12t3v3__dff_1)
+  23.1229   23.1229 v _31540_/Q (gf180mcu_osu_sc_gp12t3v3__dff_1)
+  12.3776   35.5005 ^ _16879_/Y (gf180mcu_osu_sc_gp12t3v3__clkinv_1)
+   0.3451   35.8456 v _27494_/Y (gf180mcu_osu_sc_gp12t3v3__oai21_1)
+   0.3889   36.2345 ^ _27495_/Y (gf180mcu_osu_sc_gp12t3v3__oai21_1)
+   0.1410   36.3755 ^ _27496_/Y (gf180mcu_osu_sc_gp12t3v3__or2_1)
+   0.0930   36.4685 v _27504_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.2149   36.6833 ^ _27505_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.1445   36.8279 v _27506_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.1134   36.9413 ^ _27507_/Y (gf180mcu_osu_sc_gp12t3v3__oai31_1)
+   0.1410   37.0823 ^ _27514_/Y (gf180mcu_osu_sc_gp12t3v3__and2_1)
+   0.1681   37.2504 v _27515_/Y (gf180mcu_osu_sc_gp12t3v3__oai21_1)
+   0.1415   37.3919 ^ _30289_/Y (gf180mcu_osu_sc_gp12t3v3__nor2_1)
+   0.0552   37.4471 v _30291_/Y (gf180mcu_osu_sc_gp12t3v3__aoi21_1)
+   0.1622   37.6093 ^ _30292_/Y (gf180mcu_osu_sc_gp12t3v3__nor2_1)
+   0.0000   37.6093 ^ _33208_/D (gf180mcu_osu_sc_gp12t3v3__dff_1)
+            37.6093   data arrival time
+
+  62.5000   62.5000   clock clk_32m (rise edge)
+   0.0000   62.5000   clock network delay (ideal)
+   0.0000   62.5000   clock reconvergence pessimism
+            62.5000 ^ _33208_/CLK (gf180mcu_osu_sc_gp12t3v3__dff_1)
+  -0.8039   61.6961   library setup time
+            61.6961   data required time
+-------------------------------------------------------------
+            61.6961   data required time
+           -37.6093   data arrival time
+-------------------------------------------------------------
+            24.0868   slack (MET)
+
+
+% puts "----- area -----"
+----- area -----
+% report_design_area
+invalid command name "report_design_area"
+while evaluating report_design_area
+% 

@@ -1,0 +1,52 @@
+{
+    "DESIGN_NAME": "energy_meas",
+    "VERILOG_FILES": [
+        "dir::../energy_meas.v"
+    ],
+    "CLOCK_PORT": "clk",
+    "CLOCK_PERIOD": 31.25,
+    "FP_SIZING": "relative",
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": 55,
+    "MAX_FANOUT_CONSTRAINT": 4,
+    "SYNTH_STRATEGY": "DELAY 0",
+    "DRT_THREADS": 4,
+    "ROUTING_OPT_ITERS": 32,
+    "DEFAULT_CORNER": "nom_tt_025C_3v30",
+    "STA_CORNERS": [
+        "nom_tt_025C_3v30",
+        "max_ss_125C_3v00",
+        "max_ff_n40C_3v60"
+    ],
+    "LIB": {
+        "*_tt_025C_3v30": [
+            "dir::../../ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__tt_025C_3v30.lib"
+        ],
+        "*_ss_125C_3v00": [
+            "dir::../../ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__ss_125C_3v00.lib"
+        ],
+        "*_ff_n40C_3v60": [
+            "dir::../../ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__ff_n40C_3v60.lib"
+        ]
+    },
+    "CTS_ROOT_BUFFER": "gf180mcu_as_sc_mcu7t3v3__clkbuff_12",
+    "CTS_CLK_BUFFERS": [
+        "gf180mcu_as_sc_mcu7t3v3__clkbuff_4",
+        "gf180mcu_as_sc_mcu7t3v3__clkbuff_8",
+        "gf180mcu_as_sc_mcu7t3v3__clkbuff_12"
+    ],
+    "RUN_MAGIC_DRC": false,
+    "RUN_LVS": false,
+    "RUN_IRDROP_REPORT": false,
+    "PNR_SDC_FILE": "dir::pnr.sdc",
+    "SIGNOFF_SDC_FILE": "dir::pnr.sdc",
+    "RUN_POST_GRT_DESIGN_REPAIR": true,
+    "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 0,
+    "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 75,
+    "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 75,
+    "GRT_DESIGN_REPAIR_RUN_GRT": true,
+    "GRT_RESIZER_SETUP_MAX_BUFFER_PCT": 100,
+    "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+    "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+    "HOLD_VIOLATION_CORNERS": []
+}

@@ -1,0 +1,78 @@
+{
+    "DESIGN_NAME": "picorv32_wrap",
+    "VERILOG_FILES": [
+        "dir::../../ip/picorv32/picorv32.v",
+        "dir::../picorv32_wrap.v",
+        "dir::../sram1024x8_bb.v"
+    ],
+    "CLOCK_PORT": "clk_32m",
+    "CLOCK_PERIOD": 62.5,
+    "FP_SIZING": "relative",
+    "FP_CORE_UTIL": 50,
+    "PL_TARGET_DENSITY_PCT": 50,
+    "MAX_FANOUT_CONSTRAINT": 8,
+    "SYNTH_STRATEGY": "DELAY 0",
+    "DRT_THREADS": 6,
+    "ROUTING_OPT_ITERS": 32,
+    "DEFAULT_CORNER": "nom_tt_025C_3v30",
+    "STA_CORNERS": [
+        "nom_tt_025C_3v30",
+        "max_ss_125C_3v00",
+        "max_ff_n40C_3v60"
+    ],
+    "LIB": {
+        "*_tt_025C_3v30": [
+            "dir::../../ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__tt_025C_3v30.lib",
+            "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib"
+        ],
+        "*_ss_125C_3v00": [
+            "dir::../../ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__ss_125C_3v00.lib",
+            "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ss_125C_3v00.lib"
+        ],
+        "*_ff_n40C_3v60": [
+            "dir::../../ip/gf180mcu_as_sc_mcu7t3v3/pdk/libs.ref/gf180mcu_as_sc_mcu7t3v3/lib/gf180mcu_as_sc_mcu7t3v3__ff_n40C_3v60.lib",
+            "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ff_n40C_3v60.lib"
+        ]
+    },
+    "CTS_ROOT_BUFFER": "gf180mcu_as_sc_mcu7t3v3__clkbuff_12",
+    "CTS_CLK_BUFFERS": [
+        "gf180mcu_as_sc_mcu7t3v3__clkbuff_4",
+        "gf180mcu_as_sc_mcu7t3v3__clkbuff_8",
+        "gf180mcu_as_sc_mcu7t3v3__clkbuff_12"
+    ],
+    "EXTRA_LEFS": [
+        "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.lef"
+    ],
+    "EXTRA_GDS": [
+        "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.gds"
+    ],
+    "MACRO_PLACEMENT_CFG": "dir::macro_placement_4sram.cfg",
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 5,
+    "PDN_VERTICAL_HALO": 5,
+    "PDN_MACRO_CONNECTIONS": [
+        "u_cpu_sram_A VDD VSS VDD VSS",
+        "u_cpu_sram_B VDD VSS VDD VSS",
+        "u_cpu_sram_C VDD VSS VDD VSS",
+        "u_cpu_sram_D VDD VSS VDD VSS"
+    ],
+    "PDN_CFG": "dir::pdn_cfg.tcl",
+    "RUN_MAGIC_DRC": false,
+    "RUN_LVS": false,
+    "RUN_IRDROP_REPORT": false,
+    "PNR_SDC_FILE": "dir::pnr.sdc",
+    "SIGNOFF_SDC_FILE": "dir::pnr.sdc",
+    "RUN_POST_GRT_DESIGN_REPAIR": true,
+    "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 0,
+    "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 75,
+    "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 75,
+    "GRT_DESIGN_REPAIR_RUN_GRT": true,
+    "GRT_RESIZER_SETUP_MAX_BUFFER_PCT": 100,
+    "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+    "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+    "HOLD_VIOLATION_CORNERS": "",
+    "TIMING_VIOLATION_CORNERS": [
+        "*tt*"
+    ]
+}

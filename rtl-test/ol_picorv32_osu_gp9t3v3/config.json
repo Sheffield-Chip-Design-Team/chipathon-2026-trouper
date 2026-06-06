@@ -1,0 +1,49 @@
+{
+    "DESIGN_NAME": "picorv32_wrap",
+    "VERILOG_FILES": [
+        "dir::../../ip/picorv32/picorv32.v",
+        "dir::../picorv32_wrap.v",
+        "dir::../sram1024x8_bb.v"
+    ],
+    "CLOCK_PORT": "clk_32m",
+    "CLOCK_PERIOD": 31.25,
+    "FP_SIZING": "relative",
+    "FP_CORE_UTIL": 35,
+    "PL_TARGET_DENSITY_PCT": 42,
+    "MAX_FANOUT_CONSTRAINT": 8,
+    "SYNTH_STRATEGY": "DELAY 0",
+    "DRT_THREADS": 6,
+    "ROUTING_OPT_ITERS": 32,
+    "DEFAULT_CORNER": "nom_tt_025C_3v30",
+    "STA_CORNERS": ["nom_tt_025C_3v30"],
+    "LIB": {
+        "*_tt_025C_3v30": [
+            "dir::../../ip/gf180mcu_osu_sc/gf180mcu_osu_sc_gp9t3v3/lib/gf180mcu_osu_sc_gp9t3v3_TT_25C.ccs.lib",
+            "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib"
+        ]
+    },
+    "EXTRA_LEFS": [
+        "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.lef"
+    ],
+    "EXTRA_GDS": [
+        "dir::../../ip/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.gds"
+    ],
+    "MACRO_PLACEMENT_CFG": "dir::macro_placement.cfg",
+    "FP_MACRO_HORIZONTAL_HALO": 10,
+    "FP_MACRO_VERTICAL_HALO": 10,
+    "PDN_HORIZONTAL_HALO": 5,
+    "PDN_VERTICAL_HALO": 5,
+    "RUN_MAGIC_DRC": false,
+    "RUN_LVS": false,
+    "RUN_IRDROP_REPORT": false,
+    "PNR_SDC_FILE": "dir::pnr.sdc",
+    "SIGNOFF_SDC_FILE": "dir::pnr.sdc",
+    "PDN_MACRO_CONNECTIONS": [
+        "u_cpu_sram_b0 VDD VSS VDD VSS",
+        "u_cpu_sram_b1 VDD VSS VDD VSS",
+        "u_cpu_sram_b2 VDD VSS VDD VSS",
+        "u_cpu_sram_b3 VDD VSS VDD VSS"
+    ],
+    "PDN_CFG": "dir::pdn_cfg.tcl",
+    "HOLD_VIOLATION_CORNERS": ""
+}
