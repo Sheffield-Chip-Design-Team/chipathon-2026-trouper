@@ -38,14 +38,14 @@ graph LR
     JTAG([JTAG Probe])
 
     NODE1 & NODE2 -->|868 MHz| ANT1 & ANT2 & ANT3 & ANT4
-    ANT1 <-->|RF| FEM1
-    ANT2 <-->|RF| FEM2
-    ANT3 <-->|RF| FEM3
-    ANT4 <-->|RF| FEM4
-    FEM1 <-->|TR| SX1
-    FEM2 <-->|TR| SX2
-    FEM3 <-->|TR| SX3
-    FEM4 <-->|TR| SX4
+    ANT1 -->|RF| FEM1
+    ANT2 -->|RF| FEM2
+    ANT3 -->|RF| FEM3
+    ANT4 -->|RF| FEM4
+    FEM1 -->|RX| SX1
+    FEM2 -->|RX| SX2
+    FEM3 -->|RX| SX3
+    FEM4 -->|RX| SX4
     SX1 & SX2 & SX3 & SX4 <-->|"I+Q ΣΔ 32 MS/s\nSPI cfg 10 MHz"| CHIP
 
     CHIP -->|"ΣΔ re-mod A\n1-bit I+Q 32 MS/s"| SX1302
@@ -62,10 +62,10 @@ graph LR
         ANT2([Antenna 2])
         ANT3([Antenna 3])
         ANT4([Antenna 4])
-        FEM1["FEM_1 = SE2435L_1\nPA+LNA+T/R switch\nTX+RX path"]
-        FEM2["FEM_2 = SE2435L_2\nPA+LNA+T/R switch\nTX+RX path"]
-        FEM3["FEM_3 = SE2435L_3\nLNA+T/R path\nRX-only branch"]
-        FEM4["FEM_4 = SE2435L_4\nLNA+T/R path\nRX-only branch"]
+        FEM1["FEM_1\nExternal LNA\nRX-only"]
+        FEM2["FEM_2\nExternal LNA\nRX-only"]
+        FEM3["FEM_3\nExternal LNA\nRX-only"]
+        FEM4["FEM_4\nExternal LNA\nRX-only"]
         SX1["SX1257_1\nRF Front-End\nMixer · VGA · PLL\nΣΔ ADC/DAC\nXTB ← TCXO buf"]
         SX2["SX1257_2\nRF Front-End"]
         SX3["SX1257_3\nRF Front-End"]
@@ -145,7 +145,7 @@ graph LR
 
 Notes:
 
-- `FEM` = front-end module. Here it means the external `SE2435L` RF front-end on each antenna branch.
+- `FEM` = front-end module — external LNA on each antenna branch. RX-only; no PA or T/R switch required.
 - `Energy Measurement` is shown explicitly because it shares the preamble-detection path but also provides the per-antenna snapshot used by AGC and diagnostics.
 
 ---
@@ -219,14 +219,14 @@ A surgical review of the SX1257 datasheet (v1.2) was performed on May 4, 2026. T
 - **No External Loading:** These pins must not power any external circuitry.
 
 ### 3. Thermal & Grounding
-- **Exposed Pad (Pin 0):** This is the primary ground and thermal path. It must be soldered to a large ground plane with multiple thermal vias to handle the TX PA return current.
+- **Exposed Pad (Pin 0):** This is the primary ground and thermal path. It must be soldered to a large ground plane with multiple thermal vias.
 
 ### 4. Digital Interface
 - **Reset (Pin 9):** Active high. Must be floating or high-impedance during the power-on-reset (POR) cycle to allow internal pull-up logic to function (§6.2.1).
 - **SPI Logic Levels:** 3.3V CMOS compatible (up to VDD). Max frequency 10 MHz.
-| I_IN / Q_IN (pins 13/12) | SX1257_1/2: driven by SX1302 TX I/Q bitstream. SX1257_3/4: tie to GND (10 kΩ pull-down) | SX1257_3/4 are RX-only; TX inputs must be held at a defined level. TxEnable=0 in firmware suppresses any DAC output regardless, but tie low to be safe. |
+| I_IN / Q_IN (pins 13/12) | All 4 devices: tie to GND (10 kΩ pull-down) | All antennas are RX-only. TxEnable=0 in firmware; TX inputs tied low to be safe. |
 | DIO0–DIO3 (pins 21–24) | Leave NC | ASIC has 0 spare pads. PLL lock is polled via `RegModeStatus` (0x11) over SPI instead. |
-| VBAT1/VBAT2/VBAT3 (pins 2/16/32) | Supply input — bulk decoupling per application schematic (Fig 6-4) | Main supply pins. Each needs 10 µF bulk + 100 nF to GND. VBAT3 feeds the TX PA amplifier — higher current draw during TX (~380 mA per SE2435L); ensure adequate copper pour and via stitching. |
+| VBAT1/VBAT2/VBAT3 (pins 2/16/32) | Supply input — bulk decoupling per application schematic (Fig 6-4) | Main supply pins. Each needs 10 µF bulk + 100 nF to GND. |
 | VR_PA/VR_ANA1/VR_DIG/VR_ANA2 (pins 1/3/5/25) | Internal LDO outputs — decoupling caps to GND per Fig 6-4 | Each needs 100 nF + 10 µF to GND. Do not load these pins externally. |
 
 > **I_OUT/Q_OUT pin name note (SX1257 Table 1-1 apparent typo).** Table 1-1 describes pin 14 Q_OUT as "I (inphase) channel ADC output" and pin 15 I_OUT as "Q (quadrature) channel ADC output" — contradicting the §3.7.1 block diagram which correctly shows I_OUT ← I-channel ADC and Q_OUT ← Q-channel ADC. The pin names (I = in-phase, Q = quadrature) and the block diagram are self-consistent; the Table 1-1 descriptions are a Semtech typo. Connect I_OUT → `IQ_DATA_I[n]` and Q_OUT → `IQ_DATA_Q[n]` as shown in the pad list.
@@ -276,29 +276,7 @@ Host software may still pre-program SX1257 registers and gain mirrors over SPI b
 
 ### TX signal chain
 
-```
-Host RPi → lgw_send() → SX1302 CSS Modulator → SX1257_1/2 TX DAC → Antenna 1/2
-```
-
-The ASIC is not in the TX data path. Its role is TDD switching and RX protection:
-
-1. RPi writes `TX_CTRL[0]=1` (`TX_PREP`)
-2. PicoRV32 IRQ: clears `ANTENNA_EN[0:1]` → combiner drops ant 0,1 immediately
-3. PicoRV32: writes `RegMode=0x0D` to SX1257_1 and SX1257_2 via SPI master (~6 µs SPI + 120 µs TS_TR)
-4. PicoRV32: sets `TX_ACTIVE=1`; RPi polls or waits fixed delay
-5. RPi: calls `lgw_send()` → SX1302 transmits via SX1257_1/2
-6. RPi: writes `TX_CTRL[1]=1` (`TX_DONE`) after `lgw_send()` returns
-7. PicoRV32 IRQ: writes `RegMode=0x03` to SX1257_1/2; waits TS_RE (~150 µs)
-8. PicoRV32: restores `ANTENNA_EN[0:1]`; clears `TX_ACTIVE`; invalidates W
-9. System returns to 4-antenna RX; W recomputed on next sc_lock
-
-LoRaWAN RX1 budget = 1,000,000 µs; total switching overhead ~280 µs — margin >3,500×.
-
-This TX path is outside the CPU-less fallback mode above. If PicoRV32 is held in reset, the supported operating mode is RX-only.
-
-> **REMOD output during TX window.** During steps 5–6, the combiner continues running on antennas 3+4 and REMOD_A is still driven to SX1302 Radio A — which is simultaneously transmitting. The SX1302 datasheet does not explicitly state whether the digital input is ignored during TX; this must be verified against the SX1302 HAL and register map before tapeout. If the SX1302 does not cleanly ignore REMOD_A during TX, the ASIC will need to gate REMOD_A (force to midscale or zero) for the duration of the TX window. No RTL provision for this exists yet — add a `remod_gate` signal driven by `TX_ACTIVE` if required.
-
-> **RF isolation — TX leakage into active RX antennas.** Each antenna uses a Skyworks SE2435L FEM (PA+LNA+T/R switch). SE2435L_3/4 (RX-only) have their SX1257s put to standby in step 2, which de-asserts RX_EN and switches the SE2435L LNA to bypass mode (IP1dB = +10 dBm vs −12 dBm active). At +27 dBm TX with 40 dB board isolation, leakage is −13 dBm — 23 dB below the bypass compression point. **Action for RF/analog team:** characterise actual board isolation at 868 MHz. If isolation < 37 dB (+10 dBm at bypass input), additional measures (limiter diode, or full SE2435L sleep) are required. If isolation > 50 dB, the standby step can be removed. See [SE2435L Front-End Module](blocks/SE2435L%20Front-End%20Module.md).
+TX is not supported. This is an RX-only gateway ASIC. The SX1302 and any connected SX1257 DAC paths are used for RX only; no PA, T/R switch, or TDD sequencing is implemented.
 
 ---
 
@@ -353,14 +331,14 @@ The following boundaries require explicit CDC treatment:
 
 ## Gate count & area summary
 
-**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane synthesis + full P&R):
+**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane synthesis + full P&R). Note: this run predates weight_gen being wired in; logic area will increase slightly when re-synthesised.
 
 | Metric | Value |
 | --- | --- |
-| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** |
+| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** (weight_gen excluded — update pending) |
 | Frontend buffer SRAM (1 × FD 512×8) | ~209,000 µm² (0.21 mm²) |
 | CPU SRAM (4 × OCD 1024×8) | ~838,000 µm² (0.84 mm²) |
-| **Total synthesis area (logic + SRAMs)** | **1,477,897 µm² (1.48 mm²)** |
+| **Total synthesis area (logic + SRAMs)** | **1,477,897 µm² (1.48 mm²)** (weight_gen excluded) |
 | Core area (placed) | 1,822,012 µm² (1.82 mm²) at 69.3% utilisation |
 | Post-PNR WNS — TT 25°C 3.3 V (setup) | +24.70 ns ✓ |
 | Post-PNR WNS — SS 125°C 3.0 V (setup) | **−10.08 ns ✗** (expected — FD cells fail 32 MHz SS) |
@@ -388,8 +366,8 @@ The following boundaries require explicit CDC treatment:
 | IRQ Controller | **2,402** | |
 | AHB-Lite Bus | **2,149** | |
 | PicoRV32 wrap (+ CPU SRAMs) | blackboxed | ~286 K logic + SRAM macros |
-| Weight Generation (`weight_gen.v`) | not instantiated | SW weight gen via PicoRV32 firmware |
-| **Logic subtotal (excl. picorv32, SRAMs)** | **~721,000 µm²** | hierarchical (conservative) |
+| Weight Generation (`weight_gen.v`) | TBD (not in job 1326) | now instantiated; area measured in next synthesis run |
+| **Logic subtotal (excl. picorv32, SRAMs, weight_gen)** | **~721,000 µm²** | hierarchical (conservative); update pending |
 
 > FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). The current memory plan uses GF-provided `gf180mcu_fd_ip_sram__sram512x8m8wm1` macros for the frontend buffer and `gf180mcu_ocd_ip_sram` experimental macros for the 4 KB CPU SRAM estimate. GE estimates for new blocks are preliminary.
 >
