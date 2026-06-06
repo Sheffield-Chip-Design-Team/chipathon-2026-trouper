@@ -224,7 +224,7 @@ A surgical review of the SX1257 datasheet (v1.2) was performed on May 4, 2026. T
 ### 4. Digital Interface
 - **Reset (Pin 9):** Active high. Must be floating or high-impedance during the power-on-reset (POR) cycle to allow internal pull-up logic to function (§6.2.1).
 - **SPI Logic Levels:** 3.3V CMOS compatible (up to VDD). Max frequency 10 MHz.
-| I_IN / Q_IN (pins 13/12) | All 4 devices: tie to GND (10 kΩ pull-down) | All antennas are RX-only. TxEnable=0 in firmware; TX inputs tied low to be safe. |
+| I_IN / Q_IN (pins 13/12) | All 4 devices: tie to GND (10 kΩ pull-down) | All antennas are RX-only. TxEnable=0 in firmware; TX inputs tied low to be safe. **Test PCB:** verify that the SX1257 RX path (ADC output, PLL lock, gain response) is unaffected when I_IN/Q_IN are held at GND — confirm no DAC-to-ADC crosstalk or instability in this configuration before committing to the tapeout pad list. |
 | DIO0–DIO3 (pins 21–24) | Leave NC | ASIC has 0 spare pads. PLL lock is polled via `RegModeStatus` (0x11) over SPI instead. |
 | VBAT1/VBAT2/VBAT3 (pins 2/16/32) | Supply input — bulk decoupling per application schematic (Fig 6-4) | Main supply pins. Each needs 10 µF bulk + 100 nF to GND. |
 | VR_PA/VR_ANA1/VR_DIG/VR_ANA2 (pins 1/3/5/25) | Internal LDO outputs — decoupling caps to GND per Fig 6-4 | Each needs 100 nF + 10 µF to GND. Do not load these pins externally. |
