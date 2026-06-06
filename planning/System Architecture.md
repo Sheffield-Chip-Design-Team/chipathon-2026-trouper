@@ -31,13 +31,12 @@ SX1257_4 ──►
 
 ```mermaid
 graph LR
-    NODE1(["LoRa Node 1\nf₀+Δf"])
-    NODE2(["LoRa Node 2\nf₀−Δf"])
+    NODE1(["LoRa Node\nNT=1"])
     SX1302["SX1302\nLoRa Baseband\nRadio A"]
     RPI["Host RPi\nSX1302 HAL\nChirpStack"]
     JTAG([JTAG Probe])
 
-    NODE1 & NODE2 -->|868 MHz| ANT1 & ANT2 & ANT3 & ANT4
+    NODE1 -->|868 MHz| ANT1 & ANT2 & ANT3 & ANT4
     ANT1 -->|RF| FEM1
     ANT2 -->|RF| FEM2
     ANT3 -->|RF| FEM3
