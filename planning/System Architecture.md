@@ -90,7 +90,6 @@ graph LR
             TACC["Training Accumulator\nbranch cross-correlation\nZ_j · training_done"]
             PCFSM["Packet Control FSM\npacket phase · safe_switch\nbuf_freeze · W gating"]
             FBUF["Frontend Buffer Controller\n1 kB rolling SRAM primary\noptional CPU-SRAM borrow\n8-bit saturated · SF7 policy"]
-            PSRAM["APS6404L PSRAM\n8 MB ext QSPI · 32 MHz\ndecimated IQ replay buffer\nsoftware energy meas"]
         end
 
         subgraph combining["Weight Generation & MRC Combining"]
@@ -120,8 +119,6 @@ graph LR
         DCR -->|"full-precision samples"| TACC
         DCR -->|"full-precision"| COMB
         DCR -->|"8-bit saturated"| FBUF
-        FBUF -->|"QSPI burst"| PSRAM
-        PSRAM -->|"replay / energy readback"| FBUF
         SC -->|"sc_lock · timing_ref"| PCFSM
         SC -->|"sc_lock · timing_ref"| TACC
         FBUF -->|"current · delayed samples"| SC
@@ -140,6 +137,10 @@ graph LR
     end
 
     CHIP --> chip_internals
+
+    PSRAM["APS6404L PSRAM\n8 MB ext QSPI · 32 MHz\ndecimated IQ replay buffer\nsoftware energy meas"]
+    FBUF -->|"QSPI burst"| PSRAM
+    PSRAM -->|"replay / energy readback"| FBUF
 ```
 
 Notes:
