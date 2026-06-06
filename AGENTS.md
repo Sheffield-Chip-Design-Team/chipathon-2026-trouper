@@ -178,7 +178,7 @@ The `.gitignore` excludes `rtl-test/ol_*/runs` (matches both directories and sym
 ```bash
 BLOCK=ol_my_new_block
 NFS=/srv/eda/designs/timothyjabez/lora-mimo/rtl-test/$BLOCK/runs
-LOCAL=/home/timothyjabez/Documents/chipathon-2026/lora-mimo/rtl-test/$BLOCK/runs
+LOCAL=/home/timothyjabez/Documents/chipathon-2026/chipathon-2026-trouper/rtl-test/$BLOCK/runs
 
 # Remove any local runs/ directory first (if it exists)
 rm -rf "$LOCAL"
@@ -193,7 +193,7 @@ ln -s "$NFS" "$LOCAL"
 **To set up symlinks for all existing blocks at once:**
 
 ```bash
-cd /home/timothyjabez/Documents/chipathon-2026/lora-mimo/rtl-test
+cd /home/timothyjabez/Documents/chipathon-2026/chipathon-2026-trouper/rtl-test
 for block in ol_*/; do
     block="${block%/}"
     nfs="/srv/eda/designs/timothyjabez/lora-mimo/rtl-test/$block/runs"
