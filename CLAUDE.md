@@ -11,22 +11,25 @@ SSCS PICO Chipathon 2026 tapeout. An NT=1 NR=4 MRC MIMO LoRa gateway ASIC in GF1
 ## Repository Layout
 
 ```
-rtl-test/         Verilog RTL + OpenLane/LibreLane P&R configs
-  ol_<block>/     Per-block P&R config dirs (config.json = fd cells, config_as_mcu7t3v3.json = AS cells)
-  ol_mimo_rx_top/ Top-level integration P&R (config_current.json is the active config)
-sim/              Python behavioral models and tests
-  models/         Bit-true DSP component models (fixed.py, decimator.py, receiver.py, …)
-  tests/          pytest-compatible tests + debug scripts
-  sims/           Sweep scripts (BER, SQNR, MIMO)
-  notebooks/      Jupyter analysis notebooks
-fpga-emul/        Arty A7-100T FPGA emulation wrapper (Verilator + Vivado targets)
-characterization/ SPICE sweep scripts for OCD/FD SRAM characterization
-planning/         Design documents (System Architecture.md is the canonical reference)
-resources/        Datasheets (SX1257, SX1302, APS6404L PSRAM)
-ip/               Third-party IPs (picorv32, AS/OCD SRAM macros, gf180mcu_as_sc_mcu7t3v3)
+rtl-test/               Verilog RTL + OpenLane/LibreLane P&R configs
+  rtl/                  RTL source files (synthesisable)
+  tb/                   Simulation testbenches (tb_*.v)
+  scripts/              Run scripts for P&R and simulation jobs
+  ol_mimo_rx_top/       Top-level P&R (config_current.json is the active config)
+  ol_picorv32*/         PicoRV32 core and wrapper P&R configs (several variants)
+sim/                    Python behavioral models and tests
+  models/               Bit-true DSP component models (fixed.py, decimator.py, receiver.py, …)
+  tests/                pytest-compatible tests + debug scripts
+  sims/                 Sweep scripts (BER, SQNR, MIMO)
+  notebooks/            Jupyter analysis notebooks
+fpga-emul/              Arty A7-100T FPGA emulation wrapper (Verilator + Vivado targets)
+characterization/       SPICE sweep scripts for OCD/FD SRAM characterization
+planning/               Design documents (System Architecture.md is the canonical reference)
+resources/              Datasheets (SX1257, SX1302, APS6404L PSRAM)
+ip/                     Third-party IPs (picorv32, AS/OCD SRAM macros, gf180mcu_as_sc_mcu7t3v3)
 ```
 
-Run outputs (`rtl-test/ol_*/runs/`) live on NFS and are referenced via symlinks; they are git-ignored.
+Block-level P&R dirs have been removed — synthesis is now hierarchical at the top level (`ol_mimo_rx_top`). Run outputs (`rtl-test/ol_*/runs/`) live on NFS and are referenced via symlinks; they are git-ignored.
 
 ## RTL Simulation (Verilator / iverilog)
 
@@ -101,7 +104,7 @@ librelane --pdk-root /foss/designs/pdk_overlay_as \
           <block_dir>/config_as_mcu7t3v3.json
 ```
 
-AS-cell configs must use `clkbuff_*` for CTS (not `buff_*` — causes DRT-0073), set `FP_CORE_UTIL` to **50–60%**. See `ol_sd_decimator_cic_only/config_as_mcu7t3v3.json` for a working example.
+AS-cell configs must use `clkbuff_*` for CTS (not `buff_*` — causes DRT-0073), set `FP_CORE_UTIL` to **50–60%**.
 
 ### Reading P&R results
 
@@ -132,7 +135,7 @@ The ASIC digital signal chain (all synchronous at 32 MHz):
 2. **DC Removal** (`dc_removal.v`) — IIR running-mean, `DC_ALPHA_SHIFT=8`, ×4
 3. **Schmidl-Cox Detector** (`sc_detector.v`) — sliding autocorr, produces `sc_lock` + `timing_ref`
 4. **Frontend Buffer Controller** (`frontend_buf_ctrl.v`) — 1 kB SRAM rolling buffer for delayed-sample storage; optional PSRAM replay via APS6404L
-5. **Energy Measurement** (`energy_meas_coarse.v`) — per-antenna energy snapshot for AGC/diagnostics
+5. **Noise Estimation** (`noise_est.v`) — Manhattan-norm per-antenna noise snapshot (no multipliers); replaces energy_meas
 6. **Training Accumulator** (`training_acc.v`) — computes Z_j = Σ raw_j[n]·conj(chirp_ref[n mod M])
 7. **Packet Control FSM** (`packet_ctrl_fsm.v`) — controls buf_freeze, W gating, safe_switch
 8. **Weight Generation** (`weight_gen.v`) — SHIFT→CAL→COMPUTE→SCALE; HW modes: EGC/MRC/SC; SW: ALMMSE via PicoRV32
