@@ -2,8 +2,8 @@
     "DESIGN_NAME": "picorv32_wrap",
     "VERILOG_FILES": [
         "dir::../../ip/picorv32/picorv32.v",
-        "dir::../picorv32_wrap_fdsram.v",
-        "dir::../sram512x8_bb.v"
+        "dir::../rtl/picorv32_wrap_fdsram.v",
+        "dir::../rtl/sram512x8_bb.v"
     ],
     "CLOCK_PORT": "clk_32m",
     "CLOCK_PERIOD": 62.5,

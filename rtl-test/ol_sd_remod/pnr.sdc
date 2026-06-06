@@ -1,7 +1,0 @@
-create_clock -name clk_32m -period 31.25 [get_ports clk_32m]
-set_input_delay -max 2.0 -clock clk_32m [get_ports {in_i in_q in_valid en}]
-set_input_delay -min 1.0 -clock clk_32m [get_ports {in_i in_q in_valid en}]
-set_output_delay -max 2.0 -clock clk_32m [all_outputs]
-set_output_delay -min 0.0 -clock clk_32m [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk_32m]
-set_false_path -from [get_ports rst_n]

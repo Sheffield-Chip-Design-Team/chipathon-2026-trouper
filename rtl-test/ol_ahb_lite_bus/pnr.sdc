@@ -1,7 +1,0 @@
-create_clock -name HCLK -period 31.25 [get_ports HCLK]
-set_input_delay -max 2.0 -clock HCLK [get_ports {HADDR HTRANS HWRITE HSIZE HBURST HWDATA s0_rdata s0_ready s1_rdata s1_ready s2_rdata s2_ready s3_rdata s3_ready}]
-set_input_delay -min 1.0 -clock HCLK [get_ports {HADDR HTRANS HWRITE HSIZE HBURST HWDATA s0_rdata s0_ready s1_rdata s1_ready s2_rdata s2_ready s3_rdata s3_ready}]
-set_output_delay -max 2.0 -clock HCLK [all_outputs]
-set_output_delay -min 0.0 -clock HCLK [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks HCLK]
-set_false_path -from [get_ports HRESETn]

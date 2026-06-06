@@ -1,7 +1,0 @@
-create_clock -name clk -period 31.25 [get_ports clk]
-set_input_delay -max 2.0 -clock clk [get_ports {iq_valid cur_i0 cur_q0 del_i0 del_q0 delayed_valid sf sc_thr sc_hits_req}]
-set_input_delay -min 1.0 -clock clk [get_ports {iq_valid cur_i0 cur_q0 del_i0 del_q0 delayed_valid sf sc_thr sc_hits_req}]
-set_output_delay -max 2.0 -clock clk [all_outputs]
-set_output_delay -min 0.0 -clock clk [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk]
-set_false_path -from [get_ports rst_n]

@@ -1,7 +1,0 @@
-create_clock -name clk_32m -period 31.25 [get_ports clk_32m]
-set_input_delay -max 2.0 -clock clk_32m [get_ports {raw_i0 raw_i1 raw_i2 raw_i3 raw_q0 raw_q1 raw_q2 raw_q3 raw_valid dc_alpha_shift dc_bypass}]
-set_input_delay -min 1.0 -clock clk_32m [get_ports {raw_i0 raw_i1 raw_i2 raw_i3 raw_q0 raw_q1 raw_q2 raw_q3 raw_valid dc_alpha_shift dc_bypass}]
-set_output_delay -max 2.0 -clock clk_32m [all_outputs]
-set_output_delay -min 0.0 -clock clk_32m [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk_32m]
-set_false_path -from [get_ports rst_n]

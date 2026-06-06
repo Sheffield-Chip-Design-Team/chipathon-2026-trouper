@@ -1,7 +1,0 @@
-create_clock -name clk -period 31.25 [get_ports clk]
-set_input_delay -max 2.0 -clock clk [get_ports {iq_valid sample_count sf sc_lock timing_ref training_done W_commit mode_shadow antenna_en_shadow psram_en psram_replay_active pkt_timeout_syms noise_thresh energy0 energy1 energy2 energy3}]
-set_input_delay -min 1.0 -clock clk [get_ports {iq_valid sample_count sf sc_lock timing_ref training_done W_commit mode_shadow antenna_en_shadow psram_en psram_replay_active pkt_timeout_syms noise_thresh energy0 energy1 energy2 energy3}]
-set_output_delay -max 2.0 -clock clk [all_outputs]
-set_output_delay -min 0.0 -clock clk [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk]
-set_false_path -from [get_ports rst_n]

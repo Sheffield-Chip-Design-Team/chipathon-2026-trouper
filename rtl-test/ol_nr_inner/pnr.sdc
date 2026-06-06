@@ -1,6 +1,0 @@
-create_clock -name clk -period 31.25 [get_ports clk]
-set_input_delay -max 2.0 -clock clk [get_ports {r s_slice}]
-set_input_delay -min 1.0 -clock clk [get_ports {r s_slice}]
-set_output_delay -max 2.0 -clock clk [all_outputs]
-set_output_delay -min 0.0 -clock clk [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk]

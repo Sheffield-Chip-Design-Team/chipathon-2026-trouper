@@ -1,7 +1,0 @@
-create_clock -name clk -period 62.5 [get_ports clk]
-set_input_delay -max 2.0 -clock clk [get_ports {training_done Z_i0 Z_q0 Z_i1 Z_q1 Z_i2 Z_q2 Z_i3 Z_q3 n_acc wgt_src wgt_auto_commit wgt_mode antenna_en cal_re0 cal_im0 cal_re1 cal_im1 cal_re2 cal_im2 cal_re3 cal_im3 fw_W_re0 fw_W_im0 fw_W_re1 fw_W_im1 fw_W_re2 fw_W_im2 fw_W_re3 fw_W_im3 fw_W_commit}]
-set_input_delay -min 1.0 -clock clk [get_ports {training_done Z_i0 Z_q0 Z_i1 Z_q1 Z_i2 Z_q2 Z_i3 Z_q3 n_acc wgt_src wgt_auto_commit wgt_mode antenna_en cal_re0 cal_im0 cal_re1 cal_im1 cal_re2 cal_im2 cal_re3 cal_im3 fw_W_re0 fw_W_im0 fw_W_re1 fw_W_im1 fw_W_re2 fw_W_im2 fw_W_re3 fw_W_im3 fw_W_commit}]
-set_output_delay -max 2.0 -clock clk [all_outputs]
-set_output_delay -min 0.0 -clock clk [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk]
-set_false_path -from [get_ports rst_n]

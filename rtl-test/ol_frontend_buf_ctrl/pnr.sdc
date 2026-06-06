@@ -1,7 +1,0 @@
-create_clock -name clk -period 31.25 [get_ports clk]
-set_input_delay -max 2.0 -clock clk [get_ports {iq_valid in_i0 in_i1 in_i2 in_i3 in_q0 in_q1 in_q2 in_q3 sf sc_lock buf_freeze sram0_Q sram1_Q}]
-set_input_delay -min 1.0 -clock clk [get_ports {iq_valid in_i0 in_i1 in_i2 in_i3 in_q0 in_q1 in_q2 in_q3 sf sc_lock buf_freeze sram0_Q sram1_Q}]
-set_output_delay -max 2.0 -clock clk [all_outputs]
-set_output_delay -min 0.0 -clock clk [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk]
-set_false_path -from [get_ports rst_n]

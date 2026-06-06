@@ -1,6 +1,0 @@
-create_clock -name clk_16m -period 62.5 [get_ports clk_16m]
-set_input_delay -max 2.0 -clock clk_16m [all_inputs]
-set_input_delay -min 0.5 -clock clk_16m [all_inputs]
-set_output_delay -max 2.0 -clock clk_16m [all_outputs]
-set_output_delay -min 0.5 -clock clk_16m [all_outputs]
-set_clock_uncertainty 0.25 [get_clocks clk_16m]
