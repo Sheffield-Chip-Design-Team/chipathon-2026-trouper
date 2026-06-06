@@ -331,43 +331,43 @@ The following boundaries require explicit CDC treatment:
 
 ## Gate count & area summary
 
-**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane synthesis + full P&R). Note: this run predates weight_gen being wired in; logic area will increase slightly when re-synthesised.
+**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane P&R). Note: this run predates weight_gen being wired in; flat logic area will be updated on next P&R run.
 
 | Metric | Value |
 | --- | --- |
-| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** (weight_gen excluded — update pending) |
+| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** (weight_gen excluded — P&R re-run pending) |
 | Frontend buffer SRAM (1 × FD 512×8) | ~209,000 µm² (0.21 mm²) |
 | CPU SRAM (4 × OCD 1024×8) | ~838,000 µm² (0.84 mm²) |
-| **Total synthesis area (logic + SRAMs)** | **1,477,897 µm² (1.48 mm²)** (weight_gen excluded) |
+| **Total synthesis area (logic + SRAMs)** | **~1,478,000 µm² (1.48 mm²)** (weight_gen excluded from logic) |
 | Core area (placed) | 1,822,012 µm² (1.82 mm²) at 69.3% utilisation |
 | Post-PNR WNS — TT 25°C 3.3 V (setup) | +24.70 ns ✓ |
 | Post-PNR WNS — SS 125°C 3.0 V (setup) | **−10.08 ns ✗** (expected — FD cells fail 32 MHz SS) |
 | Post-PNR WNS — FF −40°C 3.6 V (hold) | −0.98 ns ✗ (hold violations at FF corner) |
 | Power — TT 25°C 3.3 V | 50.9 mW (42.5 mW internal + 8.4 mW switching) |
 
-**Per-module breakdown — SGE job 1326** (FD cells, hierarchical Yosys synthesis, SRAMs blackboxed). Note: hierarchical synthesis does not optimise across module boundaries so individual areas are conservative estimates; the flat total above is the authoritative number.
+**Per-module breakdown — SGE job 1330** (FD cells, hierarchical Yosys synthesis, SRAMs blackboxed). Note: hierarchical synthesis does not optimise across module boundaries so individual areas are conservative estimates; the flat P&R total above is the authoritative number.
 
 | Component | FD-cell µm² | Notes |
 | --- | --- | --- |
-| ΣΔ Decimator CIC-only ×4 | 70,674 × 4 = **282,696** | per-instance × 4 |
+| ΣΔ Decimator CIC-only ×4 | 71,502 × 4 = **286,008** | per-instance × 4 |
+| Weight Generation (`weight_gen.v`) | **141,244** | HW EGC/MRC/SC; now instantiated |
 | Training Accumulator | **132,706** | |
 | Schmidl-Cox Detector | **111,942** | incl. `signed_mul24_pipe` shared multiplier |
 | Register Bank | **81,703** | |
 | MRC Combiner | **61,738** | |
 | PSRAM Buffer Controller | **44,071** | |
 | Packet Control FSM | **43,551** | |
-| DC Removal | **31,815** | |
+| DC Removal | **32,138** | |
 | ΣΔ Re-modulator | **28,250** | |
 | Noise Estimation (`noise_est`) | **22,929** | Manhattan norm, no multipliers |
-| Frontend Buffer Controller | **22,663** | |
+| Frontend Buffer Controller | **22,615** | |
 | SPI Slave | **16,420** | |
 | Top-level glue (`mimo_rx_top`) | **11,116** | |
 | SPI Master | **9,483** | |
 | IRQ Controller | **2,402** | |
 | AHB-Lite Bus | **2,149** | |
 | PicoRV32 wrap (+ CPU SRAMs) | blackboxed | ~286 K logic + SRAM macros |
-| Weight Generation (`weight_gen.v`) | TBD (not in job 1326) | now instantiated; area measured in next synthesis run |
-| **Logic subtotal (excl. picorv32, SRAMs, weight_gen)** | **~721,000 µm²** | hierarchical (conservative); update pending |
+| **Logic subtotal (excl. picorv32, SRAMs)** | **~1,075,000 µm²** | hierarchical (conservative) |
 
 > FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). The current memory plan uses GF-provided `gf180mcu_fd_ip_sram__sram512x8m8wm1` macros for the frontend buffer and `gf180mcu_ocd_ip_sram` experimental macros for the 4 KB CPU SRAM estimate. GE estimates for new blocks are preliminary.
 >
