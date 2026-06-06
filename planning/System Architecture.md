@@ -1,6 +1,6 @@
 # System Architecture & Block Overview
 
-> Architecture — NT=1 NR=2 MRC single-mode MIMO gateway ASIC.
+> Architecture — NT=1 NR=4 MRC single-mode MIMO gateway ASIC.
 > GF180MCU. 3.3 V core and IO. SSCS PICO Chipathon 2026. Tapeout deadline: September 2026.
 > Supported LoRa BW: **125 kHz and 250 kHz only** (both use decim_ratio=1, R=128). 500 kHz BW not supported (CIC-only SQNR 9.6 dB at R=64).
 
@@ -8,29 +8,22 @@ Related prototype hardware note: [AFE Characterisation Board](AFE%20Characterisa
 
 Full pad list: [Pinout](Pinout.md)
 
-Deployment configurations (cascaded ASIC topology for NR=4): [Applications](Applications.md)
+Deployment configurations: [Applications](Applications.md)
 
 ---
 
-## Design ambition: NR=4 via 3-chip cascade
+## Architecture: NR=4 single-chip
 
-The system target is **effective NR=4 MRC combining gain** (~6 dB diversity gain over single-antenna). A single NR=4 chip would require ~3.26 mm² at 65% effective density — too large for the chipathon area budget. The solution is three identical NR=2 ASICs on one PCB:
+The system implements **NR=4 MRC combining gain** (~6 dB diversity gain over single-antenna) on a single ASIC. Four SX1257 front-ends feed four ΣΔ decimator branches directly into the ASIC:
 
 ```
-SX1257_1 ──► ASIC_A (NR=2) ──► SX1302 Radio A (hierarchical MRC feeder)
-SX1257_2 ──►                                    ↘
-                                                  ASIC_C (NR=2 combiner)──► SX1302 Radio A
-SX1257_3 ──► ASIC_B (NR=2) ──► SX1302 Radio A ↗
+SX1257_1 ──► ASIC (NR=4) ──► SX1302 Radio A
+SX1257_2 ──►
+SX1257_3 ──►
 SX1257_4 ──►
 ```
 
-- **ASIC_A and ASIC_B** each perform 2-antenna MRC and re-modulate their combined output as a ΣΔ stream to SX1302 Radio A inputs.
-- **ASIC_C** acts as the second-stage combiner: its two SX1257 inputs are replaced by the ΣΔ re-mod outputs of ASIC_A and ASIC_B, recovering full 4-antenna combining gain.
-- All three chips are **identical silicon** — role (feeder vs combiner) is determined by PCB routing and firmware config, not by different RTL.
-- Lock-detect synchronisation: any chip asserting `sc_lock` triggers the others via a shared GPIO line, ensuring all three chips freeze their frontend buffers at the same preamble boundary. See [NR2 Multi-ASIC Cascade](NR2-multi-ASIC-cascade.md) for full protocol.
-- PSRAM replay is essential in the cascade: feeder chips store the pre-preamble IQ window in their external APS6404L so ASIC_C can replay from the correct packet start after hierarchical lock.
-
-**NR=4 single chip** remains the preferred architecture if area constraints are relaxed in a future revision. NR=4 is 2.3× more silicon-efficient than the 3-chip cascade on a per-combining-branch basis.
+> **Previous 3-chip cascade approach** (ASIC_A/B as NR=2 feeders into ASIC_C as second-stage combiner) is no longer the plan. That architecture was explored as a workaround for area constraints but is not being pursued for tapeout. See [NR2 Multi-ASIC Cascade](NR2-multi-ASIC-cascade.md) for historical notes.
 
 ---
 

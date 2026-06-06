@@ -16,7 +16,9 @@ docker run --rm \
   --skip bash -c "cd /foss/designs/lora-mimo/rtl-test && librelane --pdk gf180mcuD --scl gf180mcu_fd_sc_mcu7t5v0 <block_dir>/config.json"
 ```
 
-### Native 3.3 V cells: `gf180mcu_as_sc_mcu7t3v3`
+### Native 3.3 V cells: `gf180mcu_as_sc_mcu7t3v3` — **not the current tapeout plan**
+
+> AS cells are unlikely to be used. The library is unproven (community-maintained, not a GF-qualified foundry library). Retain configs for reference; prefer FD cells + MCP for new work.
 
 The AS cells are not in the container's PDK. A pre-built overlay at
 `/foss/designs/pdk_overlay_as` (NFS-persistent) adds them alongside the
@@ -53,9 +55,7 @@ hqsub --name rebuild-as-overlay --cpus 1 --mem 1G -- bash -c \
   "cd /foss/designs/lora-mimo/rtl-test && ./stage_as_scl.sh /foss/designs/pdk_overlay_as"
 ```
 
-**Why AS cells?** `fd_sc_mcu7t5v0` is characterised at 3 V (SS corner) but
-designed for 5 V — it fails 32 MHz SS timing across all blocks. AS cells are
-native 3.3 V and close timing correctly. Trade-off: ~16% larger die area.
+**Why AS cells were explored:** `fd_sc_mcu7t5v0` is characterised at 3 V (SS corner) but designed for 5 V — it fails 32 MHz SS timing across all blocks. AS cells are native 3.3 V and close timing correctly (~16% larger die area). However, the library is unproven and tapeout risk is high; the preferred approach is FD cells with MCP or clock-domain partitioning.
 
 Replace `<block_dir>` with e.g. `ol_mrc_combiner`, `ol_picorv32`, `ol_sd_decimator`, `ol_nr_outer`.
 
