@@ -353,33 +353,46 @@ The following boundaries require explicit CDC treatment:
 
 ## Gate count & area summary
 
-Measured figures from SGE job 1249 (AS cells, NR=4, CIC-only, no NFE). **Note:** RTL has changed since this run — `energy_meas_coarse` replaced by `noise_est` (Manhattan norm, smaller), `mrc_combiner_serIQ` replaced by `mrc_combiner`. Figures marked † are from the old RTL and will be refreshed on the next hierarchical P&R run.
+**Current figures — `RUN_2026-06-06_01-25-43`** (FD cells `gf180mcu_fd_sc_mcu7t5v0`, NR=4, CIC-only, hierarchical flat synthesis). Design is fully flattened by Yosys so per-module breakdown is not available from this run; totals only.
 
-| Component | Measured µm² (NR=4) | NR=2 est. |
-| --- | --- | --- |
-| PicoRV32 RV32IM core | 286,493 | 286,493 |
-| ΣΔ Decimator CIC-only ×4 (R=128, no FIR) | 74,940 × 4 = 299,760 | 74,940 × 2 = 149,880 |
-| Training Accumulator | 139,558 | ~70,000 |
-| Weight Generation | 138,649 | ~70,000 |
-| Schmidl-Cox Detector | 112,631 | ~57,000 |
-| Register Bank | 99,306 | ~90,000 |
-| MRC Combiner † | 97,632 | ~85,000 |
-| Noise Estimation (Manhattan, `noise_est`) † | ~68,000 est. | ~34,000 |
-| DC Removal | 50,009 | ~25,000 |
-| PSRAM Buffer Controller | 46,466 | 46,466 |
-| Packet Control FSM | 32,987 | 32,987 |
-| ΣΔ Re-modulator | 29,262 | 29,262 |
-| PicoRV32 wrap + glue | 22,448 | 22,448 |
-| Frontend Buffer Controller | 17,502 | 17,502 |
-| SPI Slave | 17,472 | 17,472 |
-| Top-level glue | 12,052 | 12,052 |
-| SPI Master | 10,241 | 10,241 |
-| IRQ Controller + AHB-Lite | 5,036 | 5,036 |
-| **Stdcell total** | **~1,598,000 µm²** | **~1,167,000 µm²** |
-| Frontend Buffer SRAM (1 × OCD 512×8) | — | ~0.21 mm² |
-| CPU IMEM+DMEM (OCD 512×8 × 2) | — | ~0.21 mm² |
-| External APS6404L PSRAM (8 MB) | off-chip | off-chip |
-| **Die total (NR=2, 65% eff. density)** | | **~2.43 mm²** |
+| Metric | Value |
+| --- | --- |
+| Stdcell logic area (excl. SRAMs) | **~431,000 µm²** |
+| Frontend buffer SRAM (1 × FD 512×8) | ~209,000 µm² (0.21 mm²) |
+| CPU SRAM (4 × OCD 1024×8) | ~838,000 µm² (0.84 mm²) |
+| **Total synthesis area (logic + SRAMs)** | **1,477,897 µm² (1.48 mm²)** |
+| Standard cells | 16,336 |
+| Sequential elements | 168,574 µm² (11.4% of total) |
+| Core area (placed) | 1,822,012 µm² (1.82 mm²) |
+| Core utilization | 69.3% |
+| Post-PNR WNS — TT 25°C 3.3 V (setup) | +24.70 ns ✓ |
+| Post-PNR WNS — SS 125°C 3.0 V (setup) | **−10.08 ns ✗** (32 MHz fails SS, as expected for FD cells) |
+| Post-PNR WNS — FF −40°C 3.6 V (hold) | −0.98 ns ✗ (hold violations at FF corner) |
+| Power — TT 25°C 3.3 V | 50.9 mW total (42.5 mW internal + 8.4 mW switching) |
+
+**Historical per-module figures (AS cells, SGE job 1249) — for reference only:**
+
+| Component | AS-cell µm² (NR=4) |
+| --- | --- |
+| PicoRV32 RV32IM core | 286,493 |
+| ΣΔ Decimator CIC-only ×4 | 299,760 |
+| Training Accumulator | 139,558 |
+| Weight Generation | 138,649 |
+| Schmidl-Cox Detector | 112,631 |
+| Register Bank | 99,306 |
+| MRC Combiner | 97,632 |
+| Noise Estimation (`noise_est`) | ~68,000 est. |
+| DC Removal | 50,009 |
+| PSRAM Buffer Controller | 46,466 |
+| Packet Control FSM | 32,987 |
+| ΣΔ Re-modulator | 29,262 |
+| PicoRV32 wrap + glue | 22,448 |
+| Frontend Buffer Controller | 17,502 |
+| SPI Slave | 17,472 |
+| Top-level glue | 12,052 |
+| SPI Master | 10,241 |
+| IRQ Controller + AHB-Lite | 5,036 |
+| External APS6404L PSRAM (8 MB) | off-chip |
 
 > FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). The current memory plan uses GF-provided `gf180mcu_fd_ip_sram__sram512x8m8wm1` macros for the frontend buffer and `gf180mcu_ocd_ip_sram` experimental macros for the 4 KB CPU SRAM estimate. GE estimates for new blocks are preliminary.
 >
