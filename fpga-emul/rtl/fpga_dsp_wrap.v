@@ -1,7 +1,7 @@
 // fpga_dsp_wrap.v
 // FPGA emulation wrapper for the LoRa MIMO ASIC DSP chain.
 // Instantiates the full ASIC RTL (sd_decimator, dc_removal, frontend_buf_ctrl,
-// energy_meas, sc_detector, packet_ctrl_fsm, training_acc, weight_gen,
+// noise_est, sc_detector, packet_ctrl_fsm, training_acc, weight_gen,
 // mrc_combiner, sd_remod) and exposes a mode-selectable interface.
 //
 // Mode register (mode[1:0]):
@@ -171,47 +171,42 @@ module fpga_dsp_wrap (
     wire              dcr_valid;
 
     dc_removal u_dcr (
-        .clk_32m       (clk),
-        .rst_n         (rst_n),
+        .clk_32m   (clk),
+        .rst_n     (rst_n),
         .raw_i0 (src_i[0]), .raw_i1 (src_i[1]),
         .raw_i2 (src_i[2]), .raw_i3 (src_i[3]),
         .raw_q0 (src_q[0]), .raw_q1 (src_q[1]),
         .raw_q2 (src_q[2]), .raw_q3 (src_q[3]),
-        .raw_valid     (src_valid),
-        .dc_alpha_shift(dc_alpha_shift),
-        .dc_bypass     (dc_bypass),
+        .raw_valid (src_valid),
         .out_i0 (dcr_i[0]), .out_i1 (dcr_i[1]),
         .out_i2 (dcr_i[2]), .out_i3 (dcr_i[3]),
         .out_q0 (dcr_q[0]), .out_q1 (dcr_q[1]),
         .out_q2 (dcr_q[2]), .out_q3 (dcr_q[3]),
-        .out_valid     (dcr_valid),
-        .dc_est_i0 (), .dc_est_i1 (), .dc_est_i2 (), .dc_est_i3 (),
-        .dc_est_q0 (), .dc_est_q1 (), .dc_est_q2 (), .dc_est_q3 ()
+        .out_valid (dcr_valid)
     );
 
     // =========================================================================
-    // Stage 3: Energy Measurement (feeds packet_ctrl_fsm threshold compare)
+    // Stage 3: Noise Estimation (Manhattan norm; feeds packet_ctrl_fsm threshold)
+    // noise_snap[k] is 8-bit; zero-pad to 16-bit for downstream consumers.
     // =========================================================================
-    wire [31:0] energy_sum [0:3];
+    wire [7:0]  noise_snap [0:3];
     wire [15:0] energy_snap [0:3];
-    wire        energy_valid_int;
+    assign energy_snap[0] = {noise_snap[0], 8'h0};
+    assign energy_snap[1] = {noise_snap[1], 8'h0};
+    assign energy_snap[2] = {noise_snap[2], 8'h0};
+    assign energy_snap[3] = {noise_snap[3], 8'h0};
 
-    energy_meas u_em (
-        .clk_32m    (clk),
+    noise_est u_nest (
+        .clk        (clk),
         .rst_n      (rst_n),
-        .iq_i_0 (dcr_i[0]), .iq_i_1 (dcr_i[1]),
-        .iq_i_2 (dcr_i[2]), .iq_i_3 (dcr_i[3]),
-        .iq_q_0 (dcr_q[0]), .iq_q_1 (dcr_q[1]),
-        .iq_q_2 (dcr_q[2]), .iq_q_3 (dcr_q[3]),
         .iq_valid   (dcr_valid),
-        .sf         (sf),
-        .sc_lock    (sc_lock),
-        .energy_sum_0 (energy_sum[0]), .energy_sum_1 (energy_sum[1]),
-        .energy_sum_2 (energy_sum[2]), .energy_sum_3 (energy_sum[3]),
-        .energy_0 (energy_snap[0]), .energy_1 (energy_snap[1]),
-        .energy_2 (energy_snap[2]), .energy_3 (energy_snap[3]),
-        .energy_valid           (energy_valid_int),
-        .energy_snapshot_valid  ()
+        .sc_lock    (sc_lock_int),
+        .dcr_i0 (dcr_i[0]), .dcr_i1 (dcr_i[1]),
+        .dcr_i2 (dcr_i[2]), .dcr_i3 (dcr_i[3]),
+        .dcr_q0 (dcr_q[0]), .dcr_q1 (dcr_q[1]),
+        .dcr_q2 (dcr_q[2]), .dcr_q3 (dcr_q[3]),
+        .noise_snap_0 (noise_snap[0]), .noise_snap_1 (noise_snap[1]),
+        .noise_snap_2 (noise_snap[2]), .noise_snap_3 (noise_snap[3])
     );
 
     assign energy0 = energy_snap[0];
@@ -295,17 +290,17 @@ module fpga_dsp_wrap (
         .clk          (clk),
         .rst_n        (rst_n),
         .iq_valid     (dcr_valid),
-        .cur_i0 (cur_i[0]), .cur_i1 (cur_i[1]),
-        .cur_q0 (cur_q[0]), .cur_q1 (cur_q[1]),
-        .del_i0 (del_i[0]), .del_i1 (del_i[1]),
-        .del_q0 (del_q[0]), .del_q1 (del_q[1]),
+        .cur_i0 (cur_i[0]),
+        .cur_q0 (cur_q[0]),
+        .del_i0 (del_i[0]),
+        .del_q0 (del_q[0]),
         .delayed_valid  (delayed_valid),
         .sf             (sf),
         .sc_thr         (sc_thr),
         .sc_hits_req    (sc_hits_req),
         .sc_lock        (sc_lock_int),
         .timing_ref     (timing_ref_int),
-        .c_i0 (), .c_q0 (), .c_i1 (), .c_q1 (),
+        .c_i0 (), .c_q0 (),
         .sc_stat              (),
         .sc_hit_dbg           (),
         .sc_hit_count_dbg     (),
@@ -318,9 +313,7 @@ module fpga_dsp_wrap (
     // =========================================================================
     wire signed [31:0] Z_i [0:3];
     wire signed [31:0] Z_q [0:3];
-    wire signed [63:0] E_ref;
     wire               training_done_int;
-    wire               noise_ready;
     wire [9:0]         n_acc;
     wire               noise_sample_en;  // driven by packet_ctrl_fsm
 
@@ -337,15 +330,11 @@ module fpga_dsp_wrap (
         .sc_lock    (sc_lock_int),
         .timing_ref (timing_ref_int),
         .sf         (sf),
-        .ref_sel    (2'b00),
-        .noise_en   (noise_sample_en),
         .Z_i0 (Z_i[0]), .Z_q0 (Z_q[0]),
         .Z_i1 (Z_i[1]), .Z_q1 (Z_q[1]),
         .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
         .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
-        .E_ref         (E_ref),
         .training_done (training_done_int),
-        .noise_ready   (noise_ready),
         .n_acc         (n_acc)
     );
 
@@ -366,6 +355,7 @@ module fpga_dsp_wrap (
         .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
         .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
         .n_acc         (n_acc),
+        .sf            (sf),
         .wgt_src       (wgt_src),
         .wgt_auto_commit (wgt_auto_commit),
         .wgt_mode      (wgt_mode),
@@ -383,10 +373,6 @@ module fpga_dsp_wrap (
         .W_hw_re1 (W_hw_re[1]), .W_hw_im1 (W_hw_im[1]),
         .W_hw_re2 (W_hw_re[2]), .W_hw_im2 (W_hw_im[2]),
         .W_hw_re3 (W_hw_re[3]), .W_hw_im3 (W_hw_im[3]),
-        .W_shadow_re0 (), .W_shadow_im0 (),
-        .W_shadow_re1 (), .W_shadow_im1 (),
-        .W_shadow_re2 (), .W_shadow_im2 (),
-        .W_shadow_re3 (), .W_shadow_im3 (),
         .W_commit      (W_commit_int),
         .wgen_hw_done  (),
         .wgen_active   (),
@@ -468,10 +454,10 @@ module fpga_dsp_wrap (
         .x_i2 (dcr_i[2]), .x_q2 (dcr_q[2]),
         .x_i3 (dcr_i[3]), .x_q3 (dcr_q[3]),
         .x_valid  (dcr_valid),
-        .W_re0 (W_hw_re[0]), .W_im0 (W_hw_im[0]),
-        .W_re1 (W_hw_re[1]), .W_im1 (W_hw_im[1]),
-        .W_re2 (W_hw_re[2]), .W_im2 (W_hw_im[2]),
-        .W_re3 (W_hw_re[3]), .W_im3 (W_hw_im[3]),
+        .W_re0 (W_hw_re[0][15:8]), .W_im0 (W_hw_im[0][15:8]),
+        .W_re1 (W_hw_re[1][15:8]), .W_im1 (W_hw_im[1][15:8]),
+        .W_re2 (W_hw_re[2][15:8]), .W_im2 (W_hw_im[2][15:8]),
+        .W_re3 (W_hw_re[3][15:8]), .W_im3 (W_hw_im[3][15:8]),
         .W_valid          (W_valid),
         .mode             (active_mode[0]),
         .bypass_ant       (bypass_ant),
