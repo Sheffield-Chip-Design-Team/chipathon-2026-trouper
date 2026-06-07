@@ -1,5 +1,5 @@
 # Trouper
-# DSP Hardware implementation of MRC for LoRa standard
+## DSP Hardware implementation of MRC for LoRa standard
 
 This project aims to implement Maximal Ratio Combining, a form of MIMO, by combining baseband data streams from 4 uncorrelated LoRa receivers and weighting according to SNR in order to output a single data stream with a theoretical 6dB improvement in SNR to the digital demodulator.
 
