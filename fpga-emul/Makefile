@@ -91,11 +91,13 @@ sim_all: sim_inject sim_decim_eth
 # ============================================================================
 # Vivado project
 # ============================================================================
+VIVADO = /home/timothyjabez/tools/Xilinx/2025.2/Vivado/bin/vivado
+
 vivado_project:
-	vivado -mode batch -source vivado/create_project.tcl
+	$(VIVADO) -mode batch -source vivado/create_project.tcl 2>&1 | tee vivado_create.log
 
 vivado_synth:
-	cd vivado_proj && vivado -mode batch -source run_synth.tcl
+	$(VIVADO) -mode batch -source vivado/run_synth.tcl 2>&1 | tee vivado_synth.log
 
 # ============================================================================
 # Clean
