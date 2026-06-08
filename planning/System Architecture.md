@@ -87,7 +87,7 @@ graph LR
             DCR["DC Removal ×4\nIIR running-mean\nDC_ALPHA_SHIFT=8"]
             SC["Schmidl-Cox / Correlator\nsliding magnitude autocorr\nsc_lock · timing_ref"]
             EM["Energy Measurement\nper-antenna energy snapshot\nAGC / diagnostics"]
-            TACC["Training Accumulator\nbranch cross-correlation\nZ_j · training_done"]
+            TACC["Training Accumulator\nall-pairs Z_kl + Z_kk diagonal\nW_k→HW · Zpair→FW eigenvec\nnoise_mode · training_done"]
             PCFSM["Packet Control FSM\npacket phase · safe_switch\nbuf_freeze · W gating"]
             FBUF["Frontend Buffer Controller\n1 kB rolling SRAM primary\noptional CPU-SRAM borrow\n8-bit saturated · SF7 policy"]
         end
@@ -123,9 +123,9 @@ graph LR
         SC -->|"sc_lock · timing_ref"| TACC
         FBUF -->|"current · delayed samples"| SC
         PCFSM -->|"buf_freeze"| FBUF
-        TACC -->|"Z_j · training_done"| PCFSM
-        TACC -->|"Z_j · training_done"| IRQC
-        TACC -->|"Z_j · training_done"| WGEN
+        TACC -->|"W_k · training_done"| PCFSM
+        TACC -->|"training_done"| IRQC
+        TACC -->|"W_k · training_done"| WGEN
         WGEN -->|"wgen_hw_done"| IRQC
         WGEN -->|"W_COMMIT"| PCFSM
         PICO <-->|"W_HW readback\nSW W_SHADOW write"| WGEN
@@ -260,6 +260,8 @@ This is the baseline hardware fallback mode when PicoRV32 firmware is absent, st
 - packet detection, training accumulation, hardware weight generation, packet FSM control, combining, and ΣΔ re-modulation remain active
 - AGC does not run; the four SX1257 gain registers stay at their programmed or reset values
 - TX/TDD sequencing is not supported
+
+A follow-on backup mode may layer a [UART Backup Interface](blocks/UART%20Backup%20Interface.md) on top of this baseline. In that mode, PicoRV32 remains optional, the host computes `W` off chip, and the ASIC applies those weights through the existing `W_SHADOW` / `W_COMMIT` path. Same-packet use of host/UART weights for the full packet requires `PSRAM_EN=1` so the packet can be replayed from its stored start; without PSRAM replay, the UART path is a next-packet or payload-only refinement rather than a full-packet live replacement.
 
 Required reset defaults for this mode are:
 
@@ -400,9 +402,11 @@ The following boundaries require explicit CDC treatment:
 > - acceptable acquisition latency and control complexity at higher spreading factors
 >
 > **Deferred PSRAM-assisted software weight generation.** If the optional PSRAM replay path is used, same-packet software weight generation becomes much more plausible than in the baseline live path. In the replay architecture, the receiver buffers the packet, waits for `W_commit`, and then replays from the stored packet start, so the weight deadline moves from "before payload start" to effectively "before packet end". Under that model:
-> - PicoRV32 can read `Z_j`, compute weights in software, write `W_SHADOW`, and pulse `W_COMMIT` without racing the live payload boundary
+> - PicoRV32 can read the individual `Z_kl` pair registers (0x70–0xE7), build the full 4×4 Hermitian matrix, compute the eigenvector MRC weights in software, write `W_SHADOW`, and pulse `W_COMMIT` without racing the live payload boundary
 > - simple software formulas such as MRC, SC, EGC, EMA-smoothed variants, or other low-complexity heuristics become candidates for same-packet use
 > - this may allow removal or major simplification of the dedicated hardware weight-generation block if the replay path is accepted architecturally
+>
+> Clarification: in the baseline live path (`PSRAM_EN = 0`), a fast on-chip `weight_gen` can still update weights before payload start, so the current packet payload may be combined with same-packet weights. However, the earliest preamble symbols have already passed the SX1302-facing output before `training_done` and `W_commit`. If the downstream LoRa baseband must see the full packet, including the preamble, under the final weight vector, PSRAM replay is required. The same rule applies to the planned host/UART backup path: no-PSRAM UART weights cannot retroactively recover the preamble already emitted on the live stream.
 >
 > The expected benefit is logic-area reduction in the cold-path control/DSP hardware. The main risks are replay-mode complexity, packet-latency increase, and the need to prove that firmware service time remains comfortably inside the buffered-packet window under worst-case interrupt and memory-access behavior.
 

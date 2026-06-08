@@ -3,7 +3,7 @@
 RX path block (non-FFT frontend). See [Non-FFT LoRa Frontend Proposal](../Non-FFT%20LoRa%20Frontend%20Proposal.md) for context.
 
 **Owner:** TBD
-**Status:** Draft
+**Status:** Updated — all-pairs cross-correlator with Z_kl pairs, Z_kk diagonal, noise mode
 
 ---
 
@@ -393,6 +393,57 @@ State 5 (E\_ref = `ref_i² + ref_q²`) retains a single sub-cycle — both produ
 **Removed pipeline stage:** the `prod_zi_q / prod_zq_q / prod_state_q / prod_valid_q / prod_last_q` register bank (37 bits) is eliminated; zi and zq are accumulated directly from the pipeline output, with `zi_latch` (16-bit) bridging the two sub-cycles.
 
 **Verified:** all 7 tb\_dsp\_chain self-checks pass (SGE job 1141).
+
+---
+
+## All-pairs cross-correlator (current RTL)
+
+> **Note:** The RTL has been updated from the single-reference cross-correlator described above to an all-pairs accumulator. The role description and interface table below are superseded; see `rtl-test/rtl/training_acc.v` for the current implementation. This section documents the new architecture.
+
+Instead of correlating each branch against a single nominated reference, `training_acc.v` now computes the full C(4,2)=6 branch-pair cross-correlations plus the 4 autocorrelation diagonals:
+
+```
+Z_kl = Σ_n raw_k[n] · conj(raw_l[n])   for all k < l   (6 complex pairs)
+Z_kk = Σ_n |raw_k[n]|²                  for k=0..3      (4 real diagonals)
+W_k  = Σ_{l≠k} Z_kl                     per branch       (row sum, HW weight_gen input)
+```
+
+This gives firmware access to the full 4×4 Hermitian channel covariance matrix Z ≈ h·h^H·n_acc + σ²·I, enabling a firmware eigenvector MRC path that is significantly better than the W_k row-sum used by the hardware path.
+
+### New register outputs (current RTL)
+
+| Registers | Address | Content |
+|-----------|---------|---------|
+| Z_01 I/Q | 0x70–0x77 | Zpair_i0, Zpair_q0 |
+| Z_02 I/Q | 0x78–0x7F | Zpair_i1, Zpair_q1 |
+| Z_03 I/Q | 0x80–0x87 | Zpair_i2, Zpair_q2 |
+| Z_12 I/Q | 0x88–0x8F | Zpair_i3, Zpair_q3 |
+| Z_13 I/Q | 0xD4–0xDB | Zpair_i4, Zpair_q4 |
+| Z_23 I/Q | 0xE0–0xE7 | Zpair_i5, Zpair_q5 (via sigma2_hw repurpose) |
+| Zdiag top-16 | 0xE8–0xEF | Zdiag_0..3 [31:16] and [23:16] |
+| TACC_NOISE_TRIG | 0x6C[0] | W1P — arms accumulator without sc_lock |
+
+### Noise mode
+
+Writing 1 to TACC_NOISE_TRIG (0x6C[0]) arms the accumulator without waiting for sc_lock, accumulating for 8 symbols. During this window (no signal): Z_kl ≈ 0 for k≠l, and Z_kk ≈ σ²_k · n_acc. The diagonal readback at 0xE8–0xEF therefore gives per-branch noise power, which firmware can use for noise-whitened eigenvector combining (subtract σ²·n_acc·I from Z before eigendecomposition).
+
+### Combining method performance (SF=7, NR=4, 2000 packets/point)
+
+| SNR | Oracle MRC | Eigvec PSRAM (50-sym payload) | Eigvec preamble-only | W_k HW |
+|-----|-----------|------------------------------|---------------------|--------|
+| −16 dB | 13.4% | 17.6% | 30.9% | 60.1% |
+| −14 dB | 4.9% | 6.6% | 14.0% | 45.5% |
+| −12 dB | 1.4% | 2.1% | 3.7% | 28.9% |
+| −10 dB | 0.4% | **0.4%** | 0.9% | 20.3% |
+| −8 dB | ~0% | ~0% | 0.2% | 12.8% |
+
+Key findings:
+- Increasing weight precision beyond Q1.15 gives **zero improvement** — the gap to oracle is entirely channel estimation noise, not quantization.
+- PSRAM accumulation (7.2× more samples: preamble + 50 payload symbols) closes 1–4 dB of the estimation gap; matches oracle at −10 dB.
+- Noise whitening (subtract σ²·I before eigdecomp) adds no additional benefit at this accumulation depth — the bias is negligible with 7424 samples.
+- W_k row-sum (HW path) is 10–20 dB worse than eigvec in the target SNR range; the eigvec FW path is strongly preferred for any deployment where firmware is available.
+
+Source: `sim/sims/compare_mrc_methods.py` (SGE jobs 1368–1371).
 
 ---
 

@@ -2,7 +2,7 @@
 
 Corresponds to planning/blocks/Training Accumulator.md.
 
-Primary path — cross-correlation against nominated reference branch:
+Legacy helper path — cross-correlation against nominated reference branch:
 
     Z_j = Σ_n  raw_j[n] · conj(raw_ref[n])
 
@@ -16,10 +16,9 @@ The common CFO exp(j·ω·n) cancels exactly in the cross-product because
 |s[n]|² = 1 for a constant-amplitude LoRa upchirp. This holds at all CFO
 values — no Dirichlet attenuation, no integer-bin nulls.
 
-MRC combining uses weights proportional to conj(Z_j). The hardened hardware
-path applies a shared conservative power-of-two scale to fit Q1.15 and leave
-coherent-add headroom; exact normalized MRC is retained only as an oracle/helper
-for algorithm comparisons.
+Current RTL uses the all-pairs accumulator implemented by
+`training_accumulate_allpairs()`. The legacy single-reference helper remains
+available for comparison studies and older notebooks.
 """
 
 import numpy as np
@@ -187,42 +186,123 @@ def training_accumulate_allpairs(
     timing_ref: int,
     M: int,
     preamble_len: int = 8,
-) -> tuple[np.ndarray, int]:
+    packet_end: int | None = None,
+    tacc_guard: int = 0,
+    return_matrix: bool = False,
+) -> tuple[np.ndarray, int] | tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """
-    All-pairs cross-correlator matching training_acc.v (commit 2202607).
+    All-pairs cross-correlator matching training_acc.v.
 
-    Computes all C(4,2)=6 branch-pair cross-correlations and returns the
-    per-branch sum W_k = Σ_{l≠k} Z_kl used as MRC weights.
+    Computes the full NR×NR Hermitian correlation matrix:
+        Z_kl = Σ_n raw_k[n] · conj(raw_l[n])
 
-    Z_kl = Σ_n raw_k[n] · conj(raw_l[n])
+    Diagonal: Z_kk = Σ|raw_k[n]|² (signal + noise power)
+    Off-diagonal: Z_kl ≈ h_k · conj(h_l) · n_acc  (channel cross-term)
 
-    W_k = Σ_{l≠k} Z_kl  (sum of all cross-correlations involving branch k)
+    Hardware W_k output: W_k = Σ_{l≠k} Z_kl  (row sum excluding diagonal)
+    Firmware eigenvector path: uses the full 4×4 Hermitian Z matrix.
 
-    MRC weight: w_k = conj(W_k) / noise_est[k]²
+    In noise mode (no signal): Z_kl ≈ 0 for k≠l (uncorrelated noise),
+    Z_kk ≈ σ²_k · n_acc (diagonal carries noise power directly).
 
-    Benefits vs single-ref: if branch 0 is in deep fade, Z_01, Z_02, Z_03 → 0
-    but Z_12, Z_13, Z_23 are still valid. Branch 0 gets weight → 0 automatically.
+    Parameters
+    ----------
+    raw_j         : (NR, N_samples) complex int8 samples
+    sc_lock_sample: accumulation start index (sc_lock fires here)
+    timing_ref    : preamble-start estimate from SC detector
+    M             : samples per symbol (2^SF)
+    preamble_len  : number of preamble symbols; sets acc_end in live mode
+    packet_end    : if given, enables PSRAM mode — acc_end extends to
+                    packet_end - tacc_guard instead of the preamble boundary
+    tacc_guard    : guard margin subtracted from packet_end in PSRAM mode
+    return_matrix : if True, return (W_k, Z_matrix, Zdiag, n_acc) instead of
+                    (W_k, n_acc). Z_matrix is the full NR×NR Hermitian matrix;
+                    Zdiag is (NR,) real diagonal (same as np.diag(Z_matrix)).
 
     Returns
     -------
-    W_k : (NR,) complex — per-branch accumulated sum (direct, not sign-extended)
+    W_k : (NR,) complex — per-branch accumulated sum (HW weight_gen input)
     n_acc : int — number of samples accumulated
+    If return_matrix=True also returns:
+    Z_matrix : (NR, NR) complex — full Hermitian cross-correlation matrix
+    Zdiag    : (NR,) real — diagonal autocorrelations (Σ|raw_k|²)
     """
     NR, N_samples = raw_j.shape
     acc_start = sc_lock_sample
-    acc_end   = min(timing_ref + preamble_len * M - 1, N_samples - 1)
+    if packet_end is not None:
+        acc_end = min(packet_end - tacc_guard, N_samples - 1)
+    else:
+        acc_end = min(timing_ref + preamble_len * M - 1, N_samples - 1)
     if acc_start > acc_end:
+        if return_matrix:
+            return np.zeros(NR, dtype=complex), np.zeros((NR, NR), dtype=complex), np.zeros(NR), 0
         return np.zeros(NR, dtype=complex), 0
 
     win = raw_j[:, acc_start:acc_end + 1]   # (NR, n_acc)
     n_acc = acc_end - acc_start + 1
 
-    # Compute all pairwise correlations in one shot: Z = win @ win.conj().T
-    Z = win @ np.conj(win.T)  # (NR, NR); diagonal = autocorrelation
+    # Full NR×NR Hermitian matrix: diagonal = autocorrelation, off-diagonal = cross-correlations
+    Z = win @ np.conj(win.T)  # (NR, NR)
 
-    # W_k = sum of row k, excluding the diagonal
+    # W_k = row sum excluding diagonal (hardware accumulator output)
     W_k = np.sum(Z, axis=1) - np.diag(Z)
+
+    if return_matrix:
+        Zdiag = np.real(np.diag(Z))   # always real (Σ|raw_k|²)
+        return W_k, Z, Zdiag, n_acc
     return W_k, n_acc
+
+
+def compute_eigvec_weights(
+    Z_matrix: np.ndarray,
+    antenna_en: int = 0xF,
+    cal_j: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Firmware eigenvector MRC: principal eigenvector of the full Z matrix.
+
+    Z ≈ h · h^H · n_acc + σ² · I
+    The principal eigenvector of Z is the ML channel estimator.
+
+    This is the optimal firmware path — better than the W_k row-sum used by
+    hardware because it uses all 16 matrix entries coherently rather than 3
+    off-diagonal entries per row.
+
+    Parameters
+    ----------
+    Z_matrix  : (NR, NR) complex Hermitian matrix from training_accumulate_allpairs()
+    antenna_en: enabled antenna bitmask (bit j = antenna j)
+    cal_j     : (NR,) complex Q1.15 calibration coefficients, or None
+
+    Returns
+    -------
+    w : (NR,) complex Q1.15 weights (conj of principal eigenvector, normalised)
+    """
+    from .weight_generation import apply_calibration
+    from .fixed import quantize_q1_15
+
+    NR = Z_matrix.shape[0]
+    mask = np.array([(antenna_en >> j) & 1 for j in range(NR)], dtype=bool)
+
+    # Restrict to enabled branches
+    Z = Z_matrix.copy()
+    Z[~mask, :] = 0.0
+    Z[:, ~mask] = 0.0
+
+    eigvals, eigvecs = np.linalg.eigh(Z)
+    v = eigvecs[:, -1]                   # largest eigenvalue → best channel estimate
+
+    if cal_j is not None:
+        v = apply_calibration(v, cal_j)
+
+    v[~mask] = 0.0
+
+    max_abs = float(np.max(np.abs(v)))
+    if max_abs == 0.0:
+        return np.zeros(NR, dtype=complex)
+    w = np.conj(v) / max_abs            # w = conj(h_hat), normalised
+
+    return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
 
 
 def noise_est_rtl(

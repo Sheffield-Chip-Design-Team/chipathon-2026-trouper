@@ -61,8 +61,15 @@ module reg_bank (
     input  wire [15:0] c_pool_i, c_pool_q,
     // CFO diagnostic [15:0]
     input  wire [15:0] cfo_diag,
-    // Z_j readback (right-shifted to int32 by z_shift)
-    input  wire [31:0] z0_i, z0_q, z1_i, z1_q, z2_i, z2_q, z3_i, z3_q,
+    // Z_kl pair readback — individual cross-correlations (int32, big-endian bytes)
+    // Pairs: 0=Z_01 1=Z_02 2=Z_03 3=Z_12 4=Z_13 5=Z_23
+    input  wire [31:0] zpair_i0, zpair_q0,   // Z_01  @ 0x70-0x77
+    input  wire [31:0] zpair_i1, zpair_q1,   // Z_02  @ 0x78-0x7F
+    input  wire [31:0] zpair_i2, zpair_q2,   // Z_03  @ 0x80-0x87
+    input  wire [31:0] zpair_i3, zpair_q3,   // Z_12  @ 0x88-0x8F
+    input  wire [31:0] zpair_i4, zpair_q4,   // Z_13  @ 0xD4-0xDB
+    // Z_kk diagonal autocorrelation (Σ|raw_k|², real int32) @ 0xE8-0xEF top 16-bit
+    input  wire [31:0] zdiag_0, zdiag_1, zdiag_2, zdiag_3,
     // SC debug
     input  wire        sc_hit_dbg,
     input  wire [1:0]  sc_hit_count_dbg,
@@ -143,7 +150,8 @@ module reg_bank (
     output wire [63:0]  sigma2_sw,
     // Null steering
     output reg         noise_en,       // 0x6A[0]: enable noise-window accumulation mode
-    output reg [1:0]   ref_sel         // 0x6B[1:0]: training reference branch (0-3)
+    output reg [1:0]   ref_sel,        // 0x6B[1:0]: training reference branch (0-3)
+    output reg         noise_trig      // 0x6C[0]: W1P — firmware-triggers noise measurement in training_acc
 );
 
     reg read_valid;
@@ -259,6 +267,7 @@ module reg_bank (
             null_quality_reg <= 16'h0;
             noise_en         <= 1'b0;
             ref_sel          <= 2'd0;
+            noise_trig       <= 1'b0;
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
             // CAL default: I=0x7FFF (unity), Q=0x0000 per branch (4 bytes each)
             cal_coeff_r[0]  <= 8'h7F; cal_coeff_r[1]  <= 8'hFF; // CAL_0_I
@@ -278,6 +287,7 @@ module reg_bank (
             sx_start        <= 1'b0;
             sram_dump_start <= 1'b0;
             sigma2_commit   <= 1'b0;
+            noise_trig      <= 1'b0;
 
             if (we) begin
                 case (addr)
@@ -384,6 +394,7 @@ module reg_bank (
                     8'h57: null_quality_reg[7:0]  <= wdata;
                     8'h6A: noise_en               <= wdata[0];
                     8'h6B: ref_sel                <= wdata[1:0];
+                    8'h6C: noise_trig             <= wdata[0];  // W1P: firmware noise-mode trigger
                     default: ;
                 endcase
             end
@@ -499,39 +510,45 @@ module reg_bank (
             8'h67: rdata_next = c_pool_q[7:0];
             8'h68: rdata_next = cfo_diag[15:8];
             8'h69: rdata_next = cfo_diag[7:0];
-            // Z_j readback (big-endian int32)
-            8'h70: rdata_next = z0_i[31:24];
-            8'h71: rdata_next = z0_i[23:16];
-            8'h72: rdata_next = z0_i[15:8];
-            8'h73: rdata_next = z0_i[7:0];
-            8'h74: rdata_next = z0_q[31:24];
-            8'h75: rdata_next = z0_q[23:16];
-            8'h76: rdata_next = z0_q[15:8];
-            8'h77: rdata_next = z0_q[7:0];
-            8'h78: rdata_next = z1_i[31:24];
-            8'h79: rdata_next = z1_i[23:16];
-            8'h7A: rdata_next = z1_i[15:8];
-            8'h7B: rdata_next = z1_i[7:0];
-            8'h7C: rdata_next = z1_q[31:24];
-            8'h7D: rdata_next = z1_q[23:16];
-            8'h7E: rdata_next = z1_q[15:8];
-            8'h7F: rdata_next = z1_q[7:0];
-            8'h80: rdata_next = z2_i[31:24];
-            8'h81: rdata_next = z2_i[23:16];
-            8'h82: rdata_next = z2_i[15:8];
-            8'h83: rdata_next = z2_i[7:0];
-            8'h84: rdata_next = z2_q[31:24];
-            8'h85: rdata_next = z2_q[23:16];
-            8'h86: rdata_next = z2_q[15:8];
-            8'h87: rdata_next = z2_q[7:0];
-            8'h88: rdata_next = z3_i[31:24];
-            8'h89: rdata_next = z3_i[23:16];
-            8'h8A: rdata_next = z3_i[15:8];
-            8'h8B: rdata_next = z3_i[7:0];
-            8'h8C: rdata_next = z3_q[31:24];
-            8'h8D: rdata_next = z3_q[23:16];
-            8'h8E: rdata_next = z3_q[15:8];
-            8'h8F: rdata_next = z3_q[7:0];
+            // Z_kl pair readback (big-endian int32) — all C(4,2)=6 cross-correlations.
+            // Use with z_shift (0x63) for firmware scaling. Firmware path: read pairs,
+            // build 4×4 Hermitian Z, take principal eigenvector for MRC weights.
+            // Z_01 @ 0x70: pair (0,1)
+            8'h70: rdata_next = zpair_i0[31:24];
+            8'h71: rdata_next = zpair_i0[23:16];
+            8'h72: rdata_next = zpair_i0[15:8];
+            8'h73: rdata_next = zpair_i0[7:0];
+            8'h74: rdata_next = zpair_q0[31:24];
+            8'h75: rdata_next = zpair_q0[23:16];
+            8'h76: rdata_next = zpair_q0[15:8];
+            8'h77: rdata_next = zpair_q0[7:0];
+            // Z_02 @ 0x78: pair (0,2)
+            8'h78: rdata_next = zpair_i1[31:24];
+            8'h79: rdata_next = zpair_i1[23:16];
+            8'h7A: rdata_next = zpair_i1[15:8];
+            8'h7B: rdata_next = zpair_i1[7:0];
+            8'h7C: rdata_next = zpair_q1[31:24];
+            8'h7D: rdata_next = zpair_q1[23:16];
+            8'h7E: rdata_next = zpair_q1[15:8];
+            8'h7F: rdata_next = zpair_q1[7:0];
+            // Z_03 @ 0x80: pair (0,3)
+            8'h80: rdata_next = zpair_i2[31:24];
+            8'h81: rdata_next = zpair_i2[23:16];
+            8'h82: rdata_next = zpair_i2[15:8];
+            8'h83: rdata_next = zpair_i2[7:0];
+            8'h84: rdata_next = zpair_q2[31:24];
+            8'h85: rdata_next = zpair_q2[23:16];
+            8'h86: rdata_next = zpair_q2[15:8];
+            8'h87: rdata_next = zpair_q2[7:0];
+            // Z_12 @ 0x88: pair (1,2)
+            8'h88: rdata_next = zpair_i3[31:24];
+            8'h89: rdata_next = zpair_i3[23:16];
+            8'h8A: rdata_next = zpair_i3[15:8];
+            8'h8B: rdata_next = zpair_i3[7:0];
+            8'h8C: rdata_next = zpair_q3[31:24];
+            8'h8D: rdata_next = zpair_q3[23:16];
+            8'h8E: rdata_next = zpair_q3[15:8];
+            8'h8F: rdata_next = zpair_q3[7:0];
             // --- W shadow bank (RW) ---
             8'h90: rdata_next = w_shadow_r[0];
             8'h91: rdata_next = w_shadow_r[1];
@@ -595,15 +612,37 @@ module reg_bank (
             8'hD1: rdata_next = {7'h0, sigma2_valid};
             8'hD2: rdata_next = noise_thresh[15:8];
             8'hD3: rdata_next = noise_thresh[7:0];
-            // --- SIGMA2 hardware estimates ---
-            8'hE0: rdata_next = sigma2_hw_0[15:8];
-            8'hE1: rdata_next = sigma2_hw_0[7:0];
-            8'hE2: rdata_next = sigma2_hw_1[15:8];
-            8'hE3: rdata_next = sigma2_hw_1[7:0];
-            8'hE4: rdata_next = sigma2_hw_2[15:8];
-            8'hE5: rdata_next = sigma2_hw_2[7:0];
-            8'hE6: rdata_next = sigma2_hw_3[15:8];
-            8'hE7: rdata_next = sigma2_hw_3[7:0];
+            // Z_13 @ 0xD4: pair (1,3)
+            8'hD4: rdata_next = zpair_i4[31:24];
+            8'hD5: rdata_next = zpair_i4[23:16];
+            8'hD6: rdata_next = zpair_i4[15:8];
+            8'hD7: rdata_next = zpair_i4[7:0];
+            8'hD8: rdata_next = zpair_q4[31:24];
+            8'hD9: rdata_next = zpair_q4[23:16];
+            8'hDA: rdata_next = zpair_q4[15:8];
+            8'hDB: rdata_next = zpair_q4[7:0];
+            // --- Z_23 @ 0xE0: pair (2,3) — repurposes former sigma2_hw addresses ---
+            // sigma2_hw_0..3 ports are wired to Zpair5 halves in mimo_rx_top.
+            8'hE0: rdata_next = sigma2_hw_0[15:8];   // zpair_i5[31:16] MSB
+            8'hE1: rdata_next = sigma2_hw_0[7:0];    // zpair_i5[31:16] LSB
+            8'hE2: rdata_next = sigma2_hw_1[15:8];   // zpair_i5[15:0]  MSB
+            8'hE3: rdata_next = sigma2_hw_1[7:0];    // zpair_i5[15:0]  LSB
+            8'hE4: rdata_next = sigma2_hw_2[15:8];   // zpair_q5[31:16] MSB
+            8'hE5: rdata_next = sigma2_hw_2[7:0];    // zpair_q5[31:16] LSB
+            8'hE6: rdata_next = sigma2_hw_3[15:8];   // zpair_q5[15:0]  MSB
+            8'hE7: rdata_next = sigma2_hw_3[7:0];    // zpair_q5[15:0]  LSB
+            // --- Z_kk diagonal autocorrelation @ 0xE8: top 16 bits per branch ---
+            // Zdiag_k = Σ|raw_k[n]|² over the training window.  In noise mode
+            // (no signal) Zdiag_k ≈ σ²_k · n_acc. Upper 16 bits give sufficient
+            // resolution for firmware noise EMA (full 32-bit in training_acc register).
+            8'hE8: rdata_next = zdiag_0[31:24];
+            8'hE9: rdata_next = zdiag_0[23:16];
+            8'hEA: rdata_next = zdiag_1[31:24];
+            8'hEB: rdata_next = zdiag_1[23:16];
+            8'hEC: rdata_next = zdiag_2[31:24];
+            8'hED: rdata_next = zdiag_2[23:16];
+            8'hEE: rdata_next = zdiag_3[31:24];
+            8'hEF: rdata_next = zdiag_3[23:16];
             // --- SIGMA2 SW override ---
             8'hF1: rdata_next = sigma2_sw_r[0];
             8'hF2: rdata_next = sigma2_sw_r[1];

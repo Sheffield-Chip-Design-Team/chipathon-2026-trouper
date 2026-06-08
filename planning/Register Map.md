@@ -100,15 +100,13 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x68` | `CFO_DIAG_HI` | R | `0x00` | Schmidl-Cox | Coarse CFO diagnostic [15:8] |
 | `0x69` | `CFO_DIAG_LO` | R | `0x00` | Schmidl-Cox | Coarse CFO diagnostic [7:0] |
 | `0x6A` | `NOISE_WIN_CTRL` | R/W | `0x00` | Training Accumulator | [0] `NOISE_EN`: enable noise-window accumulation mode; [7:1] reserved |
-| `0x6B`–`0x6F` | — | — | — | — | Reserved for future training-derived metrics |
-| `0x70`–`0x73` | `Z0_I` | R | `0x00` | Training Accumulator | Branch 0 I component [31:0] |
-| `0x74`–`0x77` | `Z0_Q` | R | `0x00` | Training Accumulator | Branch 0 Q component [31:0] |
-| `0x78`–`0x7B` | `Z1_I` | R | `0x00` | Training Accumulator | Branch 1 I component [31:0] |
-| `0x7C`–`0x7F` | `Z1_Q` | R | `0x00` | Training Accumulator | Branch 1 Q component [31:0] |
-| `0x80`–`0x83` | `Z2_I` | R | `0x00` | Training Accumulator | Branch 2 I component [31:0] |
-| `0x84`–`0x87` | `Z2_Q` | R | `0x00` | Training Accumulator | Branch 2 Q component [31:0] |
-| `0x88`–`0x8B` | `Z3_I` | R | `0x00` | Training Accumulator | Branch 3 I component [31:0] |
-| `0x8C`–`0x8F` | `Z3_Q` | R | `0x00` | Training Accumulator | Branch 3 Q component [31:0] |
+| `0x6B` | `TACC_REF_SEL` | R/W | `0x00` | Training Accumulator | [1:0] reference branch selector for legacy single-ref path; [7:2] reserved |
+| `0x6C` | `TACC_NOISE_TRIG` | W | `0x00` | Training Accumulator | [0] W1P: write 1 to arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`). Accumulates for 8 symbols then asserts `TRAINING_DONE`. Off-diagonal `Z_kl` ≈ 0; diagonal `ZDIAG_k` ≈ σ²_k · n_acc. |
+| `0x6D`–`0x6F` | — | — | — | — | Reserved for future training-derived metrics |
+| `0x70`–`0x77` | `Z_01` | R | `0x00` | Training Accumulator | Pair (0,1) cross-correlation: I[31:0] at 0x70–0x73, Q[31:0] at 0x74–0x77. Z_01 = Σ raw_0[n]·conj(raw_1[n]). |
+| `0x78`–`0x7F` | `Z_02` | R | `0x00` | Training Accumulator | Pair (0,2): I at 0x78–0x7B, Q at 0x7C–0x7F |
+| `0x80`–`0x87` | `Z_03` | R | `0x00` | Training Accumulator | Pair (0,3): I at 0x80–0x83, Q at 0x84–0x87 |
+| `0x88`–`0x8F` | `Z_12` | R | `0x00` | Training Accumulator | Pair (1,2): I at 0x88–0x8B, Q at 0x8C–0x8F |
 | **Active Weight / Shadow Bank Interface** (`0x90`–`0x9F`) | | | | | |
 | `0x90` | `W_0_RE_HI` | R/W | `0x00` | MRC Combiner | Branch 0 real [15:8], int16 Q1.15 |
 | `0x91` | `W_0_RE_LO` | R/W | `0x00` | MRC Combiner | Branch 0 real [7:0] |
@@ -175,10 +173,14 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xD1` | `NFE_STATUS` | R | `0x00` | Noise Floor Estimator | [0] `SIGMA2_VALID`; [7:1] reserved |
 | `0xD2` | `NOISE_THRESH_HI` | R/W | `0x00` | Noise Floor Estimator | Near-far threshold [15:8] |
 | `0xD3` | `NOISE_THRESH_LO` | R/W | `0x00` | Noise Floor Estimator | Near-far threshold [7:0] |
-| `0xD4`–`0xDF` | — | — | — | — | Reserved for future NFE diagnostics |
-| **Sigma2 Hardware Estimates** (`0xE0`–`0xEF`) | | | | | |
-| `0xE0`–`0xE7` | `SIGMA2_*_HW_*` | R | `0x00` | Noise Floor Estimator | Hardware per-branch EMA estimates |
-| `0xE8`–`0xEF` | — | — | — | — | Reserved |
+| `0xD4`–`0xDB` | `Z_13` | R | `0x00` | Training Accumulator | Pair (1,3): I at 0xD4–0xD7, Q at 0xD8–0xDB. Big-endian int32. |
+| `0xDC`–`0xDF` | — | — | — | — | Reserved |
+| **Z_23 Pair and Z_kk Diagonal** (`0xE0`–`0xEF`) | | | | | |
+| `0xE0`–`0xE7` | `Z_23` | R | `0x00` | Training Accumulator | Pair (2,3): I[31:0] at 0xE0–0xE3 (via sigma2_hw_0..1 ports), Q[31:0] at 0xE4–0xE7 (sigma2_hw_2..3). Replaces former sigma2_hw estimate addresses (sigma2_hw was always 0). |
+| `0xE8`–`0xE9` | `ZDIAG_0_HI` | R | `0x00` | Training Accumulator | Branch 0 diagonal Z_kk = Σ\|raw_0\|² top 16 bits [31:16]. In noise mode: ≈ σ²_0 · n_acc. |
+| `0xEA`–`0xEB` | `ZDIAG_1_HI` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:16] |
+| `0xEC`–`0xED` | `ZDIAG_2_HI` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:16] |
+| `0xEE`–`0xEF` | `ZDIAG_3_HI` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:16] |
 | **Sigma2 Software Overrides** (`0xF0`–`0xFF`) | | | | | |
 | `0xF0` | `SIGMA2_COMMIT` | W | `0x00` | Noise Floor Estimator | Write-1 latch for software override values |
 | `0xF1`–`0xF8` | `SIGMA2_*_SW_*` | R/W | `0x00` | Noise Floor Estimator | Firmware override shadow values |
@@ -233,6 +235,13 @@ Supported RX-only fallback:
 - keep `PSRAM_CTRL.PSRAM_EN=0`
 - rely on hardware weight-generation defaults (`AUTO`, `AUTO_COMMIT=1`, `MODE=MRC`)
 - use fixed `RX_GAIN_ACTIVE_n` values (`0x3E` reset default, or host-programmed shadow values committed before RX)
+
+Planned host/UART backup extension:
+
+- host asserts or leaves `CPU_RESET=1` if PicoRV32 is not trusted
+- host reads `Z_j` and status, computes `W` off chip, writes `W_SHADOW`, and pulses `W_COMMIT` through the control path
+- `PSRAM_CTRL.PSRAM_EN=1` is required if the host/UART path must replay the full packet, including preamble, to the downstream LoRa baseband
+- with `PSRAM_CTRL.PSRAM_EN=0`, host/UART weights are only guaranteed for next-packet use or for the current payload if they beat the live payload boundary
 
 ---
 
@@ -484,7 +493,7 @@ Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchan
 Unified control/status register for the weight path.
 
 - `WGT_SRC`, `WGT_AUTO_COMMIT`, and `WGT_MODE` configure the hardware weight-generation path
-- `W_COMMIT` is the shared commit pulse used by either the hardware path or PicoRV32 after writing the `0x90`-`0x9F` W shadow bank
+- `W_COMMIT` is the shared commit pulse used by either the hardware path, PicoRV32, or the [UART Backup Interface](blocks/UART%20Backup%20Interface.md) after writing the `0x90`-`0x9F` W shadow bank
 - `W_VALID`, `W_PENDING`, and `W_MISSED_PACKET` report Packet Control FSM status for the active W bank
 
 Reset value `0x0E` selects the CPU-independent baseline:
@@ -556,24 +565,61 @@ Controls noise-window accumulation in the training accumulator.
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `NOISE_EN` | 1 = enable noise-window mode. When set, the training accumulator uses antenna 0 as its own reference (`x_ref = x_0`) instead of the chirp reference. Accumulation starts at the same trigger point as normal training but fires `IRQ_NOISE_READY` on completion rather than `IRQ_TRAINING_DONE`. The `Z_j` readback registers (`0x70`–`0x8F`) hold the cross-correlations: `Z0` = antenna 0 self-power (real); `Z1/Z2/Z3` = `R_10/R_20/R_30` (complex). |
-| [7:1] | — | Reserved, write 0 |
-
-**Interaction with normal training.** `NOISE_EN` and `WGT_SRC=SW` (`IRQ_TRAINING_DONE`) are mutually exclusive within one accumulation window — the hardware fires one or the other IRQ, not both. Firmware must clear `NOISE_EN` before the packet preamble starts if it wants the normal `Z_j` channel estimates for that packet. Typical flow: noise window fires `IRQ_NOISE_READY` → firmware computes null and commits W → firmware clears `NOISE_EN` → preamble training proceeds normally and fires `IRQ_TRAINING_DONE`.
+| [0] | `NOISE_EN` | Legacy flag retained for firmware compatibility; [7:1] reserved |
 
 ---
 
-### `0x70`–`0x8F` — Z_j scaled readback (read-only)
+### `0x6B` — TACC_REF_SEL (read/write)
 
-Training-accumulator output exposed for diagnostics or optional software weight computation. Values are the int64 `Z_j` right-shifted by common `Z_SHIFT` so they fit in signed int32 readback registers.
+| Bits | Field | Description |
+| --- | --- | --- |
+| [1:0] | `REF_SEL` | Reference branch index for the legacy single-ref path (0–3). Not used in the all-pairs cross-correlator path. |
+| [7:2] | — | Reserved |
 
-When `NOISE_WIN_CTRL.NOISE_EN=1` these registers hold noise cross-correlations instead of channel estimates: `Z0` = antenna 0 self-power (imaginary part ~0), `Z1/Z2/Z3` = `R_10/R_20/R_30` for DOA estimation. See [PicoRV32 Integration — Null steering](PicoRV32%20Integration.md) for the firmware algorithm.
+---
+
+### `0x6C` — TACC_NOISE_TRIG (write-only, W1P)
+
+Firmware-triggered noise measurement. Writing bit 0 = 1 arms the training accumulator without waiting for `sc_lock`. The accumulator resets all internal state and immediately begins accumulating the next `8 × 2^SF` samples. `TRAINING_DONE` fires on completion.
+
+In noise mode (no signal): off-diagonal `Z_kl ≈ 0` (uncorrelated noise); diagonal `ZDIAG_k ≈ σ²_k · n_acc`.
+
+Firmware EMA flow:
+1. Write `0x6C ← 0x01` during idle (no packet in progress)
+2. Poll `TRAINING_STATUS.TRAINING_DONE`
+3. Read `ZDIAG_k` at 0xE8–0xEF (top 16 bits) for all branches
+4. Update per-branch EMA: `sigma2_k ← (1-α)·sigma2_k + α · ZDIAG_k[31:16] / n_acc`
+
+This replaces the former `noise_est.v` Manhattan-norm flow which required a dedicated pre-lock measurement period.
+
+---
+
+### `0x70`–`0x8F` — Z_kl pair readback, pairs 0–3 (read-only)
+
+All C(4,2)=6 branch-pair cross-correlations from the training accumulator. Values are signed int32, big-endian. Use `Z_SHIFT` (0x63) for firmware scaling.
+
+Firmware eigenvector path: read all 6 Z_kl pairs, build the 4×4 Hermitian matrix `Z`, take the principal eigenvector `eigh(Z)[:,-1]` as the MRC weight direction. This achieves near-ideal diversity gain and is significantly better than the W_k row-sum (hardware path) which mixes channel estimates.
+
+| Addresses | Name | Description |
+| --- | --- | --- |
+| `0x70`–`0x73` | `Z_01_I` | Pair (0,1) real part Σ raw_0·conj(raw_1), int32 |
+| `0x74`–`0x77` | `Z_01_Q` | Pair (0,1) imaginary part |
+| `0x78`–`0x7B` | `Z_02_I` | Pair (0,2) real part |
+| `0x7C`–`0x7F` | `Z_02_Q` | Pair (0,2) imaginary part |
+| `0x80`–`0x83` | `Z_03_I` | Pair (0,3) real part |
+| `0x84`–`0x87` | `Z_03_Q` | Pair (0,3) imaginary part |
+| `0x88`–`0x8B` | `Z_12_I` | Pair (1,2) real part |
+| `0x8C`–`0x8F` | `Z_12_Q` | Pair (1,2) imaginary part |
+
+Pairs Z_13 and Z_23 are at `0xD4`–`0xDB` and `0xE0`–`0xE7` respectively. The conjugate `Z_lk = conj(Z_kl)` is implied by Hermitian symmetry — firmware reconstructs the full 4×4 matrix from these 6 unique values.
+
+Note: `training_acc.v` also outputs W_k per-branch sums (Z_i0/q0–Z_i3/q3) directly to the hardware weight generator; these are NOT in the register bank. The register bank exposes the individual Z_kl pairs for firmware use.
 
 ---
 
 ### `0x90`–`0x9F` — W vector (read/write)
 
-MRC weight vector `w` (4 complex coefficients, int16 Q1.15). Written by hardware weight generation in AUTO mode or by PicoRV32 firmware in SW mode. These locations hold the shadow bank; the live combiner reads only `W_ACTIVE`.
+MRC weight vector `w` (4 complex coefficients, int16 Q1.15). Written by hardware weight generation in AUTO mode or by PicoRV32 firmware in SW mode. The planned host/UART backup path also writes this shadow bank when off-chip weights are supplied. These locations hold the shadow bank; the live combiner reads only `W_ACTIVE`.
 
 `W_ACTIVE` updates atomically after `WGT_CTRL.W_COMMIT` is pulsed and the Packet Control FSM reaches an idle boundary.
 
@@ -661,9 +707,23 @@ These registers are debug aids, not part of the normal packet-processing control
 
 Near-far guard threshold used by the packet-control and estimation path.
 
-### `0xE0`–`0xE7` — SIGMA2 hardware estimates (read-only)
+### `0xE0`–`0xE7` — Z_23 pair readback (read-only)
 
-Hardware per-branch EMA sigma2 estimates.
+Pair (2,3) cross-correlation: I[31:0] at 0xE0–0xE3, Q[31:0] at 0xE4–0xE7. These addresses formerly held `sigma2_hw` estimates (always zero); repurposed for Z_23.
+
+### `0xE8`–`0xEF` — Z_kk diagonal autocorrelation (read-only)
+
+Per-branch `Zdiag_k = Σ|raw_k[n]|²` over the training window. Top 16 bits of the 32-bit accumulator, sufficient for firmware noise EMA.
+
+| Addresses | Field | Description |
+| --- | --- | --- |
+| `0xE8`–`0xE9` | `ZDIAG_0` | Branch 0 Σ\|raw_0\|² [31:16] |
+| `0xEA`–`0xEB` | `ZDIAG_1` | Branch 1 Σ\|raw_1\|² [31:16] |
+| `0xEC`–`0xED` | `ZDIAG_2` | Branch 2 Σ\|raw_2\|² [31:16] |
+| `0xEE`–`0xEF` | `ZDIAG_3` | Branch 3 Σ\|raw_3\|² [31:16] |
+
+In normal signal mode: `ZDIAG_k ≈ (|h_k|² + σ²_k) · n_acc`.
+In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 
 ### `0xF0`–`0xF8` — SIGMA2 software override bank
 
@@ -683,11 +743,11 @@ Firmware writes the shadow values first, then pulses `SIGMA2_COMMIT`.
 | `0x20`–`0x2F` | Gain / AGC / SX1257 live RX control |
 | `0x30`–`0x3F` | Packet / weight-path control |
 | `0x40`–`0x5F` | Runtime measurement and live observability |
-| `0x60`–`0x8F` | Training and estimation |
+| `0x60`–`0x8F` | Training and estimation (Z_01–Z_12 pairs at 0x70–0x8F) |
 | `0x90`–`0x9F` | Active weight / shadow bank interface |
 | `0xA0`–`0xAF` | Calibration coefficients |
 | `0xB0`–`0xBF` | External memory / radio sideband control |
 | `0xC0`–`0xCF` | Bring-up / debug / BIST observability |
-| `0xD0`–`0xDF` | Noise floor estimator |
-| `0xE0`–`0xEF` | Sigma2 hardware estimates |
+| `0xD0`–`0xDF` | Noise floor estimator; Z_13 pair at 0xD4–0xDB |
+| `0xE0`–`0xEF` | Z_23 pair (0xE0–0xE7); Z_kk diagonal (0xE8–0xEF) |
 | `0xF0`–`0xFF` | Sigma2 software overrides and commit |

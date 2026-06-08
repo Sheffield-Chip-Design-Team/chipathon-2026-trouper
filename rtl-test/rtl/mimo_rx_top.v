@@ -306,10 +306,16 @@ module mimo_rx_top (
     // =========================================================================
     // Stage 4: Training Accumulator
     // =========================================================================
-    wire signed [31:0] Z_i [0:3];
+    wire signed [31:0] Z_i [0:3];        // W_k per-branch sums → weight_gen HW path
     wire signed [31:0] Z_q [0:3];
+    // Individual Z_kl pairs → reg_bank firmware eigenvector path
+    wire signed [31:0] Zpair_i [0:5];
+    wire signed [31:0] Zpair_q [0:5];
+    // Z_kk diagonal autocorrelation → reg_bank noise estimation
+    wire [31:0]        Zdiag [0:3];
     wire               training_done;
     wire [9:0]         n_acc;
+    wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
 
     training_acc u_tacc (
         .clk        (clk),
@@ -322,27 +328,38 @@ module mimo_rx_top (
         .sc_lock    (sc_lock),
         .timing_ref (timing_ref),
         .sf         (rb_sf_cfg),
+        .noise_trig (rb_noise_trig),
         .Z_i0 (Z_i[0]), .Z_q0 (Z_q[0]),
         .Z_i1 (Z_i[1]), .Z_q1 (Z_q[1]),
         .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
         .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
+        .Zpair_i0 (Zpair_i[0]), .Zpair_q0 (Zpair_q[0]),
+        .Zpair_i1 (Zpair_i[1]), .Zpair_q1 (Zpair_q[1]),
+        .Zpair_i2 (Zpair_i[2]), .Zpair_q2 (Zpair_q[2]),
+        .Zpair_i3 (Zpair_i[3]), .Zpair_q3 (Zpair_q[3]),
+        .Zpair_i4 (Zpair_i[4]), .Zpair_q4 (Zpair_q[4]),
+        .Zpair_i5 (Zpair_i[5]), .Zpair_q5 (Zpair_q[5]),
+        .Zdiag_0  (Zdiag[0]),   .Zdiag_1  (Zdiag[1]),
+        .Zdiag_2  (Zdiag[2]),   .Zdiag_3  (Zdiag[3]),
         .training_done (training_done),
         .n_acc       (n_acc)
     );
 
     // =========================================================================
-    // Stage 5: sigma2 register path — noise_metric[] currently tied to 0 so
-    // sigma2_hw/sigma2_valid always read zero. Scaffolding retained for future
-    // HW noise estimator; firmware reads coarse noise via energy_snap instead.
+    // Stage 5: sigma2 register path.
+    // sigma2_hw[0..3] are repurposed to carry Z_23 (pair 5) at reg_bank 0xE0-0xE7:
+    //   sigma2_hw[0] = Zpair_i5[31:16], [1] = Zpair_i5[15:0]
+    //   sigma2_hw[2] = Zpair_q5[31:16], [3] = Zpair_q5[15:0]
+    // sigma2_valid remains tied to 0 (no HW noise estimator yet).
     // =========================================================================
     wire [15:0] sigma2_hw [0:3];
     wire        sigma2_valid;
     wire        noise_sample_en;   // driven by packet_ctrl_fsm; retained for FW timing/IRQ use
 
-    assign sigma2_hw[0] = {6'd0, noise_metric[0]};
-    assign sigma2_hw[1] = {6'd0, noise_metric[1]};
-    assign sigma2_hw[2] = {6'd0, noise_metric[2]};
-    assign sigma2_hw[3] = {6'd0, noise_metric[3]};
+    assign sigma2_hw[0] = Zpair_i[5][31:16];
+    assign sigma2_hw[1] = Zpair_i[5][15:0];
+    assign sigma2_hw[2] = Zpair_q[5][31:16];
+    assign sigma2_hw[3] = Zpair_q[5][15:0];
 
     reg sigma2_valid_r;
     always @(posedge clk or negedge rst_n)
@@ -352,55 +369,15 @@ module mimo_rx_top (
     assign sigma2_valid = sigma2_valid_r;
 
     // =========================================================================
-    // Stage 6: Weight Generation
-    // wgt_src=0 → HW (EGC/MRC/SC computed from Z); wgt_src=1 → FW (firmware
-    // writes W shadow registers and strobes w_commit_pulse).
+    // Stage 6: Weight Generation — firmware path only (HW weight_gen under development).
+    // PicoRV32 computes ALMMSE weights and writes them via reg_bank fw_W_shadow path.
+    // W_commit fires on firmware strobe; reg_bank outputs below are wired but unused here.
     // =========================================================================
     wire        rb_wgt_src, rb_wgt_auto_commit;
     wire [1:0]  rb_wgt_mode;
     wire [127:0] rb_cal_coeff;
 
-    wire signed [15:0] wg_W_re [0:3];
-    wire signed [15:0] wg_W_im [0:3];
-    wire W_commit_hw, wgen_hw_done, wgen_active;
-    wire [1:0] wgen_mode_dbg;
-
-    weight_gen u_wgen (
-        .clk             (clk),
-        .rst_n           (rst_n),
-        .training_done   (training_done),
-        .Z_i0 (Z_i[0]), .Z_q0 (Z_q[0]),
-        .Z_i1 (Z_i[1]), .Z_q1 (Z_q[1]),
-        .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
-        .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
-        .n_acc           (n_acc),
-        .sf              (rb_sf_cfg),
-        .wgt_src         (rb_wgt_src),
-        .wgt_auto_commit (rb_wgt_auto_commit),
-        .wgt_mode        (rb_wgt_mode),
-        .antenna_en      (active_antenna_en),
-        .cal_re0 (rb_cal_coeff[127:112]), .cal_im0 (rb_cal_coeff[111:96]),
-        .cal_re1 (rb_cal_coeff[95:80]),   .cal_im1 (rb_cal_coeff[79:64]),
-        .cal_re2 (rb_cal_coeff[63:48]),   .cal_im2 (rb_cal_coeff[47:32]),
-        .cal_re3 (rb_cal_coeff[31:16]),   .cal_im3 (rb_cal_coeff[15:0]),
-        .fw_W_re0 (rb_w_shadow[127:112]), .fw_W_im0 (rb_w_shadow[111:96]),
-        .fw_W_re1 (rb_w_shadow[95:80]),   .fw_W_im1 (rb_w_shadow[79:64]),
-        .fw_W_re2 (rb_w_shadow[63:48]),   .fw_W_im2 (rb_w_shadow[47:32]),
-        .fw_W_re3 (rb_w_shadow[31:16]),   .fw_W_im3 (rb_w_shadow[15:0]),
-        .fw_W_commit     (rb_w_commit_pulse),
-        .W_hw_re0 (wg_W_re[0]), .W_hw_im0 (wg_W_im[0]),
-        .W_hw_re1 (wg_W_re[1]), .W_hw_im1 (wg_W_im[1]),
-        .W_hw_re2 (wg_W_re[2]), .W_hw_im2 (wg_W_im[2]),
-        .W_hw_re3 (wg_W_re[3]), .W_hw_im3 (wg_W_im[3]),
-        .W_shadow_re0 (), .W_shadow_im0 (),
-        .W_shadow_re1 (), .W_shadow_im1 (),
-        .W_shadow_re2 (), .W_shadow_im2 (),
-        .W_shadow_re3 (), .W_shadow_im3 (),
-        .W_commit        (W_commit_hw),
-        .wgen_hw_done    (wgen_hw_done),
-        .wgen_active     (wgen_active),
-        .wgen_mode_dbg   (wgen_mode_dbg)
-    );
+    wire W_commit_hw = rb_w_commit_pulse;
 
     // =========================================================================
     // Stage 7: Packet Control FSM
@@ -527,10 +504,10 @@ module mimo_rx_top (
         .x_i2 (comb_xi[2]), .x_q2 (comb_xq[2]),
         .x_i3 (comb_xi[3]), .x_q3 (comb_xq[3]),
         .x_valid  (comb_xvalid),
-        .W_re0 (wg_W_re[0][15:8]), .W_im0 (wg_W_im[0][15:8]),
-        .W_re1 (wg_W_re[1][15:8]), .W_im1 (wg_W_im[1][15:8]),
-        .W_re2 (wg_W_re[2][15:8]), .W_im2 (wg_W_im[2][15:8]),
-        .W_re3 (wg_W_re[3][15:8]), .W_im3 (wg_W_im[3][15:8]),
+        .W_re0 (rb_w_shadow[127:120]), .W_im0 (rb_w_shadow[111:104]),
+        .W_re1 (rb_w_shadow[95:88]),  .W_im1 (rb_w_shadow[79:72]),
+        .W_re2 (rb_w_shadow[63:56]),  .W_im2 (rb_w_shadow[47:40]),
+        .W_re3 (rb_w_shadow[31:24]),  .W_im3 (rb_w_shadow[15:8]),
         .W_valid   (W_valid),
         .mode      (active_mode[0]),    // 0=MRC, 1=bypass
         .bypass_ant(bypass_ant),
@@ -647,10 +624,13 @@ module mimo_rx_top (
         .c_pool_i        (16'd0),
         .c_pool_q        (16'd0),
         .cfo_diag        (16'd0),
-        .z0_i (Z_i[0]), .z0_q (Z_q[0]),
-        .z1_i (Z_i[1]), .z1_q (Z_q[1]),
-        .z2_i (Z_i[2]), .z2_q (Z_q[2]),
-        .z3_i (Z_i[3]), .z3_q (Z_q[3]),
+        .zpair_i0 (Zpair_i[0]), .zpair_q0 (Zpair_q[0]),
+        .zpair_i1 (Zpair_i[1]), .zpair_q1 (Zpair_q[1]),
+        .zpair_i2 (Zpair_i[2]), .zpair_q2 (Zpair_q[2]),
+        .zpair_i3 (Zpair_i[3]), .zpair_q3 (Zpair_q[3]),
+        .zpair_i4 (Zpair_i[4]), .zpair_q4 (Zpair_q[4]),
+        .zdiag_0  (Zdiag[0]),   .zdiag_1  (Zdiag[1]),
+        .zdiag_2  (Zdiag[2]),   .zdiag_3  (Zdiag[3]),
         .sc_hit_dbg          (sc_hit_dbg),
         .sc_hit_count_dbg    (sc_hit_cnt_dbg),
         .sc_lock_dbg         (sc_lock),
@@ -716,7 +696,8 @@ module mimo_rx_top (
         .sigma2_commit   (rb_sigma2_commit),
         .sigma2_sw       (rb_sigma2_sw),
         .noise_en        (),
-        .ref_sel         (rb_ref_sel)
+        .ref_sel         (rb_ref_sel),
+        .noise_trig      (rb_noise_trig)
     );
 
     // ---- SPI Master (→ SX1257) ----
