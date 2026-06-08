@@ -94,11 +94,17 @@ connect_bd_net [get_bd_ports clk100mhz] [get_bd_pins clk_wiz_0/clk_in1]
 create_bd_port -dir I -type rst ext_resetn
 connect_bd_net [get_bd_ports ext_resetn] [get_bd_pins clk_wiz_0/resetn]
 
+# Keep the MicroBlaze reset fabric inactive by default, matching the working
+# fpga-eth bring-up flow. The board reset still resets the clock wizard.
+set rst_const [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant xlconstant_1]
+set_property -dict [list CONFIG.CONST_VAL {1} CONFIG.CONST_WIDTH {1}] $rst_const
+
 # Single proc_sys_reset for the 32 MHz domain
 set psr [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_32m]
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins rst_32m/slowest_sync_clk]
 connect_bd_net [get_bd_pins clk_wiz_0/locked]   [get_bd_pins rst_32m/dcm_locked]
-connect_bd_net [get_bd_ports ext_resetn]          [get_bd_pins rst_32m/ext_reset_in]
+connect_bd_net [get_bd_pins xlconstant_1/dout]   [get_bd_pins rst_32m/ext_reset_in]
+connect_bd_net [get_bd_pins xlconstant_1/dout]   [get_bd_pins rst_32m/aux_reset_in]
 
 # --- MicroBlaze — created after clock wizard so automation can resolve the clock
 set mb [create_bd_cell -type ip -vlnv xilinx.com:ip:microblaze:11.0 microblaze_0]

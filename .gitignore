@@ -45,3 +45,23 @@ rtl-test/syn_*/out_*/netlist.v
 2026-*.txt
 
 characterization/
+
+# FPGA emulation generated artifacts
+fpga-emul/vivado_proj/
+fpga-emul/obj_dir_*/
+fpga-emul/*.bit
+fpga-emul/*backup.jou
+fpga-emul/*backup.log
+fpga-emul/vivado*.jou
+fpga-emul/vivado*.log
+fpga-emul/vivado_create*.log
+fpga-emul/vivado_synth*.log
+fpga-emul/sw/*.elf
+fpga-emul/sw/*.map
+fpga-emul/sw/*.xsa
+fpga-emul/sw/updatemem*.jou
+fpga-emul/sw/updatemem*.log
+fpga-emul/sw/vivado*.jou
+fpga-emul/sw/vivado*.log
+fpga-emul/uart_pin_test/uart_pin_test.bit
+fpga-emul/uart_pin_test/vivado_proj/

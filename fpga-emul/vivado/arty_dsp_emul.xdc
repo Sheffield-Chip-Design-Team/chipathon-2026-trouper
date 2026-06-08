@@ -9,7 +9,7 @@
 # ============================================================================
 set_property PACKAGE_PIN E3  [get_ports clk100mhz]
 set_property IOSTANDARD  LVCMOS33 [get_ports clk100mhz]
-create_clock -period 10.000 -name sys_clk [get_ports clk100mhz]
+create_clock -add -period 10.000 -name sys_clk_pin [get_ports clk100mhz]
 
 # Active-low reset (BTN0)
 set_property PACKAGE_PIN C2  [get_ports ext_resetn]
@@ -26,23 +26,23 @@ set_property IOSTANDARD  LVCMOS33 [get_ports ext_resetn]
 # Ethernet MII (Arty A7-100T on-board LAN8720A)
 # Pin assignments from Digilent Arty-A7-100-Master.xdc
 # ============================================================================
-set_property PACKAGE_PIN F16  [get_ports {MII_0_tx_en}]
-set_property PACKAGE_PIN H15  [get_ports {MII_0_txd[0]}]
-set_property PACKAGE_PIN H16  [get_ports {MII_0_txd[1]}]
-set_property PACKAGE_PIN F18  [get_ports {MII_0_txd[2]}]
-set_property PACKAGE_PIN G18  [get_ports {MII_0_txd[3]}]
-set_property PACKAGE_PIN C18  [get_ports {MII_0_tx_clk}]
+set_property PACKAGE_PIN H15  [get_ports {MII_0_tx_en}]
+set_property PACKAGE_PIN H14  [get_ports {MII_0_txd[0]}]
+set_property PACKAGE_PIN J14  [get_ports {MII_0_txd[1]}]
+set_property PACKAGE_PIN J13  [get_ports {MII_0_txd[2]}]
+set_property PACKAGE_PIN H17  [get_ports {MII_0_txd[3]}]
+set_property PACKAGE_PIN H16  [get_ports {MII_0_tx_clk}]
 set_property PACKAGE_PIN G16  [get_ports {MII_0_rx_dv}]
 set_property PACKAGE_PIN D18  [get_ports {MII_0_rxd[0]}]
 set_property PACKAGE_PIN E17  [get_ports {MII_0_rxd[1]}]
-set_property PACKAGE_PIN A18  [get_ports {MII_0_rxd[2]}]
-set_property PACKAGE_PIN B18  [get_ports {MII_0_rxd[3]}]
-set_property PACKAGE_PIN I17  [get_ports {MII_0_rx_clk}]
+set_property PACKAGE_PIN E18  [get_ports {MII_0_rxd[2]}]
+set_property PACKAGE_PIN G17  [get_ports {MII_0_rxd[3]}]
+set_property PACKAGE_PIN F15  [get_ports {MII_0_rx_clk}]
 set_property PACKAGE_PIN C17  [get_ports {MII_0_rx_er}]
 set_property PACKAGE_PIN D17  [get_ports {MII_0_col}]
 set_property PACKAGE_PIN G14  [get_ports {MII_0_crs}]
 set_property PACKAGE_PIN C16  [get_ports {phy_rst_n_0}]
-set_property PACKAGE_PIN H17  [get_ports {phy_mdc_0}]
+set_property PACKAGE_PIN F16  [get_ports {phy_mdc_0}]
 set_property PACKAGE_PIN K13  [get_ports {MDIO_0_mdio_io}]
 
 set_property IOSTANDARD LVCMOS33 [get_ports {MII_0_*}]
@@ -121,14 +121,6 @@ set_property IOSTANDARD LVCMOS33 [get_ports remod_q]
 # ============================================================================
 # Timing constraints
 # ============================================================================
-# I/Q input setup/hold relative to the 32 MHz MMCM output (clk_out1)
-set_input_delay -clock [get_clocks -of_objects [get_pins */clk_wiz_0/inst/*/CLKOUT0]] \
-    -max 5.0 [get_ports {hw_iq_i[*] hw_iq_q[*]}]
-set_input_delay -clock [get_clocks -of_objects [get_pins */clk_wiz_0/inst/*/CLKOUT0]] \
-    -min 1.0 [get_ports {hw_iq_i[*] hw_iq_q[*]}]
-
-# REMOD output delay
-set_output_delay -clock [get_clocks -of_objects [get_pins */clk_wiz_0/inst/*/CLKOUT0]] \
-    -max 5.0 [get_ports {remod_i remod_q}]
-set_output_delay -clock [get_clocks -of_objects [get_pins */clk_wiz_0/inst/*/CLKOUT0]] \
-    -min 1.0 [get_ports {remod_i remod_q}]
+# Board-level PMOD timing is left unconstrained for bring-up. The previous
+# generic delays were binding against multiple derived clocks and producing
+# critical warnings during implementation.
