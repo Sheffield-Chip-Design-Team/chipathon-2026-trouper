@@ -50,18 +50,18 @@ Trouper contains no embedded CPU. Weight computation and firmware control are pr
 | TRPR-SYS-015 | C | P | **32 MHz tier** — the following blocks SHALL meet single-cycle (31.25 ns) setup timing at TT: `sd_decimator_cic_only` (CIC integrators accumulate every edge), `sd_remod` (1-bit output pipeline), `psram_buf_ctrl` (QPI FSM). These blocks are also covered by MCP=2 in the SDC (62.5 ns budget is more relaxed than needed); the functional requirement is behavioural, not a STA exception. | I |
 | TRPR-SYS-016 | C | P | **250 kS/s tier** — the following blocks are updated only on `iq_valid` and MAY use the full MCP=2 budget (62.5 ns): `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `reg_bank`, `irq_ctrl`, `spi_master`, `spi_slave`, `packet_ctrl_fsm`. Exception: the SC detector TDM FSM evaluates 8 multiply-accumulate steps within each `iq_valid` window; each step is a single-cycle dependency. MCP=2 under-constrains these TDM paths, making the SC detector accumulator the dominant SS timing violator (see TRPR-PHY-008). Weight generation is not an RTL block in Trouper; it is performed entirely by Grouper firmware (see §4.6). | I |
 | TRPR-SYS-004 | C | F | Trouper SHALL support LoRa bandwidths of 125 kHz and 250 kHz only. 500 kHz BW is out of scope. | A |
-| TRPR-SYS-005 | C | F | Trouper SHALL operate in standalone bypass mode when no weight commit is received, routing the lowest-enabled antenna to the output. | T |
+| TRPR-SYS-005 | C | F | Trouper SHALL operate in standalone bypass mode when no weight commit is received, routing the lowest-numbered enabled antenna to the output. | T |
 | TRPR-SYS-006 | C | I | Trouper SHALL expose an AHB-Lite slave port for register access by Grouper over the MPW-internal interconnect. | T |
 | TRPR-SYS-007 | H | I | Trouper SHALL expose an SPI slave interface for register access and SX1257 configuration by the host (Raspberry Pi). | T |
 | TRPR-SYS-008 | C | HW | Trouper SHALL be fabricated in GF180MCU (gf180mcuD PDK), 3.3 V core and IO, targeting the `gf180mcu_fd_sc_mcu7t5v0` standard-cell library. | I |
-| TRPR-SYS-009 | C | HW | The total pad count SHALL NOT exceed 25. | I |
+| TRPR-SYS-009 | C | HW | The total pad count SHALL NOT exceed 22. | I |
 | TRPR-SYS-010 | C | P | The end-to-end RTL implementation SHALL be validated bit-exactly against the Python reference model in `sim/models/receiver.py` across the full input dynamic range. | T |
 | TRPR-SYS-011 | H | P | Post-PNR setup WNS at TT/25 °C/3.3 V SHALL be positive. SS/125 °C/3.0 V timing shall be documented; MCP or clock-domain partitioning is the preferred path to closure. | A |
 | TRPR-SYS-012 | H | F | Trouper SHALL provide an active-low chip reset pad (RESETB). All state SHALL be cleared on assertion; DSP datapath SHALL resume within one IQ_CLK cycle after de-assertion. | T |
 | TRPR-SYS-013 | H | P | Estimated total power at TT/25 °C/3.3 V SHALL be documented for each P&R run. Target ≤ 60 mW. | A |
 | TRPR-SYS-014 | M | F | Trouper SHALL support two operating modes: MRC NR=4 (Mode 0) and single-antenna passthrough (Mode 1). | T |
 | TRPR-SYS-017 | C | F | Trouper SHALL implement **same-packet MRC** as the primary operating mode. The PSRAM Buffer Controller SHALL continuously stream all decimated I/Q samples to an external APS6404L PSRAM. After `training_done` and `W_COMMIT`, the controller SHALL replay the stored packet from the preamble start through the MRC combiner with the newly computed weights. This ensures the trained weights are applied to the packet they were derived from, not the next packet. Next-packet MRC (no PSRAM replay) is a degraded fallback only. | T |
-| TRPR-SYS-018 | C | HW | An external APS6404L PSRAM (8 MB, QSPI) SHALL be present on the host board and permanently enabled (`PSRAM_EN=1`). Trouper SHALL assert QSPI pads and complete PSRAM initialisation before the first `iq_valid` pulse. Board designs without PSRAM are not supported. | A |
+| TRPR-SYS-018 | C | HW | An external APS6404L PSRAM (8 MB, QSPI) SHALL be present on the host board. On reset, Trouper SHALL initialise the device and default QSPI ownership to the local `psram_buf_ctrl` path. A register-controlled handover to Grouper SHALL be supported for firmware-managed off-chip memory access. Board designs without PSRAM are not supported. | A |
 
 ### 3.1 Clock Architecture
 
@@ -179,7 +179,7 @@ Maintains a rolling 1 kB SRAM buffer of the latest decimated samples for pre-loc
 | TRPR-FBC-005 | H | I | The current write pointer (mod 128) SHALL be readable from `BUF_WR_PTR` (0x15). Buffer mode and freeze state SHALL be readable from `FRONTEND_STATUS` (0x14). | T |
 | TRPR-FBC-006 | H | F | A BIST mode SHALL be triggered by writing `FRONTEND_CFG.BIST_RUN` (0x13[1]). BIST result SHALL be reflected in `FRONTEND_STATUS.SRAM0_BIST_PASS` and `SRAM1_BIST_PASS`. | T |
 | TRPR-FBC-007 | M | F | A debug dump mode (triggered by `SRAM_DUMP_CTRL`, 0xCA) SHALL allow the host to read any byte from the SRAM via `SRAM_DUMP_ADDR_HI/LO` and `SRAM_DUMP_DATA` (0xCB–0xCD). Dump mode is only accepted when the buffer is frozen. | T |
-| TRPR-FBC-008 | C | F | The frontend buffer controller SHALL forward all incoming decimated samples to the PSRAM Buffer Controller in parallel with the local SRAM circular write. The PSRAM path is always active (`PSRAM_EN=1`); the local SRAM path serves the SC detector autocorrelation delay line independently. | T |
+| TRPR-FBC-008 | C | F | The frontend buffer controller SHALL forward all incoming decimated samples to the PSRAM Buffer Controller in parallel with the local SRAM circular write whenever QSPI ownership is assigned to Trouper (`PSRAM_CTRL.QSPI_OWNER=0`) and `PSRAM_EN=1`. The local SRAM path serves the SC detector autocorrelation delay line independently. | T |
 
 ---
 
@@ -200,6 +200,28 @@ Computes all-pairs cross-correlations Z_kl and diagonal autocorrelations Z_kk ov
 | TRPR-TAC-009 | H | P | Z_kl / n_acc SHALL match the Python reference `h_k · conj(h_l)` within Q1.15 rounding on a noiseless channel. | T |
 | TRPR-TAC-010 | M | F | On each `sc_lock` event, the accumulator SHALL automatically reset internal state before beginning a new training window. | T |
 | TRPR-TAC-011 | M | I | The `TACC_REF_SEL` register (0x6B) is retained for legacy single-reference path compatibility; it has no effect in the all-pairs cross-correlator path. | I |
+
+---
+
+### 4.5A Static Frontend Calibration (`cal_j`) — TRPR-CAL
+
+Static frontend calibration compensates fixed branch-to-branch complex mismatch before firmware weight generation. The calibration term is a per-branch complex coefficient `cal_j` applied as:
+
+```
+H_j_cal = H_j · conj(cal_j)
+```
+
+where `H_j` is the branch channel estimate derived from the Training Accumulator. The current revision uses `cal_j` only for static branch gain and carrier-phase equalisation; it is not a true I/Q imbalance canceller. Calibration procedure and bench method are defined in `planning/Frontend Calibration Procedure.md`.
+
+| ID | Pri | Type | Requirement | Verif |
+|---|---|---|---|---|
+| TRPR-CAL-001 | C | F | The system SHALL support one static complex calibration coefficient `cal_j` per enabled RX branch. `cal_j` SHALL be applied before firmware weight generation so that the effective estimate used for MRC/eigenvector weighting is `H_j_cal = H_j · conj(cal_j)`. | T |
+| TRPR-CAL-002 | C | I | `cal_j` SHALL use signed complex Q1.15 format per branch and SHALL be held in Grouper firmware memory, CPU SRAM, or an equivalent host-managed software image. Trouper SHALL NOT require a dedicated hardware `CAL_*` register bank in this revision. | I |
+| TRPR-CAL-003 | H | F | Calibration SHALL be performed offline or during bring-up using a coherent common-input fixture so that fixed branch gain/phase mismatch can be separated from packet-to-packet channel variation. Accepted methods are defined in `planning/Frontend Calibration Procedure.md`. | I |
+| TRPR-CAL-004 | H | P | Under the calibration fixture, after applying `cal_j`, the residual inter-branch phase spread SHALL be less than `5 deg` and the residual inter-branch amplitude spread SHALL be less than `0.5 dB`. | T |
+| TRPR-CAL-005 | H | F | The loaded `cal_j` set SHALL remain the active default for normal operation until explicitly replaced by firmware or host software. Reset default may be `cal_j = 1 + 0j` for all branches until a measured calibration set is loaded. | T |
+| TRPR-CAL-006 | H | F | `cal_j` SHALL be treated as a scalar branch equalisation term only. It SHALL NOT be specified or verified as a complete correction for true per-branch I/Q imbalance. Residual I/Q imbalance SHALL be handled as a separately characterised frontend impairment (see TRPR-WGN-010 and TRPR-WGN-011). | A |
+
 
 ---
 
@@ -232,6 +254,8 @@ training_done IRQ fires
 | TRPR-WGN-007 | H | F | The firmware weight mode (MRC row-sum or eigenvector power iteration) SHALL be selectable via `MIMO_CTRL.WEIGHT_MODE` (0x33[2:1]) without requiring a chip reset. | T |
 | TRPR-WGN-008 | H | P | If `W_COMMIT` is not received before the payload boundary, the PCF FSM SHALL remain in bypass mode for that packet (see TRPR-PCF-005). Grouper firmware SHALL log a `W_MISSED_PACKET` counter readable at `DBG_MISSED_PKTS`. | T |
 | TRPR-WGN-009 | M | F | Grouper SHALL apply the `Z_SHIFT` (0x63) value when reading Z_kl to undo the hardware right-shift applied for register overflow prevention. | T |
+| TRPR-WGN-010 | H | F | Static frontend calibration via `cal_j` SHALL be treated as a complex scalar correction for per-branch gain and phase mismatch only. It SHALL NOT be assumed to correct true per-branch I/Q imbalance, which introduces an image term proportional to `conj(x)` rather than a pure complex scale. | A |
+| TRPR-WGN-011 | H | P | The current Trouper combiner architecture SHALL be treated as a linear combiner `sum w_k x_k`. Any performance loss caused by branch-dependent I/Q imbalance beyond what can be absorbed into `cal_j` or the estimated weight vector SHALL be documented as a residual frontend impairment. A widely-linear compensator is out of scope for this revision. | A |
 
 ---
 
@@ -318,8 +342,10 @@ Packet end: REPLAY_ACTIVE de-asserts; circular write resumes
 | TRPR-PSR-006 | H | I | `PSRAM_STATUS` (0xB1) SHALL expose: `state[2:0]`, `INIT_DONE`, `REPLAY_ACTIVE`, `REPLAY_MISSED`, `OVERFLOW`, `PAD_CONFLICT`. | T |
 | TRPR-PSR-007 | H | F | Sticky error flags (`OVERFLOW`, `REPLAY_MISSED`) SHALL be clearable by writing `PSRAM_CLR_ERR` (0xB0[1]). | T |
 | TRPR-PSR-008 | M | F | `PSRAM_PKT_BYTES` (0xB2–0xB3) SHALL report the number of bytes written to PSRAM for the current packet, for firmware overflow detection. | T |
-| TRPR-PSR-009 | M | F | A disable mode (`PSRAM_EN=0`, 0xB0[0]) SHALL be supported for factory test and bring-up only. In this mode the controller SHALL remain idle and SHALL NOT assert any QSPI pad outputs. Normal operation requires `PSRAM_EN=1`. | T |
-| TRPR-PSR-010 | L | F | `PAD_CONFLICT` SHALL assert if any PSRAM QSPI pad is driven by another block simultaneously. | T |
+| TRPR-PSR-009 | M | F | A disable mode (`PSRAM_EN=0`, 0xB0[0]) SHALL be supported for factory test and bring-up only. In this mode the controller SHALL remain idle and SHALL NOT assert any QSPI pad outputs. | T |
+| TRPR-PSR-010 | C | I | `PSRAM_CTRL.QSPI_OWNER` (0xB0[3]) SHALL select the active QSPI master: `0` = Trouper `psram_buf_ctrl` owns the pads for capture/replay, `1` = ownership is transferred to Grouper through a dedicated AHB-accessible PSRAM peripheral path. While `QSPI_OWNER=1`, the local replay controller SHALL de-assert CE#, hold SCK low, tri-state SIO[3:0], and suspend BUFFERING/REPLAY activity. | T |
+| TRPR-PSR-011 | H | F | Writes to `QSPI_OWNER` during BUFFERING or REPLAY SHALL NOT glitch the pads. The ownership change SHALL take effect only when `PSRAM_STATUS.STATE=IDLE`, after which the newly selected owner has exclusive control of the PSRAM QSPI pads. | T |
+| TRPR-PSR-012 | L | F | `PAD_CONFLICT` SHALL assert if any PSRAM QSPI pad is driven by another block simultaneously. | T |
 
 ---
 
