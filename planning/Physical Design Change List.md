@@ -859,3 +859,28 @@ Decision ranking from these measured numbers:
 The netlist is now materially closer to a meaningful macro-aware PD run because both the frontend SRAMs and CPU SRAM are represented as hard macros in the RTL and configs.
 
 But the architecture question is still open. Until the top gets a real `32 MHz` / `16 MHz` split with explicit CDC and matching SDC, a full top-level PD run would still answer only a limited question: whether the current single-clock approximation with real SRAM macros can be placed and routed.
+
+---
+
+## Trouper DSP-only P&R trial results (moved from spec)
+
+### 2026-06-09 — DSP-only 1100×1100 µm trial
+
+Config: `config_trouper_dsp_1100.json`, `pnr_32m_mcp_v4.sdc` (MCP=2, `-from/-to get_clocks IQ_CLK`), 1 × sram512x8, 25k stdcells.
+
+| Corner | Setup WNS | Hold WNS | Notes |
+|---|---|---|---|
+| TT 25 °C 3.3 V | **0.0 ns** ✓ | −0.06 ns (trivial) | Nominal operating point |
+| FF −40 °C 3.6 V | 0.0 ns ✓ | −0.83 ns | Hold fixable with buffers |
+| SS 125 °C 3.0 V | **−7.4 ns** | +1.85 ns ✓ | Accepted; see note below |
+
+SS timing analysis:
+
+- With a broken SDC (global `set_multicycle_path` without `-from/-to` is silently ignored by OpenSTA), all paths were analysed as MCP=1 (31.25 ns budget) and WNS was −20.6 ns.
+- Fixing the SDC to `set_multicycle_path 2 -setup -from [get_clocks IQ_CLK] -to [get_clocks IQ_CLK]` raised the effective budget to 62.5 ns and improved SS WNS to −7.4 ns.
+- The worst SS path is a stacked chain in the SC detector (TDM accumulator: 8×8 combinational multiply → sign-extend → two 24-bit additions → register). At SS 125 °C 3 V the chain needs ~72 ns; MCP=2 budget is ~64 ns.
+- A 3-stage pipeline split of `signed_mul24_pipe` (13×13 → two 7×13 partials) was tried but **shifted** the critical path to the TDM accumulator without improving SS WNS, and was reverted.
+- Conclusion: the −7 to −10 ns SS gap is distributed across the SC detector accumulator chain. Closing it would require AS cells (unproven) or significant RTL restructuring of the TDM FSM. The design is accepted with TT as the guaranteed operating corner.
+
+Area: stdcell area 630k µm², die 1.21 mm² (1100×1100), stdcell utilisation 52%.
+
