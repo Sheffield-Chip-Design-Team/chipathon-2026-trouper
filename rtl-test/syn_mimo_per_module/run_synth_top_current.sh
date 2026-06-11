@@ -4,7 +4,7 @@
 # Changes vs run_synth_hier.sh:
 #   - sd_decimator_cic_only.v  (was sd_decimator.v — old FIR version)
 #   - psram_buf_ctrl.v         (was missing)
-#   - noise_floor_est removed  (already removed from mimo_rx_top.v)
+#   - noise_floor_est removed  (already removed from trouper_top.v)
 #   - energy_meas_coarse.v     (already correct)
 #   - mrc_combiner.v           (now serialised I/Q — same module name, drop-in)
 #
@@ -19,7 +19,7 @@ SRAM_LIB=$RTL/ip/gf180mcu_ocd_ip_sram/timing/gf180mcu_fd_ip_sram__sram512x8m8wm1
 
 mkdir -p "$OUT"
 LOG=$OUT/run.log
-echo "=== mimo_rx_top current synth $(date --iso-8601=seconds) on $(hostname) ===" | tee "$LOG"
+echo "=== trouper_top current synth $(date --iso-8601=seconds) on $(hostname) ===" | tee "$LOG"
 
 YS=$OUT/synth.ys
 cat > "$YS" <<YEOF
@@ -29,7 +29,7 @@ read_verilog $RT/dc_removal.v
 read_verilog $RT/energy_meas_coarse.v
 read_verilog $RT/frontend_buf_ctrl.v
 read_verilog $RT/irq_ctrl.v
-read_verilog $RT/mimo_rx_top.v
+read_verilog $RT/trouper_top.v
 read_verilog $RT/mrc_combiner.v
 read_verilog $RT/packet_ctrl_fsm.v
 read_verilog $RT/picorv32_wrap.v
@@ -44,13 +44,13 @@ read_verilog $RT/sram512x8_bb.v
 read_verilog $RT/sram1024x8_bb.v
 read_verilog $RT/training_acc.v
 read_verilog $RT/weight_gen.v
-hierarchy -top mimo_rx_top
-synth -top mimo_rx_top
+hierarchy -top trouper_top
+synth -top trouper_top
 dfflibmap -liberty $CORE_LIB
 abc -liberty $CORE_LIB
 setundef -zero
 opt_clean -purge
-tee -o $OUT/stat_hier.txt stat -liberty $CORE_LIB -top mimo_rx_top
+tee -o $OUT/stat_hier.txt stat -liberty $CORE_LIB -top trouper_top
 YEOF
 
 echo "--- running yosys ---" | tee -a "$LOG"

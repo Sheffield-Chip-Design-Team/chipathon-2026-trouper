@@ -53,7 +53,7 @@ module training_acc_nr2 (
     input  wire [1:0]  ref_sel,
     output wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1,
     output wire        training_done,
-    output wire [9:0]  n_acc
+    output wire [14:0]  n_acc
 );
     wire signed [31:0] Z_i2_nc, Z_q2_nc, Z_i3_nc, Z_q3_nc;
     training_acc u (
@@ -111,7 +111,7 @@ cat > /tmp/weight_gen_nr2.v << 'EOF'
 module weight_gen_nr2 (
     input  wire        clk, rst_n, training_done,
     input  wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1,
-    input  wire [9:0]  n_acc,
+    input  wire [14:0]  n_acc,
     input  wire [3:0]  sf,
     input  wire        wgt_src, wgt_auto_commit,
     input  wire [1:0]  wgt_mode,

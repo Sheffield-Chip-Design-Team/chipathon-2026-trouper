@@ -1,6 +1,6 @@
-# mimo_rx_top per-module area breakdown
+# trouper_top per-module area breakdown
 
-Hierarchical yosys synthesis of `mimo_rx_top` against the **Avalon
+Hierarchical yosys synthesis of `trouper_top` against the **Avalon
 `gf180mcu_as_sc_mcu7t3v3`** 3.3 V 7-track cell library. No `-flatten`, so the
 `stat -liberty -top` report attributes cells to their owning submodule.
 This is pre-place gate area only (SRAM macros are blackboxes; fill/utilization
@@ -15,14 +15,14 @@ not included).
 
 | Top                  | Cells | Area (µm²) | Seq fraction |
 |----------------------|-------|------------|--------------|
-| `mimo_rx_top` (flat) | 80,751 | **2,512,196** | 37.4 % seq |
+| `trouper_top` (flat) | 80,751 | **2,512,196** | 37.4 % seq |
 
 (Matches the earlier flat-synth report at ~2.58M when run with `-flatten`; small
 delta is structural-vs-flat ABC choices.)
 
 ## Top-level submodule areas (including children)
 
-Sorted by total contribution to `mimo_rx_top`. Instance count from yosys
+Sorted by total contribution to `trouper_top`. Instance count from yosys
 hierarchy report.
 
 | Rank | Submodule              | Instances | Area each (µm²) | Total (µm²) | % of chip |
@@ -44,7 +44,7 @@ hierarchy report.
 |  15  | `spi_master`           | 1         |   10,241        |     10,241  |  0.4 % |
 |  16  | `irq_ctrl`             | 1         |    2,571        |      2,571  |  0.1 % |
 |  17  | `ahb_lite_bus`         | 1         |    2,465        |      2,465  |  0.1 % |
-|      | `mimo_rx_top` (local)  | -         |    4,537        |      4,537  |  0.2 % |
+|      | `trouper_top` (local)  | -         |    4,537        |      4,537  |  0.2 % |
 
 `*` includes child modules:
 - `sc_detector` = 308,588 local + `signed_mul24_pipe` 99,570
@@ -92,9 +92,9 @@ combined. That's the architectural decision to make first.
 - Numbers are post-tech-map but pre-place; no buffering, no fill, no halo,
   no CTS. Final die area will be ~2-3× this depending on utilization target
   (32 % util on as_sc gave 2.97 mm² for picorv32_wrap alone).
-- SRAM macro footprint not counted; mimo_rx_top has 1× 512×8 + 4× 1024×8
+- SRAM macro footprint not counted; trouper_top has 1× 512×8 + 4× 1024×8
   hard macros.
 - as_sc liberty has some unusual cell-area weights (`maj3_2` heavy use);
   ranking is stable but absolute numbers shift ~5-10 % across libraries.
-- `mimo_rx_top` "local" area (4.5 k µm²) is just the top-level wiring/glue —
+- `trouper_top` "local" area (4.5 k µm²) is just the top-level wiring/glue —
   it does not include any submodule.

@@ -1,17 +1,18 @@
 # `rtl-test` trial synthesis
 
-This directory contains a trial Yosys synthesis flow for `mimo_rx_top` against the GF180MCU standard-cell library inside the OSIC Docker image.
+This directory contains trial Yosys synthesis flows for the standalone `trouper_top` top level and the legacy `mimo_rx_top` compatibility wrapper against the GF180MCU standard-cell library inside the OSIC Docker image.
 
 ## What this flow does
 
-- Synthesises `mimo_rx_top` with Yosys.
-- Blackboxes `picorv32` integration via [`picorv32_stub.v`](./picorv32_stub.v) and [`picorv32_wrap_bb.v`](./picorv32_wrap_bb.v).
-- Leaves the two frontend SRAMs in [`mimo_rx_top.v`](./mimo_rx_top.v) as behavioural arrays, so the reported area is an over-estimate until they are replaced with GF180 SRAM macros.
+- Synthesises the top-level RTL with Yosys. New work should target `trouper_top`; `mimo_rx_top` remains as a compatibility wrapper.
+- The standalone implementation now lives in [`trouper_top.v`](./rtl/trouper_top.v); [`mimo_rx_top.v`](./rtl/mimo_rx_top.v) is a thin legacy wrapper.
+- The active `trouper_top` boundary is radio-only: no embedded PicoRV32, SPI slave, or AHB-Lite control fabric. Control enters through the external `CFG_*` byte interface.
+- Recent area cuts removed the dead `W_k` path from `training_acc` and removed the standalone `noise_est` block in favour of `training_acc` noise-mode windows plus SC-contamination gating.
 
 ## Prerequisites
 
 - Docker installed locally.
-- OSIC image available locally, defaulting to `hpretl/iic-osic-tools:2026.04`.
+- OSIC image available locally. For chipathon work, use `hpretl/iic-osic-tools:chipathon26`.
 
 ## Run
 
@@ -31,11 +32,11 @@ Or from inside `rtl-test`:
 
 The run writes:
 
-- `rtl-test/out/netlist_mimo_rx_top.v`
+- `rtl-test/out/netlist_<top>.v` (for example `netlist_trouper_top.v` or legacy `netlist_mimo_rx_top.v`)
 - `rtl-test/out/stat.txt`
 
 ## Optional override
 
 ```bash
-OSIC_IMAGE=hpretl/iic-osic-tools:latest bash rtl-test/run_synth_gf180_docker.sh
+OSIC_IMAGE=hpretl/iic-osic-tools:chipathon26 bash rtl-test/run_synth_gf180_docker.sh
 ```

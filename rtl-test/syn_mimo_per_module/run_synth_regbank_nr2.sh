@@ -47,7 +47,7 @@ module reg_bank_nr2_hwwgt (
     input  wire [15:0] corr_mag_0, corr_mag_1,
     input  wire [15:0] sc_stat,
     input  wire        training_armed,
-    input  wire [9:0]  n_acc,
+    input  wire [14:0]  n_acc,
     input  wire [5:0]  z_shift,
     input  wire [15:0] c_pool_i, c_pool_q, cfo_diag,
     input  wire [31:0] z0_i, z0_q, z1_i, z1_q,
