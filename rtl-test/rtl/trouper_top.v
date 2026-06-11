@@ -255,7 +255,8 @@ module trouper_top (
     // Z_kk diagonal autocorrelation → reg_bank noise estimation
     wire [31:0]        Zdiag [0:3];
     wire               training_done;
-    wire [14:0]         n_acc;
+    wire [14:0]        n_acc;
+    wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
 
     training_acc u_tacc (
@@ -278,8 +279,9 @@ module trouper_top (
         .Zpair_i5 (Zpair_i[5]), .Zpair_q5 (Zpair_q[5]),
         .Zdiag_0  (Zdiag[0]),   .Zdiag_1  (Zdiag[1]),
         .Zdiag_2  (Zdiag[2]),   .Zdiag_3  (Zdiag[3]),
-        .training_done (training_done),
-        .n_acc       (n_acc)
+        .training_done   (training_done),
+        .n_acc           (n_acc),
+        .training_armed  (training_armed)
     );
 
     // =========================================================================
@@ -617,7 +619,7 @@ module trouper_top (
         .corr_mag_0 (16'd0), .corr_mag_1 (16'd0),
         .corr_mag_2 (16'd0), .corr_mag_3 (16'd0),
         .sc_stat         (sc_stat),
-        .training_armed  (1'b0),
+        .training_armed  (training_armed),
         .n_acc           (n_acc),
         .z_shift         (6'd0),
         .c_pool_i        (16'd0),

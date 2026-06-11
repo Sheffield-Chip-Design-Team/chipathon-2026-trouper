@@ -58,8 +58,11 @@ module training_acc (
     // Z_kk autocorrelation (real, for noise estimation)
     output reg  [31:0] Zdiag_0, Zdiag_1, Zdiag_2, Zdiag_3,
     output reg         training_done,
-    output reg  [14:0] n_acc   // up to 32768 samples (SF=12: 2^(12+3))
+    output reg  [14:0] n_acc,  // up to 32768 samples (SF=12: 2^(12+3))
+    output wire        training_armed
 );
+
+    assign training_armed = armed;
 
     reg [31:0] sample_count;
     reg [31:0] acc_start, acc_end;
