@@ -46,6 +46,15 @@ rtl-test/syn_*/out_*/netlist.v
 
 characterization/
 
+# Root-level Vivado session logs
+vivado*.jou
+vivado*.log
+updatemem*.jou
+updatemem*.log
+
+# P&R config bundle zips
+*.zip
+
 # FPGA emulation generated artifacts
 fpga-emul/vivado_proj/
 fpga-emul/obj_dir_*/
