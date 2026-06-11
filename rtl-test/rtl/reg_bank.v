@@ -14,6 +14,7 @@ module reg_bank (
     input  wire        we,
     input  wire        re,
     output reg  [7:0]  rdata,
+    output wire [7:0]  peek_rdata,   // combinational read tap for SPI slave
     output wire        ready,       // reads insert one wait state
 
     // -----------------------------------------------------------------------
@@ -47,8 +48,6 @@ module reg_bank (
     input  wire        w_missed_rb,
     // IRQ status (sticky bits set by hardware events)
     input  wire [7:0]  irq_set,     // one-cycle pulse per IRQ source to set sticky bits
-    // Energy snapshots [15:0] per branch
-    input  wire [15:0] energy_0, energy_1, energy_2, energy_3,
     // SC correlation magnitude [15:0] per branch
     input  wire [15:0] corr_mag_0, corr_mag_1, corr_mag_2, corr_mag_3,
     // SC detection statistic [15:0]
@@ -76,17 +75,15 @@ module reg_bank (
     input  wire        sc_lock_dbg,
     input  wire [31:0] sc_first_hit_dbg,
     input  wire [31:0] sc_lock_snap_dbg,
-    // SRAM dump
-    input  wire        sram_dump_done,
-    input  wire [7:0]  sram_dump_data,
-    // NFE status
-    input  wire        sigma2_valid,
+    // Z_23 via sigma2_hw repurpose (zpair5 halves)
     // SIGMA2 hardware EMA estimates [15:0] per branch
     input  wire [15:0] sigma2_hw_0, sigma2_hw_1, sigma2_hw_2, sigma2_hw_3,
     // PSRAM status
     input  wire [7:0]  psram_status_rb,
     input  wire [15:0] psram_pkt_bytes,
     input  wire [7:0]  psram_rd_offset,
+    input  wire        psram_dbg_busy,
+    input  wire [7:0]  psram_dbg_data,
     // Firmware diagnostic registers (written by PicoRV32 via AHB)
     // (cond_num and snr_0 are R/W from firmware side — stored internally)
 
@@ -98,8 +95,6 @@ module reg_bank (
     output reg [2:0]   gpio_dir,
     output reg [2:0]   gpio_out,
     output reg [1:0]   cpu_sram_ctrl,
-    output reg [2:0]   tx_ctrl,
-    output reg [7:0]   low_bat_thr,
     // RX front-end
     output reg [1:0]   mimo_mode,       // MIMO_CTRL[0] (mode) + [1] reserved
     output reg [3:0]   antenna_en,      // MIMO_CTRL[7:4]
@@ -116,7 +111,6 @@ module reg_bank (
     // Gain control
     output reg [7:0]   rx_gain_shadow_0, rx_gain_shadow_1,
                        rx_gain_shadow_2, rx_gain_shadow_3,
-    output reg [7:0]   tx_gain_0, tx_gain_1,
     output reg         rx_gain_commit,  // W1P
     // Weight generation
     output reg         wgt_src,
@@ -127,31 +121,17 @@ module reg_bank (
     output reg [1:0]   remod_backoff_shift,
     // W shadow bank: 16 bytes 0x90–0x9F packed big-endian (byte[0] at [127:120])
     output wire [127:0] w_shadow,
-    // Calibration coefficients: 16 bytes 0xA0–0xAF packed big-endian
-    output wire [127:0] cal_coeff,
     // PSRAM control
-    output reg [2:0]   psram_ctrl,
-    // SPI master passthrough
-    output reg [1:0]   sx_target,
-    output reg [6:0]   sx_addr,
-    output reg [7:0]   sx_data_wr,
-    output reg         sx_rnw,
-    output reg         sx_start,       // W1P
-    // SRAM dump control
-    output reg         sram_dump_start, // W1P
-    output reg [9:0]   sram_dump_addr,  // {macro_sel, addr[8:0]}
-    // NFE control
-    output reg         sigma2_src,
-    output reg [2:0]   noise_alpha_shift,
-    output reg [15:0]  noise_thresh,
-    // SIGMA2 software overrides
-    output reg         sigma2_commit,  // W1P
-    // sigma2 SW overrides: 8 bytes 0xF1–0xF8 packed big-endian (byte[0] at [63:56])
-    output wire [63:0]  sigma2_sw,
+    output reg [3:0]   psram_ctrl,
+    output reg [22:0]  psram_dbg_addr,
+    output reg         psram_dbg_auto_inc,
+    output reg         psram_dbg_rd_trig, // W1P
     // Null steering
     output reg         noise_en,       // 0x6A[0]: enable noise-window accumulation mode
     output reg [1:0]   ref_sel,        // 0x6B[1:0]: training reference branch (0-3)
-    output reg         noise_trig      // 0x6C[0]: W1P — firmware-triggers noise measurement in training_acc
+    output reg         noise_trig,     // 0x6C[0]: W1P — firmware-triggers noise measurement in training_acc
+    // Aggregated sticky interrupt output (mirrors IRQ_STATUS[6:0] OR)
+    output wire        irq_out
 );
 
     reg read_valid;
@@ -163,8 +143,6 @@ module reg_bank (
     //  as flat packed buses, big-endian: byte[0] at MSB)
     // -----------------------------------------------------------------------
     reg [7:0] w_shadow_r  [0:15];
-    reg [7:0] cal_coeff_r [0:15];
-    reg [7:0] sigma2_sw_r [0:7];
 
     assign w_shadow[127:120] = w_shadow_r[0];  assign w_shadow[119:112] = w_shadow_r[1];
     assign w_shadow[111:104] = w_shadow_r[2];  assign w_shadow[103:96]  = w_shadow_r[3];
@@ -175,24 +153,13 @@ module reg_bank (
     assign w_shadow[31:24]   = w_shadow_r[12]; assign w_shadow[23:16]   = w_shadow_r[13];
     assign w_shadow[15:8]    = w_shadow_r[14]; assign w_shadow[7:0]     = w_shadow_r[15];
 
-    assign cal_coeff[127:120] = cal_coeff_r[0];  assign cal_coeff[119:112] = cal_coeff_r[1];
-    assign cal_coeff[111:104] = cal_coeff_r[2];  assign cal_coeff[103:96]  = cal_coeff_r[3];
-    assign cal_coeff[95:88]   = cal_coeff_r[4];  assign cal_coeff[87:80]   = cal_coeff_r[5];
-    assign cal_coeff[79:72]   = cal_coeff_r[6];  assign cal_coeff[71:64]   = cal_coeff_r[7];
-    assign cal_coeff[63:56]   = cal_coeff_r[8];  assign cal_coeff[55:48]   = cal_coeff_r[9];
-    assign cal_coeff[47:40]   = cal_coeff_r[10]; assign cal_coeff[39:32]   = cal_coeff_r[11];
-    assign cal_coeff[31:24]   = cal_coeff_r[12]; assign cal_coeff[23:16]   = cal_coeff_r[13];
-    assign cal_coeff[15:8]    = cal_coeff_r[14]; assign cal_coeff[7:0]     = cal_coeff_r[15];
-
-    assign sigma2_sw[63:56] = sigma2_sw_r[0]; assign sigma2_sw[55:48] = sigma2_sw_r[1];
-    assign sigma2_sw[47:40] = sigma2_sw_r[2]; assign sigma2_sw[39:32] = sigma2_sw_r[3];
-    assign sigma2_sw[31:24] = sigma2_sw_r[4]; assign sigma2_sw[23:16] = sigma2_sw_r[5];
-    assign sigma2_sw[15:8]  = sigma2_sw_r[6]; assign sigma2_sw[7:0]   = sigma2_sw_r[7];
+    assign peek_rdata = rdata_next;
 
     // -----------------------------------------------------------------------
     // IRQ status register (sticky, cleared by write to 0x33)
     // -----------------------------------------------------------------------
     reg [7:0] irq_status;
+    assign irq_out = |irq_status;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -225,8 +192,6 @@ module reg_bank (
             gpio_dir         <= 3'h0;
             gpio_out         <= 3'h0;
             cpu_sram_ctrl    <= 2'h0;
-            tx_ctrl          <= 3'h0;
-            low_bat_thr      <= 8'h02;
             mimo_mode        <= 2'h0;
             antenna_en       <= 4'hF;
             sf_cfg           <= 4'h7;
@@ -241,8 +206,6 @@ module reg_bank (
             rx_gain_shadow_1 <= 8'h3E;
             rx_gain_shadow_2 <= 8'h3E;
             rx_gain_shadow_3 <= 8'h3E;
-            tx_gain_0        <= 8'h08;
-            tx_gain_1        <= 8'h08;
             rx_gain_commit   <= 1'b0;
             wgt_src          <= 1'b0;
             wgt_auto_commit  <= 1'b1;
@@ -250,18 +213,10 @@ module reg_bank (
             w_commit_pulse   <= 1'b0;
             comb_post_gain_shift <= 3'd0;
             remod_backoff_shift <= 2'd1;
-            psram_ctrl       <= 3'h0;
-            sx_target        <= 2'h0;
-            sx_addr          <= 7'h0;
-            sx_data_wr       <= 8'h0;
-            sx_rnw           <= 1'b0;
-            sx_start         <= 1'b0;
-            sram_dump_start  <= 1'b0;
-            sram_dump_addr   <= 10'h0;
-            sigma2_src       <= 1'b0;
-            noise_alpha_shift <= 3'h2;
-            noise_thresh     <= 16'h0;
-            sigma2_commit    <= 1'b0;
+            psram_ctrl       <= 4'h0;
+            psram_dbg_addr   <= 23'h0;
+            psram_dbg_auto_inc <= 1'b0;
+            psram_dbg_rd_trig <= 1'b0;
             cond_num_reg     <= 16'h0;
             snr_0_reg        <= 16'h0;
             null_quality_reg <= 16'h0;
@@ -269,24 +224,13 @@ module reg_bank (
             ref_sel          <= 2'd0;
             noise_trig       <= 1'b0;
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
-            // CAL default: I=0x7FFF (unity), Q=0x0000 per branch (4 bytes each)
-            cal_coeff_r[0]  <= 8'h7F; cal_coeff_r[1]  <= 8'hFF; // CAL_0_I
-            cal_coeff_r[2]  <= 8'h00; cal_coeff_r[3]  <= 8'h00; // CAL_0_Q
-            cal_coeff_r[4]  <= 8'h7F; cal_coeff_r[5]  <= 8'hFF;
-            cal_coeff_r[6]  <= 8'h00; cal_coeff_r[7]  <= 8'h00;
-            cal_coeff_r[8]  <= 8'h7F; cal_coeff_r[9]  <= 8'hFF;
-            cal_coeff_r[10] <= 8'h00; cal_coeff_r[11] <= 8'h00;
-            cal_coeff_r[12] <= 8'h7F; cal_coeff_r[13] <= 8'hFF;
-            cal_coeff_r[14] <= 8'h00; cal_coeff_r[15] <= 8'h00;
-            for (i = 0; i < 8; i = i + 1) sigma2_sw_r[i] <= 8'h00;
         end else begin
             // Auto-clear write-1-pulse outputs
             bist_run        <= 1'b0;
             rx_gain_commit  <= 1'b0;
             w_commit_pulse  <= 1'b0;
-            sx_start        <= 1'b0;
-            sram_dump_start <= 1'b0;
-            sigma2_commit   <= 1'b0;
+            psram_ctrl[1]   <= 1'b0;
+            psram_dbg_rd_trig <= 1'b0;
             noise_trig      <= 1'b0;
 
             if (we) begin
@@ -296,8 +240,6 @@ module reg_bank (
                     8'h04: gpio_dir         <= wdata[2:0];
                     8'h05: gpio_out         <= wdata[2:0];
                     8'h07: cpu_sram_ctrl    <= wdata[1:0];
-                    8'h09: tx_ctrl          <= wdata[2:0];
-                    8'h0A: low_bat_thr      <= wdata;
                     8'h10: begin
                                mimo_mode   <= wdata[1:0];
                                antenna_en  <= wdata[7:4];
@@ -316,8 +258,6 @@ module reg_bank (
                     8'h21: rx_gain_shadow_1 <= wdata;
                     8'h22: rx_gain_shadow_2 <= wdata;
                     8'h23: rx_gain_shadow_3 <= wdata;
-                    8'h24: tx_gain_0        <= wdata;
-                    8'h25: tx_gain_1        <= wdata;
                     8'h2A: rx_gain_commit   <= wdata[0];
                     8'h35: begin
                                wgt_src        <= wdata[0];
@@ -344,47 +284,20 @@ module reg_bank (
                     8'h9D: w_shadow_r[13] <= wdata;
                     8'h9E: w_shadow_r[14] <= wdata;
                     8'h9F: w_shadow_r[15] <= wdata;
-                    // Calibration 0xA0–0xAF
-                    8'hA0: cal_coeff_r[0]  <= wdata;
-                    8'hA1: cal_coeff_r[1]  <= wdata;
-                    8'hA2: cal_coeff_r[2]  <= wdata;
-                    8'hA3: cal_coeff_r[3]  <= wdata;
-                    8'hA4: cal_coeff_r[4]  <= wdata;
-                    8'hA5: cal_coeff_r[5]  <= wdata;
-                    8'hA6: cal_coeff_r[6]  <= wdata;
-                    8'hA7: cal_coeff_r[7]  <= wdata;
-                    8'hA8: cal_coeff_r[8]  <= wdata;
-                    8'hA9: cal_coeff_r[9]  <= wdata;
-                    8'hAA: cal_coeff_r[10] <= wdata;
-                    8'hAB: cal_coeff_r[11] <= wdata;
-                    8'hAC: cal_coeff_r[12] <= wdata;
-                    8'hAD: cal_coeff_r[13] <= wdata;
-                    8'hAE: cal_coeff_r[14] <= wdata;
-                    8'hAF: cal_coeff_r[15] <= wdata;
-                    // PSRAM / SPI passthrough
-                    8'hB0: psram_ctrl <= wdata[2:0];
-                    8'hB5: sx_target  <= wdata[1:0];
-                    8'hB6: sx_addr    <= wdata[6:0];
-                    8'hB7: sx_data_wr <= wdata;
-                    8'hB8: begin sx_rnw <= wdata[0]; sx_start <= wdata[1]; end
-                    // SRAM dump
-                    8'hCA: sram_dump_start <= wdata[0];
-                    8'hCB: sram_dump_addr[9:8] <= wdata[1:0];
-                    8'hCC: sram_dump_addr[7:0]  <= wdata;
-                    // NFE
-                    8'hD0: begin sigma2_src <= wdata[0]; noise_alpha_shift <= wdata[3:1]; end
-                    8'hD2: noise_thresh[15:8] <= wdata;
-                    8'hD3: noise_thresh[7:0]  <= wdata;
-                    // SIGMA2 SW override
-                    8'hF0: sigma2_commit   <= wdata[0];
-                    8'hF1: sigma2_sw_r[0]    <= wdata;
-                    8'hF2: sigma2_sw_r[1]    <= wdata;
-                    8'hF3: sigma2_sw_r[2]    <= wdata;
-                    8'hF4: sigma2_sw_r[3]    <= wdata;
-                    8'hF5: sigma2_sw_r[4]    <= wdata;
-                    8'hF6: sigma2_sw_r[5]    <= wdata;
-                    8'hF7: sigma2_sw_r[6]    <= wdata;
-                    8'hF8: sigma2_sw_r[7]    <= wdata;
+                    // PSRAM / debug window
+                    8'hB0: begin
+                               psram_ctrl[0] <= wdata[0];
+                               psram_ctrl[1] <= wdata[1];
+                               psram_ctrl[2] <= wdata[2];
+                               psram_ctrl[3] <= wdata[3];
+                           end
+                    8'hB5: psram_dbg_addr[7:0]   <= wdata;
+                    8'hB6: psram_dbg_addr[15:8]  <= wdata;
+                    8'hB7: psram_dbg_addr[22:16] <= wdata[6:0];
+                    8'hB8: begin
+                               psram_dbg_rd_trig  <= wdata[0];
+                               psram_dbg_auto_inc <= wdata[1];
+                           end
                     // Firmware diagnostics
                     8'h52: cond_num_reg[15:8] <= wdata;
                     8'h53: cond_num_reg[7:0]  <= wdata;
@@ -431,8 +344,6 @@ module reg_bank (
             8'h06: rdata_next = {5'h0, gpio_in};
             8'h07: rdata_next = {6'h0, cpu_sram_ctrl};
             8'h08: rdata_next = {2'h0, cpu_sram_status};
-            8'h09: rdata_next = {5'h0, tx_ctrl};
-            8'h0A: rdata_next = low_bat_thr;
             // --- RX front-end ---
             8'h10: rdata_next = {antenna_en, 2'h0, mimo_mode};
             8'h11: rdata_next = {4'h0, sf_cfg};
@@ -453,14 +364,11 @@ module reg_bank (
             8'h21: rdata_next = rx_gain_shadow_1;
             8'h22: rdata_next = rx_gain_shadow_2;
             8'h23: rdata_next = rx_gain_shadow_3;
-            8'h24: rdata_next = tx_gain_0;
-            8'h25: rdata_next = tx_gain_1;
             8'h26: rdata_next = rx_gain_active_0;
             8'h27: rdata_next = rx_gain_active_1;
             8'h28: rdata_next = rx_gain_active_2;
             8'h29: rdata_next = rx_gain_active_3;
-            8'h2A: rdata_next = {4'h0, rx_gain_error, rx_gain_owner,
-                            rx_gain_pending, 1'b0};
+            8'h2A: rdata_next = {7'h0, rx_gain_pending};
             // --- Packet / weight ---
             8'h30: rdata_next = {6'h0, active_mode_rb};
             8'h31: rdata_next = {4'h0, active_antenna_en_rb};
@@ -472,15 +380,7 @@ module reg_bank (
                             1'b0, wgt_mode, wgt_auto_commit, wgt_src};
             8'h36: rdata_next = {5'h0, comb_post_gain_shift};
             8'h37: rdata_next = {6'h0, remod_backoff_shift};
-            // --- Energy / SC live telemetry ---
-            8'h40: rdata_next = energy_0[15:8];
-            8'h41: rdata_next = energy_0[7:0];
-            8'h42: rdata_next = energy_1[15:8];
-            8'h43: rdata_next = energy_1[7:0];
-            8'h44: rdata_next = energy_2[15:8];
-            8'h45: rdata_next = energy_2[7:0];
-            8'h46: rdata_next = energy_3[15:8];
-            8'h47: rdata_next = energy_3[7:0];
+            // --- SC live telemetry ---
             8'h48: rdata_next = corr_mag_0[15:8];
             8'h49: rdata_next = corr_mag_0[7:0];
             8'h4A: rdata_next = corr_mag_1[15:8];
@@ -566,33 +466,17 @@ module reg_bank (
             8'h9D: rdata_next = w_shadow_r[13];
             8'h9E: rdata_next = w_shadow_r[14];
             8'h9F: rdata_next = w_shadow_r[15];
-            // --- Calibration (RW) ---
-            8'hA0: rdata_next = cal_coeff_r[0];
-            8'hA1: rdata_next = cal_coeff_r[1];
-            8'hA2: rdata_next = cal_coeff_r[2];
-            8'hA3: rdata_next = cal_coeff_r[3];
-            8'hA4: rdata_next = cal_coeff_r[4];
-            8'hA5: rdata_next = cal_coeff_r[5];
-            8'hA6: rdata_next = cal_coeff_r[6];
-            8'hA7: rdata_next = cal_coeff_r[7];
-            8'hA8: rdata_next = cal_coeff_r[8];
-            8'hA9: rdata_next = cal_coeff_r[9];
-            8'hAA: rdata_next = cal_coeff_r[10];
-            8'hAB: rdata_next = cal_coeff_r[11];
-            8'hAC: rdata_next = cal_coeff_r[12];
-            8'hAD: rdata_next = cal_coeff_r[13];
-            8'hAE: rdata_next = cal_coeff_r[14];
-            8'hAF: rdata_next = cal_coeff_r[15];
             // --- PSRAM / SPI passthrough ---
-            8'hB0: rdata_next = {5'h0, psram_ctrl};
+            8'hB0: rdata_next = {4'h0, psram_ctrl};
             8'hB1: rdata_next = psram_status_rb;
             8'hB2: rdata_next = psram_pkt_bytes[15:8];
             8'hB3: rdata_next = psram_pkt_bytes[7:0];
             8'hB4: rdata_next = psram_rd_offset;
-            8'hB5: rdata_next = {6'h0, sx_target};
-            8'hB6: rdata_next = {1'h0, sx_addr};
-            8'hB7: rdata_next = sx_data_wr;
-            8'hB8: rdata_next = {5'h0, 1'b0 /*BUSY from SPI master*/, sx_start, sx_rnw};
+            8'hB5: rdata_next = psram_dbg_addr[7:0];
+            8'hB6: rdata_next = psram_dbg_addr[15:8];
+            8'hB7: rdata_next = {1'b0, psram_dbg_addr[22:16]};
+            8'hB8: rdata_next = {psram_dbg_busy, 5'h0, psram_dbg_auto_inc, 1'b0};
+            8'hB9: rdata_next = psram_dbg_busy ? 8'h00 : psram_dbg_data;
             // --- SC debug ---
             8'hC0: rdata_next = {4'h0, sc_lock_dbg, sc_hit_count_dbg, sc_hit_dbg};
             8'hC2: rdata_next = sc_first_hit_dbg[31:24];
@@ -603,15 +487,6 @@ module reg_bank (
             8'hC7: rdata_next = sc_lock_snap_dbg[23:16];
             8'hC8: rdata_next = sc_lock_snap_dbg[15:8];
             8'hC9: rdata_next = sc_lock_snap_dbg[7:0];
-            8'hCA: rdata_next = {6'h0, sram_dump_done, 1'b0};
-            8'hCB: rdata_next = {6'h0, sram_dump_addr[9:8]};
-            8'hCC: rdata_next = sram_dump_addr[7:0];
-            8'hCD: rdata_next = sram_dump_data;
-            // --- NFE ---
-            8'hD0: rdata_next = {4'h0, noise_alpha_shift, sigma2_src};
-            8'hD1: rdata_next = {7'h0, sigma2_valid};
-            8'hD2: rdata_next = noise_thresh[15:8];
-            8'hD3: rdata_next = noise_thresh[7:0];
             // Z_13 @ 0xD4: pair (1,3)
             8'hD4: rdata_next = zpair_i4[31:24];
             8'hD5: rdata_next = zpair_i4[23:16];
@@ -643,15 +518,6 @@ module reg_bank (
             8'hED: rdata_next = zdiag_2[23:16];
             8'hEE: rdata_next = zdiag_3[31:24];
             8'hEF: rdata_next = zdiag_3[23:16];
-            // --- SIGMA2 SW override ---
-            8'hF1: rdata_next = sigma2_sw_r[0];
-            8'hF2: rdata_next = sigma2_sw_r[1];
-            8'hF3: rdata_next = sigma2_sw_r[2];
-            8'hF4: rdata_next = sigma2_sw_r[3];
-            8'hF5: rdata_next = sigma2_sw_r[4];
-            8'hF6: rdata_next = sigma2_sw_r[5];
-            8'hF7: rdata_next = sigma2_sw_r[6];
-            8'hF8: rdata_next = sigma2_sw_r[7];
             default: rdata_next = 8'h00;
         endcase
     end

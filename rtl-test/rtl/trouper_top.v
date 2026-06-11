@@ -14,8 +14,9 @@
 //   → sd_remod → SX1302 Radio A (1-bit IQ)
 //
 // Control plane:
-//   external top-level control fabric → reg_bank byte interface
-//   irq/status handoff through macro-level ports
+//   Host RPi → SPI slave (HOST_CS/SCK/MOSI/MISO pads) → reg_bank byte interface
+//   Grouper  → GRP_ADDR/WDATA/WE/RE/RDATA/READY inter-chip bus → reg_bank (priority)
+//   IRQ: irq_out (sticky) → IRQ_OUT pad (TCK_IRQ when JTAG_EN=0) + IRQ_GROUPER inter-chip
 
 `ifndef TROUPER_TOP_V
 `define TROUPER_TOP_V
@@ -42,16 +43,23 @@ module trouper_top (
     input  wire [3:0]  PSRAM_SIO_IN,
     output wire [3:0]  PSRAM_SIO_OE,
 
-    // ---- External control/status byte interface ----
-    input  wire [7:0]  CFG_ADDR,
-    input  wire [7:0]  CFG_WDATA,
-    input  wire        CFG_WE,
-    input  wire        CFG_RE,
-    output wire [7:0]  CFG_RDATA,
-    output wire        CFG_READY,
+    // ---- Host SPI slave (RPi) ----
+    input  wire        HOST_CS,       // active-low chip select from RPi
+    input  wire        SPI_SCK,       // SPI clock (Mode 0, up to 10 MHz)
+    input  wire        SPI_MOSI,
+    output wire        SPI_MISO,
 
-    // ---- Macro-level interrupt output ----
-    output wire        IRQ_OUT
+    // ---- Grouper inter-project register bus (priority over SPI) ----
+    input  wire [7:0]  GRP_ADDR,
+    input  wire [7:0]  GRP_WDATA,
+    input  wire        GRP_WE,
+    input  wire        GRP_RE,
+    output wire [7:0]  GRP_RDATA,
+    output wire        GRP_READY,
+
+    // ---- Interrupt outputs ----
+    output wire        IRQ_OUT,       // → TCK_IRQ pad (when JTAG_EN=0); sticky, level-high
+    output wire        IRQ_GROUPER    // → Grouper inter-project IRQ line; same signal as IRQ_OUT
 );
 
     // =========================================================================
@@ -82,9 +90,8 @@ module trouper_top (
     wire [2:0]  rb_gpio_dir, rb_gpio_out;
     wire [1:0]  rb_cpu_sram_ctrl;
     wire [7:0]  cfg_rdata_w;
+    wire [7:0]  rb_peek_rdata_w;
     wire        cfg_ready_w;
-    wire [2:0]  rb_tx_ctrl;
-    wire [7:0]  rb_low_bat_thr;
     wire [1:0]  rb_mimo_mode;
     wire [3:0]  rb_antenna_en;
     wire [3:0]  rb_sf_cfg;
@@ -97,24 +104,29 @@ module trouper_top (
     wire [7:0]  rb_pkt_timeout_syms;
     wire [7:0]  rb_rx_gain_shadow_0, rb_rx_gain_shadow_1,
                 rb_rx_gain_shadow_2, rb_rx_gain_shadow_3;
-    wire [7:0]  rb_tx_gain_0, rb_tx_gain_1;
     wire        rb_rx_gain_commit;
+    reg  [7:0]  rx_gain_active_r [0:3];
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rx_gain_active_r[0] <= 8'h3E;
+            rx_gain_active_r[1] <= 8'h3E;
+            rx_gain_active_r[2] <= 8'h3E;
+            rx_gain_active_r[3] <= 8'h3E;
+        end else if (rb_rx_gain_commit) begin
+            rx_gain_active_r[0] <= rb_rx_gain_shadow_0;
+            rx_gain_active_r[1] <= rb_rx_gain_shadow_1;
+            rx_gain_active_r[2] <= rb_rx_gain_shadow_2;
+            rx_gain_active_r[3] <= rb_rx_gain_shadow_3;
+        end
+    end
     wire        rb_w_commit_pulse;
     wire [2:0]  rb_comb_post_gain_shift;
     wire [1:0]  rb_remod_backoff_shift;
     wire [127:0] rb_w_shadow;
-    wire [2:0]  rb_psram_ctrl;
-    wire [1:0]  rb_sx_target;
-    wire [6:0]  rb_sx_addr;
-    wire [7:0]  rb_sx_data_wr;
-    wire        rb_sx_rnw, rb_sx_start;
-    wire        rb_sram_dump_start;
-    wire [9:0]  rb_sram_dump_addr;
-    wire        rb_sigma2_src;
-    wire [2:0]  rb_noise_alpha_shift;
-    wire [15:0] rb_noise_thresh;
-    wire        rb_sigma2_commit;
-    wire [63:0] rb_sigma2_sw;
+    wire [3:0]  rb_psram_ctrl;
+    wire [22:0] rb_psram_dbg_addr;
+    wire        rb_psram_dbg_auto_inc;
+    wire        rb_psram_dbg_rd_trig;
     wire [1:0]  rb_ref_sel;
 
     // =========================================================================
@@ -234,12 +246,6 @@ module trouper_top (
     // semantics below match firmware expectations, especially around sc_hit_dbg
     // timing versus training_done commit.
     // =========================================================================
-    wire [15:0] energy_snap [0:3];
-    assign energy_snap[0] = 16'h0000;
-    assign energy_snap[1] = 16'h0000;
-    assign energy_snap[2] = 16'h0000;
-    assign energy_snap[3] = 16'h0000;
-
     // =========================================================================
     // Stage 4: Training Accumulator
     // =========================================================================
@@ -329,7 +335,6 @@ module trouper_top (
     // =========================================================================
     wire        rb_wgt_src, rb_wgt_auto_commit;
     wire [1:0]  rb_wgt_mode;
-    wire [127:0] rb_cal_coeff;
 
     wire W_commit_hw = rb_w_commit_pulse;
 
@@ -394,7 +399,9 @@ module trouper_top (
         .clk_32m      (clk),
         .rst_n        (rst_n),
         .psram_en     (rb_psram_ctrl[0]),
-        .init_start   (rb_psram_ctrl[2]),  // firmware strobes bit[2] after tPU
+        .init_start   (rb_psram_ctrl[0] & ~rb_psram_ctrl[3]),
+        .qspi_owner   (rb_psram_ctrl[3]),
+        .packet_active(packet_active),
         .sf           (rb_sf_cfg),
         .iq_i0 (dcr_i[0]), .iq_i1 (dcr_i[1]),
         .iq_i2 (dcr_i[2]), .iq_i3 (dcr_i[3]),
@@ -428,7 +435,13 @@ module trouper_top (
         .qe_init_done (psram_qe_init_done),
         .replay_missed(psram_replay_missed),
         .overflow     (psram_overflow),
-        .state_dbg    (psram_state_dbg)
+        .state_dbg    (psram_state_dbg),
+        .dbg_addr     (rb_psram_dbg_addr),
+        .dbg_auto_inc (rb_psram_dbg_auto_inc),
+        .dbg_rd_trig  (rb_psram_dbg_rd_trig),
+        .dbg_data_pop (spi_reg_re && (spi_reg_re_addr == 8'hB9)),
+        .dbg_busy     (psram_dbg_busy_w),
+        .dbg_data     (psram_dbg_data_w)
     );
 
     // Combiner input mux: live decimator IQ during normal/buffering,
@@ -507,24 +520,77 @@ module trouper_top (
         else        packet_active_r <= packet_active;
     wire packet_done_pulse = packet_active_r && !packet_active;
 
-    // irq_set for reg_bank: level signals; reg_bank latches rising edges internally
-    wire [7:0] rb_irq_set = {1'b0, rb_tx_ctrl[1], rb_tx_ctrl[0], 1'b0,
+    // irq_set for reg_bank: level signals; reg_bank latches rising edges into sticky bits
+    wire [7:0] rb_irq_set = {1'b0, 1'b0, 1'b0, 1'b0,
                              packet_done_pulse, W_missed_packet, training_done, sc_lock};
 
-    assign CFG_RDATA = cfg_rdata_w;
-    assign CFG_READY = cfg_ready_w;
-    assign IRQ_OUT   = |rb_irq_set;
+    // =========================================================================
+    // SPI slave instantiation
+    // =========================================================================
+    wire [7:0] spi_reg_wr_addr;
+    wire [7:0] spi_reg_wdata;
+    wire       spi_reg_we;
+    wire [7:0] spi_reg_rd_addr;
+    wire [7:0] spi_reg_re_addr;
+    wire       spi_reg_re;
+    wire [7:0] spi_reg_rdata;
+    wire       psram_dbg_busy_w;
+    wire [7:0] psram_dbg_data_w;
+
+    spi_slave u_spi (
+        .clk_32m     (clk),
+        .rst_n       (rst_n),
+        .HOST_CS     (HOST_CS),
+        .SPI_SCK     (SPI_SCK),
+        .SPI_MOSI    (SPI_MOSI),
+        .SPI_MISO    (SPI_MISO),
+        .reg_wr_addr (spi_reg_wr_addr),
+        .reg_wdata   (spi_reg_wdata),
+        .reg_we      (spi_reg_we),
+        .reg_rd_addr (spi_reg_rd_addr),
+        .reg_re_addr (spi_reg_re_addr),
+        .reg_re      (spi_reg_re),
+        .reg_rdata   (spi_reg_rdata),
+        // Firmware-load port: not connected (no on-chip CPU SRAM in Trouper)
+        .fw_ld_addr  (),
+        .fw_ld_wdata (),
+        .fw_ld_we    (),
+        .fw_ld_rdata (8'h00),
+        .fw_ld_req   (),
+        .fw_ld_ready (1'b1)
+    );
+
+    // =========================================================================
+    // Register bus arbiter: Grouper (GRP_*) has priority over SPI slave
+    // =========================================================================
+    wire grp_active = GRP_WE | GRP_RE;
+
+    wire [7:0] rb_addr  = grp_active ? GRP_ADDR :
+                          (spi_reg_we ? spi_reg_wr_addr : spi_reg_rd_addr);
+    wire [7:0] rb_wdata = grp_active ? GRP_WDATA : spi_reg_wdata;
+    wire       rb_we    = grp_active ? GRP_WE    : spi_reg_we;
+    wire       rb_re    = GRP_RE;
+
+    assign GRP_RDATA = cfg_rdata_w;
+    assign GRP_READY = cfg_ready_w;
+    assign spi_reg_rdata = rb_peek_rdata_w;
 
     // ---- Register Bank ----
+    wire rb_irq_out_sticky;
+    assign IRQ_OUT     = rb_irq_out_sticky;
+    assign IRQ_GROUPER = rb_irq_out_sticky;
+
     reg_bank u_rb (
         .clk        (clk),
         .rst_n      (rst_n),
-        .addr       (CFG_ADDR),
-        .wdata      (CFG_WDATA),
-        .we         (CFG_WE),
-        .re         (CFG_RE),
+        .addr       (rb_addr),
+        .wdata      (rb_wdata),
+        .we         (rb_we),
+        .re         (rb_re),
         .rdata      (cfg_rdata_w),
+        .peek_rdata (rb_peek_rdata_w),
         .ready      (cfg_ready_w),
+        .irq_out    (rb_irq_out_sticky),
         // Hardware status inputs
         .gpio_in    (3'b000),
         .cpu_sram_status (6'd0),
@@ -534,10 +600,10 @@ module trouper_top (
         .sram1_bist_pass (1'b1),
         .buf_freeze      (buf_freeze),
         .buf_wr_ptr      (7'd0),
-        .rx_gain_active_0 (8'h3E), .rx_gain_active_1 (8'h3E),
-        .rx_gain_active_2 (8'h3E), .rx_gain_active_3 (8'h3E),
-        .rx_gain_pending  (1'b0),
-        .rx_gain_owner    (1'b0),
+        .rx_gain_active_0 (rx_gain_active_r[0]), .rx_gain_active_1 (rx_gain_active_r[1]),
+        .rx_gain_active_2 (rx_gain_active_r[2]), .rx_gain_active_3 (rx_gain_active_r[3]),
+        .rx_gain_pending  (rb_rx_gain_commit),
+        .rx_gain_owner    (1'b1),
         .rx_gain_error    (1'b0),
         .active_mode_rb   (active_mode),
         .active_antenna_en_rb (active_antenna_en),
@@ -548,8 +614,6 @@ module trouper_top (
         .w_valid_rb       (W_valid),
         .w_missed_rb      (W_missed_packet),
         .irq_set          (rb_irq_set),
-        .energy_0 (energy_snap[0]), .energy_1 (energy_snap[1]),
-        .energy_2 (energy_snap[2]), .energy_3 (energy_snap[3]),
         .corr_mag_0 (16'd0), .corr_mag_1 (16'd0),
         .corr_mag_2 (16'd0), .corr_mag_3 (16'd0),
         .sc_stat         (sc_stat),
@@ -571,9 +635,6 @@ module trouper_top (
         .sc_lock_dbg         (sc_lock),
         .sc_first_hit_dbg    (sc_first_hit_dbg),
         .sc_lock_snap_dbg    (sc_lock_snap_dbg),
-        .sram_dump_done      (1'b0),
-        .sram_dump_data      (8'd0),
-        .sigma2_valid        (sigma2_valid),
         .sigma2_hw_0 (sigma2_hw[0]), .sigma2_hw_1 (sigma2_hw[1]),
         .sigma2_hw_2 (sigma2_hw[2]), .sigma2_hw_3 (sigma2_hw[3]),
         .psram_status_rb  ({psram_buf_active, psram_overflow,
@@ -581,14 +642,14 @@ module trouper_top (
                             psram_qe_init_done, psram_state_dbg}),
         .psram_pkt_bytes  (16'd0),
         .psram_rd_offset  (8'd0),
+        .psram_dbg_busy   (psram_dbg_busy_w),
+        .psram_dbg_data   (psram_dbg_data_w),
         // Hardware control outputs
         .cpu_reset       (rb_cpu_reset),
         .jtag_en         (rb_jtag_en),
         .gpio_dir        (rb_gpio_dir),
         .gpio_out        (rb_gpio_out),
         .cpu_sram_ctrl   (rb_cpu_sram_ctrl),
-        .tx_ctrl         (rb_tx_ctrl),
-        .low_bat_thr     (rb_low_bat_thr),
         .mimo_mode       (rb_mimo_mode),
         .antenna_en      (rb_antenna_en),
         .sf_cfg          (rb_sf_cfg),
@@ -603,8 +664,6 @@ module trouper_top (
         .rx_gain_shadow_1(rb_rx_gain_shadow_1),
         .rx_gain_shadow_2(rb_rx_gain_shadow_2),
         .rx_gain_shadow_3(rb_rx_gain_shadow_3),
-        .tx_gain_0       (rb_tx_gain_0),
-        .tx_gain_1       (rb_tx_gain_1),
         .rx_gain_commit  (rb_rx_gain_commit),
         .wgt_src         (rb_wgt_src),
         .wgt_auto_commit (rb_wgt_auto_commit),
@@ -613,20 +672,10 @@ module trouper_top (
         .comb_post_gain_shift(rb_comb_post_gain_shift),
         .remod_backoff_shift(rb_remod_backoff_shift),
         .w_shadow        (rb_w_shadow),
-        .cal_coeff       (rb_cal_coeff),
         .psram_ctrl      (rb_psram_ctrl),
-        .sx_target       (rb_sx_target),
-        .sx_addr         (rb_sx_addr),
-        .sx_data_wr      (rb_sx_data_wr),
-        .sx_rnw          (rb_sx_rnw),
-        .sx_start        (rb_sx_start),
-        .sram_dump_start (rb_sram_dump_start),
-        .sram_dump_addr  (rb_sram_dump_addr),
-        .sigma2_src      (rb_sigma2_src),
-        .noise_alpha_shift(rb_noise_alpha_shift),
-        .noise_thresh    (rb_noise_thresh),
-        .sigma2_commit   (rb_sigma2_commit),
-        .sigma2_sw       (rb_sigma2_sw),
+        .psram_dbg_addr  (rb_psram_dbg_addr),
+        .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
+        .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
         .noise_en        (),
         .ref_sel         (rb_ref_sel),
         .noise_trig      (rb_noise_trig)
