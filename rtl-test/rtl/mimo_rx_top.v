@@ -20,7 +20,6 @@ module mimo_rx_top (
     input  wire        SPI_SCK,
     input  wire        SPI_MOSI,
     output wire        SPI_MISO,
-    output wire [1:0]  CS_A,
     output wire        TCK_IRQ,
     input  wire        TMS_GPIO0,
     input  wire        TDI_GPIO1,
@@ -53,7 +52,6 @@ module mimo_rx_top (
     );
 
     assign SPI_MISO  = 1'b0;
-    assign CS_A      = 2'b00;
     assign TCK_IRQ   = irq_out;
     assign TDO_GPIO2 = 1'b0;
 

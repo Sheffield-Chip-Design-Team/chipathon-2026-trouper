@@ -2,9 +2,11 @@
 // Standalone Trouper top-level integration
 // GF180MCU 3.3V 32 MHz — SSCS PICO Chipathon 2026
 //
-// Pad count: 2+8+2+6+6+4 = 28 signal pads (clk/rst, IQ×8, remod×2,
-//            PSRAM SCK+CE_N+SIO×4, SPI HOST_CS/SCK/MOSI/MISO/CS_A×2,
-//            JTAG/IRQ TCK_IRQ/TMS/TDI/TDO)
+// Pad count: 22 signal + 3 power = 25 total (at Chipathon limit)
+//            clk/rst×2, IQ×8, remod×2, PSRAM SCK+CE_N×2,
+//            SPI HOST_CS/SCK/MOSI/MISO×4,
+//            JTAG/PSRAM-SIO/IRQ TCK_IRQ/TMS/TDI/TDO×4 (shared pads)
+//            VDD_IO/VDD_CORE/GND×3. CS_A removed (SPI master not present).
 //
 // Signal flow:
 //   SX1257[0..3] 1-bit IQ → sd_decimator×4 → dc_removal → psram_buf_ctrl

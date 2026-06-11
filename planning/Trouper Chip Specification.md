@@ -54,7 +54,7 @@ Trouper is a standalone hardened DSP macro. In the current top-level RTL it expo
 | TRPR-SYS-006 | C | I | Trouper SHALL expose a byte-oriented external configuration/status interface that can be driven by a higher-level integration wrapper or companion control macro. | T |
 | TRPR-SYS-007 | H | I | Host-side SPI access, if required in the final chip, SHALL be provided by the higher-level integration wrapper around the hardened Trouper macro rather than by logic embedded in the standalone Trouper hard macro. | T |
 | TRPR-SYS-008 | C | HW | Trouper SHALL be fabricated in GF180MCU (gf180mcuD PDK), 3.3 V core and IO, targeting the `gf180mcu_fd_sc_mcu7t5v0` standard-cell library. | I |
-| TRPR-SYS-009 | C | HW | The total pad count SHALL NOT exceed 23 (20 signal pads + 3 supply/ground pads) in the current no-SPI-master revision. | I |
+| TRPR-SYS-009 | C | HW | The total pad count SHALL NOT exceed 25 | I |
 | TRPR-SYS-010 | C | P | The end-to-end RTL implementation SHALL be validated bit-exactly against the Python reference model in `sim/models/receiver.py` across the full input dynamic range. | T |
 | TRPR-SYS-011 | H | P | Post-PNR setup WNS at TT/25 °C/3.3 V SHALL be positive. SS/125 °C/3.0 V timing shall be documented; MCP or clock-domain partitioning is the preferred path to closure. | A |
 | TRPR-SYS-012 | H | F | Trouper SHALL provide an active-low chip reset pad (RESETB). All state SHALL be cleared on assertion; DSP datapath SHALL resume within one IQ_CLK cycle after de-assertion. | T |
@@ -495,8 +495,9 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-PHY-001 | C | HW | The design SHALL be submitted in GF180MCU (gf180mcuD), targeting `gf180mcu_fd_sc_mcu7t5v0` standard cells. AS cells (`gf180mcu_as_sc_mcu7t3v3`) are not the current plan and carry tapeout risk; new work SHALL NOT target AS cells without explicit team decision. | I |
+| TRPR-PHY-015 | C | HW | Supply voltages SHALL be: VDD_CORE = 3.3 V (±5%), VDD_IO = 5.0 V (±5%). The `gf180mcu_fd_sc_mcu7t5v0` standard-cell library is rated for 5 V IO and 3.3 V core operation. Board designs SHALL NOT apply 3.3 V to VDD_IO or 5 V to VDD_CORE. | I |
 | TRPR-PHY-002 | C | HW | The total number of IO pads SHALL NOT exceed 25 (Chipathon per-team allocation). | I |
-| TRPR-PHY-003 | C | HW | Pad allocation (23 total): DATA_I×4 + DATA_Q×4 + IQ_CLK + REMOD_A_I + REMOD_A_Q + SPI_MOSI + SPI_MISO + SPI_SCK + HOST_CS + RESETB + TCK_IRQ + TMS_GPIO0 + TDI_GPIO1 + TDO_GPIO2 + VDD_IO + VDD_CORE + GND = 23. | I |
+| TRPR-PHY-003 | C | HW | Pad allocation (25 total): IQ_DATA_I×4 + IQ_DATA_Q×4 + IQ_CLK + REMOD_A_I + REMOD_A_Q + PSRAM_SCK + PSRAM_CE_N + SPI_MOSI + SPI_MISO + SPI_SCK + HOST_CS + RESETB + TCK_IRQ/SIO[0] + TMS_GPIO0/SIO[1] + TDI_GPIO1/SIO[2] + TDO_GPIO2/SIO[3] + VDD_IO + VDD_CORE + GND = 25. PSRAM SIO[3:0] mux with the four JTAG/GPIO pads (no additional pads required). | I |
 | TRPR-PHY-004 | C | HW | No external companion-chip control interface SHALL consume package pads beyond the documented host SPI, IRQ, and JTAG/GPIO pads. | I |
 | TRPR-PHY-005 | H | HW | Physical design SHALL use LibreLane inside the `hpretl/iic-osic-tools:chipathon26` Docker image. `:latest` and `:2026.04` tags are prohibited. | I |
 | TRPR-PHY-006 | H | HW | The frontend buffer SRAM SHALL use `gf180mcu_fd_ip_sram__sram512x8m8wm1` (two instances, 1 kB total). | I |
@@ -520,7 +521,7 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | TRPR-VER-003 | H | F | The FPGA emulation platform (Arty A7-100T) SHALL be used as the primary pre-silicon validation environment for the full DSP chain. | T |
 | TRPR-VER-004 | H | F | The internal AHB-Lite control path SHALL be testable in simulation with a BFM (Bus Functional Model) acting as the Grouper-side master. | T |
 | TRPR-VER-005 | H | F | Grouper-inactive mode (no firmware activity, no W_COMMIT) SHALL be verified: the combiner SHALL produce valid bypass output without FSM deadlock. | T |
-| TRPR-VER-006 | M | F | Over-the-air validation with two Heltec V3 nodes at f₀±Δf SHALL achieve PER ≤ 1% for both nodes simultaneously at −10 dB SNR after full system integration. | T |
+| TRPR-VER-006 | M | F | Over-the-air validation with a single Heltec V3 transmitter SHALL demonstrate MRC diversity gain: PER with all four branches active (Mode 0, MRC weights committed) SHALL be ≤ 1% at an attenuation level where single-antenna bypass (Mode 1) yields PER ≥ 10%. Test SHALL be performed at SF7 and SF12, BW=250 kHz. | T |
 
 ---
 
