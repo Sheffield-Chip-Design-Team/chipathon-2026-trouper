@@ -223,6 +223,7 @@ def test_sf_normalisation_improves_high_sf():
 # ---------------------------------------------------------------------------
 
 def test_dc_removal_removes_dc():
+    # Legacy float helper; bit-accurate current model is DCRemovalRTL.
     dcr = DCRemoval(nr=4, alpha_shift=8)
     N = 2000
     samples = np.ones((4, N), dtype=complex) * 10.0
@@ -233,6 +234,7 @@ def test_dc_removal_removes_dc():
 
 
 def test_dc_removal_passes_ac():
+    # Legacy float helper; bit-accurate current model is DCRemovalRTL.
     dcr = DCRemoval(nr=1, alpha_shift=8)
     N = 1000
     t = np.arange(N)

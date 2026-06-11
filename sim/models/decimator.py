@@ -58,19 +58,23 @@ class SigmaDeltaDecimator:
     dec = SigmaDeltaDecimator(ratio=decimation_ratio(500e3))  # R=64,  500 kS/s
     """
 
-    def __init__(self, ratio: int, output_bits: int = 8, stages: int = 3):
+    def __init__(self, ratio: int, output_bits: int = 8, stages: int = 3, cic_only: bool = True):
         """
         Parameters
         ----------
         ratio       : CIC decimation ratio (any positive integer)
         output_bits : Output word width in bits (default 8 for SRAM path)
         stages      : Number of CIC integrator/comb stages (default 3)
+        cic_only    : If True (default), skip the FIR compensation filter to match
+                      sd_decimator_cic_only.v (the tapeout RTL). Set False to
+                      enable the 9-tap droop-compensation FIR for comparison only.
         """
         if ratio < 1:
             raise ValueError("ratio must be >= 1")
         self.ratio = ratio
         self.output_bits = output_bits
         self.stages = stages
+        self.cic_only = cic_only
         self.fs_out = FS_ADC / ratio
 
     @property
@@ -133,13 +137,17 @@ class SigmaDeltaDecimator:
         # Normalise: remove CIC gain R^N
         normalized = decimated / (self.ratio ** self.stages)
 
-        # 9-tap FIR compensation filter (causal, matches RTL serialised MAC)
-        re_fir = lfilter(FIR_COEFFS, 1.0, normalized.real)
-        im_fir = lfilter(FIR_COEFFS, 1.0, normalized.imag)
+        if self.cic_only:
+            re_out = normalized.real
+            im_out = normalized.imag
+        else:
+            # 9-tap FIR droop-compensation filter (not present in tapeout RTL)
+            re_out = lfilter(FIR_COEFFS, 1.0, normalized.real)
+            im_out = lfilter(FIR_COEFFS, 1.0, normalized.imag)
 
         # Quantise to output_bits
         scale = 2 ** (self.output_bits - 1)
-        re = quantize(re_fir * scale, self.output_bits) / scale
-        im = quantize(im_fir * scale, self.output_bits) / scale
+        re = quantize(re_out * scale, self.output_bits) / scale
+        im = quantize(im_out * scale, self.output_bits) / scale
 
         return re + 1j * im

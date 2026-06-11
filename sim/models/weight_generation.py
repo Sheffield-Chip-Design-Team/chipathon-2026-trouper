@@ -320,6 +320,37 @@ def compute_exact_mrc_weights(
     return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
 
 
+def compute_sw_mrc_weights(
+    Z_j: np.ndarray,
+    antenna_en: int = 0xF,
+    cal_j: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    True SW MRC — no SHIFT, exact conj(Z)/Σ|Z|² on raw accumulator output.
+
+    Represents PicoRV32 firmware reading W_k directly from accumulator
+    registers and computing weights without the SHIFT state, which exists
+    only to fit the 64-bit Z into the 18-bit H register in hardware.
+
+    All three SW improvements over hw_mrc are applied here:
+      1. Skip shift_normalise — no truncation of the raw accumulators
+      2. Exact division conj(Z)/Σ|Z|² instead of coarse power-of-2 scale
+      3. Normalised to max|w|=1 before Q1.15 quantisation to use full range
+    """
+    NR = len(Z_j)
+    mask = np.array([(antenna_en >> j) & 1 for j in range(NR)], dtype=bool)
+    Z = apply_calibration(Z_j, cal_j).copy()
+    Z[~mask] = 0.0
+    S = float(np.sum(np.abs(Z) ** 2))
+    if S == 0.0:
+        return np.zeros(NR, dtype=complex)
+    w = np.conj(Z) / S
+    max_abs = float(np.max(np.abs(w)))
+    if max_abs > 0:
+        w = w / max_abs
+    return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
+
+
 # ---------------------------------------------------------------------------
 # SW-path noise-weighted MRC — firmware computes via W_SHADOW
 # ---------------------------------------------------------------------------

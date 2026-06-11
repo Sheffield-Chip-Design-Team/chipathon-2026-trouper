@@ -13,7 +13,7 @@ Architecture mirrors the ASIC pipeline in planning/blocks/:
 Weight modes
 ------------
   oracle   — ideal CSI: w_j = conj(h_j)/Σ|h_k|²  (upper-bound, default)
-  training — estimate weights from preamble via training_accumulate()
+  training — estimate weights from preamble via training_accumulate_allpairs()
   bypass   — branch 0 only, no combining
 
 Run:
@@ -37,7 +37,7 @@ import gnuradio.lora_sdr as lora_sdr
 
 _SIM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SIM_DIR)
-from models.training_accumulator import training_accumulate
+from models.training_accumulator import training_accumulate_allpairs
 from models.weight_generation import WeightGenerator
 from models.channel import rician_coefficients
 from models.dc_removal import DCRemoval
@@ -122,8 +122,8 @@ class MRCWeightBlock(gr.sync_block):
     Per-branch weight application via preamble training accumulation.
 
     Buffers NR IQ streams, detects the preamble via SC energy metric,
-    runs training_accumulate() at preamble end, then applies w_j* per branch.
-    Mirrors the ASIC Training Accumulator spec.
+    runs training_accumulate_allpairs() at preamble end, then applies the
+    already-conjugated weights directly per branch.
 
     Inputs  : NR complex64 streams
     Outputs : NR complex64 streams (weighted)
@@ -240,16 +240,15 @@ class MRCWeightBlock(gr.sync_block):
                 and self._train_done_at is not None
                 and len(self._buf[self.ref_sel]) > self._train_done_at):
             raw_j = np.array([np.array(b) for b in self._buf])
-            Z_j, n_acc, E_ref = training_accumulate(
+            W_k, n_acc = training_accumulate_allpairs(
                 raw_j,
                 sc_lock_sample=self._sc_lock_sample,
                 timing_ref=self._timing_ref,
                 M=self.M,
-                ref_sel=self.ref_sel,
                 preamble_len=self.preamble_len,
             )
             wgen = WeightGenerator(mode=self.mode)
-            w, _ = wgen.process(Z_j, sf=self.sf, E_ref=E_ref)
+            w, _ = wgen.process(W_k, sf=self.sf)
             # Divide by sat_scale to match oracle weight normalisation
             self._w = (w / self.sat_scale).astype(np.complex64)
             self._trained = True
@@ -257,7 +256,7 @@ class MRCWeightBlock(gr.sync_block):
                   f"|w_j|={np.abs(self._w * self.sat_scale).round(3)}")
 
         for j in range(self.NR):
-            output_items[j][:n] = input_items[j][:n] * np.conj(self._w[j])
+            output_items[j][:n] = input_items[j][:n] * self._w[j]
         return n
 
 
@@ -406,7 +405,7 @@ class MIMOMRCFlowgraph(gr.top_block):
             w_scaled = w_oracle / sat_scale
             self.weighted = []
             for j in range(NR):
-                mul = blocks.multiply_const_cc(complex(np.conj(w_scaled[j])))
+                mul = blocks.multiply_const_cc(complex(w_scaled[j]))
                 self.weighted.append(mul)
                 self.connect(sat[j], mul)
             self.combiner = MRCCombiner(NR)

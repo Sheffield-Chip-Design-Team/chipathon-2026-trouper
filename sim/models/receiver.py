@@ -6,9 +6,9 @@ NON-FFT PATH (current ASIC architecture)
 -----------------------------------------
 Uses the training accumulator — see training_accumulator.py.
   Stage 3 — SC preamble detection → sc_lock, timing_ref
-  Stage 4 — Training accumulator: Z_j = Σ raw_j[n]·conj(chirp_ref[n mod M])
+  Stage 4 — Training accumulator: all-pairs cross-correlation, W_k = Σ_{l≠k} Z_kl
   Stage 5 — Weight computation from Z_j (MRC/EGC/SC/Bypass)
-  Stage 6 — Complex combining: y[n] = Σ_j w_j · x_j[n]
+  Stage 6 — Complex combining: y[n] = Σ_j w_j · x_j[n], with 8-bit live weights in RTL
 
 FFT PATH (legacy reference — not used in current ASIC)
 -------------------------------------------------------
@@ -82,11 +82,11 @@ def nonfft_combine_rtl_int8(
     bypass_ant: int = 0,
 ) -> np.ndarray:
     """
-    RTL-style int8 combiner model including COMB_POST_GAIN.
+    Legacy RTL-style int8 combiner model including COMB_POST_GAIN.
 
-    The RTL path uses Q1.15 weights, int8 input samples, a fixed guard
-    divide-by-2, then `post_gain_shift` bits of left-shift gain before int8
-    saturation. MRC weights are already conjugated by weight generation.
+    This models the older Q1.15-weight combine path. The current RTL uses
+    8-bit live weights; prefer `nonfft_combine_rtl_int8w()` for the default
+    ASIC-matching combiner model.
 
     Parameters
     ----------

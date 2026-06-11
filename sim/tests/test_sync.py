@@ -44,17 +44,11 @@ def test_lock_and_timing_ref():
     det = SchmidlCoxDetector(M, threshold=0.9, hits_req=2)
     result = det.detect(make_rx(prefix_len=prefix_len, n_preamble=8))
 
-    ok = True
-    ok &= pass_fail("lock asserted", result.lock)
-    ok &= pass_fail(
-        f"timing_ref == prefix_len ({result.timing_ref})",
-        result.timing_ref == prefix_len,
+    assert result.lock, "lock not asserted"
+    assert result.timing_ref == prefix_len, f"timing_ref={result.timing_ref}, expected {prefix_len}"
+    assert result.lock_sample == result.first_hit_candidate + 3 * M - 1, (
+        f"lock_sample={result.lock_sample}"
     )
-    ok &= pass_fail(
-        f"lock_sample follows first_hit_candidate ({result.lock_sample})",
-        result.lock_sample == result.first_hit_candidate + 3 * M - 1,
-    )
-    return ok
 
 
 def test_cfo_immunity():
@@ -65,13 +59,9 @@ def test_cfo_immunity():
     for cfo in [-0.35, 0.20, 0.49]:
         det = SchmidlCoxDetector(M, threshold=0.9, hits_req=2)
         result = det.detect(make_rx(prefix_len=prefix_len, n_preamble=8, cfo=cfo))
-        ok = result.lock and result.timing_ref == prefix_len and result.peak_metric > 0.99
-        all_pass &= pass_fail(
-            f"CFO={cfo:+.2f} bins  lock={result.lock} timing_ref={result.timing_ref} peak={result.peak_metric:.4f}",
-            ok,
-        )
-
-    return all_pass
+        assert result.lock, f"CFO={cfo:+.2f}: no lock"
+        assert result.timing_ref == prefix_len, f"CFO={cfo:+.2f}: timing_ref={result.timing_ref}"
+        assert result.peak_metric > 0.99, f"CFO={cfo:+.2f}: peak_metric={result.peak_metric:.4f}"
 
 
 def test_hits_req_back_calculation():
@@ -82,17 +72,11 @@ def test_hits_req_back_calculation():
     for hits_req in [1, 2, 3]:
         det = SchmidlCoxDetector(M, threshold=0.9, hits_req=hits_req)
         result = det.detect(make_rx(prefix_len=prefix_len, n_preamble=8))
-        ok = (
-            result.lock
-            and result.timing_ref == prefix_len
-            and result.lock_sample == result.first_hit_candidate + (hits_req + 1) * M - 1
+        assert result.lock, f"hits_req={hits_req}: no lock"
+        assert result.timing_ref == prefix_len, f"hits_req={hits_req}: timing_ref={result.timing_ref}"
+        assert result.lock_sample == result.first_hit_candidate + (hits_req + 1) * M - 1, (
+            f"hits_req={hits_req}: lock_sample={result.lock_sample}"
         )
-        all_pass &= pass_fail(
-            f"hits_req={hits_req}  lock_sample={result.lock_sample}",
-            ok,
-        )
-
-    return all_pass
 
 
 def test_short_input():
@@ -101,13 +85,10 @@ def test_short_input():
     rx = np.zeros((NR, 2 * M - 1), dtype=complex)
     result = det.detect(rx)
 
-    ok = (
-        not result.lock
-        and result.timing_ref == 0
-        and result.lock_sample == 0
-        and result.metric.size == 0
-    )
-    return pass_fail("short input does not lock", ok)
+    assert not result.lock, "short input should not lock"
+    assert result.timing_ref == 0
+    assert result.lock_sample == 0
+    assert result.metric.size == 0
 
 
 def main():

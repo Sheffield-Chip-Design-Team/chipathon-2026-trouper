@@ -13,10 +13,11 @@ TX (lora_sdr)
                                    └── branch 3 ──┘
 ```
 
-**MRCWeightBlock** — detects SC preamble lock, runs `training_accumulate()` from
-`sim/models/training_accumulator.py`, then applies `w_j* · x_j[n]` per branch.
+**MRCWeightBlock** — detects SC preamble lock, runs
+`training_accumulate_allpairs()` from `sim/models/training_accumulator.py`,
+then applies the already-conjugated weights `w_j · x_j[n]` per branch.
 
-**MRCCombiner** — sums NR weighted streams: `y[n] = Σ_j w_j* · x_j[n]`.
+**MRCCombiner** — sums NR weighted streams: `y[n] = Σ_j w_j · x_j[n]`.
 
 Matches the ASIC pipeline in `planning/blocks/Training Accumulator.md` and
 `planning/blocks/Weight Generation.md`.
@@ -39,11 +40,8 @@ python3 mimo_mrc.py
 # Custom options
 python3 mimo_mrc.py --sf 6 --snr 5 --nr 4 --mode egc
 
-# Available combining modes: mrc | egc | sc | bypass
+# Available combining modes: mrc | egc | sc
 python3 mimo_mrc.py --mode sc --snr 0
-
-# With constellation plot (requires qtgui)
-python3 mimo_mrc.py --gui
 ```
 
 ## Arguments

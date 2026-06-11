@@ -10,6 +10,37 @@ import numpy as np
 from scipy.ndimage import shift
 
 
+def iq_imbalance_coefficients(gain_db: float = 0.0, phase_deg: float = 0.0) -> tuple[complex, complex]:
+    """Return widely-linear IQ-imbalance coefficients ``mu`` and ``nu``.
+
+    The impaired complex baseband is modelled as::
+
+        y = mu * x + nu * conj(x)
+
+    where ``gain_db`` is the I/Q amplitude mismatch in dB and ``phase_deg`` is
+    the quadrature phase error in degrees. Zero mismatch gives ``mu=1``,
+    ``nu=0``.
+    """
+    gamma = 10 ** (gain_db / 20.0)
+    phi = np.deg2rad(phase_deg)
+    mu = 0.5 * (gamma * np.exp(-1j * phi / 2.0) + np.exp(1j * phi / 2.0))
+    nu = 0.5 * (gamma * np.exp(-1j * phi / 2.0) - np.exp(1j * phi / 2.0))
+    return complex(mu), complex(nu)
+
+
+
+def apply_iq_imbalance(signal: np.ndarray, gain_db: float = 0.0, phase_deg: float = 0.0) -> np.ndarray:
+    """Apply receiver IQ imbalance to a complex signal.
+
+    This models branch-local analog I/Q mismatch as a widely-linear distortion.
+    Use non-zero ``gain_db`` and/or ``phase_deg`` to inject image leakage.
+    """
+    if gain_db == 0.0 and phase_deg == 0.0:
+        return signal
+    mu, nu = iq_imbalance_coefficients(gain_db=gain_db, phase_deg=phase_deg)
+    return mu * signal + nu * np.conj(signal)
+
+
 def rician_coefficients(
     NR: int,
     K: float = 0.0,
