@@ -96,11 +96,8 @@ module trouper_top (
     wire [3:0]  rb_antenna_en;
     wire [3:0]  rb_sf_cfg;
     wire [1:0]  rb_decim_ratio;
-    wire        rb_bist_run;
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
-    wire        rb_energy_gate_en;
-    wire [15:0] rb_energy_thr;
     wire [7:0]  rb_pkt_timeout_syms;
     wire [7:0]  rb_rx_gain_shadow_0, rb_rx_gain_shadow_1,
                 rb_rx_gain_shadow_2, rb_rx_gain_shadow_3;
@@ -208,7 +205,6 @@ module trouper_top (
     // Stage 3b: Schmidl-Cox preamble detector
     // =========================================================================
     wire [31:0] timing_ref;
-    wire signed [31:0] sc_c_i0, sc_c_q0;
     wire [15:0] sc_stat;
     wire        sc_hit_dbg;
     wire [1:0]  sc_hit_cnt_dbg;
@@ -228,7 +224,7 @@ module trouper_top (
         .sc_hits_req    (rb_sc_hits_req),
         .sc_lock        (sc_lock),
         .timing_ref     (timing_ref),
-        .c_i0 (sc_c_i0), .c_q0 (sc_c_q0),
+        .c_i0 (), .c_q0 (),
         .sc_stat              (sc_stat),
         .sc_hit_dbg           (sc_hit_dbg),
         .sc_hit_count_dbg     (sc_hit_cnt_dbg),
@@ -329,14 +325,6 @@ module trouper_top (
     end
 
     assign sigma2_valid = sigma2_valid_r;
-
-    // =========================================================================
-    // Stage 6: Weight Generation — firmware path only.
-    // PicoRV32/host control firmware computes MRC or eigenvector weights and writes them via
-    // reg_bank fw_W_shadow path. W_commit fires on the firmware strobe.
-    // =========================================================================
-    wire        rb_wgt_src, rb_wgt_auto_commit;
-    wire [1:0]  rb_wgt_mode;
 
     wire W_commit_hw = rb_w_commit_pulse;
 
@@ -656,20 +644,20 @@ module trouper_top (
         .antenna_en      (rb_antenna_en),
         .sf_cfg          (rb_sf_cfg),
         .decim_ratio     (rb_decim_ratio),
-        .bist_run        (rb_bist_run),
+        .bist_run        (),
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
-        .energy_gate_en  (rb_energy_gate_en),
-        .energy_thr      (rb_energy_thr),
+        .energy_gate_en  (),
+        .energy_thr      (),
         .pkt_timeout_syms(rb_pkt_timeout_syms),
         .rx_gain_shadow_0(rb_rx_gain_shadow_0),
         .rx_gain_shadow_1(rb_rx_gain_shadow_1),
         .rx_gain_shadow_2(rb_rx_gain_shadow_2),
         .rx_gain_shadow_3(rb_rx_gain_shadow_3),
         .rx_gain_commit  (rb_rx_gain_commit),
-        .wgt_src         (rb_wgt_src),
-        .wgt_auto_commit (rb_wgt_auto_commit),
-        .wgt_mode        (rb_wgt_mode),
+        .wgt_src         (),
+        .wgt_auto_commit (),
+        .wgt_mode        (),
         .w_commit_pulse  (rb_w_commit_pulse),
         .comb_post_gain_shift(rb_comb_post_gain_shift),
         .remod_backoff_shift(rb_remod_backoff_shift),
