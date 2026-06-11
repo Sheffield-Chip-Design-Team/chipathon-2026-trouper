@@ -274,7 +274,7 @@ module tb_dsp_chain_real;
     // -----------------------------------------------------------------------
     wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1, Z_i2, Z_q2, Z_i3, Z_q3;
     wire        training_done;
-    wire [9:0]  n_acc;
+    wire [14:0]  n_acc;
 
     training_acc u_tacc (
         .clk(clk),           .rst_n(rst_n),

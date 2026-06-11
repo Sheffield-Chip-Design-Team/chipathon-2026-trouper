@@ -13,13 +13,13 @@
 // Strobe period: 20 cycles (frontend_buf_ctrl needs 17 sub-cycles per sample).
 //
 // Tests (self-checking):
-//   1. sc_lock      fires <= 8000 cycles
-//   2. training_done fires <= 16000 cycles after sc_lock
+//   1. sc_lock      fires <= 17000 cycles
+//   2. training_done fires <= 50000 cycles after sc_lock
 //   3. W_commit     fires <= 200 cycles after training_done; W_hw_re0 != 0
-//   4. y_valid      fires <= 30 cycles after W_commit
+//   4. y_valid      fires <= 50 cycles after W_commit
 //   5. sd_remod latches the first MRC sample and shows output activity
-//   6. energy_valid fires <= 3500 cycles (before sc_lock)
-//   7. sigma2_valid fires <= 3500 cycles (noise floor estimated while idle)
+//   6. energy_valid fires <= 7000 cycles (before sc_lock)
+//   7. sigma2_valid fires <= 7000 cycles (noise floor estimated while idle)
 
 `timescale 1ns/1ps
 
@@ -67,10 +67,10 @@ module tb_dsp_chain;
     reg signed [7:0] raw_i0, raw_i1, raw_i2, raw_i3;
     reg signed [7:0] raw_q0, raw_q1, raw_q2, raw_q3;
 
-    // iq_valid strobe: 1 pulse every 20 cycles
-    // (frontend_buf_ctrl needs 17 sub-cycles; training_acc TDM needs 6;
-    //  mrc_combiner state machine needs 10 — 20 covers all)
-    reg [4:0] strobe_cnt;
+    // iq_valid strobe: 1 pulse every 40 cycles
+    // (frontend_buf_ctrl needs 17 sub-cycles; training_acc TDM needs 32 — must be < strobe;
+    //  mrc_combiner needs 10; 40-cycle strobe ensures every iq_valid triggers TDM)
+    reg [5:0] strobe_cnt;
     reg       iq_valid;
 
     // Forward declarations used by earlier stages in this bench.
@@ -226,7 +226,7 @@ module tb_dsp_chain;
     // -----------------------------------------------------------------------
     wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1, Z_i2, Z_q2, Z_i3, Z_q3;
     wire        training_done;
-    wire [9:0]  n_acc;
+    wire [14:0]  n_acc;
 
     training_acc u_tacc (
         .clk            (clk),
@@ -365,7 +365,7 @@ module tb_dsp_chain;
     initial begin
         rst_n        = 1'b0;
         iq_valid     = 1'b0;
-        strobe_cnt   = 5'd0;
+        strobe_cnt   = 6'd0;
         raw_i0 = 8'sd40; raw_q0 = 8'sd0;
         raw_i1 = 8'sd40; raw_q1 = 8'sd0;
         raw_i2 = 8'sd40; raw_q2 = 8'sd0;
@@ -400,17 +400,17 @@ module tb_dsp_chain;
         repeat(4) @(posedge clk);
     end
 
-    // iq_valid strobe: high for 1 cycle every 20 cycles
+    // iq_valid strobe: high for 1 cycle every 40 cycles
     always @(posedge clk) begin
         if (!rst_n) begin
-            strobe_cnt <= 5'd0;
+            strobe_cnt <= 6'd0;
             iq_valid   <= 1'b0;
         end else begin
-            if (strobe_cnt == 5'd19) begin
-                strobe_cnt <= 5'd0;
+            if (strobe_cnt == 6'd39) begin
+                strobe_cnt <= 6'd0;
                 iq_valid   <= 1'b1;
             end else begin
-                strobe_cnt <= strobe_cnt + 5'd1;
+                strobe_cnt <= strobe_cnt + 6'd1;
                 iq_valid   <= 1'b0;
             end
         end
@@ -420,50 +420,50 @@ module tb_dsp_chain;
     always @(posedge clk) if (rst_n) cycle_count <= cycle_count + 1;
 
     // -----------------------------------------------------------------------
-    // Test 6: energy_valid fires <= 3500 cycles (one SF7 window = 128 samples)
+    // Test 6: energy_valid fires <= 7000 cycles (one SF7 window = 128 samples)
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && energy_valid && t_energy_valid < 0) begin
             t_energy_valid = cycle_count;
-            if (cycle_count <= 3500) begin
-                $display("PASS test6: energy_valid at cycle %0d (<=3500), noise_metric_0=%0d",
+            if (cycle_count <= 7000) begin
+                $display("PASS test6: energy_valid at cycle %0d (<=7000), noise_metric_0=%0d",
                          cycle_count, noise_metric_0);
                 pass_count = pass_count + 1;
             end else begin
-                $display("FAIL test6: energy_valid at cycle %0d (>3500)", cycle_count);
+                $display("FAIL test6: energy_valid at cycle %0d (>7000)", cycle_count);
                 fail_count = fail_count + 1;
             end
         end
     end
 
     // -----------------------------------------------------------------------
-    // Test 7: sigma2_valid fires <= 3500 cycles (noise floor seeded)
+    // Test 7: sigma2_valid fires <= 7000 cycles (noise floor seeded)
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && sigma2_valid && t_sigma2_valid < 0) begin
             t_sigma2_valid = cycle_count;
-            if (cycle_count <= 3500 && !sc_lock) begin
-                $display("PASS test7: sigma2_valid at cycle %0d (<=3500, before sc_lock), sigma2_hw_0=%0d",
+            if (cycle_count <= 7000 && !sc_lock) begin
+                $display("PASS test7: sigma2_valid at cycle %0d (<=7000, before sc_lock), sigma2_hw_0=%0d",
                          cycle_count, sigma2_hw_0);
                 pass_count = pass_count + 1;
             end else begin
-                $display("FAIL test7: sigma2_valid at cycle %0d (sc_lock=%0b)", cycle_count, sc_lock);
+                $display("FAIL test7: sigma2_valid at cycle %0d (>7000, sc_lock=%0b)", cycle_count, sc_lock);
                 fail_count = fail_count + 1;
             end
         end
     end
 
     // -----------------------------------------------------------------------
-    // Test 1: sc_lock fires <= 8000 cycles
+    // Test 1: sc_lock fires <= 17000 cycles
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && sc_lock && t_sc_lock < 0) begin
             t_sc_lock = cycle_count;
-            if (cycle_count <= 8000) begin
-                $display("PASS test1: sc_lock at cycle %0d (<=8000)", cycle_count);
+            if (cycle_count <= 17000) begin
+                $display("PASS test1: sc_lock at cycle %0d (<=17000)", cycle_count);
                 pass_count = pass_count + 1;
             end else begin
-                $display("FAIL test1: sc_lock at cycle %0d (>8000)", cycle_count);
+                $display("FAIL test1: sc_lock at cycle %0d (>17000)", cycle_count);
                 fail_count = fail_count + 1;
             end
         end
@@ -478,7 +478,7 @@ module tb_dsp_chain;
     always @(posedge clk) begin
         if (rst_n && training_done && t_train_done < 0) begin
             t_train_done = cycle_count;
-            if (t_sc_lock >= 0 && (cycle_count - t_sc_lock) <= 22000) begin
+            if (t_sc_lock >= 0 && (cycle_count - t_sc_lock) <= 50000) begin
                 $display("PASS test2: training_done at cycle %0d (%0d cycles after sc_lock)",
                          cycle_count, cycle_count - t_sc_lock);
                 pass_count = pass_count + 1;
@@ -514,7 +514,7 @@ module tb_dsp_chain;
     always @(posedge clk) begin
         if (rst_n && y_valid && t_w_commit >= 0 && t_y_valid < 0) begin
             t_y_valid = cycle_count;
-            if ((cycle_count - t_w_commit) <= 30) begin
+            if ((cycle_count - t_w_commit) <= 50) begin
                 $display("PASS test4: y_valid at cycle %0d (%0d after W_commit), y_i=%0d y_q=%0d use_mrc_r=%0b",
                          cycle_count, cycle_count - t_w_commit, $signed(y_i), $signed(y_q), u_mrc.use_mrc_r);
                 pass_count = pass_count + 1;
@@ -628,11 +628,11 @@ module tb_dsp_chain;
     end
 
     // -----------------------------------------------------------------------
-    // Timeout watchdog: 35000 cycles
+    // Timeout watchdog: 80000 cycles
     // (sc_lock ~6400 + training ~15400 + wgen ~200 + remod ~64)
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
-        if (cycle_count == 35000) begin
+        if (cycle_count == 80000) begin
             $display("TIMEOUT at cycle %0d — chain did not complete.", cycle_count);
             if (t_energy_valid < 0) $display("  energy_valid never fired");
             if (t_sigma2_valid < 0) $display("  sigma2_valid never fired");
@@ -647,5 +647,14 @@ module tb_dsp_chain;
             $finish;
         end
     end
+
+    // Debug: trace n_acc progress and training_done
+    reg [14:0] n_acc_prev;
+    always @(posedge clk) begin
+        n_acc_prev <= n_acc;
+        if (rst_n && n_acc != n_acc_prev && (n_acc % 50 == 0))
+            $display("DBG n_acc=%0d cycle=%0d", n_acc, cycle_count);
+    end
+
 
 endmodule
