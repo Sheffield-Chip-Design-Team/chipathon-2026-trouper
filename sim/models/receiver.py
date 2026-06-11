@@ -6,7 +6,7 @@ NON-FFT PATH (current ASIC architecture)
 -----------------------------------------
 Uses the training accumulator — see training_accumulator.py.
   Stage 3 — SC preamble detection → sc_lock, timing_ref
-  Stage 4 — Training accumulator: all-pairs cross-correlation, W_k = Σ_{l≠k} Z_kl
+  Stage 4 — Training accumulator: all-pairs cross-correlation → Z_kl, Zdiag_k registers
   Stage 5 — Weight computation from Z_j (MRC/EGC/SC/Bypass)
   Stage 6 — Complex combining: y[n] = Σ_j w_j · x_j[n], with 8-bit live weights in RTL
 

@@ -328,9 +328,9 @@ def compute_sw_mrc_weights(
     """
     True SW MRC — no SHIFT, exact conj(Z)/Σ|Z|² on raw accumulator output.
 
-    Represents PicoRV32 firmware reading W_k directly from accumulator
-    registers and computing weights without the SHIFT state, which exists
-    only to fit the 64-bit Z into the 18-bit H register in hardware.
+    Legacy comparison path: Z_j is a per-branch vector (e.g. W_k row-sum or
+    Z_kl cross-correlation), used to evaluate the float-arithmetic SW MRC limit.
+    trouper_top firmware uses the eigenvector path instead (compute_eigvec_fw).
 
     All three SW improvements over hw_mrc are applied here:
       1. Skip shift_normalise — no truncation of the raw accumulators

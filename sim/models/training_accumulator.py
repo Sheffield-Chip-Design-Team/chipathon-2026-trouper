@@ -188,19 +188,21 @@ def training_accumulate_allpairs(
     preamble_len: int = 8,
     packet_end: int | None = None,
     tacc_guard: int = 0,
-    return_matrix: bool = False,
-) -> tuple[np.ndarray, int] | tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray, int]:
     """
     All-pairs cross-correlator matching training_acc.v.
 
     Computes the full NR×NR Hermitian correlation matrix:
         Z_kl = Σ_n raw_k[n] · conj(raw_l[n])
 
-    Diagonal: Z_kk = Σ|raw_k[n]|² (signal + noise power)
-    Off-diagonal: Z_kl ≈ h_k · conj(h_l) · n_acc  (channel cross-term)
+    Diagonal: Z_kk = Σ|raw_k[n]|² (signal + noise power) → maps to Zdiag_k registers.
+    Off-diagonal: Z_kl ≈ h_k · conj(h_l) · n_acc  (channel cross-term) → Zpair_kl registers.
 
-    Hardware W_k output: W_k = Σ_{l≠k} Z_kl  (row sum excluding diagonal)
-    Firmware eigenvector path: uses the full 4×4 Hermitian Z matrix.
+    trouper_top does not instantiate weight_gen.v — weights are computed by the
+    PicoRV32 firmware (eigenvector path via compute_eigvec_fw) reading Zpair_kl
+    and Zdiag_k from the register bank.  W_k = Σ_{l≠k} Z_kl (row sum excluding
+    diagonal) is no longer a hardware output; derive it locally for comparison
+    studies via ``np.sum(Z, axis=1) - np.diag(Z)``.
 
     In noise mode (no signal): Z_kl ≈ 0 for k≠l (uncorrelated noise),
     Z_kk ≈ σ²_k · n_acc (diagonal carries noise power directly).
@@ -215,17 +217,12 @@ def training_accumulate_allpairs(
     packet_end    : if given, enables PSRAM mode — acc_end extends to
                     packet_end - tacc_guard instead of the preamble boundary
     tacc_guard    : guard margin subtracted from packet_end in PSRAM mode
-    return_matrix : if True, return (W_k, Z_matrix, Zdiag, n_acc) instead of
-                    (W_k, n_acc). Z_matrix is the full NR×NR Hermitian matrix;
-                    Zdiag is (NR,) real diagonal (same as np.diag(Z_matrix)).
 
     Returns
     -------
-    W_k : (NR,) complex — per-branch accumulated sum (HW weight_gen input)
-    n_acc : int — number of samples accumulated
-    If return_matrix=True also returns:
     Z_matrix : (NR, NR) complex — full Hermitian cross-correlation matrix
     Zdiag    : (NR,) real — diagonal autocorrelations (Σ|raw_k|²)
+    n_acc    : int — number of samples accumulated
     """
     NR, N_samples = raw_j.shape
     acc_start = sc_lock_sample
@@ -234,23 +231,14 @@ def training_accumulate_allpairs(
     else:
         acc_end = min(timing_ref + preamble_len * M - 1, N_samples - 1)
     if acc_start > acc_end:
-        if return_matrix:
-            return np.zeros(NR, dtype=complex), np.zeros((NR, NR), dtype=complex), np.zeros(NR), 0
-        return np.zeros(NR, dtype=complex), 0
+        return np.zeros((NR, NR), dtype=complex), np.zeros(NR), 0
 
     win = raw_j[:, acc_start:acc_end + 1]   # (NR, n_acc)
     n_acc = acc_end - acc_start + 1
 
-    # Full NR×NR Hermitian matrix: diagonal = autocorrelation, off-diagonal = cross-correlations
-    Z = win @ np.conj(win.T)  # (NR, NR)
-
-    # W_k = row sum excluding diagonal (hardware accumulator output)
-    W_k = np.sum(Z, axis=1) - np.diag(Z)
-
-    if return_matrix:
-        Zdiag = np.real(np.diag(Z))   # always real (Σ|raw_k|²)
-        return W_k, Z, Zdiag, n_acc
-    return W_k, n_acc
+    Z = win @ np.conj(win.T)  # (NR, NR) Hermitian
+    Zdiag = np.real(np.diag(Z))   # always real (Σ|raw_k|²)
+    return Z, Zdiag, n_acc
 
 
 def compute_eigvec_weights(
@@ -264,9 +252,9 @@ def compute_eigvec_weights(
     Z ≈ h · h^H · n_acc + σ² · I
     The principal eigenvector of Z is the ML channel estimator.
 
-    This is the optimal firmware path — better than the W_k row-sum used by
-    hardware because it uses all 16 matrix entries coherently rather than 3
-    off-diagonal entries per row.
+    This is the float-reference firmware path (matches trouper_top architecture).
+    The bit-accurate RV32IM fixed-point version is compute_eigvec_fw() in
+    eigvec_fw.py; use that for chip-accurate simulation.
 
     Parameters
     ----------

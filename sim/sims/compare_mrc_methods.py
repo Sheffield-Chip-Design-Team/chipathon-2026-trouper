@@ -1,5 +1,5 @@
 """
-Compare MRC combining methods: W_k row-sum (HW path) vs eigenvector variants (FW path).
+Compare MRC combining methods: eigenvector variants (FW path) vs legacy W_k row-sum.
 
 Curves:
   oracle_clean      — ideal MRC, perfect clean h, float weights (channel-only ceiling)
@@ -11,7 +11,8 @@ Curves:
                       eigvec_pre within iteration-count tolerance.
   eigvec_psram      — eigenvec of Z via eigh, preamble+payload, Q1.15 (PSRAM replay path)
   eigvec_nw         — noise-whitened eigvec, oracle σ², PSRAM acc, Q1.15 (upper bound for NW)
-  wk_mrc            — W_k row-sum → WeightGenerator shift-normalise (current HW path, Q1.15)
+  eigvec_fw_pre     — compute_eigvec_fw fixed-point, preamble-only (chip-accurate firmware path)
+  wk_mrc            — W_k row-sum → WeightGenerator shift-normalise (legacy reference, not in trouper_top)
 
 The eigvec_pre vs eigvec_iter_float comparison isolates any accuracy loss from using
 power iteration instead of exact eigendecomposition.
@@ -39,6 +40,7 @@ from sim.models.training_accumulator import (
 )
 from sim.models.receiver import nonfft_combine, quantize_q1_15
 from sim.models.eigvec import compute_eigvec_weights_float
+from sim.models.eigvec_fw import compute_eigvec_fw
 
 
 def _iq_imbalance_profile(nr: int, gain_db_step: float = 0.0, phase_deg_step: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
@@ -137,33 +139,37 @@ def simulate_one(SF: int, NR: int, N0: float,
     rx_decode_noiseless = impair_noiseless(h[:, None] * desired_symbol[None, :])
 
     # Preamble-only accumulator (baseline — ignores payload)
-    W_k, Z_pre, _, n_pre = training_accumulate_allpairs(
+    Z_pre, _, n_pre = training_accumulate_allpairs(
         rx_preamble, sc_lock_sample=0, timing_ref=0, M=M,
-        preamble_len=preamble_len, return_matrix=True)
+        preamble_len=preamble_len)
 
     # PSRAM: preamble + full payload
     rx_full = np.concatenate([rx_preamble, rx_payload_all], axis=1)
-    _, Z_psram, _, n_psram = training_accumulate_allpairs(
+    Z_psram, _, n_psram = training_accumulate_allpairs(
         rx_full, sc_lock_sample=0, timing_ref=0, M=M,
-        packet_end=rx_full.shape[1] - 1, return_matrix=True)
+        packet_end=rx_full.shape[1] - 1)
 
     dec = lambda w: demodulate(nonfft_combine(rx_decode, w))
+
+    # Legacy W_k row-sum (removed from trouper_top hardware; kept for comparison)
+    W_k_pre = np.sum(Z_pre, axis=1) - np.diag(Z_pre)
 
     results = {
         "oracle_clean":      dec(_oracle_weights(h,        q15=False)),
         "oracle_q15":        dec(_oracle_weights(h,        q15=True)),
         "oracle_lin_imp":    dec(_oracle_linear_impaired(rx_decode_noiseless, desired_symbol)),
+        "eigvec_fw_pre":     dec(compute_eigvec_fw(Z_pre, n_pre)),
         "eigvec_pre":        dec(_eigvec_weights(Z_pre,    q15=True)),
         "eigvec_iter_float": dec(compute_eigvec_weights_float(Z_pre, iters=eigvec_iters)),
         "eigvec_psram":      dec(_eigvec_weights(Z_psram,  q15=True)),
         "eigvec_nw":         dec(_eigvec_nw(Z_psram, N0, n_psram, q15=True)),
-        "wk":                dec(tacc_compute_weights(W_k, mode="mrc", sf=SF)),
+        "wk":                dec(tacc_compute_weights(W_k_pre, mode="mrc", sf=SF)),
     }
     return b_tx, results
 
 
-KEYS = ("oracle_clean", "oracle_q15", "oracle_lin_imp", "eigvec_pre", "eigvec_iter_float",
-        "eigvec_psram", "eigvec_nw", "wk")
+KEYS = ("oracle_clean", "oracle_q15", "oracle_lin_imp", "eigvec_fw_pre", "eigvec_pre",
+        "eigvec_iter_float", "eigvec_psram", "eigvec_nw", "wk")
 
 
 def run_sweep(SF: int, NR: int, snr_list: list[float],
@@ -193,14 +199,15 @@ def run_sweep(SF: int, NR: int, snr_list: list[float],
             return 10 * np.log10(a / b)
 
         print(f"  SNR={snr_db:+6.1f} dB  "
-              f"oracle_clean={ser['oracle_clean']:.4f}  "
-              f"oracle_lin_imp={ser['oracle_lin_imp']:.4f}  "
+              f"oracle={ser['oracle_clean']:.4f}  "
+              f"oracle_imp={ser['oracle_lin_imp']:.4f}  "
+              f"eigvec_fw={ser['eigvec_fw_pre']:.4f}  "
               f"pre={ser['eigvec_pre']:.4f}  "
               f"iter_float={ser['eigvec_iter_float']:.4f}  "
               f"psram={ser['eigvec_psram']:.4f}  "
               f"nw={ser['eigvec_nw']:.4f}  "
               f"wk={ser['wk']:.4f}  "
-              f"iter_vs_eigh={gap(ser['eigvec_iter_float'], ser['eigvec_pre']):+.2f} dB  "
+              f"fw_vs_eigh={gap(ser['eigvec_fw_pre'], ser['eigvec_pre']):+.2f} dB  "
               f"({time.time()-t0:.1f}s)")
     return results
 
@@ -258,12 +265,14 @@ def main():
                 label=f"Eigvec NW, Q1.15 (oracle σ², PSRAM {args.preamble}+{args.payload} sym)")
     ax.semilogy(snr_arr, np.clip(res["eigvec_psram"],      1e-4, 1), "s-",  color="tab:blue",
                 label=f"Eigvec PSRAM, Q1.15 ({args.preamble}+{args.payload} sym acc)")
+    ax.semilogy(snr_arr, np.clip(res["eigvec_fw_pre"],     1e-4, 1), "P-",  color="tab:red",
+                label=f"Eigvec FW int32 (chip path, preamble {args.preamble} sym)")
     ax.semilogy(snr_arr, np.clip(res["eigvec_pre"],        1e-4, 1), "o--", color="tab:cyan",
                 label=f"Eigvec eigh, Q1.15 (preamble {args.preamble} sym)")
     ax.semilogy(snr_arr, np.clip(res["eigvec_iter_float"], 1e-4, 1), "D-",  color="tab:purple",
                 label=f"Eigvec power iter ({args.iters} iters, float, preamble {args.preamble} sym)")
     ax.semilogy(snr_arr, np.clip(res["wk"],                1e-4, 1), "s--", color="tab:orange",
-                label="W_k row-sum (HW path, Q1.15)")
+                label="W_k row-sum (legacy reference, not in trouper_top)")
     ax.set_xlabel("Per-antenna SNR (dB)")
     ax.set_ylabel("Symbol Error Rate")
     ax.set_title(f"MRC Method Comparison  SF={args.sf}  NR={args.nr}  preamble={args.preamble}×M\nIQ imbalance: Δg={args.iq_gain_db_step:+.2f} dB/branch, Δφ={args.iq_phase_deg_step:+.2f} deg/branch")

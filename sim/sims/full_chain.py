@@ -43,7 +43,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from sim.models.lora                 import modulate, demodulate
 from sim.models.channel              import rayleigh_coefficients
 from sim.models.decimator            import SigmaDeltaDecimator
-from sim.models.training_accumulator import training_accumulate_allpairs, compute_weights
+from sim.models.training_accumulator import training_accumulate_allpairs
+from sim.models.eigvec_fw            import compute_eigvec_fw
 from sim.models.receiver             import (nonfft_combine,
                                              nonfft_combine_rtl_int8w,
                                              choose_comb_post_gain)
@@ -159,12 +160,12 @@ def simulate_full_chain(SF: int, NR: int, snr_db_bb: float, ratio: int,
     rx_payload  = rx_bb_int[:, GD + preamble_len * M : GD + (preamble_len + 1) * M]
 
     # ---- Training accumulator over the full preamble ----------------------
-    Z, _ = training_accumulate_allpairs(rx_preamble, sc_lock_sample=0,
-                                        timing_ref=0, M=M,
-                                        preamble_len=preamble_len)
+    Z, _, n_acc_pre = training_accumulate_allpairs(rx_preamble, sc_lock_sample=0,
+                                                   timing_ref=0, M=M,
+                                                   preamble_len=preamble_len)
 
-    # ---- Weight generator (Q1.15 shadow weights) --------------------------
-    w = compute_weights(Z, mode="mrc", sf=SF)
+    # ---- Firmware eigenvector weights (chip-accurate RV32IM path) ---------
+    w = compute_eigvec_fw(Z, n_acc_pre)
 
     # ---- MRC combine + demodulate -----------------------------------------
     if use_rtl_int8:
@@ -197,10 +198,10 @@ def simulate_bb_reference(SF: int, NR: int, snr_db: float,
     b_tx        = np.random.randint(0, M)
     rx_payload  = h[:, None] * modulate(b_tx, M)[None, :] + noise(M)
 
-    Z, _ = training_accumulate_allpairs(rx_preamble, sc_lock_sample=0,
-                                        timing_ref=0, M=M,
-                                        preamble_len=preamble_len)
-    w  = compute_weights(Z, mode="mrc", sf=SF)
+    Z, _, n_acc_pre = training_accumulate_allpairs(rx_preamble, sc_lock_sample=0,
+                                                   timing_ref=0, M=M,
+                                                   preamble_len=preamble_len)
+    w  = compute_eigvec_fw(Z, n_acc_pre)
     y  = nonfft_combine(rx_payload, w)
     return b_tx, demodulate(y)
 

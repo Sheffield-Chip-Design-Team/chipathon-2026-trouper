@@ -38,7 +38,7 @@ import gnuradio.lora_sdr as lora_sdr
 _SIM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _SIM_DIR)
 from models.training_accumulator import training_accumulate_allpairs
-from models.weight_generation import WeightGenerator
+from models.eigvec_fw import compute_eigvec_fw
 from models.channel import rician_coefficients
 from models.dc_removal import DCRemoval
 
@@ -122,8 +122,9 @@ class MRCWeightBlock(gr.sync_block):
     Per-branch weight application via preamble training accumulation.
 
     Buffers NR IQ streams, detects the preamble via SC energy metric,
-    runs training_accumulate_allpairs() at preamble end, then applies the
-    already-conjugated weights directly per branch.
+    runs training_accumulate_allpairs() at preamble end, computes eigenvector
+    weights via compute_eigvec_fw() (chip-accurate firmware path), then applies
+    the already-conjugated weights directly per branch.
 
     Inputs  : NR complex64 streams
     Outputs : NR complex64 streams (weighted)
@@ -240,15 +241,14 @@ class MRCWeightBlock(gr.sync_block):
                 and self._train_done_at is not None
                 and len(self._buf[self.ref_sel]) > self._train_done_at):
             raw_j = np.array([np.array(b) for b in self._buf])
-            W_k, n_acc = training_accumulate_allpairs(
+            Z_mat, _, n_acc = training_accumulate_allpairs(
                 raw_j,
                 sc_lock_sample=self._sc_lock_sample,
                 timing_ref=self._timing_ref,
                 M=self.M,
                 preamble_len=self.preamble_len,
             )
-            wgen = WeightGenerator(mode=self.mode)
-            w, _ = wgen.process(W_k, sf=self.sf)
+            w = compute_eigvec_fw(Z_mat, n_acc)
             # Divide by sat_scale to match oracle weight normalisation
             self._w = (w / self.sat_scale).astype(np.complex64)
             self._trained = True
