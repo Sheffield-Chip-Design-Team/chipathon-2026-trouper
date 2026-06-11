@@ -17,8 +17,6 @@ module packet_ctrl_fsm (
     input  wire        psram_en,
     input  wire        psram_replay_active,
     input  wire [7:0]  pkt_timeout_syms,
-    input  wire [15:0] noise_thresh,
-    input  wire [15:0] energy0, energy1, energy2, energy3,
     output reg         safe_switch,
     output reg         W_valid_set,
     output reg         W_missed_packet,
@@ -31,8 +29,7 @@ module packet_ctrl_fsm (
     output reg  [2:0]  packet_phase,
     output reg         packet_active,
     output reg  [1:0]  active_mode,
-    output reg  [3:0]  active_antenna_en,
-    output reg         noise_sample_en
+    output reg  [3:0]  active_antenna_en
 );
 
     // FSM states
@@ -88,31 +85,7 @@ module packet_ctrl_fsm (
     reg W_commit_pending;
     reg W_valid;           // W has been applied for current packet
 
-    // Noise gate: all energies below noise_thresh
-    wire all_quiet = (energy0 < noise_thresh) && (energy1 < noise_thresh)
-                   && (energy2 < noise_thresh) && (energy3 < noise_thresh);
-
-    // Symbol-rate strobe for noise sampling (one per M samples)
-    reg [12:0] sym_sample_cnt;
-    reg        sym_strobe;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            sym_sample_cnt <= 13'd0;
-            sym_strobe     <= 1'b0;
-        end else if (iq_valid) begin
-            if (sym_sample_cnt == M_val[12:0] - 13'd1) begin
-                sym_sample_cnt <= 13'd0;
-                sym_strobe     <= 1'b1;
-            end else begin
-                sym_sample_cnt <= sym_sample_cnt + 13'd1;
-                sym_strobe     <= 1'b0;
-            end
-        end else begin
-            sym_strobe <= 1'b0;
-        end
-    end
-
+    // Noise-estimation quiet gating removed.
     reg sc_lock_prev;
 
     always @(posedge clk or negedge rst_n) begin
@@ -138,12 +111,10 @@ module packet_ctrl_fsm (
             packet_active    <= 1'b0;
             active_mode      <= 2'd0;
             active_antenna_en <= 4'd1;
-            noise_sample_en  <= 1'b0;
         end else begin
             sc_lock_prev    <= sc_lock;
             W_valid_set     <= 1'b0;
             W_missed_packet <= 1'b0;
-            noise_sample_en <= 1'b0;
             psram_abort     <= 1'b0;
             psram_replay_start <= 1'b0;
 
@@ -165,10 +136,6 @@ module packet_ctrl_fsm (
                         W_valid_set      <= 1'b1;
                         W_commit_pending <= 1'b0;
                     end
-
-                    // Noise sampling when channel is quiet
-                    if (sym_strobe && all_quiet && !sc_lock)
-                        noise_sample_en <= 1'b1;
 
                     // SC lock rising edge -> start packet acquisition
                     if (sc_lock && !sc_lock_prev) begin

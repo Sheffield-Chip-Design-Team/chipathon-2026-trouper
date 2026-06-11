@@ -55,7 +55,7 @@ module reg_bank (
     input  wire [15:0] sc_stat,
     // Training accumulator readback
     input  wire        training_armed,
-    input  wire [9:0]  n_acc,
+    input  wire [14:0] n_acc,
     input  wire [5:0]  z_shift,
     // C_pool diagnostic [15:0] I and Q
     input  wire [15:0] c_pool_i, c_pool_q,
@@ -501,7 +501,7 @@ module reg_bank (
             8'h6B: rdata_next = {6'h0, ref_sel};
             // --- Training / estimation ---
             8'h60: rdata_next = {6'h0, training_armed, training_done_rb};
-            8'h61: rdata_next = {6'h0, n_acc[9:8]};
+            8'h61: rdata_next = {1'b0, n_acc[14:8]};
             8'h62: rdata_next = n_acc[7:0];
             8'h63: rdata_next = {2'h0, z_shift};
             8'h64: rdata_next = c_pool_i[15:8];
@@ -622,7 +622,7 @@ module reg_bank (
             8'hDA: rdata_next = zpair_q4[15:8];
             8'hDB: rdata_next = zpair_q4[7:0];
             // --- Z_23 @ 0xE0: pair (2,3) — repurposes former sigma2_hw addresses ---
-            // sigma2_hw_0..3 ports are wired to Zpair5 halves in mimo_rx_top.
+            // sigma2_hw_0..3 ports are wired to Zpair5 halves in trouper_top.
             8'hE0: rdata_next = sigma2_hw_0[15:8];   // zpair_i5[31:16] MSB
             8'hE1: rdata_next = sigma2_hw_0[7:0];    // zpair_i5[31:16] LSB
             8'hE2: rdata_next = sigma2_hw_1[15:8];   // zpair_i5[15:0]  MSB

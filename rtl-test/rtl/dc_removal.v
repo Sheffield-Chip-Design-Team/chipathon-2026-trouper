@@ -7,7 +7,7 @@
 //   y[n]      = x[n] − dc_est[n−1]           (pre-update estimate, 1-cycle lag)
 //
 // Accumulator: 12-bit Q8.4 per channel (acc[11:4] = integer DC estimate).
-// Time constant: τ ≈ 16 samples = 128 µs at 125 kHz (CIC R=128).
+// Time constant: τ ≈ 16 samples = 64 µs at 250 kS/s (CIC R=128).
 //
 // The update adds the full diff (not diff>>4) to the accumulator.
 // This eliminates the ±15 LSB positive-DC deadband that floor(diff/16) caused:

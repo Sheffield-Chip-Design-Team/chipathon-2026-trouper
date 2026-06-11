@@ -9,7 +9,7 @@
 //
 // Weight width: 8-bit signed (was 16-bit). 48 dB dynamic range — sufficient
 // for 4-antenna MRC. Firmware writes weight to high byte of 16-bit shadow reg;
-// mimo_rx_top passes rb_w_shadow[hi_byte] to W_re/im ports.
+// trouper_top passes rb_w_shadow[hi_byte] to W_re/im ports.
 // Multiplier: 8×8→16-bit (was 16×8→24-bit). Accumulator: 18-bit (was 26-bit).
 // State count: 11. Budget at R=128: 128 cycles.
 // GF180MCU, 3.3V, 16 MHz DSP clock domain

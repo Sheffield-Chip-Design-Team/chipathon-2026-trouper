@@ -1,7 +1,7 @@
-// picorv32_wrap_bb.v — synthesis blackbox for picorv32_wrap.
-// Prevents the 4 kB CPU SRAM from being synthesised as flip-flops.
-// Replace with the real picorv32_wrap.v (or SRAM-macro version) for full synthesis.
-(* blackbox *)
+// Trouper DSP-only stub: replaces the on-chip PicoRV32 for lightweight synthesis and floorplan experiments.
+// All AHB-Lite master outputs are tied to IDLE — no CPU transactions.
+// fw_ld_ready=1 keeps the SPI slave firmware-load path unblocked.
+`default_nettype none
 module picorv32_wrap (
     input  wire        clk_32m,
     input  wire        rst_n,
@@ -22,4 +22,13 @@ module picorv32_wrap (
     output wire [7:0]  fw_ld_rdata,
     output wire        fw_ld_ready
 );
+    assign HADDR     = 32'b0;
+    assign HTRANS    = 2'b00;  // IDLE
+    assign HWRITE    = 1'b0;
+    assign HSIZE     = 3'b0;
+    assign HBURST    = 3'b0;
+    assign HWDATA    = 32'b0;
+    assign fw_ld_rdata = 8'b0;
+    assign fw_ld_ready = 1'b1;
 endmodule
+`default_nettype wire

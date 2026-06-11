@@ -1,7 +1,7 @@
 // sd_decimator_top.v
 // TDM decimator: 4× sd_cic_chan + 4× sd_fir_state + 1× sd_fir_mac.
 // Drop-in replacement for the 4× sd_decimator_combchain generate-for loop
-// in mimo_rx_top.v.
+// in trouper_top.v.
 //
 // Output alignment: the shared MAC processes channels 0→1→2→3 sequentially.
 // iq_valid fires once all 4 channels have completed (ch 3 done, ~28 clk_16m

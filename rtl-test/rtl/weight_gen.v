@@ -5,23 +5,25 @@
 // Area-reduction changes vs original:
 //   H registers:    32→18 bit. Z is right-shifted by SF before latching into H,
 //                   normalising across SF7-SF12. Max |Z|/2^SF ≤ 8×127² = 258k < 2^18.
-//                   K_wire removed — SF normalisation replaces the old n_acc-based shift.
+//                   K removed — always 0; SF normalisation replaces the n_acc shift.
 //   Hc registers:   32→18 bit (16×8 calibration product >>>7 → 17-bit max)
 //   Wraw registers: eliminated — ST_SCALE writes directly to W_hw with inline
 //                   saturation, reducing register count by 8×32 = 256 flops.
+//   W_shadow:       removed — outputs unused in trouper_top (saves 8×16 = 128 flops).
 //   peak_abs:       32→18 bit; mrc_norm_shift priority encoder 17→3 levels.
 //   best_metric:    33→19 bit (sum of two 18-bit abs values ≤ 262142 < 2^18).
 //   Calibration:    4 simultaneous 16×8 combinational multipliers → 1 serialised
 //                   16×8 multiplier, 5 cycles per antenna (calib_step 0..4).
 //                   ST_CALIBRATE latency: 4 ant × 5 cycles = 20 cycles (was 5).
 //                   Once-per-packet FSM — latency increase is irrelevant.
+//   Z shift wires:  32→18 bit output width (only [17:0] ever used; prunes 14 lanes).
 
 module weight_gen (
     input  wire        clk,
     input  wire        rst_n,
     input  wire        training_done,
     input  wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1, Z_i2, Z_q2, Z_i3, Z_q3,
-    /* verilator lint_off UNUSEDSIGNAL */ input  wire [9:0]  n_acc, /* verilator lint_on UNUSEDSIGNAL */
+    /* verilator lint_off UNUSEDSIGNAL */ input  wire [14:0]  n_acc, /* verilator lint_on UNUSEDSIGNAL */
     input  wire [3:0]  sf,
     input  wire        wgt_src,
     input  wire        wgt_auto_commit,
@@ -34,10 +36,6 @@ module weight_gen (
     input  wire        fw_W_commit,
     output reg  signed [15:0] W_hw_re0, W_hw_im0, W_hw_re1, W_hw_im1,
     output reg  signed [15:0] W_hw_re2, W_hw_im2, W_hw_re3, W_hw_im3,
-    output reg  signed [15:0] W_shadow_re0, W_shadow_im0,
-    output reg  signed [15:0] W_shadow_re1, W_shadow_im1,
-    output reg  signed [15:0] W_shadow_re2, W_shadow_im2,
-    output reg  signed [15:0] W_shadow_re3, W_shadow_im3,
     output reg         W_commit,
     output reg         wgen_hw_done,
     output reg         wgen_active,
@@ -56,7 +54,6 @@ module weight_gen (
     reg signed [17:0] H_i0, H_q0, H_i1, H_q1, H_i2, H_q2, H_i3, H_q3;
     reg signed [17:0] Hc_i0, Hc_q0, Hc_i1, Hc_q1, Hc_i2, Hc_q2, Hc_i3, Hc_q3;
 
-    reg [4:0] K;          // always 0 — SF normalisation applied at Z latch
     reg [18:0] best_metric;
     reg [17:0] peak_abs;
     reg [4:0]  mrc_shift;
@@ -94,15 +91,16 @@ module weight_gen (
     reg training_done_prev;
 
     // K is held at 0; Z is pre-normalised by SF when latched into H.
-    // Intermediate wires for SF-normalised Z (Verilog-2001: no part-select on expr).
-    wire signed [31:0] Z_i0_n = $signed(Z_i0) >>> sf;
-    wire signed [31:0] Z_q0_n = $signed(Z_q0) >>> sf;
-    wire signed [31:0] Z_i1_n = $signed(Z_i1) >>> sf;
-    wire signed [31:0] Z_q1_n = $signed(Z_q1) >>> sf;
-    wire signed [31:0] Z_i2_n = $signed(Z_i2) >>> sf;
-    wire signed [31:0] Z_q2_n = $signed(Z_q2) >>> sf;
-    wire signed [31:0] Z_i3_n = $signed(Z_i3) >>> sf;
-    wire signed [31:0] Z_q3_n = $signed(Z_q3) >>> sf;
+    // SF-normalised Z: variable part-select produces only the 18 bits latched into H.
+    // sf ∈ {7..12} for LoRa; sf+17 ≤ 29 ≤ 31 so no out-of-range access.
+    wire signed [17:0] Z_i0_n = $signed(Z_i0[sf +: 18]);
+    wire signed [17:0] Z_q0_n = $signed(Z_q0[sf +: 18]);
+    wire signed [17:0] Z_i1_n = $signed(Z_i1[sf +: 18]);
+    wire signed [17:0] Z_q1_n = $signed(Z_q1[sf +: 18]);
+    wire signed [17:0] Z_i2_n = $signed(Z_i2[sf +: 18]);
+    wire signed [17:0] Z_q2_n = $signed(Z_q2[sf +: 18]);
+    wire signed [17:0] Z_i3_n = $signed(Z_i3[sf +: 18]);
+    wire signed [17:0] Z_q3_n = $signed(Z_q3[sf +: 18]);
 
     // -----------------------------------------------------------------------
     // Serialised calibration multiplier
@@ -175,8 +173,8 @@ module weight_gen (
             end
         endcase
 
-        Hs_i_tmp = sel_H_i[15:0] >>> K;
-        Hs_q_tmp = sel_H_q[15:0] >>> K;
+        Hs_i_tmp = sel_H_i[15:0];
+        Hs_q_tmp = sel_H_q[15:0];
 
         abs_i_tmp = sel_Hc_i[17] ? ~sel_Hc_i : sel_Hc_i;
         abs_q_tmp = sel_Hc_q[17] ? ~sel_Hc_q : sel_Hc_q;
@@ -210,7 +208,6 @@ module weight_gen (
             Hc_i1 <= 18'sd0; Hc_q1 <= 18'sd0;
             Hc_i2 <= 18'sd0; Hc_q2 <= 18'sd0;
             Hc_i3 <= 18'sd0; Hc_q3 <= 18'sd0;
-            K         <= 5'd0;
             best_metric <= 19'd0;
             peak_abs    <= 18'd0;
             mrc_shift   <= 5'd0;
@@ -226,22 +223,13 @@ module weight_gen (
             W_hw_re1 <= 16'sd0; W_hw_im1 <= 16'sd0;
             W_hw_re2 <= 16'sd0; W_hw_im2 <= 16'sd0;
             W_hw_re3 <= 16'sd0; W_hw_im3 <= 16'sd0;
-            W_shadow_re0 <= 16'sd0; W_shadow_im0 <= 16'sd0;
-            W_shadow_re1 <= 16'sd0; W_shadow_im1 <= 16'sd0;
-            W_shadow_re2 <= 16'sd0; W_shadow_im2 <= 16'sd0;
-            W_shadow_re3 <= 16'sd0; W_shadow_im3 <= 16'sd0;
         end else begin
             W_commit         <= 1'b0;
             wgen_hw_done     <= 1'b0;
             training_done_prev <= training_done;
 
-            if (wgt_src == 1'b1 && fw_W_commit) begin
-                W_shadow_re0 <= fw_W_re0; W_shadow_im0 <= fw_W_im0;
-                W_shadow_re1 <= fw_W_re1; W_shadow_im1 <= fw_W_im1;
-                W_shadow_re2 <= fw_W_re2; W_shadow_im2 <= fw_W_im2;
-                W_shadow_re3 <= fw_W_re3; W_shadow_im3 <= fw_W_im3;
+            if (wgt_src == 1'b1 && fw_W_commit)
                 W_commit <= 1'b1;
-            end
 
             case (state)
                 ST_IDLE: begin
@@ -261,7 +249,6 @@ module weight_gen (
                 end
 
                 ST_SHIFT: begin
-                    K     <= 5'd0;   // SF normalisation already applied at H latch
                     state <= ST_CALIBRATE;
                     sub_st <= 4'd0;
                     calib_ant  <= 2'd0;
@@ -442,13 +429,8 @@ module weight_gen (
                 end
 
                 ST_WRITE: begin
-                    if (wgt_src == 1'b0 && wgt_auto_commit) begin
-                        W_shadow_re0 <= W_hw_re0; W_shadow_im0 <= W_hw_im0;
-                        W_shadow_re1 <= W_hw_re1; W_shadow_im1 <= W_hw_im1;
-                        W_shadow_re2 <= W_hw_re2; W_shadow_im2 <= W_hw_im2;
-                        W_shadow_re3 <= W_hw_re3; W_shadow_im3 <= W_hw_im3;
+                    if (wgt_src == 1'b0 && wgt_auto_commit)
                         W_commit <= 1'b1;
-                    end
                     wgen_hw_done <= 1'b1;
                     wgen_active  <= 1'b0;
                     state <= ST_IDLE;
