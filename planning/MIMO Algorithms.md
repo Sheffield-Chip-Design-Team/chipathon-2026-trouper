@@ -306,7 +306,39 @@ Useful sweep dimensions:
 - partial preamble overlap vs full overlap
 - correlated vs uncorrelated spatial channels
 
-These two risks should be treated as part of the `NT=1` algorithm assignment, not only as late validation items.
+### Branch-dependent I/Q imbalance
+
+Current calibration assumes each branch differs mainly by a complex scalar that can be folded into `cal_j` and then handled by MRC or eigenvector weighting. That assumption breaks when one branch has a different I/Q gain or quadrature-phase error from another.
+
+Failure mode:
+
+- the effective branch response becomes `a_j * s + b_j * conj(s)` rather than just `h_j * s`
+- cross-correlations `Z_kl` are biased by image leakage
+- the estimated weight vector is no longer matched to a pure linear channel
+- coherent combining gain falls even if the desired packet is static and interference-free
+
+Why this matters for Trouper:
+
+- DC removal does not fix it
+- scalar `cal_j` calibration does not fully fix it
+- the current combiner is linear only: `sum w_k x_k`
+- a true widely-linear compensator is not in the current tapeout scope
+
+Required study questions:
+
+- How much combining loss appears for realistic SX1257 branch-to-branch I/Q mismatch?
+- Does firmware eigenvector weighting remain materially better than row-sum MRC under that mismatch?
+- How close can the current linear combiner get to a genie-aided impaired linear oracle?
+- At what mismatch level would explicit I/Q imbalance correction become worth the area or firmware cost?
+
+Minimum comparison set:
+
+- no I/Q imbalance
+- common I/Q imbalance applied equally to all branches
+- branch-dependent gain mismatch only
+- branch-dependent gain plus quadrature-phase mismatch
+
+These three risks should be treated as part of the `NT=1` algorithm assignment, not only as late validation items.
 
 ---
 
@@ -625,7 +657,7 @@ This expectation should be tested, not assumed.
 - [DSP Flow](./DSP%20Flow.md)
 - [System Architecture](./System%20Architecture.md)
 - [Test Plan](./Test%20Plan.md)
-- [ALMMSE-MRC Combiner](./blocks/ALMMSE-MRC%20Combiner.md)
+- [MRC Combiner](./blocks/MRC%20Combiner.md)
 - [PicoRV32 Integration](./blocks/PicoRV32%20Integration.md)
 - `sim/models/receiver.py`
 - `sim/tests/run_ber.py`

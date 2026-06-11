@@ -31,7 +31,7 @@ SX1257 → ΣΔ decimator → dc_removal → dcr_i/q (always live) → reg_bank 
 
 ## Hardware addition — live IQ snapshot registers
 
-Add to `reg_bank` (or `mimo_rx_top`): four 8-bit registers latched from `dcr_i[0..1]`, `dcr_q[0..1]` on every `dcr_valid`, plus a firmware-readable valid flag.
+Add to `reg_bank` (or `trouper_top`): four 8-bit registers latched from `dcr_i[0..1]`, `dcr_q[0..1]` on every `dcr_valid`, plus a firmware-readable valid flag.
 
 | Register | Address | Content |
 |---|---|---|
@@ -41,7 +41,7 @@ Add to `reg_bank` (or `mimo_rx_top`): four 8-bit registers latched from `dcr_i[0
 | `LIVE_Q1` | 0xDB | `dcr_q[1]` — 8-bit signed, ant1 Q |
 | `LIVE_VALID` | 0xDC | `[0]` — pulses 1 for one 32 MHz cycle on each `dcr_valid`. Reading `LIVE_I0` auto-clears. |
 
-**RTL change:** ~10 lines in `mimo_rx_top.v` or `reg_bank.v`. Estimated area: **~2k µm²** (4 × 8-bit snapshot registers + valid flag + read logic). No changes to existing blocks.
+**RTL change:** ~10 lines in `trouper_top.v` or `reg_bank.v`. Estimated area: **~2k µm²** (4 × 8-bit snapshot registers + valid flag + read logic). No changes to existing blocks.
 
 ---
 

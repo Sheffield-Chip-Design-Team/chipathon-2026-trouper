@@ -10,6 +10,9 @@ Full pad list: [Pinout](Pinout.md)
 
 Deployment configurations: [Applications](Applications.md)
 
+
+RTL integration note: `trouper_top` is the canonical standalone Trouper hard-macro RTL. `mimo_rx_top` is retained only as a legacy compatibility wrapper for older synthesis and P&R flows. Grouper and any host SPI/AHB adaptation now sit outside this hardened Trouper boundary.
+
 ---
 
 ## Architecture: NR=4 single-chip
@@ -23,37 +26,50 @@ SX1257_3 ──►
 SX1257_4 ──►
 ```
 
-> **Previous 3-chip cascade approach** (ASIC_A/B as NR=2 feeders into ASIC_C as second-stage combiner) is no longer the plan. That architecture was explored as a workaround for area constraints but is not being pursued for tapeout. See [NR2 Multi-ASIC Cascade](NR2-multi-ASIC-cascade.md) for historical notes.
-
----
-
 ## System Architecture
+
+The system consists of two separate hardened projects on the same MPW: **Trouper** (radio datapath macro) and **Grouper** (system-control macro).
+
+- **Grouper Project:** Contains the hardened **PicoRV32 RV32IM** controller macro and any broader system-bus fabric.
+- **Trouper Project:** Contains only the radio datapath, local register bank, PSRAM replay path, and status/IRQ handoff signals required by the future top-level integration. Host SPI and Grouper bus adaptation are outside the standalone Trouper macro boundary.
 
 ```mermaid
 graph LR
-    NODE1(["LoRa Node\nNT=1"])
-    SX1302["SX1302\nLoRa Baseband\nRadio A"]
-    RPI["Host RPi\nSX1302 HAL\nChirpStack"]
+    NODE1(["LoRa Node
+NT=1"])
+    SX1302["SX1302
+LoRa Baseband
+Radio A"]
+    RPI["Host RPi
+SX1302 HAL
+ChirpStack"]
+    GROUPER["Grouper MPW Fabric
+hardened PicoRV32 macro
+AHB-Lite master"]
+    OTHER_PER["Other MPW
+peripherals"]
     JTAG([JTAG Probe])
 
     NODE1 -->|868 MHz| ANT1 & ANT2 & ANT3 & ANT4
-    ANT1 -->|RF| FEM1
-    ANT2 -->|RF| FEM2
-    ANT3 -->|RF| FEM3
-    ANT4 -->|RF| FEM4
-    FEM1 -->|RX| SX1
-    FEM2 -->|RX| SX2
-    FEM3 -->|RX| SX3
-    FEM4 -->|RX| SX4
-    SX1 & SX2 & SX3 & SX4 <-->|"I+Q ΣΔ 32 MS/s\nSPI cfg 10 MHz"| CHIP
+    ANT1 -->|RF| SX1
+    ANT2 -->|RF| SX2
+    ANT3 -->|RF| SX3
+    ANT4 -->|RF| SX4
+    SX1 & SX2 & SX3 & SX4 -->|"I+Q ΣΔ 32 MS/s"| CHIP
 
-    CHIP -->|"ΣΔ re-mod A\n1-bit I+Q 32 MS/s"| SX1302
-    SX1302 -->|"SPI0 CS0\n(SX1302 HAL)"| RPI
-    RPI -->|"SPI0 CS1\n(ASIC config)"| CHIP
-    CHIP -->|"IRQ (JTAG_EN=0)"| RPI
-    JTAG <-->|"TCK/TMS/TDI/TDO\n(JTAG_EN=1)"| CHIP
-    CLKBUF["PCB Clock Buffer\nTCXO 32 MHz · 1→5 fan-out"] -->|"32 MHz IQ_CLK"| CHIP
-    CLKBUF -->|"32 MHz XTB ×4\n(1.8 V pk-pk max)"| SX1 & SX2 & SX3 & SX4
+    CHIP -->|"ΣΔ re-mod A
+1-bit I+Q 32 MS/s"| SX1302
+    SX1302 -->|"SPI0 CS0
+(SX1302 HAL)"| RPI
+    RPI <-->|"Host SPI (dedicated)"| CHIP
+    GROUPER <-->|"On-chip AHB-Lite"| CHIP
+    GROUPER --- OTHER_PER
+    JTAG <-->|"TCK/TMS/TDI/TDO
+(JTAG_EN=1)"| CHIP
+    CLKBUF["PCB Clock Buffer
+TCXO 32 MHz · 1→5 fan-out"] -->|"32 MHz IQ_CLK"| CHIP
+    CLKBUF -->|"32 MHz XTB ×4
+(1.8 V pk-pk max)"| SX1 & SX2 & SX3 & SX4
 
     subgraph rf_fe["RF Front-End ×4"]
         direction LR
@@ -61,22 +77,28 @@ graph LR
         ANT2([Antenna 2])
         ANT3([Antenna 3])
         ANT4([Antenna 4])
-        FEM1["FEM_1\nExternal LNA\nRX-only"]
-        FEM2["FEM_2\nExternal LNA\nRX-only"]
-        FEM3["FEM_3\nExternal LNA\nRX-only"]
-        FEM4["FEM_4\nExternal LNA\nRX-only"]
-        SX1["SX1257_1\nRF Front-End\nMixer · VGA · PLL\nΣΔ ADC/DAC\nXTB ← TCXO buf"]
-        SX2["SX1257_2\nRF Front-End"]
-        SX3["SX1257_3\nRF Front-End"]
-        SX4["SX1257_4\nRF Front-End"]
+        SX1["SX1257_1
+RF Front-End
+Mixer · VGA · PLL
+ΣΔ ADC/DAC
+XTB ← TCXO buf"]
+        SX2["SX1257_2
+RF Front-End"]
+        SX3["SX1257_3
+RF Front-End"]
+        SX4["SX1257_4
+RF Front-End"]
     end
 
-    subgraph chip_internals["GF180MCU MIMO ASIC"]
+    subgraph chip_internals["GF180MCU MIMO ASIC (`trouper_top`)"]
         direction TB
 
-        subgraph rx_fe["RX Front-End ×4"]
+        subgraph rx_fe["Decimators ×4"]
             direction LR
-            D1["ΣΔ Decimator 1\nCIC-only (R=128)\n1-bit → int8 · 250 kS/s\n(125 & 250 kHz BW)"]
+            D1["ΣΔ Decimator 1
+CIC-only (R=128)
+1-bit → int8 · 250 kS/s
+(125 & 250 kHz BW)"]
             D2["ΣΔ Decimator 2"]
             D3["ΣΔ Decimator 3"]
             D4["ΣΔ Decimator 4"]
@@ -84,69 +106,71 @@ graph LR
 
         subgraph detection["Preamble Detection & Channel Estimation"]
             direction TB
-            DCR["DC Removal ×4\nIIR running-mean\nDC_ALPHA_SHIFT=8"]
-            SC["Schmidl-Cox / Correlator\nsliding magnitude autocorr\nsc_lock · timing_ref"]
-            EM["Energy Measurement\nper-antenna energy snapshot\nAGC / diagnostics"]
-            TACC["Training Accumulator\nall-pairs Z_kl + Z_kk diagonal\nW_k→HW · Zpair→FW eigenvec\nnoise_mode · training_done"]
-            PCFSM["Packet Control FSM\npacket phase · safe_switch\nbuf_freeze · W gating"]
-            FBUF["Frontend Buffer Controller\n1 kB rolling SRAM primary\noptional CPU-SRAM borrow\n8-bit saturated · SF7 policy"]
+            DCR["DC Removal ×4
+IIR running-mean
+DC_ALPHA_SHIFT=8"]
+            SC["Schmidl-Cox / Correlator
+sliding magnitude autocorr
+sc_lock · timing_ref"]
+            TACC["Training Accumulator
+all-pairs Z_kl + Z_kk diagonal
+Z_kk → FW noise statistics
+Z_kl → FW via REGBANK
+noise_mode · training_done"]
+            PCFSM["Packet Control FSM
+packet phase · safe_switch
+buf_freeze · W gating"]
+            FBUF["Frontend Buffer Controller
+1 kB rolling SRAM
+8-bit saturated"]
         end
 
-        subgraph combining["Weight Generation & MRC Combining"]
+        subgraph combining["MRC Combining"]
             direction LR
-            WGEN["Weight Generation\nSHIFT→CAL→COMPUTE→SCALE\nHW: EGC/MRC/SC · SW: ALMMSE"]
-            COMB["MRC Combiner\nŷ[n] = w^H·x[n] per sample\ntime domain · int32→int8 (÷2)"]
-            REMOD_A["ΣΔ Re-mod\n3rd order · int8 → 1-bit"]
+            COMB["MRC Combiner
+ŷ[n] = w^H·x[n] per sample
+time domain · int32→int8 (÷2)"]
+            REMOD_A["ΣΔ Re-mod
+3rd order · int8 → 1-bit"]
             COMB --> REMOD_A
         end
 
-        subgraph ctrl["Control Plane"]
+        subgraph ctrl["Control Plane in `trouper_top`"]
             direction TB
-            PICO["PicoRV32\nRV32IM\nALMMSE / EMA weights (SW)\nTDD switching · AGC loop"]
-            REGBANK["Register Bank\ngenerated by custom Python tool\nAHB-Lite slave · 8-bit addr/data"]
-            IRQC["IRQ Controller\ncorr_lock · training_done · tx events"]
-            SPIS["SPI Slave\nRPi SPI0 CS1\nconfig + FW load"]
-            SPIM["SPI Master\n→ SX1257 config\n(shared MOSI/MISO/SCK)"]
-            JTAGTAP["JTAG TAP\nPicoRV32 debug"]
-            WB["AHB-Lite Bus"]
-            PICO <--> WB
-            WB <--> REGBANK & IRQC & SPIS & SPIM & JTAGTAP
+            REGBANK["Register Bank
+byte-oriented external control/status interface
+FW-visible training and status regs"]
+            IRQO["IRQ / status handoff
+IRQ_OUT plus register-visible status"]
         end
 
         D1 & D2 & D3 & D4 --> DCR
         DCR --> SC
-        DCR --> EM
-        DCR -->|"full-precision samples"| TACC
-        DCR -->|"full-precision"| COMB
+        DCR --> TACC
+        DCR --> COMB
         DCR -->|"8-bit saturated"| FBUF
         SC -->|"sc_lock · timing_ref"| PCFSM
         SC -->|"sc_lock · timing_ref"| TACC
         FBUF -->|"current · delayed samples"| SC
         PCFSM -->|"buf_freeze"| FBUF
-        TACC -->|"W_k · training_done"| PCFSM
+        TACC -->|"training_done"| PCFSM
         TACC -->|"training_done"| IRQC
-        TACC -->|"W_k · training_done"| WGEN
-        WGEN -->|"wgen_hw_done"| IRQC
-        WGEN -->|"W_COMMIT"| PCFSM
-        PICO <-->|"W_HW readback\nSW W_SHADOW write"| WGEN
-        EM -->|"energy[0..3] snapshot"| PICO
-        SC -->|"corr_lock"| IRQC
-        PCFSM -->|"tx / mode status"| IRQC
-        IRQC -->|"IRQ"| PICO
-        PCFSM -->|"safe_switch · W_valid\nactive mode/antenna"| COMB
+        REGBANK -->|"W_SHADOW write
+W_COMMIT"| PCFSM
+        SC -->|"corr_lock"| IRQO
+        PCFSM -->|"mode status · packet_done"| IRQO
+        PCFSM -->|"safe_switch · W_valid
+active mode/antenna"| COMB
     end
 
     CHIP --> chip_internals
 
-    PSRAM["APS6404L PSRAM\n8 MB ext QSPI · 32 MHz\ndecimated IQ replay buffer\nsoftware energy meas"]
+    PSRAM["APS6404L PSRAM
+8 MB ext QSPI · 32 MHz
+decimated IQ replay buffer"]
     FBUF -->|"QSPI burst"| PSRAM
-    PSRAM -->|"replay / energy readback"| FBUF
+    PSRAM -->|"replay"| FBUF
 ```
-
-Notes:
-
-- `FEM` = front-end module — external LNA on each antenna branch. RX-only; no PA or T/R switch required.
-- `Energy Measurement` is shown explicitly because it shares the preamble-detection path but also provides the per-antenna snapshot used by AGC and diagnostics.
 
 ---
 
@@ -156,12 +180,13 @@ Notes:
 | --- | --- | --- | --- | --- |
 | RX I/Q ×4 | SX1257_1–4 ΣΔ ADC | ASIC decimators | 1-bit I+Q sigma-delta | 32 MS/s per antenna |
 | RX CLK | PCB Clock Buffer | ASIC (shared) | 32 MHz clock | — |
-| SPI config | ASIC SPI master | SX1257_1–4 | RegMode, freq, gain | 10 MHz |
+| AFE control / config | External board or companion-system logic | SX1257_1–4 | Reset, mode, frequency, gain programming outside Trouper RTL | board-defined |
 | ΣΔ re-mod A | ASIC | SX1302 Radio A | 1-bit I+Q sigma-delta | 32 MS/s |
-| PSRAM QSPI | ASIC psram_buf_ctrl | APS6404L (ext.) | 8-bit IQ replay + energy buf | 32 MHz QPI |
-| Host SPI | RPi SPI0 CS1 | ASIC SPI slave | Config registers + FW load | 10 MHz |
+| PSRAM QSPI | Trouper `psram_buf_ctrl` or a future firmware-managed external-memory mode | APS6404L (ext.) | replay buffer or firmware-managed off-chip RAM | 32 MHz QPI |
+| Host SPI | RPi SPI0 CS1 | Trouper SPI slave | Dedicated host register access and debug | 10 MHz |
 | SX1302 SPI | RPi SPI0 CS0 | SX1302 | SX1302 HAL (packets, config) | 10 MHz |
-| IRQ | ASIC | RPi GPIO | Packet ready, error | GPIO |
+| AHB-Lite | Grouper (Bus Master) | Trouper (Slave) + Other Peripherals | MPW System Bus | 32 MHz |
+| IRQ | Trouper (ASIC) | Grouper (PicoRV32) | Packet ready, error | Interrupt |
 | JTAG | JTAG probe | ASIC JTAG TAP | TCK + TMS + TDI + TDO | — |
 
 ### SX1257 → ASIC (RX, per antenna)
@@ -180,15 +205,15 @@ Notes:
 
 > **SX1302 clock:** SX1302 CLK_IN is driven by SX1257_1 CLK_OUT (pin 10) directly on the PCB — no ASIC pad required. Per §3.5.2 SX1257 CLK_OUT outputs the buffered XTB reference (32 MHz); SX1257_2–4 CLK_OUT left NC.
 
-### ASIC ↔ SX1257 (shared SPI config bus)
+### Host SPI interface to `trouper_top`
 
 | Signal | Description |
 | --- | --- |
-| `SPI_MOSI` | Shared — ASIC master drives when a SX1257 is addressed; ASIC slave drives when HOST_CS asserted |
-| `SPI_MISO` | Shared — ASIC tristates when acting as SPI master |
-| `SPI_SCK` | Bidirectional — host drives during host→ASIC; ASIC drives during ASIC→SX1257 |
-| `CS_A[1:0]` | ASIC → 74HC139 decoder (board-level) → SX1257_1–4 NSS. 2-bit address selects one device per transaction. |
+| `SPI_MOSI` | Host-driven register writes and debug commands into the ASIC SPI slave |
+| `SPI_MISO` | ASIC status/config readback from the SPI slave |
+| `SPI_SCK` | Host-driven SPI clock for host↔ASIC register access |
 | `HOST_CS` | RPi SPI0 CS1 → ASIC chip select |
+
 
 ### SX1257 board-level pin dispositions (not ASIC pads)
 
@@ -202,83 +227,27 @@ The following SX1257 pins require a PCB-level decision; none connect to ASIC pad
 | CLK_IN (pin 11) | All 4 devices: leave NC | **Design Decision:** Using internal clock mode (§3.5.2) to save ASIC pads. Frequency lock is maintained via shared XTB reference. |
 | CLK_OUT (pin 10) | SX1257_1: CLK_OUT → SX1302 CLK_IN (PCB trace). SX1257_2–4: leave NC | SX1257_1 CLK_OUT provides the 32 MHz clock for SX1302 data sync (§3.5.2). No ASIC pad required. |
 
----
+> SX1257 electrical constraints (XTB voltage limit, LDO decoupling, I_IN/Q_IN pull-downs, DIO NC disposition) are documented in [Pinout](Pinout.md).
 
-## Pin Verification & Electrical Constraints
-
-A surgical review of the SX1257 datasheet (v1.2) was performed on May 4, 2026. The following constraints are binding for PCB layout and system integration:
-
-### 1. Clocking & Synchronization
-- **XTB (Pin 8) Voltage Limit:** Absolute maximum of 1.8V pk-pk. Exceeding this may damage the internal oscillator circuitry or degrade phase noise.
-- **XTA (Pin 6) Floating:** Must be left open when driving XTB with an external clock (§3.3.1). Do not ground.
-- **TX Synchronization:** Pin 11 (CLK_IN) is bypassed. Data at `I_IN/Q_IN` is sampled by the internal clock derived from XTB. Since the ASIC and SX1257 share the same TCXO reference, they are frequency-locked.
-
-### 2. Power & Decoupling
-- **Internal LDOs:** Pins 1 (VR_PA), 3 (VR_ANA1), 5 (VR_DIG), and 25 (VR_ANA2) are outputs of internal regulators. 
-- **Mandatory Decoupling:** Each requires a 10µF tantalum/ceramic in parallel with a 100nF ceramic capacitor strictly as shown in Fig 6-4. 
-- **No External Loading:** These pins must not power any external circuitry.
-
-### 3. Thermal & Grounding
-- **Exposed Pad (Pin 0):** This is the primary ground and thermal path. It must be soldered to a large ground plane with multiple thermal vias.
-
-### 4. Digital Interface
-- **Reset (Pin 9):** Active high. Must be floating or high-impedance during the power-on-reset (POR) cycle to allow internal pull-up logic to function (§6.2.1).
-- **SPI Logic Levels:** 3.3V CMOS compatible (up to VDD). Max frequency 10 MHz.
-| I_IN / Q_IN (pins 13/12) | All 4 devices: tie to GND (10 kΩ pull-down) | All antennas are RX-only. TxEnable=0 in firmware; TX inputs tied low to be safe. **Test PCB:** verify that the SX1257 RX path (ADC output, PLL lock, gain response) is unaffected when I_IN/Q_IN are held at GND — confirm no DAC-to-ADC crosstalk or instability in this configuration before committing to the tapeout pad list. |
-| DIO0–DIO3 (pins 21–24) | Leave NC | ASIC has 0 spare pads. PLL lock is polled via `RegModeStatus` (0x11) over SPI instead. |
-| VBAT1/VBAT2/VBAT3 (pins 2/16/32) | Supply input — bulk decoupling per application schematic (Fig 6-4) | Main supply pins. Each needs 10 µF bulk + 100 nF to GND. |
-| VR_PA/VR_ANA1/VR_DIG/VR_ANA2 (pins 1/3/5/25) | Internal LDO outputs — decoupling caps to GND per Fig 6-4 | Each needs 100 nF + 10 µF to GND. Do not load these pins externally. |
-
-> **I_OUT/Q_OUT pin name note (SX1257 Table 1-1 apparent typo).** Table 1-1 describes pin 14 Q_OUT as "I (inphase) channel ADC output" and pin 15 I_OUT as "Q (quadrature) channel ADC output" — contradicting the §3.7.1 block diagram which correctly shows I_OUT ← I-channel ADC and Q_OUT ← Q-channel ADC. The pin names (I = in-phase, Q = quadrature) and the block diagram are self-consistent; the Table 1-1 descriptions are a Semtech typo. Connect I_OUT → `IQ_DATA_I[n]` and Q_OUT → `IQ_DATA_Q[n]` as shown in the pad list.
-
-### RPi → ASIC (host config + firmware load)
+### RPi → ASIC (host register access + debug)
 
 | Signal | Direction | Description |
 | --- | --- | --- |
 | `HOST_CS` | RPi → ASIC | SPI0 CS1 — active low |
 | `SPI_SCK` | RPi → ASIC | Shared SPI clock |
-| `SPI_MOSI` | RPi → ASIC | Config writes + firmware binary |
+| `SPI_MOSI` | RPi → ASIC | Register writes and debug commands |
 | `SPI_MISO` | ASIC → RPi | Status register readback |
 | `TCK_IRQ` | ASIC → RPi (JTAG_EN=0) | Interrupt: packet ready, preamble lock |
 
-### Boot sequence (firmware load)
+### Grouper-Inactive / Host-Assisted Operation
 
-```
-RPi: assert cpu_reset=1 (SPI register write to ASIC)
-RPi: write firmware.bin to IMEM base address (0x0000) over SPI
-RPi: de-assert cpu_reset=0
-PicoRV32: fetch from 0x00000, begin execution
-```
+Trouper remains usable when the Grouper firmware path is inactive. In that mode:
 
-### CPU-held-reset RX-only mode
+- the RX datapath still runs: decimation, DC removal, SC detection, training accumulation, combining, and ΣΔ re-modulation remain active
+- no weight commits occur unless an external host writes `W_SHADOW` and pulses `W_COMMIT` over the host SPI path
+- AFE configuration remains external to Trouper; the ASIC does not originate SX1257 transactions in this revision
 
-RX-only operation is supported with `CPU_RESET=1` permanently asserted.
-
-This is the baseline hardware fallback mode when PicoRV32 firmware is absent, stalled, or intentionally disabled. In this mode:
-
-- the RX datapath still runs using the hardware-only chain
-- packet detection, training accumulation, hardware weight generation, packet FSM control, combining, and ΣΔ re-modulation remain active
-- AGC does not run; the four SX1257 gain registers stay at their programmed or reset values
-- TX/TDD sequencing is not supported
-
-A follow-on backup mode may layer a [UART Backup Interface](blocks/UART%20Backup%20Interface.md) on top of this baseline. In that mode, PicoRV32 remains optional, the host computes `W` off chip, and the ASIC applies those weights through the existing `W_SHADOW` / `W_COMMIT` path. Same-packet use of host/UART weights for the full packet requires `PSRAM_EN=1` so the packet can be replayed from its stored start; without PSRAM replay, the UART path is a next-packet or payload-only refinement rather than a full-packet live replacement.
-
-Required reset defaults for this mode are:
-
-| Item | Reset / default value | Reason |
-| --- | --- | --- |
-| `CPU_RESET` | `1` | CPU held in reset unless explicitly released |
-| `MIMO_CTRL.MODE` | `0` (MRC) | Hardware combining path selected by default |
-| `MIMO_CTRL.ANTENNA_EN` | `0xF0` | All four RX antennas enabled |
-| Weight generation control | `AUTO`, `AUTO_COMMIT=1`, `MODE=MRC` | Hardware weight path selected with no firmware commit required |
-| `PSRAM_EN` | `0` | Same-packet replay disabled by default |
-| `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` | `0x3E` each | Fixed maximum-gain fallback if AGC is inactive |
-
-Host software may still pre-program SX1257 registers and gain mirrors over SPI before enabling RX-only operation, but firmware execution is not required once those defaults are acceptable.
-
-### TX signal chain
-
-TX is not supported. This is an RX-only gateway ASIC. The SX1302 and any connected SX1257 DAC paths are used for RX only; no PA, T/R switch, or TDD sequencing is implemented.
+An optional host-assisted mode may compute `W` off chip and apply it through the existing `W_SHADOW` / `W_COMMIT` path over SPI. Same-packet use of host-computed weights for the full packet requires `PSRAM_EN=1` so the packet can be replayed from its stored start; without PSRAM replay, the host path is a next-packet or payload-only refinement rather than a full-packet live replacement.
 
 ---
 
@@ -301,20 +270,39 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | SX1257 DATA_Q ×4 | 4 | |
 | IQ_CLK | 1 | ASIC core clock = TCXO buffer output; same reference driven to SX1257 XTB on PCB |
 | SX1302 Radio A I+Q | 2 | ΣΔ re-mod stream (MRC output) |
-| SPI MOSI / MISO / SCK | 3 | Shared host↔ASIC and ASIC↔SX1257 |
-| CS_A[1:0] + HOST_CS | 3 | 2-bit address to board-level 74HC139 decoder → SX1257_1–4 NSS; HOST_CS = RPi SPI0 CS1 |
+| SPI MOSI / MISO / SCK | 3 | Host↔ASIC SPI slave interface |
+| HOST_CS | 1 | RPi SPI0 CS1 for the Trouper host SPI slave |
 | RESETB | 1 | Active-low chip reset |
 | JTAG / IRQ / GPIO mux (TCK_IRQ + TMS_GPIO0 + TDI_GPIO1 + TDO_GPIO2) | 4 | TCK_IRQ = IRQ (JTAG_EN=0) / TCK (JTAG_EN=1); TMS/TDI/TDO_GPIO0–2 = GPIO_0–2 (JTAG_EN=0) / JTAG pins (JTAG_EN=1); see [Pinout](Pinout.md) |
 | VDD IO 3.3V | 1 | |
 | VDD core 3.3V | 1 | Single pad — IR drop must be verified in floorplan |
 | GND | 1 | Single pad — place at highest switching-current region |
-| **Total** | **25** | At ≤25 per-team allocation limit |
+| **Total** | **23** | Within the ≤25 per-team allocation limit |
 
 ---
 
 ## Clock domain crossing boundaries
 
-The design has a single internal clock domain (32 MHz, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins). All DSP blocks, PicoRV32, AHB-Lite bus, and SPI master are synchronous to this domain.
+The design has a single internal clock domain (32 MHz, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins). All blocks instantiated in `trouper_top` are synchronous to this domain, including the DSP chain, Trouper-side AHB-Lite endpoint/bridge, SPI slave, register bank, and IRQ logic.
+
+### Clock Partition Guidance
+
+For the current tapeout revision, the preferred implementation remains a **single `IQ_CLK` domain** with sample-enable strobes (`iq_valid`, `raw_valid`) and carefully-scoped multicycle constraints. Introducing many local divided clocks would create avoidable CTS, STA, reset, and CDC complexity.
+
+If a future revision introduces a true slow DSP clock, it should be generated **once at top level** as a global `/2` clock and distributed as a normal clock tree. Per-block local clock dividers are not recommended.
+
+Recommended block classification:
+
+- Keep on `IQ_CLK`: `sd_decimator_cic_only`, `sd_remod`, `psram_buf_ctrl`, `dc_removal`, `spi_slave`, `reg_bank`, `irq_ctrl`, `trouper_top` glue logic
+- Candidate for a future global `clk_16m` domain: `mrc_combiner`, `training_acc`, `frontend_buf_ctrl`, `packet_ctrl_fsm`
+- Requires RTL restructuring rather than only a slower clock: `sc_detector`
+
+Rationale:
+
+- `sd_decimator_cic_only`, `sd_remod`, and `psram_buf_ctrl` have true 32 MHz external or bit-level timing obligations.
+- `dc_removal` is light arithmetic immediately after the decimator; it already updates only on `raw_valid`, so a local divided clock buys little and adds a new boundary before SC/training.
+- `mrc_combiner` and `training_acc` are sample-triggered arithmetic blocks with large idle gaps between valid samples, making them natural slow-domain candidates if a clean 2-clock architecture is ever adopted.
+- `sc_detector` is the present SS timing limiter, but the issue is the internal TDM combinational chain; simply moving it to a slower domain is not a complete fix without extra pipelining or state restructuring.
 
 > **CFO is a transmitter-only property.** Because all four SX1257 AFEs and the ASIC itself derive their clocks from one TCXO, there is no sampling-rate offset (SRO) between antennas or between the ADC outputs and ASIC processing. Any observed carrier frequency offset `df` is entirely due to the remote transmitter's TCXO offset. The digital CFO correction `exp(−j2π·df_est·n/Fs)` applied in firmware operates with cycle-accurate sample indexing — no accumulated phase error from clock-domain mismatch. The residuals quantified in `sim/notebooks/02_cfo_estimation.ipynb` are therefore the complete error budget.
 
@@ -333,11 +321,11 @@ The following boundaries require explicit CDC treatment:
 
 ## Gate count & area summary
 
-**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane P&R). Note: this run predates weight_gen being wired in; flat logic area will be updated on next P&R run.
+**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane P&R). Note: predates removal of `weight_gen` and `noise_est`; logic area will be updated on next P&R run.
 
 | Metric | Value |
 | --- | --- |
-| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** (weight_gen excluded — P&R re-run pending) |
+| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** (stale — `weight_gen` + `noise_est` not yet removed from this run) |
 | Frontend buffer SRAM (1 × FD 512×8) | ~209,000 µm² (0.21 mm²) |
 | CPU SRAM (4 × OCD 1024×8) | ~838,000 µm² (0.84 mm²) |
 | **Total synthesis area (logic + SRAMs)** | **~1,478,000 µm² (1.48 mm²)** (weight_gen excluded from logic) |
@@ -352,63 +340,28 @@ The following boundaries require explicit CDC treatment:
 | Component | FD-cell µm² | Notes |
 | --- | --- | --- |
 | ΣΔ Decimator CIC-only ×4 | 71,502 × 4 = **286,008** | per-instance × 4 |
-| Weight Generation (`weight_gen.v`) | **141,244** | HW EGC/MRC/SC; now instantiated |
+| ~~Weight Generation (`weight_gen.v`)~~ | ~~141,244~~ | **Removed** — weights are firmware-computed |
 | Training Accumulator | **132,706** | |
 | Schmidl-Cox Detector | **111,942** | incl. `signed_mul24_pipe` shared multiplier |
-| Register Bank | **81,703** | |
+| Register Bank | **81,703** | stale — 32 registers removed since this run |
 | MRC Combiner | **61,738** | |
 | PSRAM Buffer Controller | **44,071** | |
 | Packet Control FSM | **43,551** | |
 | DC Removal | **32,138** | |
 | ΣΔ Re-modulator | **28,250** | |
-| Noise Estimation (`noise_est`) | **22,929** | Manhattan norm, no multipliers |
+| ~~Noise Estimation (`noise_est`)~~ | ~~22,929** | **Removed** — firmware EMA via ZDIAG readback |
 | Frontend Buffer Controller | **22,615** | |
 | SPI Slave | **16,420** | |
-| Top-level glue (`mimo_rx_top`) | **11,116** | |
+| Top-level glue (`trouper_top`) | **11,116** | |
 | SPI Master | **9,483** | |
 | IRQ Controller | **2,402** | |
 | AHB-Lite Bus | **2,149** | |
-| PicoRV32 wrap (+ CPU SRAMs) | blackboxed | ~286 K logic + SRAM macros |
-| **Logic subtotal (excl. picorv32, SRAMs)** | **~1,075,000 µm²** | hierarchical (conservative) |
+| **PicoRV32 (Grouper Project)** | **Part of Grouper** | Hardened macro in separate project |
+| **Logic subtotal (Trouper only)** | **~789,000 µm²** | hierarchical (conservative) |
 
-> FFT Engine (~10 K GE) and Baseband SRAM (544 KB, ~4.50 mm²) are removed in the non-FFT architecture. CPU memory is a single unified 4 KB SRAM (text + data + stack). The current memory plan uses GF-provided `gf180mcu_fd_ip_sram__sram512x8m8wm1` macros for the frontend buffer and `gf180mcu_ocd_ip_sram` experimental macros for the 4 KB CPU SRAM estimate. GE estimates for new blocks are preliminary.
->
-> Dedicated frontend SRAM remains the primary acquisition buffer. An optional architecture extension may allow the Frontend Buffer Controller to borrow a reserved upper CPU SRAM window (`CPU_SRAM_BORROW_EN`) to extend delayed-sample depth for `SF7`, but only when `CPU_RESET=1` or when firmware is explicitly excluded from that borrowed bank. In the shared case, the reserved upper `1 kB` bank must be removed from the linker/runtime-visible PicoRV32 memory map so `.text`, `.data`, `.bss`, and stack never touch it. If the borrow path is unavailable, `SF7` must fall back to `NR=2` acquisition on branches `1` and `3` rather than relying on four-branch sample storage that is not guaranteed.
->
-> **Deferred SC detector area-reduction ideas.** Trial Yosys/GF180 synthesis indicates the Schmidl-Cox detector remains one of the dominant logic blocks even after serializing the symbol-boundary metric math. The following options are worth evaluating, but are intentionally not implemented yet:
-> - reduce the detector branch count before correlation if 4 independent antenna branches are not required for acquisition
-> - tighten accumulator widths using a proper worst-case dynamic-range bound instead of the current conservative 32-bit accumulation and 64-bit metric path
-> - replace exact `|C|^2 = C_i^2 + C_q^2` with a cheaper approximation such as `|C_i| + |C_q|`
-> - replace exact energy-product normalization `E_cur * E_del` with a cheaper proxy such as `min(E_cur, E_del)` or `E_cur + E_del`, subject to detection-performance validation
-> - subsample or partially decimate the correlation window if full-rate SC updates are not required for reliable lock
-> - move more of the per-sample branch math onto a time-multiplexed shared datapath if acquisition latency budget permits
-> - use a simpler coarse trigger on fewer branches and only enable full multi-antenna correlation after a candidate preamble event
->
-> **Deferred acquisition simplification candidate.** A promising area-reduction direction is to make acquisition explicitly `NR=2` while preserving `NR=4` for post-lock combining. In that architecture:
-> - the Schmidl-Cox detector runs on 2 antennas rather than 4
-> - the delayed-sample frontend buffer stores only those 2 acquisition branches, which can reduce the dedicated frontend SRAM requirement from 2 macros to 1 macro in the acquisition path
-> - training and combining still use all 4 live branches after lock
->
-> This is attractive if 2-antenna detection diversity is already sufficient at the target SNR operating point. The expected benefits are reduced SC logic, reduced delayed-sample routing/control complexity, and roughly half of the current frontend acquisition SRAM area. The main risk is lower acquisition robustness than 4-branch SC, so this direction still requires simulation validation before it becomes the baseline architecture.
->
-> **Deferred acquisition mode ladder.** If acquisition is reduced to `NR=2`, the operating modes can be staged by spreading memory cost across capability tiers instead of sizing the dedicated frontend SRAM for the worst case:
-> - `SF6`: baseline `NR=2` acquisition using dedicated frontend SRAM only
-> - `SF7`: preferred `NR=2` acquisition in dedicated frontend SRAM, with `NR=1` fallback if delayed-sample depth or defect tolerance becomes the limiting factor
-> - `SF8+`: use borrowed CPU SRAM (`CPU_SRAM_BORROW_EN`) to extend delayed-sample depth, likely with reduced acquisition branch count (`NR=1` or `NR=2`) rather than full 4-branch buffered acquisition
->
-> In this model, acquisition capability scales by mode while post-lock processing can still preserve full 4-branch live training and combining. This is a promising way to trade area against optional high-SF support, but it depends on three things being validated:
-> - 2-branch and 1-branch acquisition performance at the target SNRs
-> - clean CPU-SRAM arbitration and memory-map isolation during borrow mode
-> - acceptable acquisition latency and control complexity at higher spreading factors
->
-> **Deferred PSRAM-assisted software weight generation.** If the optional PSRAM replay path is used, same-packet software weight generation becomes much more plausible than in the baseline live path. In the replay architecture, the receiver buffers the packet, waits for `W_commit`, and then replays from the stored packet start, so the weight deadline moves from "before payload start" to effectively "before packet end". Under that model:
-> - PicoRV32 can read the individual `Z_kl` pair registers (0x70–0xE7), build the full 4×4 Hermitian matrix, compute the eigenvector MRC weights in software, write `W_SHADOW`, and pulse `W_COMMIT` without racing the live payload boundary
-> - simple software formulas such as MRC, SC, EGC, EMA-smoothed variants, or other low-complexity heuristics become candidates for same-packet use
-> - this may allow removal or major simplification of the dedicated hardware weight-generation block if the replay path is accepted architecturally
->
-> Clarification: in the baseline live path (`PSRAM_EN = 0`), a fast on-chip `weight_gen` can still update weights before payload start, so the current packet payload may be combined with same-packet weights. However, the earliest preamble symbols have already passed the SX1302-facing output before `training_done` and `W_commit`. If the downstream LoRa baseband must see the full packet, including the preamble, under the final weight vector, PSRAM replay is required. The same rule applies to the planned host/UART backup path: no-PSRAM UART weights cannot retroactively recover the preamble already emitted on the live stream.
->
-> The expected benefit is logic-area reduction in the cold-path control/DSP hardware. The main risks are replay-mode complexity, packet-latency increase, and the need to prove that firmware service time remains comfortably inside the buffered-packet window under worst-case interrupt and memory-access behavior.
+> CPU memory and PicoRV32 core are now part of the **Grouper** project. Trouper contains only the MIMO RX datapath and its control slaves. FFT engine and baseband SRAM are removed in the non-FFT architecture.
+
+Area-reduction options (SC simplification, NR=2 acquisition, PSRAM-assisted weight timing) are tracked in [area-cut-contingency.md](area-cut-contingency.md).
 
 ---
 
@@ -435,12 +388,11 @@ See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignme
 | Frontend Buffer Controller (1 kB SRAM) | TBD | [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md) |
 | PSRAM Buffer Controller (APS6404L, QSPI) | TBD | [Memory Strategy](Memory%20Strategy.md) |
 | Training Accumulator | TBD | [Training Accumulator](blocks/Training%20Accumulator.md) |
-| Weight Generation | TBD | [Weight Generation](blocks/Weight%20Generation.md) |
 | Packet Control FSM | TBD | [Packet Control FSM](blocks/Packet%20Control%20FSM.md) |
-| MRC Combiner | TBD | [ALMMSE-MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md) |
+| MRC Combiner | TBD | [MRC Combiner](blocks/MRC%20Combiner.md) |
 | ΣΔ Re-modulator | TBD | [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md) |
 | PicoRV32 RV32IM integration | TBD | [PicoRV32 Integration](blocks/PicoRV32%20Integration.md) |
-| PicoRV32 SRAM (64 KB, experimental 3.3V macros) | TBD | [Memory Strategy](Memory%20Strategy.md) |
+| PicoRV32 SRAM (4 KB unified, OCD macros) | TBD | [Memory Strategy](Memory%20Strategy.md) |
 | SPI Slave (host interface) | TBD | [SPI Slave](blocks/SPI%20Slave.md) |
 | SPI Master (→ SX1257) | TBD | [SPI Master](blocks/SPI%20Master.md) |
 | AHB-Lite Bus | TBD | — |

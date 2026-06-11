@@ -1,6 +1,6 @@
-# AHB-Lite Bus
+# AHB-Lite Bus (Grouper Project)
 
-Control block. See [System Architecture](../System%20Diagram.md) for context.
+Control block. See [System Architecture](../System%20Architecture.md) for context.
 
 **Owner:** TBD
 **Status:** Not started
@@ -9,20 +9,21 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-Custom single-master `AHB-Lite` interconnect connecting PicoRV32-side logic to all on-chip peripherals and SRAM-facing slaves.
+Shared `AHB-Lite` system bus fabric residing in the **Grouper** project. It provides the primary control interconnect between the PicoRV32 processor (Bus Master) and all system peripherals on the MPW, including the **Trouper** MIMO RX datapath.
 
-The project decision is to use `AHB-Lite`, not Wishbone. Because PicoRV32 is not a native AHB master, the master side will be implemented with a custom wrapper/bridge around PicoRV32.
+The bus fabric is designed for single-master operation with multiple slave peripherals. It supports standard AHB-Lite transactions for configuration, status polling, and firmware-driven algorithm management.
 
 ---
 
 ## Slave map
 
-| Address range | Slave | Notes |
-| --- | --- | --- |
-| `0x10000`–`0x100FF` | Register bank | ASIC config/status registers |
-| `0x10100`–`0x101FF` | SPI master | SX1257 config writes |
-| `0x10200`–`0x102FF` | IRQ controller | Source read/clear |
-| `0x10300`–`0x103FF` | SWD TAP | Debug interface |
+| Address range | Slave | Project | Notes |
+| --- | --- | --- | --- |
+| `0x00000`–`0x0FFFF` | Grouper SRAM | Grouper | Unified Instruction/Data memory |
+| `0x10000`–`0x100FF` | Trouper Register Bank | Trouper | ASIC config/status registers |
+| `0x10200`–`0x102FF` | Trouper IRQ Controller | Trouper | Source read/clear |
+| `0x10300`–`0x103FF` | Trouper JTAG/GPIO | Trouper | Debug/IO mux control |
+| `0x20000`–`0x2FFFF` | Grouper Peripherals | Grouper | Timer, UART, etc. |
 
 ---
 
@@ -40,19 +41,19 @@ Top-level bus signals follow standard AHB-Lite naming:
 - `HREADY`
 - `HRESP`
 
-Current peripheral block notes may still show local `wb_*`-style placeholder register strobes. Treat those as provisional local slave-interface names pending cleanup to the final AHB-Lite wrapper signals.
+Trouper's internal register bank and control sub-blocks are integrated as slaves on this fabric via a bridge/decoder that routes Grouper bus transactions to the appropriate Trouper peripheral.
 
 ---
 
 ## Implementation notes
 
-**Single master.** The PicoRV32 wrapper is the only AHB-Lite master — no multi-master arbitration is needed.
+**Centralised Grouper Bus.** The AHB-Lite bus is a physical fabric in the Grouper project. Trouper connects to this bus via external pins/wires on the common MPW.
 
-**Custom PicoRV32 wrapper.** Implement a lightweight adapter that converts PicoRV32 memory/peripheral accesses into AHB-Lite transactions. This is intentionally custom rather than adopting a pre-existing Wishbone-centric integration.
+**Master side.** The PicoRV32 in Grouper is the sole bus master. A lightweight adapter converts PicoRV32 native memory accesses into AHB-Lite transactions.
 
-**Wait states.** Register bank and IRQ controller should respond in one transfer when possible. SPI master may insert wait states through `HREADY` deassertion while a SPI transaction completes; the PicoRV32 wrapper must stall cleanly until the transfer completes.
+**Shared Peripheral Access.** The bus allows the PicoRV32 to manage both Trouper-specific logic and Grouper-native peripherals (SRAM, timers, etc.) within a unified address space.
 
-**Shared bus reset.** Slaves return idle-ready behavior after reset. The PicoRV32 wrapper must not issue valid transfers until reset is released and SRAM/SPI macros are stable.
+**Wait states.** Slaves may assert `HREADY` low to stall the bus. Register-based slaves in Trouper are expected to respond with zero wait states. There is no active Trouper SPI-master subordinate in the current map.
 
 ---
 
@@ -60,14 +61,15 @@ Current peripheral block notes may still show local `wb_*`-style placeholder reg
 
 | Test | Method | Pass criterion |
 | --- | --- | --- |
-| Register R/W via AHB-Lite | cocotb: PicoRV32 wrapper writes/reads each slave | Correct data; `HRDATA/HREADY` behavior as expected |
-| Wait state handling | SRAM with 2-cycle latency | PicoRV32 wrapper stalls until `HREADY`; data correct |
-| Address decode | Access each slave address range | No aliasing; correct slave responds |
-| Wrapper sanity | Back-to-back PicoRV32 peripheral accesses | No dropped transfers; correct ordering |
+| Address Decoding | cocotb: Master accesses each slave range | Correct slave selected; no aliasing |
+| Trouper Register Access | cocotb: Write/read Trouper reg bank via AHB | Correct data; Trouper logic responds |
+| Grouper Peripheral Access | cocotb: Access native Grouper slaves | Seamless operation on the same fabric |
+| Concurrent Bus Usage | cocotb: Host SPI (via bridge) vs CPU AHB access | Correct arbitration and completion |
 
 ---
 
 ## Related blocks
 
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — custom PicoRV32-to-AHB-Lite master side
-- All peripheral blocks — bus slaves
+- [PicoRV32 Integration](PicoRV32%20Integration.md) — Bus master
+- [SPI Slave](SPI%20Slave.md) — Host bridge into the Grouper system bus
+- All Trouper and Grouper peripheral blocks — Bus slaves

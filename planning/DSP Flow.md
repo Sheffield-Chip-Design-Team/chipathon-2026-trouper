@@ -12,7 +12,7 @@ The mandatory hardware-only receive path is:
 - DC removal
 - SC detection and timing
 - training accumulation
-- hardware weight generation
+- firmware weight generation via on-chip PicoRV32 (host-assisted fallback optional)
 - packet-phase control
 - combiner or bypass selection
 - ΣΔ re-modulation
@@ -21,14 +21,14 @@ PicoRV32 is therefore treated as:
 
 - optional for baseline RX correctness
 - useful for ALMMSE, EMA smoothing, diagnostics, AGC policy, and TDD control
-- allowed to fail or remain in reset without preventing packet reception in the baseline MRC/bypass modes
+- required for MRC weighting in the current tapeout plan; if held in reset, Trouper remains limited to bypass-mode packet forwarding
 
-If firmware-dependent features are enabled, they must fail back to the hardware baseline rather than blocking the live receive stream.
+There is no hardware weight-generation baseline in the current tapeout plan. The only firmware-free fallback is bypass-mode receive, with the selected antenna forwarded directly to the re-modulator.
 
-The supported firmware-free fallback is specifically `RX-only`:
+The supported firmware-free fallback is specifically `RX-only bypass`:
 
 - `CPU_RESET=1`
-- hardware weight path enabled
+- no weight commits
 - PSRAM replay disabled
 - fixed SX1257 gain from reset defaults or host-programmed register values
 - no TX/TDD sequencing
@@ -37,7 +37,7 @@ Two operating modes share the same hardware:
 
 | Mode | Config | Combining | Output |
 | --- | --- | --- | --- |
-| 1 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A |
+| 1 | NT=1, NR=4 | MRC (requires firmware-computed W) | ΣΔ re-mod → SX1302 Radio A |
 | 2 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A |
 
 ---
@@ -52,8 +52,8 @@ Two operating modes share the same hardware:
 | 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 1 |
 | 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 1 |
 | 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `buf_freeze`, `combiner_source`, `safe_switch` | per packet | Mode 1 |
-| 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | `Z_j` (complex channel estimates), `E_ref`, `training_done` | per packet | Mode 1 |
-| 7 | Weight Generation | `Z_j`, `training_done` | `W_SHADOW`, `W_COMMIT` | per packet | Mode 1 |
+| 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | all-pairs `Z_kl`, `Z_diag`, `training_done` | per packet | Mode 1 |
+| 7 | Firmware Weight Generation | register-bank `Z_kl`, `training_done` IRQ | `W_SHADOW`, `W_COMMIT` | per packet | Mode 1 |
 | 7' | Bypass MUX | int8 from selected antenna | int8 (no sign-extension needed) | f_s | Mode 2 only |
 | 8 | MRC Combiner | `W_ACTIVE`, `x_j[n]` (4 branches) | `ŷ[n]` (1 stream) | f_s | Mode 1 |
 | 9 | ΣΔ Re-modulator (3rd order) | int8 I+Q from combiner | 1-bit I+Q | 32 MS/s | All |
@@ -64,7 +64,7 @@ Two operating modes share the same hardware:
 
 `MIMO_CTRL.MODE = 1` (register value 1, referred to as Mode 2 in human-facing numbering).
 
-Stages 4–8 (SC detector, frontend buffer, training accumulator, weight generation, combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A:
+Stages 4–8 (SC detector, frontend buffer, training accumulator, firmware weight path trigger, combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A:
 
 ```
 bypass_sel = lowest set bit of ANTENNA_EN[3:0]
@@ -197,25 +197,11 @@ See [Training Accumulator](blocks/Training%20Accumulator.md).
 
 ## Stage 7 — Weight Generation
 
-Converts `Z_j` into combining weights `W` via a dual hardware/software path.
+On-chip PicoRV32 firmware is triggered by `IRQ_TRAINING_DONE`, reads the all-pairs Z matrix from the register bank, computes weights in software, writes `W_SHADOW`, and pulses `W_COMMIT`. A host-assisted SPI path is retained as a fallback if firmware is held in reset. The primary modes are row-sum MRC and eigenvector power iteration; exact algorithm details live in firmware and simulation docs rather than hardened Trouper RTL.
 
-**Hardware path (SC/shift-MRC, deterministic, ~16 cycles):**
+Same-packet MRC requires firmware to meet the packet timing budget and, in the preferred architecture, PSRAM replay to re-present the full stored packet through the combiner after `W_ACTIVE` is committed.
 
-```
-SHIFT → CALIBRATE → COMPUTE (SC metric or shared MRC shift) → SCALE → WRITE W_HW
-```
-
-With `WGT_AUTO_COMMIT=1`, the hardware path commits weights within ~16 cycles of `training_done` in current RTL simulation — enabling same-packet weight application at SF6 (payload starts ~69,000 cycles after `training_done`). Exact normalized MRC remains a software/oracle option, not the hardened AUTO path.
-
-**Software path (firmware, ALMMSE / EMA smoothing):**
-
-PicoRV32 is triggered by `IRQ_TRAINING_DONE`, reads `Z_j` from registers (or `W_HW` for EMA), computes any weight formula, writes `W_SHADOW`, and pulses `W_COMMIT`.
-
-This software path is optional. Baseline RX must still work when PicoRV32 does not service the interrupt.
-
-`W_HW` read-only registers expose the hardware-computed result to firmware at all times, enabling EMA smoothing without re-deriving the raw per-packet estimate.
-
-See [Weight Generation](blocks/Weight%20Generation.md).
+See [Weight Generation](blocks/Weight%20Generation.md) for archived hardware exploration and [Trouper Chip Specification](Trouper%20Chip%20Specification.md) for the active contract.
 
 ---
 
@@ -234,9 +220,9 @@ else:
     y[n] = (w^H · x[n]) >> 1      // MRC: int32 ÷2 → int8
 ```
 
-`W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` switch only at `safe_switch` boundaries (IDLE between packets). If W is not ready when the current packet ends, it activates on the next packet.
+`W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` switch only at `safe_switch` boundaries (IDLE between packets). If W is not ready before the payload window closes, the current packet stays in bypass and the committed weight applies on the next eligible replay/packet boundary.
 
-See [MRC Combiner](blocks/ALMMSE-MRC%20Combiner.md).
+See [MRC Combiner](blocks/MRC%20Combiner.md).
 
 ---
 
@@ -285,9 +271,9 @@ Recommended starting points:
 
 ### 3. Weight Path Selection
 
-- **Hardware auto (`WGT_SRC=0`, `WGT_AUTO_COMMIT=1`):** same-packet MRC/EGC. No firmware involvement in the weight path.
-- **Software (`WGT_SRC=1`):** ALMMSE, EMA cross-packet smoothing, or custom formulas.
-- **EMA smoothing:** use `WGT_SRC=1`; firmware reads `W_HW` (hardware result), applies EMA in DMEM, writes back to `W_SHADOW`.
+- **Firmware MRC:** default tapeout path. PicoRV32 reads the training matrix, computes row-sum MRC or eigenvector weights, writes `W_SHADOW`, and pulses `W_COMMIT`.
+- **Host-assisted weighting:** optional backup mode. An off-chip controller may write `W_SHADOW` and pulse `W_COMMIT` through the existing control path if PicoRV32 is unavailable.
+- **EMA smoothing:** optional firmware enhancement; apply smoothing in DMEM and commit the filtered weights on a later packet/replay boundary.
 
 Disable EMA (`ALPHA_SHIFT=0`) for mobile deployments where channel coherence time may be shorter than the averaging window.
 
@@ -304,7 +290,7 @@ Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitiv
 | Decimation ratios | R=256, 128, 64, 32 | Native support for 125, 250, 500 kHz BW (1×) plus 1 MS/s (2× / 500 kHz); power-of-2 ensures integer M for all SF |
 | SC detection window | L = min(M, 256) samples per block | Block-based buffer; one 512×8 SRAM covers SF6–SF12 |
 | Training accumulation | ~5 symbols (SC_HITS_REQ=2) | ~2 dB loss vs ideal 8-symbol average; acceptable baseline |
-| Weight gen (hardware) | ~50 clock cycles | Same-packet application feasible at all supported SF; ~1,390× margin at SF6, ~2,780× at SF7 (commit window = 4.25M samples between training_done and payload start) |
-| Weight gen (software) | < 5,000 cycles | ~14× margin at SF6/125 kHz, ~28× at SF7; late SC lock reduces this further (see Training Accumulator risks) |
+| Firmware weight generation | < 5,000 cycles | Fits the SF5/SF6 timing budget for same-packet payload weighting; full-packet same-packet delivery relies on PSRAM replay |
+| Host-assisted weight generation | board/software dependent | Valid as a bring-up or backup path, but timing margin depends on transport latency and is not the primary tapeout mode |
 | Frontend Buffer SRAM | 512 B (1 × 512 B macro) | Channel 0 only; block-based L=256; covers SF6–SF12 |
 | ΣΔ re-mod | 3rd order, single instance | SQNR > 100 dB at OSR=64 (500 kHz BW) — LoRa headroom > 70 dB |

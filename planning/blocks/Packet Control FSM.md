@@ -46,7 +46,7 @@ IDLE ──────────────► PREAMBLE_ACQ
 |---|---|---|---|
 | `IDLE` | Reset; packet end; timeout | `safe_switch=1`; promote `W_SHADOW→W_ACTIVE` if `W_commit_pending`; unfreeze FRONTEND_BUF; assert `noise_sample_en` each symbol period while `energy_j < NOISE_THRESH` and `!sc_lock` | `sc_lock` |
 | `PREAMBLE_ACQ` | `sc_lock` | Latch `timing_ref`, `ACTIVE_MODE`, `ACTIVE_ANTENNA_EN`; freeze FRONTEND_BUF; combiner=bypass; raise `IRQ_CORR_LOCK` | `training_done` or preamble timeout |
-| `W_PENDING` | `training_done` | Raise `IRQ_TRAINING_DONE`; weight gen computes and writes `W_SHADOW`; combiner stays bypass | `W_commit` or payload-start timeout |
+| `W_PENDING` | `training_done` | Raise `IRQ_TRAINING_DONE`; firmware computes and writes `W_SHADOW`; combiner stays bypass | `W_commit` or payload-start timeout |
 | `PAYLOAD_ACTIVE` | Payload phase begins | Combiner = `W_ACTIVE` if `W_valid`, else bypass; if `PSRAM_EN=1` and replay was armed on time, combiner input switches to PSRAM replay; else live path remains active; set `W_MISSED_PACKET` if W was not committed before this state | `packet_end` or timeout |
 
 ### Packet end detection
@@ -165,7 +165,7 @@ Unlike the baseline live path, PSRAM replay does **not** require `W_commit` befo
 | `sc_lock` | in | 1 | SC preamble detection event |
 | `timing_ref` | in | 32 | Preamble-start sample index from SC |
 | `training_done` | in | 1 | Training accumulator complete |
-| `W_commit` | in | 1 | Weight gen finished writing W_SHADOW |
+| `W_commit` | in | 1 | Firmware/host finished writing W_SHADOW |
 | `mode_shadow` | in | 2 | Host/firmware requested combining mode |
 | `antenna_en_shadow` | in | 4 | Host/firmware requested antenna mask |
 | `psram_en` | in | 1 | Optional same-packet PSRAM replay enable |
@@ -259,8 +259,8 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 
 - [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
 - [Training Accumulator](Training%20Accumulator.md) — provides `training_done`
-- [Weight Generation](Weight%20Generation.md) — provides `W_commit`
+- [Weight Generation](Weight%20Generation.md) — archived hardware exploration; current `W_commit` source is firmware/host
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives `buf_freeze`
 - [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) — optional same-packet replay path
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — receives `combiner_source`, `active_mode`, `active_antenna_en`
+- [MRC Combiner](MRC%20Combiner.md) — receives `combiner_source`, `active_mode`, `active_antenna_en`
 - [Register Map](../Register%20Map.md) — `PKT_TIMEOUT_SYMS`, `PACKET_PHASE`, `W_MISSED_PACKET`, IRQ registers

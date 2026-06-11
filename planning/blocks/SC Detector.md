@@ -1,6 +1,6 @@
 # SC Detector
 
-RX path stage 3b. Schmidl-Cox preamble detector — locks onto the LoRa preamble and provides a sample-accurate `timing_ref` to the downstream Training Accumulator and Weight Generation blocks.
+RX path stage 3b. Schmidl-Cox preamble detector — locks onto the LoRa preamble and provides a sample-accurate `timing_ref` to the downstream Training Accumulator and firmware weight-generation flow.
 
 **Owner:** TBD
 **Status:** RTL complete, P&R clean (TT/FF timing met; SS corner −7.3 ns at 32 MHz — known GF180 3V wall)
@@ -134,4 +134,4 @@ SS corner fails at 32 MHz — consistent with the GF180 3V SS wall seen on other
 ## Related blocks
 
 - [Training Accumulator](Training%20Accumulator.md) — consumes `timing_ref` and `sc_lock`
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md)
+- [MRC Combiner](MRC%20Combiner.md)

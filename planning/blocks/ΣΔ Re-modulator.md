@@ -99,6 +99,6 @@ The AGC still owns the **per-branch** operating point, but it is no longer the s
 
 ## Related blocks
 
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — int8 output (MRC: int32 ÷2 → int8; bypass: direct int8)
+- [MRC Combiner](MRC%20Combiner.md) — int8 output (MRC: int32 ÷2 → int8; bypass: direct int8)
 - [System Architecture](../System%20Diagram.md) — REMOD_CLK routing, SX1302 interface
 - [DSP Flow](../DSP%20Flow.md)

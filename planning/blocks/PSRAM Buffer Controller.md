@@ -1,6 +1,6 @@
 # PSRAM Buffer Controller
 
-Optional same-packet MRC extension. See [Packet Control FSM](Packet%20Control%20FSM.md) and [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) for context.
+Optional same-packet MRC extension. See [Packet Control FSM](Packet%20Control%20FSM.md) and [MRC Combiner](MRC%20Combiner.md) for context.
 
 **Owner:** TBD  
 **Status:** Not started  
@@ -12,9 +12,11 @@ Optional same-packet MRC extension. See [Packet Control FSM](Packet%20Control%20
 
 Enables same-packet MRC by buffering the received IQ stream into external PSRAM from `sc_lock` and replaying the complete packet (preamble + payload) through the MRC combiner once weights are committed. The SX1302 output is held at zero during BUFFERING and receives the MRC-combined replay starting from `W_commit`.
 
+This block is what upgrades "same-packet payload weighting" into "same-packet full-packet presentation" for the downstream LoRa baseband. Without PSRAM replay, even fast firmware weight generation can only affect the later payload window; some early preamble symbols necessarily leave the chip before the final weights are available.
+
 `iq_in` is a direct fanout from the ΣΔ decimator — the same full-precision stream that feeds the Training Accumulator. The PSRAM path does not read from or write to the on-chip Frontend Buffer SRAM; those two paths are independent and share only the wire from the decimator output.
 
-When `PSRAM_EN=0` (default) the block tristates all QPI data pins and the system operates identically to the standard next-packet path with no PSRAM device fitted.
+When `PSRAM_EN=0` (default) the block tristates all QPI data pins and the system operates identically to the standard next-packet path with no PSRAM device fitted. When `PSRAM_CTRL.QSPI_OWNER=1`, the block likewise releases the pads, but ownership is transferred away from the replay controller for a future firmware-managed external-memory mode.
 
 ---
 
@@ -205,14 +207,52 @@ When `PSRAM_EN=0` or `JTAG_OVERRIDE=1`: SIO[0–3] are tristated and JTAG operat
 
 ---
 
+## Maximum data rate
+
+### Nominal operating point (production path)
+
+| Parameter | Value |
+|---|---|
+| Channels | 4 (NT=1, NR=4) |
+| Sample rate (post-decimation) | 250 kHz complex (32 MHz ÷ R=128) |
+| Sample width | 1 byte I + 1 byte Q = 2 bytes/channel |
+| Bytes per sample (all channels) | 4 ch × 2 bytes = **8 bytes** |
+| **Write data rate** | **8 bytes × 250 000 S/s = 2 MB/s (16 Mbit/s)** |
+| APS6404L max throughput (QPI 133 MHz) | ~66 MB/s |
+| **Utilisation** | **~3% of device capacity** |
+
+### Timing headroom at nominal operating point (16 MHz controller clock)
+
+| Parameter | Value |
+|---|---|
+| QPI 8-byte write latency | 24 cycles = **1.5 µs** |
+| `iq_valid` period at 250 kHz | 64 cycles = **4.0 µs** |
+| Slack per sample | 40 cycles = 2.5 µs (**62% idle**) |
+
+Write completes in 37% of the available window — no back-pressure at 250 kHz.
+
+### Buffer capacity vs packet size
+
+At 16-bit I/Q mode (8 bytes/sample), worst case is SF12:
+
+| SF | Samples buffered | Buffer depth | APS6404L capacity | Headroom |
+|---|---|---|---|---|
+| SF7 | ~1 024 | 8 kB | 8 MB | 1 000× |
+| SF9 | ~4 096 | 32 kB | 8 MB | 256× |
+| SF12 | ~32 768 | **256 kB** | **8 MB** | **32×** |
+
+SF12 same-packet replay is the worst case and uses 3% of available PSRAM.
+
+---
+
 ## Sample width
 
 Selected by `PSRAM_CTRL[1]` (`SAMPLE_WIDTH`):
 
-| Mode | Per-sample storage | Bandwidth at 1 MS/s | Max f_s (same-packet) | Max f_s (next-packet) |
+| Mode | Per-sample storage | Write data rate at 250 kHz | Max f_s (same-packet, 16 MHz clk) | Max f_s (next-packet) |
 |---|---|---|---|---|
-| 0 — 16-bit I/Q (default) | 4ch × 16b = 8 bytes | 64 Mb/s | 500 kS/s | 1 MS/s |
-| 1 — 32-bit I/Q | 4ch × 32b = 16 bytes | 128 Mb/s | 500 kS/s | 500 kS/s |
+| 0 — 16-bit I/Q (default) | 4ch × 16b = **8 bytes** | **2 MB/s** | 500 kS/s | 1 MS/s |
+| 1 — 32-bit I/Q | 4ch × 32b = **16 bytes** | **4 MB/s** | 500 kS/s | 500 kS/s |
 
 In 16-bit mode the decimator output is right-shifted by `(W_IN − 8)` before serialisation. With ~6 dB AGC headroom, effective SQNR ≈ 44 dB — well above the LoRa noise floor at any SF.
 
@@ -371,9 +411,12 @@ SX1302 input ◄────┬─ IDLE or PSRAM_EN=0 ───────► l
 | [0] | `PSRAM_EN` | 0 | 0 = next-packet mode; 1 = same-packet PSRAM replay |
 | [1] | `PSRAM_CLR_ERR` | 0 | Write-1 pulse: clear OVERFLOW and REPLAY_MISSED sticky flags |
 | [2] | `SAMPLE_WIDTH` | 0 | 0 = 16-bit I/Q (default); 1 = 32-bit I/Q. See Sample width table. |
-| [7:3] | — | 0 | Reserved |
+| [3] | `QSPI_OWNER` | 0 | 0 = Trouper replay controller owns QSPI pads (default); 1 = replay is disabled and the pads are reserved for a future firmware-managed external-memory mode. Ownership changes take effect only in IDLE. |
+| [7:4] | — | 0 | Reserved |
 
-Note: JTAG/QPI pad conflict is handled implicitly. `DEBUG_CTRL` (`0x03`) bit `JTAG_EN` is ignored while `PSRAM_EN=1`; setting both simultaneously sets `PAD_CONFLICT` in `PSRAM_STATUS`. No separate `JTAG_OVERRIDE` register bit is needed.
+Note: JTAG/QPI pad conflict is handled implicitly. `DEBUG_CTRL` (`0x03`) bit `JTAG_EN` is ignored while either the replay controller or a future alternate owner owns the PSRAM QSPI pads; any simultaneous enable request sets `PAD_CONFLICT` in `PSRAM_STATUS`. No separate `JTAG_OVERRIDE` register bit is needed.
+
+When `QSPI_OWNER=1`, this block de-asserts `ce_n`, gates `sck`, drives `sio_oe=0`, and suspends BUFFERING/REPLAY state progression. The same APS6404L device is then reserved for a future alternate access path.
 
 **`PSRAM_STATUS`** `0xB1` (R, default `0x00`)
 
@@ -430,6 +473,6 @@ Replay start offset [7:0] — low 8 bits of `buf_base` relative to the PSRAM bas
 
 - [Packet Control FSM](Packet%20Control%20FSM.md) — `sc_lock`, `W_commit`, `packet_end`
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — live `iq_in`
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — applies weights to PSRAM replay stream during REPLAY
+- [MRC Combiner](MRC%20Combiner.md) — applies weights to PSRAM replay stream during REPLAY
 - [JTAG TAP](JTAG%20TAP.md) — shares SIO[0–3] pads; mutually exclusive with PSRAM_EN=1
 - [Register Map](../Register%20Map.md) — `PSRAM_CTRL` (0x16), `PSRAM_STATUS` (0xBA), `PSRAM_PKT_BYTES` (0xBB–0xBC), `PSRAM_RD_OFFSET` (0xBD)

@@ -1,6 +1,6 @@
-# PicoRV32 Integration
+# PicoRV32 Integration (Grouper Project)
 
-Control block. See [System Architecture](../System%20Diagram.md) for context.
+Control block. See [System Architecture](../System%20Architecture.md) for context.
 
 **Owner:** TBD
 **Status:** Not started
@@ -9,27 +9,27 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-PicoRV32 RV32IM soft-core CPU providing optional control-plane and experimental algorithm support. Runs firmware loaded over SPI by the RPi host. Connects to all peripherals via a custom `AHB-Lite` wrapper/interconnect.
+Hardened **PicoRV32 RV32IM** processor macro residing in the **Grouper** project. It serves as the primary system controller for the MPW, providing control-plane and algorithm support for the **Trouper** MIMO RX ASIC. It runs firmware loaded over a dedicated SPI interface by the RPi host and manages peripherals via the shared `AHB-Lite` system bus.
 
-Baseline RX packet reception must not depend on this block being operational. If PicoRV32 is held in reset, stalled, or absent from the live control loop, the hardware receive path must still:
+Baseline RX packet reception in Trouper must not depend on this block being operational. If the PicoRV32 is held in reset, stalled, or absent, Trouper's hardware receive path remains functional, supporting:
 
-- detect packets
-- accumulate training data
-- compute baseline hardware weights
-- control W commit and packet phase
-- drive bypass or combined output to the ΣΔ re-modulator
+- Preamble detection
+- Training data accumulation
+- Baseline hardware weighting
+- Packet phase control
+- Direct bypass or combined output to the ΣΔ re-modulator
 
-PicoRV32 is therefore a non-critical enhancement block for:
+PicoRV32 provides non-critical but high-performance enhancements for:
 
-- software weight algorithms such as ALMMSE
-- cross-packet EMA smoothing
-- AGC policy
-- diagnostics and statistics
+- Software weight algorithms (e.g., Eigenvector power iteration)
+- Cross-packet EMA smoothing
+- Advanced AGC policies
+- Comprehensive diagnostics and telemetry
 - TDD TX/RX switching orchestration
 
-**Bus decision.** The project bus is now `AHB-Lite`. PicoRV32 is kept as the CPU, so the master side is a custom implementation rather than a native Wishbone integration.
+**Bus decision.** The project uses a single-master `AHB-Lite` system bus. The PicoRV32 (Master) connects to this bus via a custom wrapper that translates native CPU memory accesses into AHB-Lite transactions.
 
-**Why RV32IM (not RV32I):** The hardened AUTO path uses shift-MRC and avoids division, but firmware still needs efficient multiply/divide for software-only exact MRC, NW-MRC, ALMMSE approximations, AGC statistics, and diagnostic calculations. Hardware MUL/DIV (the M extension) keeps those control-loop tasks within the packet/idle-time budget.
+**Why RV32IM (not RV32I):** Hardware MUL/DIV (the M extension) is essential for keeping complex control-loop tasks (weight computation, statistics) within the tight timing budgets required for real-time packet processing.
 
 ---
 
@@ -48,11 +48,11 @@ These are optional enhancements unless otherwise noted in the TX path. None of t
 
 ### Weight computation override
 
-Triggered by `IRQ_TRAINING_DONE` only when the software path is intentionally being used. In the baseline hardware RX path, PicoRV32 does not need to service this interrupt; hardware weight generation already computes and commits the default MRC weights.
+Triggered by `IRQ_TRAINING_DONE` for the current MRC path. There is no baseline hardware weight-generation path in the tapeout plan, so PicoRV32 or an equivalent host-side weight engine must service this flow whenever MRC combining is required.
 
-When software override is enabled, firmware reads Z_j scaled readback registers (`0x70`–`0x8F`), computes combining weights for the active mode, writes W_SHADOW (`0x90`–`0xAF`), then pulses W_COMMIT.
+Firmware reads the training accumulator readback registers, computes combining weights for the active mode, writes W_SHADOW (`0x90`–`0xAF`), then pulses W_COMMIT.
 
-Z_j are exposed as int32 (right-shifted by `Z_SHIFT` from register `0xB3`). The common shift preserves relative magnitudes and phases — no division by n_acc needed.
+The training accumulator readback preserves relative magnitudes and phases, so firmware can compute weights directly from the exported Z matrix without dividing by `n_acc` for the usual MRC/eigenvector paths.
 
 ```c
 // Read Z_j_scaled (int32 I+Q per branch, big-endian) from 0x70-0x8F
@@ -73,7 +73,7 @@ for (int j = 0; j < 4; j++) {
 // Bypass: w_j = 1 for lowest enabled antenna, 0 for others
 ```
 
-After writing W_SHADOW and pulsing W_COMMIT, the Packet Control FSM promotes W_SHADOW → W_ACTIVE at the next `safe_switch` (IDLE boundary). See [Weight Generation](Weight%20Generation.md) for full arithmetic detail.
+After writing W_SHADOW and pulsing W_COMMIT, the Packet Control FSM promotes W_SHADOW → W_ACTIVE at the next `safe_switch` (IDLE boundary). See [Firmware Spec](../Firmware%20Spec.md) and [Eigenvector Weight Computation](Eigenvector%20Weight%20Computation.md) for the active arithmetic detail.
 
 ### TX preparation (RX → TX)
 
@@ -545,7 +545,7 @@ For DMEM faults: adjust stack pointer and linker `.data` / `.bss` placement to a
 4. PicoRV32 fetches from 0x00000; executes SX1257 init, then waits for IRQ
 ```
 
-**IRQ.** Schmidl-Cox lock fires `IRQ_CORR_LOCK` (AGC). Training accumulator completion fires `IRQ_TRAINING_DONE` — this is the W computation trigger for the software path. When `WGT_SRC=SW`, firmware reads Z_j_scaled from registers (`0x70`–`0x8F`), computes W, writes `W_SHADOW` (`0x90`–`0xAF`), then asserts the W commit strobe. When `WGT_SRC=AUTO`, the hardware Weight Generation FSM fires automatically and firmware is not required for the weight path — firmware may still read `W_HW` for EMA smoothing. Hardware copies `W_SHADOW` into `W_ACTIVE` atomically at the next idle boundary and sets `W_valid`. The live combiner falls back to the selected bypass antenna until `W_valid` is set.
+**IRQ.** Schmidl-Cox lock fires `IRQ_CORR_LOCK` (AGC). Training accumulator completion fires `IRQ_TRAINING_DONE` — this is the W computation trigger for the software path. Firmware reads the all-pairs Z matrix from registers (`0x70`–`0xEF`), computes W, writes `W_SHADOW` (`0x90`–`0xAF`), then asserts the W commit strobe. There is no hardware Weight Generation FSM in the current tapeout plan. Hardware copies `W_SHADOW` into `W_ACTIVE` atomically at the next idle boundary and sets `W_valid`. The live combiner falls back to the selected bypass antenna until `W_valid` is set.
 
 ---
 
@@ -728,8 +728,8 @@ From most to least impactful, with measured deltas where available:
 - [IRQ Controller](IRQ%20Controller.md) — `training_done`, `corr_lock`, and TX IRQs
 - [Packet Control FSM](Packet%20Control%20FSM.md) — packet phase, safe W commit, W missed status
 - [Training Accumulator](Training%20Accumulator.md) — Z_j source; triggers `IRQ_TRAINING_DONE`; noise-mode cross-correlations for null steering (`IRQ_NOISE_READY`)
-- [Weight Generation](Weight%20Generation.md) — weight computation detail (HW FSM option)
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md) — W register target
+- [Weight Generation](Weight%20Generation.md) — archived hardware exploration note
+- [MRC Combiner](MRC%20Combiner.md) — W register target
 - [Register Map](../Register%20Map.md) — Z_j registers and training diagnostics
 - [Register Map](../Register%20Map.md) — `CPU_RESET` at `0x02`
 - [Memory Strategy](../Memory%20Strategy.md) — macro selection, BIST architecture, overlay fallback

@@ -163,7 +163,7 @@ These modes remain encoded in the module interface and are useful for bench comp
 - **Area saving is too small to justify the risk.** Synthesis shows 256,779 µm² vs 300,207 µm² for 4× CIC-only — a saving of ~43 kµm² (14.5% of the decimator block, ~2.3% of die area). This does not unlock any new floorplan floor.
 - No FIR compensation (identical signal quality to current CIC-only).
 
-The module stays on disk as a synthesis reference. It will not be instantiated in `mimo_rx_top.v`.
+The module stays on disk as a synthesis reference. It will not be instantiated in `trouper_top.v`.
 
 ---
 
@@ -223,7 +223,7 @@ Relevant RTL already exists:
 
 1. Wire `sd_decimator_top` around the existing `sd_cic_chan`, `sd_fir_state`, and `sd_fir_mac` blocks.
 2. Re-run SQNR and loopback regressions against the CIC-only baseline.
-3. Swap the 4× `sd_decimator_cic_only` instances in `mimo_rx_top` for the shared top wrapper.
+3. Swap the 4× `sd_decimator_cic_only` instances in `trouper_top` for the shared top wrapper.
 4. Re-run synthesis and P&R; keep the upgrade only if timing and routing still close.
 
 ### Upgrade risks
@@ -256,6 +256,6 @@ Primary reference result: [`planning/cic-only-decimator-findings.md`](../cic-onl
 - [DC Removal](DC%20Removal.md)
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md)
 - [Training Accumulator](Training%20Accumulator.md)
-- [ALMMSE-MRC Combiner](ALMMSE-MRC%20Combiner.md)
+- [MRC Combiner](MRC%20Combiner.md)
 - [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md)
 - [Register Map](../Register%20Map.md)

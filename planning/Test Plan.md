@@ -77,11 +77,11 @@
 
 ### Block 4 — Training Accumulator + Weight Generation
 
-> **Non-FFT path:** FFT Engine test is not applicable. This block replaced by Training Accumulator and Weight Generation. See [Training Accumulator](blocks/Training%20Accumulator.md) and [Weight Generation](blocks/Weight%20Generation.md) for block-level verification tables.
+> **Non-FFT path:** FFT Engine test is not applicable. This block is now split between the Trouper Training Accumulator RTL and firmware weight generation. See [Training Accumulator](blocks/Training%20Accumulator.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md), and [Firmware Spec](Firmware%20Spec.md).
 
 **Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(8 - SC_HITS_REQ - 1) × M`.
 
-**Pass criterion (Weight Generation):** Weights match the Python hardware reference for implemented modes (shift-MRC, SC, Bypass) to within ±2 LSB Q1.15. Exact normalized MRC is an oracle/software comparison only. W_COMMIT pulses within 70,400 cycles of `training_done` at SF6/125 kHz.
+**Pass criterion (Firmware Weight Generation):** Firmware-computed weights match the Python reference for the selected algorithm (row-sum MRC or eigenvector power iteration) to within the expected Q1.15 rounding error. `W_COMMIT` is issued within the SF5/SF6 timing budget after `training_done`. Full same-packet delivery is proven with PSRAM replay tests, not by a standalone hardware weight FSM latency check.
 
 **Test matrix:**
 
@@ -89,16 +89,16 @@
 | --- | --- |
 | Noiseless single-path, SF6 | `Z_j / n_acc` matches `h_j` within rounding |
 | Noiseless single-path, SF7 | `Z_j / n_acc` matches `h_j` within rounding when the selected sample-memory mode is valid |
-| CFO immunity ±10 kHz | Weights correctly phase-aligned to h_j |
-| MRC all branches equal | Equal-magnitude shift-MRC weights with branch-count headroom; no clipping |
-| EGC noiseless | Software/oracle only unless WGT_MODE=10 is implemented in a future revision |
-| SC single strong branch | w_j = 1 on correct branch |
+| CFO immunity ±10 kHz | Firmware weights remain correctly phase-aligned to h_j |
+| MRC all branches equal | Firmware outputs equal-magnitude MRC/eigenvector weights with no unexpected clipping |
+| Eigenvector vs row-sum | Eigenvector path matches Python model and outperforms row-sum on noisy cases |
+| Single-branch dominance | Firmware collapses weight to the dominant branch when the channel is strongly imbalanced |
 | 8-bit saturation vs full-precision | SC lock timing unaffected at −10 dB SNR |
 | Strong signal saturation | SC lock and training accumulator degrade gracefully |
 
 ---
 
-### Block 5 — ALMMSE/MRC Combiner
+### Block 5 — MRC Combiner
 
 **Pass criterion:** Combined output `ŷ[n]` matches Python matrix multiply reference to within ±2 LSB. Post-combining SNR improvement matches theoretical MRC gain (10·log10(NR) dB = 6 dB for NR=4) within 1 dB on a flat channel.
 

@@ -405,10 +405,12 @@ Instead of correlating each branch against a single nominated reference, `traini
 ```
 Z_kl = Σ_n raw_k[n] · conj(raw_l[n])   for all k < l   (6 complex pairs)
 Z_kk = Σ_n |raw_k[n]|²                  for k=0..3      (4 real diagonals)
-W_k  = Σ_{l≠k} Z_kl                     per branch       (row sum, HW weight_gen input)
+W_k  = Σ_{l≠k} Z_kl                     per branch       (useful firmware row-sum MRC seed)
 ```
 
-This gives firmware access to the full 4×4 Hermitian channel covariance matrix Z ≈ h·h^H·n_acc + σ²·I, enabling a firmware eigenvector MRC path that is significantly better than the W_k row-sum used by the hardware path.
+This gives firmware access to the full 4×4 Hermitian channel covariance matrix Z ≈ h·h^H·n_acc + σ²·I, enabling a firmware eigenvector MRC path that is significantly better than the simple W_k row-sum approximation.
+
+**Current RTL note (2026-06-10):** the active standalone `trouper_top` no longer retains or exports the legacy per-branch row-sum outputs `W_k` / `Z_i*` / `Z_q*`. Only `Zpair_*`, `Zdiag_*`, `training_done`, and `n_acc` remain live because the current combiner path is firmware-driven. The separate `noise_est` block was also removed; firmware-triggered `noise_trig` windows now reuse `training_acc` noise mode, and `sigma2_valid` is generated only when a completed noise window was not contaminated by `sc_hit_dbg` or `sc_lock`. This acceptance timing still needs further directed verification.
 
 ### New register outputs (current RTL)
 
@@ -452,5 +454,5 @@ Source: `sim/sims/compare_mrc_methods.py` (SGE jobs 1368–1371).
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — holds rolling sample history; training accumulator reads from the decimator directly, not from SRAM
 - [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides `raw_j` and `iq_valid`
-- [Weight Generation](Weight%20Generation.md) — consumes `Z_j` and `n_acc`; dual hardware/software path
+- [Weight Generation](Weight%20Generation.md) — historical block note; current tapeout uses firmware-only weight generation
 - Register Map — `TACC_REF_SEL[1:0]` field selects reference branch

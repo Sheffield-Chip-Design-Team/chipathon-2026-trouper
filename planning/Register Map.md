@@ -1,6 +1,8 @@
 # Register Map
 
-Internal registers accessible through the SPI slave interface (RPi SPI0 CS1 -> ASIC).
+Internal registers accessible through two primary control paths:
+1.  **Trouper Host SPI Slave:** Dedicated interface for external host access (RPi SPI0 CS1).
+2.  **Grouper AHB-Lite Bus:** Shared system bus for inter-project control by the PicoRV32.
 
 This file is the authoritative register-map source for the non-FFT LoRa-MIMO architecture. All addresses below are final for the current planning set. There are no legacy aliases or compatibility mappings.
 
@@ -12,17 +14,17 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 
 | Address | Name | R/W | Reset | Block | Description |
 | --- | --- | --- | --- | --- | --- |
-| **Global / CPU / Debug** (`0x00`–`0x0F`) | | | | | |
+| **Global / Control / Debug** (`0x00`–`0x0F`) | | | | | |
 | `0x00` | `CHIP_ID` | R | `0xA7` | — | Chip identification byte |
 | `0x01` | `CHIP_REV` | R | `0x01` | — | Silicon revision |
-| `0x02` | `CPU_RESET` | R/W | `0x01` | Control | [0] hold PicoRV32 in reset; write 0 to release after firmware load |
+| `0x02` | — | — | — | — | Reserved (legacy `CPU_RESET`; Trouper has no local CPU reset control in the current revision) |
 | `0x03` | `DEBUG_CTRL` | R/W | `0x00` | JTAG TAP | [0] `JTAG_EN`; [7:1] reserved |
 | `0x04` | `GPIO_DIR` | R/W | `0x00` | JTAG TAP | GPIO direction bits for `TMS_GPIO0`, `TDI_GPIO1`, `TDO_GPIO2` when `JTAG_EN=0` |
 | `0x05` | `GPIO_OUT` | R/W | `0x00` | JTAG TAP | GPIO output values when `JTAG_EN=0` |
 | `0x06` | `GPIO_IN` | R | `0x00` | JTAG TAP | GPIO sampled inputs when `JTAG_EN=0` |
-| `0x07` | `CPU_SRAM_CTRL` | R/W | `0x00` | PicoRV32 Integration / Frontend Buffer | [0] `CPU_SRAM_BORROW_EN`; [1] `CPU_SRAM_SHARED_BORROW_EN`; [7:2] reserved |
-| `0x08` | `CPU_SRAM_STATUS` | R | `0x00` | PicoRV32 Integration / Frontend Buffer | [0] `CPU_SRAM_BANK0_PASS`; [1] `CPU_SRAM_BANK1_PASS`; [2] `CPU_SRAM_BANK2_PASS`; [3] `CPU_SRAM_BORROW_BANK_PASS`; [4] `CPU_SRAM_BORROW_AVAIL`; [5] `CPU_SRAM_BORROW_ACTIVE`; [7:6] reserved |
-| `0x09` | `TX_CTRL` | R/W | `0x00` | PicoRV32 FW | [0] `TX_PREP`; [1] `TX_DONE`; [2] `TX_ACTIVE`; [7:3] reserved |
+| `0x07` | — | — | — | — | Reserved (legacy CPU-SRAM borrow control; removed) |
+| `0x08` | — | — | — | — | Reserved (legacy CPU-SRAM status; removed) |
+| `0x09` | — | — | — | — | Reserved (was TX_CTRL; TX not supported) |
 | `0x0A` | `LOW_BAT_THR` | R/W | `0x02` | Control | Low-battery threshold configuration |
 | `0x0B`–`0x0F` | — | — | — | — | Reserved for future global boot/BIST/debug control |
 | **RX Front-End Configuration** (`0x10`–`0x1F`) | | | | | |
@@ -35,23 +37,22 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x16` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
 | `0x17` | `ENERGY_THR_HI` | R/W | `0x00` | Energy Measurement | Optional coarse energy threshold [15:8] used when `SC_CFG.ENERGY_GATE_EN=1` |
 | `0x18` | `ENERGY_THR_LO` | R/W | `0x00` | Energy Measurement | Optional coarse energy threshold [7:0] |
-| `0x19` | `SC_THR_HI` | R/W | `0x73` | Schmidl-Cox | Detection threshold `theta_sc` [15:8] (Q1.15), default 0.90 |
-| `0x1A` | `SC_THR_LO` | R/W | `0x33` | Schmidl-Cox | Detection threshold `theta_sc` [7:0] |
+| `0x19` | `SC_THR_HI` | R/W | `0x73` | Schmidl-Cox | Detection threshold register [15:8]. Current RTL only consumes bits [12:0]; reset value is legacy. |
+| `0x1A` | `SC_THR_LO` | R/W | `0x33` | Schmidl-Cox | Detection threshold register [7:0] |
 | `0x1B` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Consecutive SC hits required for `sc_lock`, valid range 1-3 |
 | `0x1C` | `SC_CFG` | R/W | `0x00` | Schmidl-Cox | [0] `ENERGY_GATE_EN`; [7:1] reserved |
 | `0x1D`–`0x1F` | — | — | — | — | Reserved for RX front-end growth |
 | **Gain / AGC / SX1257 Live RX Control** (`0x20`–`0x2F`) | | | | | |
-| `0x20` | `RX_GAIN_SHADOW_0` | R/W | `0x3E` | AGC / SPI Master | Pending `RegRxAnaGain` for SX1257_1 |
-| `0x21` | `RX_GAIN_SHADOW_1` | R/W | `0x3E` | AGC / SPI Master | Pending `RegRxAnaGain` for SX1257_2 |
-| `0x22` | `RX_GAIN_SHADOW_2` | R/W | `0x3E` | AGC / SPI Master | Pending `RegRxAnaGain` for SX1257_3 |
-| `0x23` | `RX_GAIN_SHADOW_3` | R/W | `0x3E` | AGC / SPI Master | Pending `RegRxAnaGain` for SX1257_4 |
-| `0x24` | `TX_GAIN_0` | R/W | `0x08` | SPI Master | SX1257_1 TX gain |
-| `0x25` | `TX_GAIN_1` | R/W | `0x08` | SPI Master | SX1257_2 TX gain |
-| `0x26` | `RX_GAIN_ACTIVE_0` | R | `0x3E` | AGC / SPI Master | Live applied `RegRxAnaGain` for SX1257_1 |
-| `0x27` | `RX_GAIN_ACTIVE_1` | R | `0x3E` | AGC / SPI Master | Live applied `RegRxAnaGain` for SX1257_2 |
-| `0x28` | `RX_GAIN_ACTIVE_2` | R | `0x3E` | AGC / SPI Master | Live applied `RegRxAnaGain` for SX1257_3 |
-| `0x29` | `RX_GAIN_ACTIVE_3` | R | `0x3E` | AGC / SPI Master | Live applied `RegRxAnaGain` for SX1257_4 |
-| `0x2A` | `RX_GAIN_CTRL` | R/W | `0x00` | AGC / SPI Master | [0] `RX_GAIN_COMMIT`; [1] `RX_GAIN_PENDING`; [2] `RX_GAIN_OWNER`; [3] `RX_GAIN_ERROR`; [7:4] reserved |
+| `0x20` | `RX_GAIN_SHADOW_0` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_1 (Trouper does not apply it on chip) |
+| `0x21` | `RX_GAIN_SHADOW_1` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_2 |
+| `0x22` | `RX_GAIN_SHADOW_2` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_3 |
+| `0x23` | `RX_GAIN_SHADOW_3` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_4 |
+| `0x24`–`0x25` | — | — | — | — | Reserved (was TX_GAIN_0/1; TX not supported) |
+| `0x26` | `RX_GAIN_ACTIVE_0` | R | `0x3E` | AGC / External Control | Software-maintained mirror of the live SX1257_1 gain setting |
+| `0x27` | `RX_GAIN_ACTIVE_1` | R | `0x3E` | AGC / External Control | Software-maintained mirror of the live SX1257_2 gain setting |
+| `0x28` | `RX_GAIN_ACTIVE_2` | R | `0x3E` | AGC / External Control | Software-maintained mirror of the live SX1257_3 gain setting |
+| `0x29` | `RX_GAIN_ACTIVE_3` | R | `0x3E` | AGC / External Control | Software-maintained mirror of the live SX1257_4 gain setting |
+| `0x2A` | `RX_GAIN_CTRL` | R/W | `0x00` | AGC / External Control | [0] `RX_GAIN_COMMIT`; [1] reserved; [2] reserved; [3] reserved; [7:4] reserved |
 | `0x2B`–`0x2F` | — | — | — | — | Reserved for AGC thresholds and gain diagnostics |
 | **Packet / Weight-Path Control** (`0x30`–`0x3F`) | | | | | |
 | `0x30` | `ACTIVE_MODE` | R | `0x00` | Control | Active mode latched at packet-safe boundary from `MIMO_CTRL.MODE` |
@@ -59,44 +60,44 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x32` | `IRQ_STATUS` | R | `0x00` | IRQ Controller | Sticky interrupt source bits |
 | `0x33` | `IRQ_CLEAR` | W | `0x00` | IRQ Controller | Write 1 to clear matching `IRQ_STATUS` bits |
 | `0x34` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | `PACKET_ACTIVE`, `PACKET_PHASE`, `TRAINING_DONE`, `W_PENDING`, `W_VALID`, `W_MISSED_PACKET` |
-| `0x35` | `WGT_CTRL` | R/W | `0x0E` | Weight Generation / Packet Control FSM / Combiner | `WGT_SRC`, `WGT_AUTO_COMMIT`, `WGT_MODE`, `W_COMMIT`, `W_VALID`, `W_PENDING`, `W_MISSED_PACKET` |
+| `0x35` | `WGT_CTRL` | R/W | `0x00` | Packet Control FSM / Combiner | [0] `W_COMMIT`; [1] `W_VALID`; [2] `W_PENDING`; [3] `W_MISSED_PACKET`; [7:4] reserved (WGT_SRC/AUTO_COMMIT/WGT_MODE removed — HW weight_gen gone) |
 | `0x36` | `COMB_POST_GAIN` | R/W | `0x00` | MRC Combiner | Post-combine left-shift gain after fixed guard divide-by-2 |
 | `0x37`–`0x3F` | — | — | — | — | Reserved for packet-FSM and weight-path expansion |
 | **Runtime Measurement / Live Observability** (`0x40`–`0x5F`) | | | | | |
-| `0x40` | `ENERGY_0_HI` | R | `0x00` | Energy Measurement | Antenna 0 energy snapshot [15:8] |
-| `0x41` | `ENERGY_0_LO` | R | `0x00` | Energy Measurement | Antenna 0 energy snapshot [7:0] |
-| `0x42` | `ENERGY_1_HI` | R | `0x00` | Energy Measurement | Antenna 1 energy snapshot [15:8] |
-| `0x43` | `ENERGY_1_LO` | R | `0x00` | Energy Measurement | Antenna 1 energy snapshot [7:0] |
-| `0x44` | `ENERGY_2_HI` | R | `0x00` | Energy Measurement | Antenna 2 energy snapshot [15:8] |
-| `0x45` | `ENERGY_2_LO` | R | `0x00` | Energy Measurement | Antenna 2 energy snapshot [7:0] |
-| `0x46` | `ENERGY_3_HI` | R | `0x00` | Energy Measurement | Antenna 3 energy snapshot [15:8] |
-| `0x47` | `ENERGY_3_LO` | R | `0x00` | Energy Measurement | Antenna 3 energy snapshot [7:0] |
-| `0x48` | `CORR_MAG_0_HI` | R | `0x00` | Correlator Bank | Branch 0 SC correlation magnitude [15:8] |
-| `0x49` | `CORR_MAG_0_LO` | R | `0x00` | Correlator Bank | Branch 0 SC correlation magnitude [7:0] |
-| `0x4A` | `CORR_MAG_1_HI` | R | `0x00` | Correlator Bank | Branch 1 SC correlation magnitude [15:8] |
-| `0x4B` | `CORR_MAG_1_LO` | R | `0x00` | Correlator Bank | Branch 1 SC correlation magnitude [7:0] |
-| `0x4C` | `CORR_MAG_2_HI` | R | `0x00` | Correlator Bank | Branch 2 SC correlation magnitude [15:8] |
-| `0x4D` | `CORR_MAG_2_LO` | R | `0x00` | Correlator Bank | Branch 2 SC correlation magnitude [7:0] |
-| `0x4E` | `CORR_MAG_3_HI` | R | `0x00` | Correlator Bank | Branch 3 SC correlation magnitude [15:8] |
-| `0x4F` | `CORR_MAG_3_LO` | R | `0x00` | Correlator Bank | Branch 3 SC correlation magnitude [7:0] |
-| `0x50` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current `Lambda^2[s]` magnitude-squared [15:8] |
-| `0x51` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current `Lambda^2[s]` magnitude-squared [7:0] |
-| `0x52` | `COND_NUM_HI` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: channel condition number [15:8] |
-| `0x53` | `COND_NUM_LO` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: channel condition number [7:0] |
-| `0x54` | `SNR_0_HI` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: post-combining SNR [15:8] |
-| `0x55` | `SNR_0_LO` | R | `0x00` | PicoRV32 FW | Optional firmware diagnostic: post-combining SNR [7:0] |
-| `0x56` | `NULL_QUALITY_HI` | R | `0x00` | PicoRV32 FW | Optional null-steering diagnostic: post-combining noise power ratio [15:8] (see register detail) |
-| `0x57` | `NULL_QUALITY_LO` | R | `0x00` | PicoRV32 FW | Optional null-steering diagnostic: post-combining noise power ratio [7:0] |
+| `0x40` | `ENERGY_0_HI` | R | `0x00` | Training Accumulator | Antenna 0 Z_kk energy [15:8] (latched at training_done) |
+| `0x41` | `ENERGY_0_LO` | R | `0x00` | Training Accumulator | Antenna 0 Z_kk energy [7:0] |
+| `0x42` | `ENERGY_1_HI` | R | `0x00` | Training Accumulator | Antenna 1 Z_kk energy [15:8] |
+| `0x43` | `ENERGY_1_LO` | R | `0x00` | Training Accumulator | Antenna 1 Z_kk energy [7:0] |
+| `0x44` | `ENERGY_2_HI` | R | `0x00` | Training Accumulator | Antenna 2 Z_kk energy [15:8] |
+| `0x45` | `ENERGY_2_LO` | R | `0x00` | Training Accumulator | Antenna 2 Z_kk energy [7:0] |
+| `0x46` | `ENERGY_3_HI` | R | `0x00` | Training Accumulator | Antenna 3 Z_kk energy [15:8] |
+| `0x47` | `ENERGY_3_LO` | R | `0x00` | Training Accumulator | Antenna 3 Z_kk energy [7:0] |
+| `0x48` | `CORR_MAG_0_HI` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [15:8]; currently hardwired 0 |
+| `0x49` | `CORR_MAG_0_LO` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [7:0]; currently hardwired 0 |
+| `0x4A` | `CORR_MAG_1_HI` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [15:8]; currently hardwired 0 |
+| `0x4B` | `CORR_MAG_1_LO` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [7:0]; currently hardwired 0 |
+| `0x4C` | `CORR_MAG_2_HI` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [15:8]; currently hardwired 0 |
+| `0x4D` | `CORR_MAG_2_LO` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [7:0]; currently hardwired 0 |
+| `0x4E` | `CORR_MAG_3_HI` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [15:8]; currently hardwired 0 |
+| `0x4F` | `CORR_MAG_3_LO` | R | `0x00` | Correlator Bank | Reserved SC magnitude readback [7:0]; currently hardwired 0 |
+| `0x50` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `|C[s]|^2` telemetry [15:8] |
+| `0x51` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `|C[s]|^2` telemetry [7:0] |
+| `0x52` | `COND_NUM_HI` | R | `0x00` | Grouper FW | Optional firmware diagnostic: channel condition number [15:8] |
+| `0x53` | `COND_NUM_LO` | R | `0x00` | Grouper FW | Optional firmware diagnostic: channel condition number [7:0] |
+| `0x54` | `SNR_0_HI` | R | `0x00` | Grouper FW | Optional firmware diagnostic: post-combining SNR [15:8] |
+| `0x55` | `SNR_0_LO` | R | `0x00` | Grouper FW | Optional firmware diagnostic: post-combining SNR [7:0] |
+| `0x56` | `NULL_QUALITY_HI` | R | `0x00` | Grouper FW | Optional null-steering diagnostic: post-combining noise power ratio [15:8] (see register detail) |
+| `0x57` | `NULL_QUALITY_LO` | R | `0x00` | Grouper FW | Optional null-steering diagnostic: post-combining noise power ratio [7:0] |
 | `0x58`–`0x5F` | — | — | — | — | Reserved; keep this page read-mostly live telemetry |
 | **Training and Estimation** (`0x60`–`0x8F`) | | | | | |
 | `0x60` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
 | `0x61` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [15:8] |
 | `0x62` | `N_ACC_LO` | R | `0x00` | Training Accumulator | Samples accumulated [7:0] |
 | `0x63` | `Z_SHIFT` | R | `0x00` | Training Accumulator | Common right shift applied to `Z_j` readback [5:0] |
-| `0x64` | `C_POOL_I_HI` | R | `0x00` | Schmidl-Cox | Pooled SC correlator real part [15:8] |
-| `0x65` | `C_POOL_I_LO` | R | `0x00` | Schmidl-Cox | Pooled SC correlator real part [7:0] |
-| `0x66` | `C_POOL_Q_HI` | R | `0x00` | Schmidl-Cox | Pooled SC correlator imag part [15:8] |
-| `0x67` | `C_POOL_Q_LO` | R | `0x00` | Schmidl-Cox | Pooled SC correlator imag part [7:0] |
+| `0x64` | `C_POOL_I_HI` | R | `0x00` | Schmidl-Cox | Reserved SC phasor readback [15:8]; currently hardwired 0 |
+| `0x65` | `C_POOL_I_LO` | R | `0x00` | Schmidl-Cox | Reserved SC phasor readback [7:0]; currently hardwired 0 |
+| `0x66` | `C_POOL_Q_HI` | R | `0x00` | Schmidl-Cox | Reserved SC phasor readback [15:8]; currently hardwired 0 |
+| `0x67` | `C_POOL_Q_LO` | R | `0x00` | Schmidl-Cox | Reserved SC phasor readback [7:0]; currently hardwired 0 |
 | `0x68` | `CFO_DIAG_HI` | R | `0x00` | Schmidl-Cox | Coarse CFO diagnostic [15:8] |
 | `0x69` | `CFO_DIAG_LO` | R | `0x00` | Schmidl-Cox | Coarse CFO diagnostic [7:0] |
 | `0x6A` | `NOISE_WIN_CTRL` | R/W | `0x00` | Training Accumulator | [0] `NOISE_EN`: enable noise-window accumulation mode; [7:1] reserved |
@@ -124,33 +125,18 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0x9D` | `W_3_RE_LO` | R/W | `0x00` | MRC Combiner | Branch 3 real [7:0] |
 | `0x9E` | `W_3_IM_HI` | R/W | `0x00` | MRC Combiner | Branch 3 imag [15:8] |
 | `0x9F` | `W_3_IM_LO` | R/W | `0x00` | MRC Combiner | Branch 3 imag [7:0] |
-| **Calibration Coefficients** (`0xA0`–`0xAF`) | | | | | |
-| `0xA0` | `CAL_0_I_HI` | R/W | `0x7F` | Weight Generation | Branch 0 calibration I [15:8] Q1.15 |
-| `0xA1` | `CAL_0_I_LO` | R/W | `0xFF` | Weight Generation | Branch 0 calibration I [7:0] |
-| `0xA2` | `CAL_0_Q_HI` | R/W | `0x00` | Weight Generation | Branch 0 calibration Q [15:8] |
-| `0xA3` | `CAL_0_Q_LO` | R/W | `0x00` | Weight Generation | Branch 0 calibration Q [7:0] |
-| `0xA4` | `CAL_1_I_HI` | R/W | `0x7F` | Weight Generation | Branch 1 calibration I [15:8] |
-| `0xA5` | `CAL_1_I_LO` | R/W | `0xFF` | Weight Generation | Branch 1 calibration I [7:0] |
-| `0xA6` | `CAL_1_Q_HI` | R/W | `0x00` | Weight Generation | Branch 1 calibration Q [15:8] |
-| `0xA7` | `CAL_1_Q_LO` | R/W | `0x00` | Weight Generation | Branch 1 calibration Q [7:0] |
-| `0xA8` | `CAL_2_I_HI` | R/W | `0x7F` | Weight Generation | Branch 2 calibration I [15:8] |
-| `0xA9` | `CAL_2_I_LO` | R/W | `0xFF` | Weight Generation | Branch 2 calibration I [7:0] |
-| `0xAA` | `CAL_2_Q_HI` | R/W | `0x00` | Weight Generation | Branch 2 calibration Q [15:8] |
-| `0xAB` | `CAL_2_Q_LO` | R/W | `0x00` | Weight Generation | Branch 2 calibration Q [7:0] |
-| `0xAC` | `CAL_3_I_HI` | R/W | `0x7F` | Weight Generation | Branch 3 calibration I [15:8] |
-| `0xAD` | `CAL_3_I_LO` | R/W | `0xFF` | Weight Generation | Branch 3 calibration I [7:0] |
-| `0xAE` | `CAL_3_Q_HI` | R/W | `0x00` | Weight Generation | Branch 3 calibration Q [15:8] |
-| `0xAF` | `CAL_3_Q_LO` | R/W | `0x00` | Weight Generation | Branch 3 calibration Q [7:0] |
+| **Calibration Coefficients** (`0xA0`–`0xAF`) — **REMOVED** | | | | | |
+| `0xA0`–`0xAF` | — | — | — | — | Reserved. Calibration coefficients (`CAL_j`) are not stored in the Trouper register bank in this revision. Grouper firmware or host software owns the active coefficient image. |
 | **External Memory / Radio Sideband Control** (`0xB0`–`0xBF`) | | | | | |
-| `0xB0` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR`; [2] `SAMPLE_WIDTH`; [7:3] reserved |
+| `0xB0` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR`; [2] `SAMPLE_WIDTH`; [3] `QSPI_OWNER`; [7:4] reserved |
 | `0xB1` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [2:0] state; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `PAD_CONFLICT` |
 | `0xB2` | `PSRAM_PKT_BYTES_HI` | R | `0x00` | PSRAM Buffer | Current packet bytes written to PSRAM [15:8] |
 | `0xB3` | `PSRAM_PKT_BYTES_LO` | R | `0x00` | PSRAM Buffer | Current packet bytes written to PSRAM [7:0] |
 | `0xB4` | `PSRAM_RD_OFFSET` | R | `0x00` | PSRAM Buffer | Replay start offset low 8 bits |
-| `0xB5` | `SX_TARGET` | R/W | `0x00` | SPI Master | [1:0] SX1257 target select; [7:2] reserved |
-| `0xB6` | `SX_ADDR` | R/W | `0x00` | SPI Master | [6:0] SX1257 register address |
-| `0xB7` | `SX_DATA` | R/W | `0x00` | SPI Master | Write payload or readback data |
-| `0xB8` | `SX_CTRL` | R/W | `0x00` | SPI Master | [0] `RNW`; [1] `START`; [2] `BUSY`; [7:3] reserved |
+| `0xB5` | — | — | — | — | Reserved (legacy Trouper SPI-master window removed) |
+| `0xB6` | — | — | — | — | Reserved (legacy Trouper SPI-master window removed) |
+| `0xB7` | — | — | — | — | Reserved (legacy Trouper SPI-master window removed) |
+| `0xB8` | — | — | — | — | Reserved (legacy Trouper SPI-master window removed) |
 | `0xB9`–`0xBF` | — | — | — | — | Reserved for off-chip interface growth |
 | **Bring-Up / Debug / BIST Observability** (`0xC0`–`0xCF`) | | | | | |
 | `0xC0` | `SC_DBG_FLAGS` | R | `0x00` | Schmidl-Cox | [0] `SC_HIT`; [2:1] hit counter; [3] `SC_LOCK`; [7:4] reserved |
@@ -168,11 +154,8 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xCC` | `SRAM_DUMP_ADDR_LO` | R/W | `0x00` | Frontend Buffer | Byte address bits [7:0] (0–255 within each 256-byte half of the 512 B macro) |
 | `0xCD` | `SRAM_DUMP_DATA` | R | `0x00` | Frontend Buffer | Byte at `{DUMP_ADDR_HI[1], DUMP_ADDR_HI[0], DUMP_ADDR_LO}` in selected macro; valid after `SRAM_DUMP_DONE=1` |
 | `0xCE`–`0xCF` | — | — | — | — | Reserved for bring-up-only observability |
-| **Noise Floor Estimator** (`0xD0`–`0xDF`) | | | | | |
-| `0xD0` | `NFE_CTRL` | R/W | `0x04` | Noise Floor Estimator | [0] `SIGMA2_SRC`; [3:1] `NOISE_ALPHA_SHIFT`; [7:4] reserved |
-| `0xD1` | `NFE_STATUS` | R | `0x00` | Noise Floor Estimator | [0] `SIGMA2_VALID`; [7:1] reserved |
-| `0xD2` | `NOISE_THRESH_HI` | R/W | `0x00` | Noise Floor Estimator | Near-far threshold [15:8] |
-| `0xD3` | `NOISE_THRESH_LO` | R/W | `0x00` | Noise Floor Estimator | Near-far threshold [7:0] |
+| **Training (continued) / Reserved** (`0xD0`–`0xDF`) | | | | | |
+| `0xD0`–`0xD3` | — | — | — | — | Reserved (was NFE_CTRL/STATUS/THRESH; hardware `noise_floor_est` removed — firmware owns sigma2 EMA in CPU SRAM) |
 | `0xD4`–`0xDB` | `Z_13` | R | `0x00` | Training Accumulator | Pair (1,3): I at 0xD4–0xD7, Q at 0xD8–0xDB. Big-endian int32. |
 | `0xDC`–`0xDF` | — | — | — | — | Reserved |
 | **Z_23 Pair and Z_kk Diagonal** (`0xE0`–`0xEF`) | | | | | |
@@ -181,10 +164,8 @@ All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address)
 | `0xEA`–`0xEB` | `ZDIAG_1_HI` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:16] |
 | `0xEC`–`0xED` | `ZDIAG_2_HI` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:16] |
 | `0xEE`–`0xEF` | `ZDIAG_3_HI` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:16] |
-| **Sigma2 Software Overrides** (`0xF0`–`0xFF`) | | | | | |
-| `0xF0` | `SIGMA2_COMMIT` | W | `0x00` | Noise Floor Estimator | Write-1 latch for software override values |
-| `0xF1`–`0xF8` | `SIGMA2_*_SW_*` | R/W | `0x00` | Noise Floor Estimator | Firmware override shadow values |
-| `0xF9`–`0xFF` | — | — | — | — | Reserved |
+| **Reserved** (`0xF0`–`0xFF`) | | | | | |
+| `0xF0`–`0xFF` | — | — | — | — | Reserved (was SIGMA2 software override bank; NFE removed — firmware maintains sigma2 estimates in CPU SRAM) |
 
 ---
 
@@ -210,38 +191,9 @@ Silicon revision.
 
 ---
 
-### `0x02` — CPU_RESET (read/write)
+### `0x02` — Reserved (legacy `CPU_RESET`)
 
-PicoRV32 reset control used during SPI firmware load.
-
-| Bits | Field | Description |
-| --- | --- | --- |
-| [0] | `CPU_RESET` | 1 = PicoRV32 held in reset (default); write 0 to release after firmware load |
-| [7:1] | — | Reserved, write 0 |
-
-Boot sequence when firmware is used:
-
-```text
-RPi: assert cpu_reset=1 (write 0x01 to 0x02)
-RPi: write firmware.bin to CPU SRAM base address (0x0000) over SPI
-RPi: de-assert cpu_reset=0 (write 0x00 to 0x02)
-PicoRV32: fetch from 0x00000, begin execution
-```
-
-Supported RX-only fallback:
-
-- keep `CPU_RESET=1`
-- leave `MIMO_CTRL=0xF0`
-- keep `PSRAM_CTRL.PSRAM_EN=0`
-- rely on hardware weight-generation defaults (`AUTO`, `AUTO_COMMIT=1`, `MODE=MRC`)
-- use fixed `RX_GAIN_ACTIVE_n` values (`0x3E` reset default, or host-programmed shadow values committed before RX)
-
-Planned host/UART backup extension:
-
-- host asserts or leaves `CPU_RESET=1` if PicoRV32 is not trusted
-- host reads `Z_j` and status, computes `W` off chip, writes `W_SHADOW`, and pulses `W_COMMIT` through the control path
-- `PSRAM_CTRL.PSRAM_EN=1` is required if the host/UART path must replay the full packet, including preamble, to the downstream LoRa baseband
-- with `PSRAM_CTRL.PSRAM_EN=0`, host/UART weights are only guaranteed for next-packet use or for the current payload if they beat the live payload boundary
+Trouper has no local CPU reset control in the current revision. Address `0x02` is reserved; reads return `0x00` and writes are ignored. Any Grouper firmware boot/reset sequencing is handled in the Grouper project, not through the Trouper register bank.
 
 ---
 
@@ -413,9 +365,9 @@ Maximum packet duration in LoRa symbols before the Packet Control FSM forces a r
 
 ### `0x20`–`0x2A` — RX gain shadow/active control and TX gain
 
-`RX_GAIN_SHADOW_n` holds the next SX1257 `RegRxAnaGain (0x0C)` value to be applied for branch `n`.
+`RX_GAIN_SHADOW_n` holds the desired SX1257 `RegRxAnaGain (0x0C)` value for branch `n` in software-visible form.
 
-`RX_GAIN_ACTIVE_n` is the live value already applied to the SX1257 and currently in force for reception.
+`RX_GAIN_ACTIVE_n` is a software-maintained mirror of the live value believed to be active on the external SX1257. Trouper itself does not issue the AFE write in this revision.
 
 Bit layout of each RX gain byte:
 
@@ -427,23 +379,17 @@ Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
 
 Commit model:
 
-- host or PicoRV32 writes `RX_GAIN_SHADOW_n`
-- writer pulses `RX_GAIN_CTRL.RX_GAIN_COMMIT`
-- hardware marks `RX_GAIN_PENDING=1`
-- the commit is all-or-nothing across all four branches
-- the Packet Control FSM `safe_switch` window (`IDLE`) is the only legal apply point
-- an internal gain-control sequencer uses the SX1257 SPI master to issue the four `RegRxAnaGain` writes
-- if all four SPI writes complete, `RX_GAIN_ACTIVE_n` updates atomically and `RX_GAIN_PENDING` clears
-- if the apply sequence does not complete, `RX_GAIN_ACTIVE_n` remains unchanged, `RX_GAIN_PENDING` stays set, and `RX_GAIN_ERROR` is raised
+- host or Grouper firmware writes `RX_GAIN_SHADOW_n`
+- software that owns the external AFE control path applies the corresponding SX1257 writes out of band
+- software MAY then update `RX_GAIN_ACTIVE_n` as a mirror for Trouper-side observability
+- `RX_GAIN_CTRL.RX_GAIN_COMMIT` is retained only as a software handshake/debug pulse in the current revision; it does not trigger an on-chip SPI sequence
 
 ### `0x2A` — RX_GAIN_CTRL (read/write)
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `RX_GAIN_COMMIT` | Write-1 pulse requesting promotion of all four `RX_GAIN_SHADOW_n` values at the next safe boundary |
-| [1] | `RX_GAIN_PENDING` | Read-only; shadow differs from active or SPI apply is still pending |
-| [2] | `RX_GAIN_OWNER` | Read-only owner state: 0 when `CPU_RESET=1`, 1 when `CPU_RESET=0` |
-| [3] | `RX_GAIN_ERROR` | Read-only sticky error from the previous apply sequence |
+| [0] | `RX_GAIN_COMMIT` | Write-1 pulse for software bookkeeping after updating `RX_GAIN_SHADOW_n` / external AFE state |
+| [3:1] | — | Reserved |
 | [7:4] | — | Reserved |
 
 `TX_GAIN_n` remains direct programmer-visible TX-path state and does not currently use a shadow/active scheme.
@@ -468,9 +414,8 @@ Sticky interrupt source bits.
 | [1] | `TRAINING_DONE` | Training accumulator complete; software path may inspect `Z_j` |
 | [2] | `W_MISSED_PACKET` | W was not committed before safe switch; current packet remains bypass |
 | [3] | `PACKET_DONE` | Packet Control FSM returned to `IDLE` |
-| [4] | `NOISE_READY` | Noise-window accumulation complete; `Z1`–`Z3` hold cross-correlations `R_10/R_20/R_30`; firmware may compute DOA and commit null weights |
-| [5] | `TX_PREP` | Host requested TX preparation |
-| [6] | `TX_DONE` | Host indicated TX complete |
+| [4] | `NOISE_READY` | Noise-window accumulation complete; firmware may read Z_kl and commit null weights |
+| [6:5] | — | Reserved (was TX_PREP/TX_DONE; TX not supported) |
 | [7] | — | Reserved |
 
 ### `0x33` — IRQ_CLEAR (write-only)
@@ -490,27 +435,17 @@ Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchan
 
 ### `0x35` — WGT_CTRL (read/write)
 
-Unified control/status register for the weight path.
+Weight-path commit control and status. `WGT_SRC`, `WGT_AUTO_COMMIT`, and `WGT_MODE` are removed — the hardware weight-generation block no longer exists. Firmware is the sole weight source and always uses the software commit path.
 
-- `WGT_SRC`, `WGT_AUTO_COMMIT`, and `WGT_MODE` configure the hardware weight-generation path
-- `W_COMMIT` is the shared commit pulse used by either the hardware path, PicoRV32, or the [UART Backup Interface](blocks/UART%20Backup%20Interface.md) after writing the `0x90`-`0x9F` W shadow bank
-- `W_VALID`, `W_PENDING`, and `W_MISSED_PACKET` report Packet Control FSM status for the active W bank
-
-Reset value `0x0E` selects the CPU-independent baseline:
-
-- `WGT_SRC=0` (`AUTO`)
-- `WGT_AUTO_COMMIT=1`
-- `WGT_MODE=11` (`MRC`)
+`W_COMMIT` is pulsed by Grouper firmware or the host (via SPI) after writing the `0x90`-`0x9F` W shadow bank. Reset value `0x00`.
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `WGT_SRC` | 0 = hardware AUTO path, 1 = software path |
-| [1] | `WGT_AUTO_COMMIT` | When `WGT_SRC=0`: 1 = hardware commits automatically, 0 = hardware waits for software `W_COMMIT` |
-| [3:2] | `WGT_MODE` | 00=bypass, 01=SC, 10=reserved, 11=MRC |
-| [4] | `W_COMMIT` | Write-1 pulse after W shadow writes complete |
-| [5] | `W_VALID` | Read-only mirror of active W valid state |
-| [6] | `W_PENDING` | Read-only pending commit state |
-| [7] | `W_MISSED_PACKET` | Read-only late-commit indicator |
+| [0] | `W_COMMIT` | Write-1 pulse after W shadow writes complete |
+| [1] | `W_VALID` | Read-only: active W bank is valid for the current packet |
+| [2] | `W_PENDING` | Read-only: training done but W commit not yet received |
+| [3] | `W_MISSED_PACKET` | Read-only: W was not committed before safe-switch; current packet stayed bypass |
+| [7:4] | — | Reserved |
 
 ---
 
@@ -529,26 +464,26 @@ Reset value `0x00` is conservative. Firmware/host may increase this after observ
 
 ### `0x40`–`0x47` — ENERGY[0..3] (read-only)
 
-Per-antenna energy estimates `sum(|x|^2)` captured at correlator lock. Int16 unsigned, proportional to received power before gain control.
+Per-antenna `Z_kk = Σ|raw_k[n]|²` latched at `training_done` from the Training Accumulator diagonal. Int16 unsigned (top 16 bits of the 32-bit accumulator). Replaces the former standalone Energy Measurement block — firmware reads these for AGC after `IRQ_TRAINING_DONE`. Note: `SC_CFG.ENERGY_GATE_EN` (pre-lock energy gating) is no longer supported without a dedicated pre-lock energy path; set to 0.
 
 ### `0x48`–`0x4F` — CORR_MAG[0..3] (read-only)
 
-Per-branch SC autocorrelation magnitudes for antennas 0-3. Int16 unsigned, latched at `sc_lock`.
+Reserved for future per-branch SC autocorrelation magnitude readback. In the current `trouper_top` integration all four fields are tied to `16'd0`, so firmware should treat them as unavailable telemetry until the detector outputs are wired through.
 
 ### `0x50`–`0x51` — SC_STAT (read-only)
 
-Current `Lambda^2[s]` magnitude-squared telemetry from the Schmidl-Cox detector.
+Current Schmidl-Cox metric numerator telemetry from the detector. This is the exposed `|C[s]|^2` snapshot (`sym_mag_sc[27:13]` plus a zero LSB), not a normalised `Lambda^2[s]` value.
 
 ---
 
 ### `0x60`–`0x69` — Training diagnostics (read-only)
 
-These registers expose training-window bookkeeping and pooled SC diagnostics:
+These registers expose training-window bookkeeping and placeholder SC diagnostics:
 
 - `TRAINING_STATUS`
 - `N_ACC`
 - `Z_SHIFT`
-- `C_POOL`
+- `C_POOL` (currently hardwired zero in `trouper_top`)
 - `CFO_DIAG`
 
 ### `0x56`–`0x57` — NULL_QUALITY (read-only, firmware-written)
@@ -613,19 +548,19 @@ Firmware eigenvector path: read all 6 Z_kl pairs, build the 4×4 Hermitian matri
 
 Pairs Z_13 and Z_23 are at `0xD4`–`0xDB` and `0xE0`–`0xE7` respectively. The conjugate `Z_lk = conj(Z_kl)` is implied by Hermitian symmetry — firmware reconstructs the full 4×4 matrix from these 6 unique values.
 
-Note: `training_acc.v` also outputs W_k per-branch sums (Z_i0/q0–Z_i3/q3) directly to the hardware weight generator; these are NOT in the register bank. The register bank exposes the individual Z_kl pairs for firmware use.
+Note: the register bank exposes the individual Z_kl pairs for firmware use. Firmware builds the 4×4 Hermitian matrix from these 6 unique off-diagonal values plus the Z_kk diagonals and computes weights in software.
 
 ---
 
 ### `0x90`–`0x9F` — W vector (read/write)
 
-MRC weight vector `w` (4 complex coefficients, int16 Q1.15). Written by hardware weight generation in AUTO mode or by PicoRV32 firmware in SW mode. The planned host/UART backup path also writes this shadow bank when off-chip weights are supplied. These locations hold the shadow bank; the live combiner reads only `W_ACTIVE`.
+MRC weight vector `w` (4 complex coefficients, int16 Q1.15). Written by Grouper firmware or a host-assisted path after computing weights from the Z_kl pairs. These locations hold the shadow bank; the live combiner reads only `W_ACTIVE`.
 
 `W_ACTIVE` updates atomically after `WGT_CTRL.W_COMMIT` is pulsed and the Packet Control FSM reaches an idle boundary.
 
-### `0xA0`–`0xAF` — Calibration coefficients
+### `0xA0`–`0xAF` — Calibration coefficients — **REMOVED**
 
-Static per-branch gain/phase calibration coefficients applied before weight generation. Default is unity (`1+0j`) on all branches.
+Removed from the register bank. Grouper firmware or host software owns the active `cal_j` coefficient image outside Trouper. No hardware path in Trouper reads these values directly.
 
 ---
 
@@ -636,44 +571,16 @@ Static per-branch gain/phase calibration coefficients applied before weight gene
 | [0] | `PSRAM_EN` | 0 = disabled (default); 1 = enable optional same-packet PSRAM buffering/replay |
 | [1] | `PSRAM_CLR_ERR` | Write 1 to clear sticky PSRAM error flags (`OVERFLOW`, `REPLAY_MISSED`); self-clears |
 | [2] | `SAMPLE_WIDTH` | 0 = 16-bit I/Q storage (default, max f_s = 1 MS/s); 1 = 32-bit I/Q storage (max f_s = 500 kS/s) |
-| [7:3] | — | Reserved |
+| [3] | `QSPI_OWNER` | 0 = Trouper `psram_buf_ctrl` owns the APS6404L pads for capture/replay (default); 1 = ownership transferred away from the replay controller for a future firmware-managed external-memory mode. Ownership changes take effect only when the PSRAM controller is idle. |
+| [7:4] | — | Reserved |
 
 ### `0xB1`–`0xB4` — PSRAM replay status (read-only)
 
-Only meaningful when `PSRAM_CTRL.PSRAM_EN=1`. Exposes the optional same-packet replay controller state and coarse pointer snapshots.
+Only meaningful when `PSRAM_CTRL.QSPI_OWNER=0` and `PSRAM_CTRL.PSRAM_EN=1`. Exposes the optional same-packet replay controller state and coarse pointer snapshots. When `QSPI_OWNER=1`, BUFFERING/REPLAY is suspended and the off-chip memory interface is reserved for a future firmware-managed access mode.
 
-### `0xB5`–`0xB8` — SX1257 pass-through
+### `0xB5`–`0xB8` — Reserved legacy SPI-master window
 
-Allows the RPi or PicoRV32 to issue arbitrary SX1257 register read/write transactions via the ASIC SPI master.
-
-Write sequence:
-
-```text
-1. Write SX_TARGET  <- device address (0-3 for SX1257_1-4)
-2. Write SX_ADDR    <- SX1257 register address
-3. Write SX_DATA    <- value to write
-4. Write SX_CTRL    <- 0x02  (RNW=0, START=1)
-5. Poll  SX_CTRL    until BUSY (bit 2) = 0
-```
-
-Read sequence:
-
-```text
-1. Write SX_TARGET  <- device address (0-3)
-2. Write SX_ADDR    <- SX1257 register address
-3. Write SX_CTRL    <- 0x03  (RNW=1, START=1)
-4. Poll  SX_CTRL    until BUSY (bit 2) = 0
-5. Read  SX_DATA    <- register contents
-```
-
-Arbitration: when PicoRV32 is running, firmware must poll `SX_CTRL[2]` before issuing any SPI-master transaction. The host should issue pass-through commands only during a known idle window, typically before releasing `CPU_RESET` or after asserting `CPU_RESET=1` again.
-
-Reference-clock note for SX1257 register writes:
-
-- the current board plan uses a shared `32 MHz` reference on `XTB`
-- there is no separate SX1257 PLL register bit to declare `32 MHz`; instead, all SX1257 frequency words must be computed for `F_XOSC = 32 MHz`
-- any `RegFrfRx*` / `RegFrfTx*` values copied from `36 MHz` examples must be recomputed
-- `RegRxBw[4:2]` (`RxAdcTrim`) must use the `32 MHz` setting `110` rather than the `36 MHz` setting `101`
+These addresses are reserved in the current revision. The earlier Trouper-local `SX_TARGET` / `SX_ADDR` / `SX_DATA` / `SX_CTRL` pass-through path was removed along with the on-chip AFE SPI master. Any SX1257 configuration now happens outside Trouper.
 
 ### `0xC0`–`0xC9` — SC Bring-Up Debug (read-only)
 
@@ -688,24 +595,9 @@ Optional Schmidl-Cox debug visibility intended primarily for FPGA and first-sili
 
 These registers are debug aids, not part of the normal packet-processing control path.
 
-### `0xD0` — NFE_CTRL (read/write)
+### `0xD0`–`0xD3` — **REMOVED** (was NFE_CTRL / NFE_STATUS / NOISE_THRESH)
 
-| Bits | Field | Description |
-| --- | --- | --- |
-| [0] | `SIGMA2_SRC` | 0 = hardware EMA estimate, 1 = software override bank |
-| [3:1] | `NOISE_ALPHA_SHIFT` | EMA smoothing shift |
-| [7:4] | — | Reserved |
-
-### `0xD1` — NFE_STATUS (read-only)
-
-| Bits | Field | Description |
-| --- | --- | --- |
-| [0] | `SIGMA2_VALID` | Hardware sigma2 estimate is valid |
-| [7:1] | — | Reserved |
-
-### `0xD2`–`0xD3` — NOISE_THRESH (read/write)
-
-Near-far guard threshold used by the packet-control and estimation path.
+Hardware `noise_floor_est` block removed. Firmware maintains per-branch sigma2 EMA in CPU SRAM using `ZDIAG_k` readback from the training accumulator (see `0xE8`–`0xEF`). These addresses are reserved.
 
 ### `0xE0`–`0xE7` — Z_23 pair readback (read-only)
 
@@ -725,12 +617,9 @@ Per-branch `Zdiag_k = Σ|raw_k[n]|²` over the training window. Top 16 bits of t
 In normal signal mode: `ZDIAG_k ≈ (|h_k|² + σ²_k) · n_acc`.
 In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 
-### `0xF0`–`0xF8` — SIGMA2 software override bank
+### `0xF0`–`0xFF` — **REMOVED** (was SIGMA2 software override bank)
 
-- `SIGMA2_COMMIT` at `0xF0`
-- `SIGMA2_*_SW_*` shadow values at `0xF1`-`0xF8`
-
-Firmware writes the shadow values first, then pulses `SIGMA2_COMMIT`.
+Removed along with the hardware NFE block. Firmware maintains sigma2 estimates in CPU SRAM. These addresses are reserved.
 
 ---
 
@@ -745,9 +634,9 @@ Firmware writes the shadow values first, then pulses `SIGMA2_COMMIT`.
 | `0x40`–`0x5F` | Runtime measurement and live observability |
 | `0x60`–`0x8F` | Training and estimation (Z_01–Z_12 pairs at 0x70–0x8F) |
 | `0x90`–`0x9F` | Active weight / shadow bank interface |
-| `0xA0`–`0xAF` | Calibration coefficients |
+| `0xA0`–`0xAF` | Reserved (calibration coefficients moved to CPU SRAM) |
 | `0xB0`–`0xBF` | External memory / radio sideband control |
 | `0xC0`–`0xCF` | Bring-up / debug / BIST observability |
-| `0xD0`–`0xDF` | Noise floor estimator; Z_13 pair at 0xD4–0xDB |
+| `0xD0`–`0xD3` | Reserved (NFE removed); `0xD4`–`0xDB` Z_13 pair; `0xDC`–`0xDF` reserved |
 | `0xE0`–`0xEF` | Z_23 pair (0xE0–0xE7); Z_kk diagonal (0xE8–0xEF) |
-| `0xF0`–`0xFF` | Sigma2 software overrides and commit |
+| `0xF0`–`0xFF` | Reserved (SIGMA2 override bank removed — NFE removed) |

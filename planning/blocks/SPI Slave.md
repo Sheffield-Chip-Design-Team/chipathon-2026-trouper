@@ -1,6 +1,6 @@
-# SPI Slave (Host Interface)
+# SPI Slave (Trouper Host Interface)
 
-Control block. See [System Architecture](../System%20Diagram.md) for context.
+Control block. See [System Architecture](../System%20Architecture.md) for context.
 
 **Owner:** TBD
 **Status:** Not started
@@ -9,14 +9,13 @@ Control block. See [System Architecture](../System%20Diagram.md) for context.
 
 ## Function
 
-SPI slave providing the RPi (SPI0 CS1) with:
+Dedicated SPI slave providing an external host (e.g., Raspberry Pi) with direct access to **Trouper's** internal configuration and status registers. This interface operates in parallel with the **AHB-Lite Slave** interface used for inter-project communication with Grouper.
 
-- byte-wide register read/write access to the ASIC configuration and status register bank
-- firmware load access into the PicoRV32 unified 4 kB CPU SRAM at `0x0000`–`0x0FFF`
+Key features:
+- byte-wide register read/write access to Trouper's register bank.
+- firmware load path into the local unified CPU SRAM (typically managed by Grouper's PicoRV32 but physically accessible for MPW-level bring-up).
 
-> **Non-FFT path:** The FFT-era burst SRAM read feature is removed from the active architecture. This block does **not** need any interface to the legacy 544 kB Baseband SRAM. The active requirements are register access plus firmware load into CPU SRAM only.
->
-> **Bus scope:** This block is **not** a general AHB-Lite bridge or bus master. Host SPI accesses terminate either in the register bank (`reg_*`) or in the dedicated CPU SRAM firmware-load / readback path (`fw_ld_*`). Arbitrary host peek/poke of the internal AHB-Lite address space is out of scope.
+> **Dual Control Model:** Trouper can be managed either via this SPI Slave (external host) or via the AHB-Lite Bus (internal Grouper master). Register access is arbitrated between these two masters, with Grouper usually having priority during normal operation.
 
 ---
 
@@ -28,7 +27,7 @@ SPI slave providing the RPi (SPI0 CS1) with:
 | `HOST_SCK` | in | 1 | SPI clock from RPi (up to 10 MHz) |
 | `HOST_MOSI` | in | 1 | Data from RPi |
 | `HOST_MISO` | out | 1 | Data to RPi |
-| `clk_16m` | in | — | Master clock (register domain) |
+| `clk_32m` | in | — | Master clock (register domain) |
 | `rst_n` | in | — | Active-low reset |
 | `reg_addr` | out | 8 | Decoded register address |
 | `reg_wdata` | out | 8 | Write data |
@@ -102,7 +101,6 @@ Semantics:
 - Writes beyond `0x0FFF` are ignored once the address reaches the top of the 4 kB CPU SRAM window.
 - Firmware writes are only permitted while `CPU_RESET[0] = 1`. Host software must assert `CPU_RESET` before issuing this command.
 - MISO returns `0x00` for all bytes of a write command.
-- The write command does not return an explicit success / fail status. The host confirms success by issuing opcode `0x02` readback for the same start address and length, then comparing returned bytes against the payload.
 
 ### Extended opcode `0x02` — firmware readback
 
@@ -117,22 +115,9 @@ Byte 4: len_minus_1
 Bytes 5...(5+N-1): host sends dummy bytes; MISO returns CPU SRAM bytes, starting at the specified start address and auto-incrementing after each byte
 ```
 
-Semantics:
-
-- Readback uses the same `0x000`–`0xFFF` byte-address window and auto-increment rule as write.
-- MISO during bytes 0–4 is `0x00`.
-- Returned data begins on byte 5.
-
 ### Boot sequence
 
 `CPU_RESET` is a normal register write to address `0x02`, not an extended command.
-
-Examples:
-
-```text
-Assert CPU reset:   0x82 0x01   // write register 0x02 = 0x01
-Release CPU reset:  0x82 0x00   // write register 0x02 = 0x00
-```
 
 ```
 1. Host writes CPU_RESET = 1 via register 0x02
@@ -142,65 +127,17 @@ Release CPU reset:  0x82 0x00   // write register 0x02 = 0x00
 5. PicoRV32 fetches from 0x00000
 ```
 
-### Mermaid transaction flow
-
-```mermaid
-sequenceDiagram
-    participant H as Host RPi
-    participant S as ASIC SPI Slave
-    participant M as CPU SRAM Load Port
-
-    H->>S: Normal write: 0x82 0x01
-    Note over H,S: CPU_RESET = 1
-
-    H->>S: CS low, Byte0=0x7F
-    H->>S: Byte1=0x01 (fw write)
-    H->>S: Byte2=addr_hi
-    H->>S: Byte3=addr_lo
-    H->>S: Byte4=len-1
-    loop payload bytes
-        H->>S: data byte
-        S->>M: fw_ld_addr, fw_ld_wdata, fw_ld_we
-    end
-    H->>S: CS high
-
-    opt optional readback
-        H->>S: CS low, Byte0=0x7F
-        H->>S: Byte1=0x02 (fw readback)
-        H->>S: Byte2=addr_hi
-        H->>S: Byte3=addr_lo
-        H->>S: Byte4=len-1
-        loop dummy bytes
-            H->>S: dummy byte
-            S-->>H: CPU SRAM data byte
-        end
-        H->>S: CS high
-    end
-
-    H->>S: Normal write: 0x82 0x00
-    Note over H,S: CPU_RESET = 0
-```
-
-
-`HOST_CS` must stay asserted for the full header (5 bytes) plus all payload bytes. `fw_ld_we` pulses once per accepted byte; `fw_ld_addr` auto-increments. `MISO=0x00` throughout. If `HOST_CS` deasserts early, the command is aborted and any partial trailing byte is discarded.
-
 ---
 
 ## Implementation notes
 
-**Clock domain crossing.** SPI clock (up to 10 MHz) and 16 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into `clk_16m` with a small handshake or async FIFO. Do not try to edge-detect `HOST_SCK` directly inside the 16 MHz domain.
+**Parallel Control Paths.** This SPI slave is a dedicated physical interface on the MPW, allowing host control of Trouper even if the Grouper project is inactive or held in reset.
 
-**MISO drive.** Drive `HOST_MISO` only when `HOST_CS` is asserted. Tristate (or drive low) otherwise. In the full split pinout `HOST_MISO` is a dedicated pad so no bus contention with the SX1257 master path is possible. In condensed PCB-bridge mode the output-enable rule still applies, and the SX1257 SPI master must additionally mask its `SX_MOSI`/`SX_SCK` output enables while `HOST_CS` is low — see condensed SPI option in [Pinout](../Pinout.md).
+**Arbitration.** Accesses from this SPI slave and the internal AHB-Lite slave interface are arbitrated at the register bank. Wait states are used to manage concurrent access.
 
-**Bus conflict.** In the full split pinout the host slave pads (`HOST_MOSI`, `HOST_SCK`, `HOST_CS`) and the SX1257 master pads (`SX_MOSI`, `SX_SCK`) are electrically independent — no contention is possible regardless of timing. In condensed mode, firmware must not initiate an SX1257 transaction while `HOST_CS` is asserted and vice versa.
+**Clock domain crossing.** SPI clock (up to 10 MHz) and the 32 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into the core domain with a small handshake or async FIFO.
 
-**Register bank.** Thin address decoder maps `reg_addr` to the register file. Writable registers latch `reg_wdata` on `reg_we`. Read-only registers ignore `reg_we`.
-
-**Firmware-load datapath.** The firmware-load port is byte-oriented at the SPI slave boundary. The downstream CPU SRAM wrapper may pack these writes into 32-bit macro writes internally, but that packing is not visible on the host SPI interface.
-
-**Throughput.** At 10 MHz SPI, one payload byte arrives every 0.8 us. The firmware-load sink only needs to sustain 1.25 MB/s peak. A one-byte ready/accept handshake is sufficient; no DMA is required.
-
-**Command decoding.** Normal 2-byte register frames and extended `0x7F` frames are distinct protocol classes. The parser must commit to one class from Byte 0 and must not reinterpret a partially received extended frame as a register access.
+**MISO drive.** Drive `HOST_MISO` only when `HOST_CS` is asserted. Tristate (or drive low) otherwise. This pad is dedicated to Trouper in the full split pinout.
 
 ---
 
@@ -210,18 +147,14 @@ sequenceDiagram
 | --- | --- | --- |
 | CHIP_ID read | cocotb SPI master; read 0x00 | Returns 0xA7 |
 | Register write + readback | Write known pattern to all R/W registers; read back | Byte-identical readback |
-| Read-only register write | Write to CHIP_ID; read back | Still returns 0xA7 |
 | Extended-command decode | Send `0x7F` frame with opcode `0x01` and `0x02` | Correct command selected; normal register path not triggered |
-| Firmware load write | Write 256-byte binary with opcode `0x01` starting at `0x000` | `fw_ld_addr` auto-increments; contents match expected bytes |
-| Firmware readback | Preload CPU SRAM; read with opcode `0x02` | MISO returns byte-identical contents starting on byte 5 |
-| CPU_RESET sequence | Assert, load, de-assert; monitor PicoRV32 fetch | CPU starts fetching from `0x00000` |
-| Early-CS abort | Deassert `HOST_CS` mid-extended command | Partial trailing byte discarded; next transaction starts cleanly |
-| Back-to-back transactions | Multiple single-byte accesses | No missed edges; correct data each transaction |
+| Concurrent Access | SPI Slave vs AHB-Lite access to same register | Correct data returned to both; arbitration verified |
+| CPU_RESET sequence | Assert, load, de-assert via SPI; monitor fetch | Trouper/Grouper initialisation follows expected flow |
 
 ---
 
 ## Related blocks
 
-- [Register Map](../Register%20Map.md) — authoritative active register set for tapeout
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — unified 4 kB CPU SRAM target for firmware load; `CPU_RESET` register
-- [AHB-Lite Bus](AHB-Lite%20Bus.md) — internal bus for register access
+- [Register Map](../Register%20Map.md) — authoritative register set
+- [PicoRV32 Integration](PicoRV32%20Integration.md) — firmware load target
+- [AHB-Lite Bus](AHB-Lite%20Bus.md) — parallel control path from Grouper

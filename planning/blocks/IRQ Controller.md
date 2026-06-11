@@ -21,8 +21,6 @@ Collects interrupt sources from DSP blocks and routes them to PicoRV32 (internal
 | `training_done` | Training Accumulator / Packet Control FSM | Preamble accumulation complete — firmware should compute W |
 | `W_missed_packet` | Packet Control FSM | W was not committed before packet completion; packet stayed in bypass |
 | `packet_done` | Packet Control FSM | FSM returned to IDLE (packet ended or timed out) |
-| `tx_prep` | TX_CTRL[0] register | Host requests TX preparation — disable RX antennas, switch SX1257s to TX |
-| `tx_done` | TX_CTRL[1] register | Host signals TX complete — restore SX1257s to RX, re-enable antennas |
 
 ---
 
@@ -56,9 +54,7 @@ Mirrors `IRQ_STATUS` (`0x32`) and `IRQ_CLEAR` (`0x33`) in the register map.
 | [1] | `training_done` | Write 1 to bit [1] |
 | [2] | `W_missed_packet` | Write 1 to bit [2] |
 | [3] | `packet_done` | Write 1 to bit [3] |
-| [4] | reserved | — |
-| [5] | `tx_prep` | Write 1 to bit [5] |
-| [6] | `tx_done` | Write 1 to bit [6] |
+| [4:6] | reserved | — |
 
 `irq_out` = OR of all uncleared sources. `IRQ` pad mirrors `irq_out`.
 
@@ -80,8 +76,6 @@ Interrupt sources originate in DSP blocks that run at either 16 MHz or 32 MHz:
 | `training_done` | 16 MHz (Training Accumulator / Packet Control FSM) | No |
 | `W_missed_packet` | 16 MHz (Packet Control FSM) | No |
 | `packet_done` | 16 MHz (Packet Control FSM) | No |
-| `tx_prep` | 16 MHz (register write from SPI slave / AHB) | No |
-| `tx_done` | 16 MHz (register write from SPI slave / AHB) | No |
 
 Any future source generated in the 32 MHz domain (e.g. a SX1257 DIO pin, or a CIC-domain event) must pass through a 2-FF synchroniser before entering the sticky-bit latch. Do not add unsynchronised external signals directly to the IRQ OR tree.
 

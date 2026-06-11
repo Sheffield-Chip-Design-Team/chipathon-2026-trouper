@@ -1,6 +1,6 @@
 # Frontend Calibration — RF Loopback Procedure
 
-Derives and programs the `cal_j` coefficients (`CAL_0..3` registers at `0xA0`–`0xAF`) that correct per-branch gain and phase mismatch in the Weight Generation block.
+Derives and programs the `cal_j` coefficients used by firmware weight generation to correct per-branch gain and phase mismatch before MRC/eigenvector computation.
 
 **Related:** [Weight Generation](blocks/Weight%20Generation.md) · [Register Map](Register%20Map.md) · [Test Plan — AFE characterisation](Test%20Plan.md) · [System Architecture](System%20Architecture.md)
 
@@ -8,15 +8,29 @@ Derives and programs the `cal_j` coefficients (`CAL_0..3` registers at `0xA0`–
 
 ## Background
 
-The Weight Generation block applies calibration as:
+Firmware weight generation applies calibration as:
 
 ```
 H_j_cal = H_j · conj(cal_j)
 ```
 
-`H_j` is the per-branch channel estimate produced by the Training Accumulator. `cal_j` is a static complex Q1.15 coefficient that corrects for gain/phase mismatch introduced by the SX1257 mixers, LNA, and PCB routing — mismatch that is constant across packets and must be removed before coherent combining.
+`H_j` is the per-branch channel estimate produced by the Training Accumulator. `cal_j` is a static complex Q1.15 coefficient that corrects for gain/phase mismatch introduced by the SX1257 mixers and PCB routing — mismatch that is constant across packets and must be removed before coherent combining.
 
 Default: `cal_j = 1+0j` (no correction) for all branches.
+
+### Current limitation — true I/Q imbalance
+
+This procedure corrects **scalar** branch mismatch only: relative gain error and relative carrier-phase error between receive branches. It does **not** implement a true per-branch I/Q imbalance correction.
+
+That distinction matters because true I/Q imbalance is widely-linear. A mismatched branch is better modelled as:
+
+```
+y_j = mu_j * x_j + nu_j * conj(x_j)
+```
+
+not just `y_j = a_j * x_j`. A single complex coefficient `cal_j` can absorb the `a_j` term but cannot cancel the image term `nu_j * conj(x_j)`.
+
+For the current Trouper revision, treat any residual branch-dependent I/Q imbalance as an uncorrected frontend impairment. It can bias the measured Z matrix and reduce the achievable gain of the existing linear MRC / eigenvector combiner even when DC removal and scalar calibration are working correctly.
 
 ### Why the signal must be a LoRa preamble
 
@@ -115,26 +129,11 @@ Q1.15 cannot represent exactly +1.0; 0x7FFF ≈ +0.99997 is the maximum. The err
 
 ### Step 1 — Reset cal_j to defaults
 
-Write the default values to all `CAL` registers so no prior calibration affects the measurement:
+The dedicated `CAL_*` hardware register bank was removed with the hardware `weight_gen` block. For the current tapeout plan, initialise the firmware-side `cal_j` table in CPU SRAM (or the host-side equivalent if weights are computed off-chip) to:
 
-| Register | Address | Value |
-|---|---|---|
-| `CAL_0_I_HI` | `0xA0` | `0x7F` |
-| `CAL_0_I_LO` | `0xA1` | `0xFF` |
-| `CAL_0_Q_HI` | `0xA2` | `0x00` |
-| `CAL_0_Q_LO` | `0xA3` | `0x00` |
-| `CAL_1_I_HI` | `0xA4` | `0x7F` |
-| `CAL_1_I_LO` | `0xA5` | `0xFF` |
-| `CAL_1_Q_HI` | `0xA6` | `0x00` |
-| `CAL_1_Q_LO` | `0xA7` | `0x00` |
-| `CAL_2_I_HI` | `0xA8` | `0x7F` |
-| `CAL_2_I_LO` | `0xA9` | `0xFF` |
-| `CAL_2_Q_HI` | `0xAA` | `0x00` |
-| `CAL_2_Q_LO` | `0xAB` | `0x00` |
-| `CAL_3_I_HI` | `0xAC` | `0x7F` |
-| `CAL_3_I_LO` | `0xAD` | `0xFF` |
-| `CAL_3_Q_HI` | `0xAE` | `0x00` |
-| `CAL_3_Q_LO` | `0xAF` | `0x00` |
+```
+cal_0 = cal_1 = cal_2 = cal_3 = 1 + 0j
+```
 
 ### Step 2 — Enable calibration signal path
 
@@ -147,17 +146,16 @@ Write the default values to all `CAL` registers so no prior calibration affects 
 **Method B:**
 
 1. Configure all four SX1257s at the same centre frequency and SF as the SX1302 TX.
-2. Enable RF loopback on each SX1257 (SX1257 datasheet §3.8.2). The PA output is internally routed to the LNA input; FEM T/R switch state does not matter.
-3. Set SX1302 PA power to the minimum configurable level — the internal loopback path has no FEM attenuation and will saturate the RX at normal TX power.
+2. Enable RF loopback on each SX1257 (SX1257 datasheet §3.8.2). The PA output is internally routed to the LNA input.
+3. Set SX1302 PA power to the minimum configurable level — the internal loopback path has no external attenuation and will saturate the RX at normal TX power.
 4. Trigger the SX1302 to begin transmitting a LoRa preamble repeatedly.
 
 ### Step 3 — Capture Z_j
 
-1. Set `WGT_SRC = SW` (bit 0 of `WGT_CTRL` = 1) so the hardware FSM does not auto-commit and overwrite the measurement.
-2. Set `MIMO_CTRL.MODE=0` (MRC mode) and enable all four branches (`ANTENNA_EN = 0xF`).
-3. Arm the SC detector and wait for `IRQ_TRAINING_DONE`. The Training Accumulator produces `Z_j` by correlating each branch against the upchirp reference.
-4. Read `Z_j` from registers `0x70`–`0x8F` (see [Register Map](Register%20Map.md) for byte layout). Each `Z_j` is a complex int32 pair: I[31:0] at byte offsets 0–3, Q[31:0] at byte offsets 4–7, for branch j = 0..3.
-5. Record `Z_j` for all four branches.
+1. Set `MIMO_CTRL.MODE=0` (MRC mode) and enable all four branches (`ANTENNA_EN = 0xF`).
+2. Arm the SC detector and wait for `IRQ_TRAINING_DONE`. The Training Accumulator produces the all-pairs Z matrix.
+3. Read the required Z values from the register bank. For the current firmware path, prefer the full all-pairs matrix (`0x70`–`0xEF`) rather than the legacy `Z_j` subset.
+4. Record the per-branch complex estimates needed to derive `cal_j` for all four branches.
 
 Repeat steps 3–5 three times and average in the complex domain to reduce noise:
 
@@ -200,27 +198,18 @@ def to_q15(x):
 cal_q15 = [(to_q15(c.real), to_q15(c.imag)) for c in cal]
 ```
 
-### Step 5 — Write cal_j to registers via SPI
+### Step 5 — Store cal_j for firmware use
 
 ```python
-reg_map = [
-    (0xA0, 0xA1, 0xA2, 0xA3),   # branch 0: I_HI, I_LO, Q_HI, Q_LO
-    (0xA4, 0xA5, 0xA6, 0xA7),   # branch 1
-    (0xA8, 0xA9, 0xAA, 0xAB),   # branch 2
-    (0xAC, 0xAD, 0xAE, 0xAF),   # branch 3
-]
-
-for j, (I_HI, I_LO, Q_HI, Q_LO) in enumerate(reg_map):
-    I_val, Q_val = cal_q15[j]
-    spi_write(I_HI, (I_val >> 8) & 0xFF)
-    spi_write(I_LO,  I_val       & 0xFF)
-    spi_write(Q_HI, (Q_val >> 8) & 0xFF)
-    spi_write(Q_LO,  Q_val       & 0xFF)
+# Current plan: keep calibration coefficients in firmware memory.
+# They may be compiled into the firmware image, loaded into CPU SRAM before
+# releasing CPU reset, or supplied to an off-chip host weight engine.
+firmware_cal = cal_q15
 ```
 
 ### Step 6 — Verify
 
-Repeat Step 3 (inject preamble, wait for `IRQ_TRAINING_DONE`, read `Z_j`) with `cal_j` now programmed. The Weight Generation block now applies `H_j_cal = H_j · conj(cal_j)` before producing weights.
+Repeat Step 3 with `cal_j` now loaded into firmware memory. Firmware weight generation now applies `H_j_cal = H_j · conj(cal_j)` before producing weights.
 
 ```python
 Z_post = read_z_j_registers()   # new measurement with cal applied
@@ -236,7 +225,7 @@ amp_spread = np.max(amplitudes_dB) - np.min(amplitudes_dB)
 assert amp_spread < 0.5, f"Residual amplitude spread = {amp_spread:.1f} dB — re-check"
 ```
 
-If both checks pass, set `WGT_SRC = AUTO` (bit 0 of `WGT_CTRL` = 0) to return to normal hardware weight generation.
+If both checks pass, retain these coefficients as the firmware default calibration set for normal operation.
 
 ---
 

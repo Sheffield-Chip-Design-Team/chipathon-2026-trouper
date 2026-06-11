@@ -9,7 +9,7 @@
 | Status | DRAFT |
 | Date | 2026-06-10 |
 | Project | SSCS PICO Chipathon 2026 — Trouper (DSP) |
-| Companion | Grouper companion project provides the primary firmware control plane over AHB-Lite |
+| Companion | Grouper is a separate hardened control macro; Trouper is hardened independently and integrated with Grouper only at a later top level |
 
 > **Requirement notation:** SHALL = mandatory, SHOULD = strongly recommended, MAY = optional.
 > **Columns:** ID · Priority (C=Critical / H=High / M=Medium / L=Low) · Type (F=Functional / P=Performance / I=Interface / HW=Physical) · Requirement · Verification (T=Test/Simulation / A=Analysis / I=Inspection)
@@ -20,7 +20,7 @@
 
 Trouper is a pure DSP ASIC implementing a NT=1 NR=4 Maximum Ratio Combining (MRC) LoRa diversity receiver in GF180MCU (3.3 V). It accepts four 1-bit ΣΔ I/Q streams from SX1257 RF front-ends, performs preamble detection, channel estimation, and MRC combining, and outputs a 1-bit ΣΔ re-modulated combined stream to an SX1302 LoRa baseband.
 
-Trouper is a DSP/peripheral slave connected to the companion Grouper project over AHB-Lite and also exposes a dedicated host SPI register interface. Weight computation is performed by Grouper firmware or a host-assisted software path. Trouper SHALL also operate in bypass mode when no weight commit is received or the companion control plane is inactive.
+Trouper is a standalone hardened DSP macro. In the current top-level RTL it exposes a simple external byte-oriented configuration/status interface rather than embedding PicoRV32 or an on-chip AHB-Lite master/slave fabric. Weight computation is performed externally by Grouper firmware or a host-assisted software path. Trouper SHALL also operate in bypass mode when no weight commit is received or the external control plane is inactive.
 
 ---
 
@@ -28,7 +28,7 @@ Trouper is a DSP/peripheral slave connected to the companion Grouper project ove
 
 | Term | Definition |
 |---|---|
-| Grouper control plane | Companion RV32IM firmware subsystem in Grouper; accesses Trouper through the inter-project AHB-Lite link |
+| Grouper control plane | Separate hardened RV32IM control macro; accesses Trouper from a higher-level top integration, not from inside the standalone Trouper hard macro |
 | Host SPI | External Raspberry Pi or equivalent controller using the SPI slave for Trouper register access and debug |
 | MRC | Maximum Ratio Combining — coherent weighted sum of NR=4 antenna branches |
 | SC lock | Schmidl-Cox preamble lock; triggers training accumulation |
@@ -51,8 +51,8 @@ Trouper is a DSP/peripheral slave connected to the companion Grouper project ove
 | TRPR-SYS-016 | C | P | **250 kS/s tier** — the following blocks are updated only on `iq_valid` and MAY use the full MCP=2 budget (62.5 ns): `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `reg_bank`, `irq_ctrl`, `spi_slave`, `packet_ctrl_fsm`. Exception: the SC detector TDM FSM evaluates 8 multiply-accumulate steps within each `iq_valid` window; each step is a single-cycle dependency. MCP=2 under-constrains these TDM paths, making the SC detector accumulator the dominant SS timing violator (see TRPR-PHY-008). Weight generation is not an RTL block in Trouper; it is performed entirely by Grouper firmware or an equivalent host-assisted software path (see §4.6). | I |
 | TRPR-SYS-004 | C | F | Trouper SHALL support LoRa bandwidths of 125 kHz and 250 kHz only. 500 kHz BW is out of scope. | A |
 | TRPR-SYS-005 | C | F | Trouper SHALL operate in standalone bypass mode when no weight commit is received, routing the lowest-numbered enabled antenna to the output. | T |
-| TRPR-SYS-006 | C | I | Trouper SHALL include an internal control fabric linking the inter-project AHB-Lite slave endpoint, the SPI slave bridge, and the register/peripheral fabric. | T |
-| TRPR-SYS-007 | H | I | Trouper SHALL expose an SPI slave interface for host-side register access and debug. SX1257 configuration is not performed by a Trouper on-chip SPI master in this revision. | T |
+| TRPR-SYS-006 | C | I | Trouper SHALL expose a byte-oriented external configuration/status interface that can be driven by a higher-level integration wrapper or companion control macro. | T |
+| TRPR-SYS-007 | H | I | Host-side SPI access, if required in the final chip, SHALL be provided by the higher-level integration wrapper around the hardened Trouper macro rather than by logic embedded in the standalone Trouper hard macro. | T |
 | TRPR-SYS-008 | C | HW | Trouper SHALL be fabricated in GF180MCU (gf180mcuD PDK), 3.3 V core and IO, targeting the `gf180mcu_fd_sc_mcu7t5v0` standard-cell library. | I |
 | TRPR-SYS-009 | C | HW | The total pad count SHALL NOT exceed 23 (20 signal pads + 3 supply/ground pads) in the current no-SPI-master revision. | I |
 | TRPR-SYS-010 | C | P | The end-to-end RTL implementation SHALL be validated bit-exactly against the Python reference model in `sim/models/receiver.py` across the full input dynamic range. | T |
@@ -79,6 +79,22 @@ Trouper operates from a single external 32 MHz clock (`IQ_CLK`). Within this clo
 **Future path:** A true 2-clock split (32 MHz + 16 MHz) with CDC synchronisers at `iq_valid` would be the architecturally clean solution, allowing the 250 kS/s-tier SDC to specify `CLOCK_PERIOD 62.5` and remove the MCP=2 workaround. This is deferred to a v2 revision.
 
 ---
+
+
+### 3.x Current Hardened-Macro Boundary
+
+The active `trouper_top` hard macro is now **radio-only**:
+
+- no embedded PicoRV32, AHB-Lite fabric, SPI slave, or IRQ controller exists inside the hardened Trouper RTL boundary
+- the active control/status boundary is the external byte interface `CFG_ADDR`, `CFG_WDATA`, `CFG_WE`, `CFG_RE`, `CFG_RDATA`, `CFG_READY`, plus `IRQ_OUT`
+- `mimo_rx_top` remains only as a legacy compatibility wrapper for older flows and is not the canonical hardened macro
+
+Recent area-reduction work removed two stale hardware paths from the active RTL:
+
+- the legacy `W_k` / `Z_i*` / `Z_q*` training-accumulator outputs, because the current firmware-driven combiner path does not consume them
+- the standalone `noise_est` block, replacing it with firmware-triggered `training_acc` noise-mode windows and `Zdiag`-based validity gating
+
+Open verification note: the new noise-window accept/reject path uses `training_done` plus SC-contamination tracking (`sc_hit_dbg` / `sc_lock`) and still requires directed verification of edge timing around window end.
 
 ## 4. Block Requirements
 
@@ -248,7 +264,7 @@ training_done IRQ fires
 | TRPR-WGN-001 | C | F | Weight generation SHALL be performed exclusively by software running on Grouper or an equivalent host-assisted control path. No HW weight_gen block SHALL be instantiated in Trouper RTL. | I |
 | TRPR-WGN-002 | C | I | Trouper SHALL expose all 6 off-diagonal Z_kl pairs and 4 diagonal Z_kk values in the register bank (see TRPR-TAC-004, TRPR-TAC-005) for firmware to read after `training_done`. | T |
 | TRPR-WGN-003 | C | I | Firmware SHALL write the computed weight vector to the Trouper shadow weight bank (0x90–0x9F: 4 × int16 complex, big-endian) and then pulse `WGT_CTRL.W_COMMIT` (0x35[0]) within the W_PENDING window. | T |
-| TRPR-WGN-004 | C | P | The total firmware latency from `training_done` IRQ to `W_COMMIT` pulse SHALL be less than one LoRa symbol period to avoid `W_MISSED_PACKET`. The eigenvector path (8 power-iteration steps, 4×4 complex at 16 MHz) is estimated at ~3,000–5,000 RV32IM cycles (~200–300 µs), which fits inside the SF5 worst-case budget of ~1 ms. The MRC row-sum path is faster by roughly 10×. | A |
+| TRPR-WGN-004 | C | P | **Firmware timing deadline — same-packet PSRAM replay mode (primary):** `W_COMMIT` must arrive before `packet_end`. Available window from `training_done` to `packet_end` = **(4.25 + n_payload_syms) × T_symbol** (training window consumes 8 of the 12.25 preamble symbols; residual 4.25 preamble symbols plus full payload remain). Worst case is minimum-payload: 4.25 × T_symbol. Margin by SF at 250 kHz BW (eigenvector path, ~335 µs; MRC row-sum, ~55 µs): SF6 = **3.3×** (1.09 ms window); SF7 = **6.5×** (2.18 ms); SF8 = **13×** (4.35 ms); SF9 = **26×** (8.70 ms); SF12 = **208×** (69.6 ms). Tightest case: SF6 minimum payload. Risk: AHB inter-project stall cycles at SF6 can halve the margin — firmware SHALL prioritise `training_done` over all other IRQ sources. The "one symbol period" constraint was for the removed next-packet path and is superseded. | A |
 | TRPR-WGN-005 | H | F | The primary firmware weight mode SHALL be MRC: `W_k = conj(Z_0k) / Σ |Z_0k|`, normalised to fit int16 Q1.15. | T |
 | TRPR-WGN-006 | H | F | The secondary firmware weight mode SHALL be **principal eigenvector via power iteration** (not ALMMSE): firmware finds the dominant eigenvector of the 4×4 Hermitian Z matrix using 8 fixed-point iterations on RV32IM, then conjugates and normalises to Q1.15. Algorithm: (1) normalise all Z entries to int12 via a common right-shift to prevent int32 overflow; (2) iteratively compute w = Z·v (exploiting Hermitian symmetry, 4 complex dot products per row), renormalise v by the max-magnitude power-of-2 shift; (3) after 8 iterations, output W_k = conj(v_k) × 32767 / v_max. Diagonal Z_kk is read from `ZDIAG_k` (0xE8–0xEF) as bits [31:16] of the 32-bit accumulator (left-shift by 16 before comparing magnitude with off-diagonal int32 entries). Reference model: `sim/models/eigvec_fw.py`. Detailed algorithm: `planning/blocks/Eigenvector Weight Computation.md`. | T |
 | TRPR-WGN-007 | H | F | The firmware weight mode (MRC row-sum or eigenvector power iteration) SHALL be selectable via `MIMO_CTRL.WEIGHT_MODE` (0x33[2:1]) without requiring a chip reset. | T |
@@ -339,6 +355,9 @@ Packet end: REPLAY_ACTIVE de-asserts; circular write resumes
 | TRPR-PSR-003 | C | F | On `REPLAY_ACTIVE` (asserted by PCF FSM at W_COMMIT safe-switch boundary), the controller SHALL replay samples from the latched packet start address through the MRC combiner, supplying the full packet including preamble with `W_ACTIVE` applied. Replay rate SHALL match the live sample rate (250 kS/s). | T |
 | TRPR-PSR-004 | C | F | `REPLAY_MISSED` SHALL assert and latch if `W_COMMIT` is not received before the payload window closes, preventing replay of an already-passed portion. The combiner SHALL fall back to next-packet weights for the remainder. | T |
 | TRPR-PSR-005 | H | F | The controller SHALL support 16-bit I/Q storage (default; 4 bytes per complex sample per branch = 16 bytes/sample for NR=4). This is the only mandatory storage width; 32-bit mode is reserved. | T |
+| TRPR-PSR-013 | C | P | **Maximum PSRAM write data rate (nominal operating point):** 4 channels × 2 bytes (int8 I + int8 Q) × 250 000 S/s = **2 MB/s (16 Mbit/s)**. The APS6404L rated maximum is ~66 MB/s (QPI at 133 MHz); nominal utilisation is ~3% of device capacity. | A |
+| TRPR-PSR-014 | C | P | **QPI timing headroom at nominal (16 MHz controller clock):** a QPI 8-byte write costs 24 cycles = 1.5 µs; `iq_valid` arrives every 64 cycles = 4.0 µs at 250 kHz. Slack = 40 cycles (62% idle). The write SHALL complete before the next `iq_valid` at all supported bandwidths (125 kHz, 250 kHz). | A |
+| TRPR-PSR-015 | C | P | **Buffer capacity (worst case SF12, 16-bit I/Q mode):** maximum occupied depth ≈ 8 × 2^12 × 8 bytes = **256 kB**. The APS6404L provides 8 MB; headroom ≥ 32×. No overflow SHALL occur for SF ≤ 12 at either supported bandwidth. | A |
 | TRPR-PSR-006 | H | I | `PSRAM_STATUS` (0xB1) SHALL expose: `state[2:0]`, `INIT_DONE`, `REPLAY_ACTIVE`, `REPLAY_MISSED`, `OVERFLOW`, `PAD_CONFLICT`. | T |
 | TRPR-PSR-007 | H | F | Sticky error flags (`OVERFLOW`, `REPLAY_MISSED`) SHALL be clearable by writing `PSRAM_CLR_ERR` (0xB0[1]). | T |
 | TRPR-PSR-008 | M | F | `PSRAM_PKT_BYTES` (0xB2–0xB3) SHALL report the number of bytes written to PSRAM for the current packet, for firmware overflow detection. | T |

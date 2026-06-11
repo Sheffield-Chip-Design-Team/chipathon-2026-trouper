@@ -99,6 +99,6 @@ instance (4 instances = ~300 k µm²).
 
 | File | Purpose |
 |---|---|
-| `rtl-test/sd_decimator_cic_only.v` | Production CIC-only decimator (deployed in `mimo_rx_top`) |
+| `rtl-test/sd_decimator_cic_only.v` | Production CIC-only decimator (deployed in `trouper_top`) |
 | `rtl-test/syn_mimo_per_module/run_sqnr_cic_only.sh` | A/B SQNR test script |
 | `rtl-test/syn_mimo_per_module/out_sqnr_cic_only/` | RTL output files + log (NFS only) |

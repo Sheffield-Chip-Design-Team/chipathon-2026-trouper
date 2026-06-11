@@ -9,7 +9,7 @@ RX path stage 8. See [DSP Flow](../DSP%20Flow.md) for context.
 
 ## Function
 
-Time-domain, sample-by-sample combining of 4 antenna inputs using weight vector W computed by the Weight Generation block. PicoRV32 may optionally override the shadow bank in software mode, but the combiner must not depend on firmware for baseline RX. Supports two modes:
+Time-domain, sample-by-sample combining of 4 antenna inputs using weight vector W written by on-chip PicoRV32 firmware into the shadow weight bank. There is no instantiated Trouper `weight_gen` RTL block in the tapeout plan. Supports two modes:
 
 **MRC:** inner product — scalar output
 ```
@@ -22,7 +22,7 @@ y[n] = x[bypass_sel][n]   // 1 antenna, int8 direct — no ÷2 applied
 ```
 `bypass_sel` is the index of the lowest-numbered antenna with its `ANTENNA_EN` bit set, decoded from the `bypass_ant` input.
 
-W is produced by the Weight Generation block (hardware FSM or PicoRV32 software path) after `training_done` from the Training Accumulator. Until current-packet W is valid, the combiner must not output zeros; it falls back to the selected bypass antenna so the SX1302 continues seeing a valid single-antenna LoRa stream. In passthrough mode W registers are not read.
+W is produced by firmware after `training_done` from the Training Accumulator. Until current-packet W is valid, the combiner must not output zeros; it falls back to the selected bypass antenna so the SX1302 continues seeing a valid single-antenna LoRa stream. In passthrough mode W registers are not read.
 
 ---
 
@@ -50,7 +50,7 @@ W is produced by the Weight Generation block (hardware FSM or PicoRV32 software 
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
-| W precision | int16 Q1.15 | Written by hardware weight generation or PicoRV32 software override |
+| W precision | int16 Q1.15 | Written by firmware via the shadow weight bank |
 | x precision | 8-bit signed | From decimators |
 | Accumulator | int32 | 8×16 = 24-bit product; 4 complex MACs → max 2²⁴ < 2³¹; int32 sufficient with 7 bits of headroom |
 | MACs per sample | 4 complex = 8 real MACs | |
@@ -74,7 +74,7 @@ Distributed antenna deployments (antennas hundreds of metres apart) are outside 
 
 **MAC structure.** Each complex MAC: `acc_re += W_re×x_i − W_im×x_q`, `acc_im += W_re×x_q + W_im×x_i`. Four complex MACs per sample.
 
-**Output headroom.** MRC coherently adds branch amplitudes. The hardware weight path now uses shift-MRC: weights are proportional to `conj(H_j)` with a shared conservative right shift and branch-count headroom. The combiner still applies a fixed ÷2 guard shift, then an optional `COMB_POST_GAIN` left shift before saturating to int8. Reset value `COMB_POST_GAIN=0` is conservative; firmware may increase it after observing output headroom. Bypass output is int8 directly, preserving the full per-branch amplitude. A separate remod-facing right shift (`REMOD_BACKOFF_SHIFT`, register `0x37`, default `1`) is applied only on the MRC path before `sd_remod`, so remod safety does not depend on AGC alone. Int8 saturation remains a safety net for AGC settling transients only.
+**Output headroom.** MRC coherently adds branch amplitudes. The firmware path writes weights proportional to either `conj(H_j)` (row-sum MRC) or the dominant eigenvector of the Z matrix, both with final Q1.15 normalisation. The combiner applies a fixed ÷2 guard shift, then an optional `COMB_POST_GAIN` left shift before saturating to int8. Reset value `COMB_POST_GAIN=0` is conservative; firmware may increase it after observing output headroom. Bypass output is int8 directly, preserving the full per-branch amplitude. A separate remod-facing right shift (`REMOD_BACKOFF_SHIFT`, register `0x37`, default `1`) is applied only on the MRC path before `sd_remod`, so remod safety does not depend on AGC alone. Int8 saturation remains a safety net for AGC settling transients only.
 
 **Accumulator saturation.** After the fixed ÷2 guard shift and optional post-combine gain, saturate to int8 bounds (±127) — do not allow 2's-complement wrap. This provides a safety net for AGC settling transients or unexpected strong signals, but should not be the normal operating condition.
 
@@ -101,7 +101,7 @@ The `90` target preserves roughly -3 dBFS headroom for the ΣΔ re-modulator. La
 
 **Output latency and y_valid handshake.** The combiner propagates `x_valid` through its fixed-depth pipeline and asserts `y_valid` exactly P clock cycles later, where P is a constant determined by the RTL implementation (TBD — typically 1–4 cycles). The ΣΔ re-modulator downstream must consume samples on `y_valid` rather than assuming a fixed offset from `x_valid`. P must be recorded in the RTL as a parameter and exposed in the block's timing documentation once implementation begins. This removes the need to pre-specify latency in the spec and makes the interface self-describing.
 
-**Live output state.** Weight generation (hardware FSM or firmware) runs in parallel with the live decimator-to-remod stream. The combiner output policy is:
+**Live output state.** Firmware weight computation runs in parallel with the live decimator-to-remod stream. The combiner output policy is:
 
 ```
 NO_W / ACQUIRING:   y = x[bypass_sel]          // int8 direct, no ÷2
@@ -111,7 +111,7 @@ MODE=1 passthrough: y = x[bypass_sel]          // int8 direct, no ÷2
 
 This makes the first packet recoverable as a single-antenna packet if W arrives late, and prevents mid-preamble silence from breaking SX1302 detection.
 
-**W register read timing.** W registers must be double-buffered. The hardware weight path or PicoRV32 software path writes `W_SHADOW`, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
+**W register read timing.** W registers must be double-buffered. Firmware writes `W_SHADOW`, then asserts a one-cycle commit strobe after all words are written. Hardware copies `W_SHADOW` to `W_ACTIVE` atomically and sets `W_valid`. The combiner reads only `W_ACTIVE`, so firmware writes cannot glitch live MACs. If W is invalidated mid-packet, keep using the last committed `W_ACTIVE` until firmware explicitly clears `W_valid` or changes mode.
 
 **No-glitch switching.** `W_ACTIVE`, `ACTIVE_MODE`, and `ACTIVE_ANTENNA_EN` must update only when the receiver is idle between packets. Host writes to `MODE` or `ANTENNA_EN` update shadow configuration during an active packet and commit at the next idle boundary. If current-packet W is not ready, stay in bypass for that packet rather than switching mid-symbol or at a payload boundary.
 
@@ -165,7 +165,7 @@ State count: 11 (vs 7). 11 cycles/sample used of 256-cycle budget at R=256.
 **Option B — Reduce weight precision 16-bit → 12-bit (~−30 k, medium effort)**
 
 12×8 multipliers instead of 16×8. Weight quantisation noise negligible for LoRa.
-Requires `weight_gen.v` output ports narrowed to 12-bit and register map widths adjusted.
+Would require the software-visible W register width to shrink from 16-bit to 12-bit and the firmware ABI to change accordingly, so this is not currently planned.
 **Estimated result (A+B): ~60–67 k µm².**
 
 **Option C — Fix `post_gain_shift` at synthesis time (measured: −4.3 k NR=2)**
