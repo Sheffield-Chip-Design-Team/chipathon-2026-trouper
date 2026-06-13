@@ -132,11 +132,11 @@ Submit jobs via `hqsub`, monitor via `hqstat --json` or `curl $HLAB_SGE_URL/api/
 The ASIC digital signal chain (all synchronous at 32 MHz):
 
 1. **ΣΔ Decimator** (`sd_decimator_cic_only.v`) — CIC-only R=128, 1-bit → int8, ×4 branches
-2. **DC Removal** (`dc_removal.v`) — IIR running-mean, `DC_ALPHA_SHIFT=8`, ×4
+2. **DC Removal** (`dc_removal.v`) — IIR leaky integrator, α=2^{−4} (12-bit Q8.4 acc), ×4
 3. **Schmidl-Cox Detector** (`sc_detector.v`) — sliding autocorr, produces `sc_lock` + `timing_ref`
 4. **Frontend Buffer Controller** (`frontend_buf_ctrl.v`) — 1 kB SRAM rolling buffer for delayed-sample storage; optional PSRAM replay via APS6404L
 5. **Noise Estimation** (`noise_est.v`) — Manhattan-norm per-antenna noise snapshot (no multipliers); feeds energy_snap for packet-ctrl energy gating
-6. **Training Accumulator** (`training_acc.v`) — all-pairs cross-correlator: 6 Z_kl pairs (C(4,2)) + 4 Z_kk diagonal + W_k per-branch sums. W_k → HW weight_gen; Z_kl pairs → firmware eigenvector MRC via reg_bank 0x70–0xE7. Noise mode: firmware write to 0x6C arms accumulator without sc_lock; Z_kk ≈ σ²_k·n_acc for noise EMA.
+6. **Training Accumulator** (`training_acc.v`) — all-pairs cross-correlator: 6 Z_kl pairs (C(4,2)) + 4 Z_kk diagonal + W_k per-branch sums. W_k → HW weight_gen; Z_kl pairs → firmware eigenvector MRC via reg_bank 0x40–0x63 (24-bit [31:8] readback; Zdiag at 0x64–0x6B). Noise mode: firmware write to TACC_NOISE_TRIG (0x1F) arms accumulator without sc_lock; Z_kk ≈ σ²_k·n_acc for noise EMA. Register map is 7-bit (0x00–0x7F) — see planning/Register Map.md.
 7. **Packet Control FSM** (`packet_ctrl_fsm.v`) — controls buf_freeze, W gating, safe_switch
 8. **Weight Generation** (`weight_gen.v`) — SHIFT→CAL→COMPUTE→SCALE; HW modes: EGC/MRC/SC; SW: ALMMSE via PicoRV32
 9. **MRC Combiner** (`mrc_combiner.v`) — ŷ[n] = w^H·x[n], int32→int8 (÷2 guard shift)

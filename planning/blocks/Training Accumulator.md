@@ -414,20 +414,22 @@ This gives firmware access to the full 4×4 Hermitian channel covariance matrix 
 
 ### New register outputs (current RTL)
 
+All Z_kl pair readbacks are the top 24 bits [31:8] of the signed int32 accumulators (3 bytes per component, big-endian) under the 7-bit register-map constraint — see `planning/Register Map.md`.
+
 | Registers | Address | Content |
 |-----------|---------|---------|
-| Z_01 I/Q | 0x70–0x77 | Zpair_i0, Zpair_q0 |
-| Z_02 I/Q | 0x78–0x7F | Zpair_i1, Zpair_q1 |
-| Z_03 I/Q | 0x80–0x87 | Zpair_i2, Zpair_q2 |
-| Z_12 I/Q | 0x88–0x8F | Zpair_i3, Zpair_q3 |
-| Z_13 I/Q | 0xD4–0xDB | Zpair_i4, Zpair_q4 |
-| Z_23 I/Q | 0xE0–0xE7 | Zpair_i5, Zpair_q5 (via sigma2_hw repurpose) |
-| Zdiag top-16 | 0xE8–0xEF | Zdiag_0..3 [31:16] and [23:16] |
-| TACC_NOISE_TRIG | 0x6C[0] | W1P — arms accumulator without sc_lock |
+| Z_01 I/Q | 0x40–0x45 | Zpair_i0, Zpair_q0 [31:8] |
+| Z_02 I/Q | 0x46–0x4B | Zpair_i1, Zpair_q1 [31:8] |
+| Z_03 I/Q | 0x4C–0x51 | Zpair_i2, Zpair_q2 [31:8] |
+| Z_12 I/Q | 0x52–0x57 | Zpair_i3, Zpair_q3 [31:8] |
+| Z_13 I/Q | 0x58–0x5D | Zpair_i4, Zpair_q4 [31:8] |
+| Z_23 I/Q | 0x5E–0x63 | Zpair_i5, Zpair_q5 [31:8] (via sigma2_hw repurpose) |
+| Zdiag top-16 | 0x64–0x6B | Zdiag_0..3 [31:16] |
+| TACC_NOISE_TRIG | 0x1F[0] | W1P — arms accumulator without sc_lock |
 
 ### Noise mode
 
-Writing 1 to TACC_NOISE_TRIG (0x6C[0]) arms the accumulator without waiting for sc_lock, accumulating for 8 symbols. During this window (no signal): Z_kl ≈ 0 for k≠l, and Z_kk ≈ σ²_k · n_acc. The diagonal readback at 0xE8–0xEF therefore gives per-branch noise power, which firmware can use for noise-whitened eigenvector combining (subtract σ²·n_acc·I from Z before eigendecomposition).
+Writing 1 to TACC_NOISE_TRIG (0x1F[0]) arms the accumulator without waiting for sc_lock, accumulating for 8 symbols. During this window (no signal): Z_kl ≈ 0 for k≠l, and Z_kk ≈ σ²_k · n_acc. The diagonal readback at 0x64–0x6B therefore gives per-branch noise power, which firmware can use for noise-whitened eigenvector combining (subtract σ²·n_acc·I from Z before eigendecomposition).
 
 ### Combining method performance (SF=7, NR=4, 2000 packets/point)
 

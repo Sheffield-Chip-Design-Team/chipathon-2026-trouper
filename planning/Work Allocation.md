@@ -217,7 +217,7 @@ Subblocks:
 Responsibilities:
 - keep each project within its timing and area budgets
 - coordinate inter-project signal routing with the integration team
-- manage pad budget rigorously (≤25 pads for Trouper)
+- manage pad budget rigorously (≤26 pads for Trouper)
 
 Deliverables:
 - physical GDS for Trouper and Grouper

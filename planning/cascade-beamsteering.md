@@ -112,7 +112,7 @@ Scan granularity is limited by SPI write latency and LoRa packet inter-arrival t
 
 ### Mode 3 — Closed-loop per-packet refinement (PicoRV32-driven)
 
-On each ASIC, the preamble training provides `Zpair_kl` inter-element cross-correlations in reg_bank `0x70–0xE7`. The PicoRV32 on each front-end ASIC can:
+On each ASIC, the preamble training provides `Zpair_kl` inter-element cross-correlations in reg_bank `0x40–0x63` (24-bit readback). The PicoRV32 on each front-end ASIC can:
 
 1. Start packet reception with a coarse preset steering weight (from RPi via SPI, or zeroed for MRC fallback)
 2. `sc_lock` fires → `training_acc` accumulates over the preamble → `Zpair_kl` committed

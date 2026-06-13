@@ -1,9 +1,18 @@
-# JTAG TAP (PicoRV32 Debug)
+# JTAG TAP (PicoRV32 Debug) — REMOVED
+
+> **Status: REMOVED (2026-06-13).** JTAG and GPIO have been dropped from Trouper.
+> No JTAG TAP is instantiated in the RTL, the four formerly-muxed pads now carry
+> only `PSRAM_SIO[3:0]` (dedicated), and `IRQ_OUT` has its own dedicated pad.
+> Host/firmware debug uses the SPI register and PSRAM-readback path instead
+> (see Trouper Chip Specification §4.16 / TRPR-JTG, and [Pinout](../Pinout.md)).
+> Structural scan-chain DFT, if required, is inserted by the LibreLane flow
+> independently of any functional TAP. The content below is retained for
+> historical reference only and does not describe the current design.
 
 Control block. See [System Architecture](../System%20Diagram.md) for context.
 
-**Owner:** TBD
-**Status:** Not started
+**Owner:** —
+**Status:** Removed (superseded by SPI debug path)
 
 ---
 
@@ -87,5 +96,5 @@ Abstract `Access Register` and program buffer execution are the key bring-up saf
 ## Related blocks
 
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — debug target
-- [IRQ Controller](IRQ%20Controller.md) — shares `TCK_IRQ` pad in normal mode
+- [Interrupt Aggregation](Interrupt%20Aggregation.md) — IRQ logic (now in reg_bank; formerly shared the `TCK_IRQ` pad)
 - [System Architecture](../System%20Diagram.md) — `TCK_IRQ` / `TMS_GPIO0` / `TDI_GPIO1` / `TDO_GPIO2` pads

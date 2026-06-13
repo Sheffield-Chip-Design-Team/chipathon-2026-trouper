@@ -2,6 +2,8 @@
 /sim contains the system simulation
 /planning contains MD files for planning
 
+planning/Trouper Chip Specification.md should be precise
+
 ## Running LibreLane (P&R)
 
 Use the `hpretl/iic-osic-tools:chipathon26` Docker image. LibreLane is at `/foss/tools/bin/librelane` inside the container.
@@ -76,6 +78,33 @@ export HLAB_SGE_URL=http://nas.home:4783
 
 Every `hq*` command and the REST API described below honours this variable.
 Without it, tools default to `localhost` on the configured port.
+
+## PDK selection on SGE
+
+Do **not** rely on an inherited `PDK` environment variable inside SGE jobs.
+The `chipathon26` image contains multiple installed PDKs (`gf180mcuD`,
+`ihp-sg13g2`, etc.), and scheduler/container startup can leave `PDK` pointing
+at the wrong one for Magic-based flows.
+
+For GF180 work, force the PDK explicitly inside the submitted job script:
+
+```bash
+export PDK_ROOT=/foss/pdks
+export PDK=gf180mcuD
+export STD_CELL_LIBRARY=gf180mcu_fd_sc_mcu7t5v0
+```
+
+For Magic extraction, also pass the rcfile explicitly instead of relying on
+the ambient environment:
+
+```bash
+RCFILE="$PDK_ROOT/$PDK/libs.tech/magic/$PDK.magicrc"
+magic -dnull -noconsole -rcfile "$RCFILE" ...
+```
+
+This is especially important for SRAM extraction jobs on SGE. A previous OCD
+SRAM RC-extraction failure was made worse by Magic starting in `ihp-sg13g2`
+before the script forced `gf180mcuD`.
 
 ## Shared filesystem
 

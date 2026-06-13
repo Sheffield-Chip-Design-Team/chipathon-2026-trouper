@@ -725,7 +725,7 @@ From most to least impactful, with measured deltas where available:
 
 - [AHB-Lite Bus](AHB-Lite%20Bus.md) — interconnect
 - [SPI Master](SPI%20Master.md) — SX1257 config
-- [IRQ Controller](IRQ%20Controller.md) — `training_done`, `corr_lock`, and TX IRQs
+- [Interrupt Aggregation](Interrupt%20Aggregation.md) — `training_done`, `corr_lock`, and other IRQ sources (in reg_bank)
 - [Packet Control FSM](Packet%20Control%20FSM.md) — packet phase, safe W commit, W missed status
 - [Training Accumulator](Training%20Accumulator.md) — Z_j source; triggers `IRQ_TRAINING_DONE`; noise-mode cross-correlations for null steering (`IRQ_NOISE_READY`)
 - [Weight Generation](Weight%20Generation.md) — archived hardware exploration note

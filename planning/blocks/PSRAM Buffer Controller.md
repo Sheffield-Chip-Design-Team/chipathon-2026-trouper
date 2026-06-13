@@ -221,15 +221,15 @@ When `PSRAM_EN=0` or `JTAG_OVERRIDE=1`: SIO[0–3] are tristated and JTAG operat
 | APS6404L max throughput (QPI 133 MHz) | ~66 MB/s |
 | **Utilisation** | **~3% of device capacity** |
 
-### Timing headroom at nominal operating point (16 MHz controller clock)
+### Timing headroom at nominal operating point (32 MHz controller clock)
 
 | Parameter | Value |
 |---|---|
-| QPI 8-byte write latency | 24 cycles = **1.5 µs** |
-| `iq_valid` period at 250 kHz | 64 cycles = **4.0 µs** |
-| Slack per sample | 40 cycles = 2.5 µs (**62% idle**) |
+| QPI 8-byte write latency | 25 cycles = **0.78 µs** |
+| `iq_valid` period at 250 kHz | 128 cycles = **4.0 µs** |
+| Slack per sample | 103 cycles = 3.22 µs (**80% idle**) |
 
-Write completes in 37% of the available window — no back-pressure at 250 kHz.
+Write completes in 20% of the available window — no back-pressure at 250 kHz. See TRPR-PSR-014 for full S_WRITE + SC delay read timing budget.
 
 ### Buffer capacity vs packet size
 
@@ -249,7 +249,7 @@ SF12 same-packet replay is the worst case and uses 3% of available PSRAM.
 
 Selected by `PSRAM_CTRL[1]` (`SAMPLE_WIDTH`):
 
-| Mode | Per-sample storage | Write data rate at 250 kHz | Max f_s (same-packet, 16 MHz clk) | Max f_s (next-packet) |
+| Mode | Per-sample storage | Write data rate at 250 kHz | Max f_s (same-packet, 32 MHz clk) | Max f_s (next-packet) |
 |---|---|---|---|---|
 | 0 — 16-bit I/Q (default) | 4ch × 16b = **8 bytes** | **2 MB/s** | 500 kS/s | 1 MS/s |
 | 1 — 32-bit I/Q | 4ch × 32b = **16 bytes** | **4 MB/s** | 500 kS/s | 500 kS/s |
@@ -381,9 +381,9 @@ SX1302 input ◄────┬─ IDLE or PSRAM_EN=0 ───────► l
 |---|---|---|---|
 | `clk_32m` | in | 1 | 32 MHz system clock |
 | `rst_n` | in | 1 | Active-low reset |
-| `psram_en` | in | 1 | Enable PSRAM path; from `PSRAM_CTRL[0]` (`0xB0`) |
-| `sample_width` | in | 1 | 0=16-bit I/Q, 1=32-bit I/Q; from `PSRAM_CTRL[2]` (`0xB0`) |
-| `jtag_en` | in | 1 | JTAG active; from `DEBUG_CTRL[0]` (`0x03`); forces SIO[0–3] tristate and sets `PAD_CONFLICT` when asserted with `psram_en` |
+| `psram_en` | in | 1 | Enable PSRAM path; from `PSRAM_CTRL[0]` (`0x70`) |
+| `sample_width` | in | 1 | 0=16-bit I/Q, 1=32-bit I/Q; from `PSRAM_CTRL[2]` (`0x70`) |
+| `jtag_en` | in | 1 | JTAG active; from `DEBUG_CTRL[0]` (`0x04`); forces SIO[0–3] tristate and sets `PAD_CONFLICT` when asserted with `psram_en` |
 | `init_start` | in | 1 | Firmware strobe: begin QE init after tPU |
 | `iq_in[3:0]` | in | 4×32 | Live IQ samples from decimator |
 | `iq_valid` | in | 1 | Sample strobe |
@@ -404,7 +404,7 @@ SX1302 input ◄────┬─ IDLE or PSRAM_EN=0 ───────► l
 
 ## Registers
 
-**`PSRAM_CTRL`** `0xB0` (R/W, default `0x00`)
+**`PSRAM_CTRL`** `0x70` (R/W, default `0x00`)
 
 | Bit | Name | Default | Description |
 |---|---|---|---|
@@ -414,11 +414,11 @@ SX1302 input ◄────┬─ IDLE or PSRAM_EN=0 ───────► l
 | [3] | `QSPI_OWNER` | 0 | 0 = Trouper replay controller owns QSPI pads (default); 1 = replay is disabled and the pads are reserved for a future firmware-managed external-memory mode. Ownership changes take effect only in IDLE. |
 | [7:4] | — | 0 | Reserved |
 
-Note: JTAG/QPI pad conflict is handled implicitly. `DEBUG_CTRL` (`0x03`) bit `JTAG_EN` is ignored while either the replay controller or a future alternate owner owns the PSRAM QSPI pads; any simultaneous enable request sets `PAD_CONFLICT` in `PSRAM_STATUS`. No separate `JTAG_OVERRIDE` register bit is needed.
+Note: JTAG/GPIO have been removed (no TAP in RTL; see Trouper Chip Specification §4.16), so the four SIO pads are dedicated to PSRAM and there is no JTAG-vs-QPI pad conflict to arbitrate. The only ownership boundary is `QSPI_OWNER` (`0x70[3]`): when set, this block releases the pads (de-asserts `ce_n`, gates `sck`, tristates `sio`) for a future firmware-managed external-memory mode. `PSRAM_STATUS[7]` reports `BUF_ACTIVE`.
 
 When `QSPI_OWNER=1`, this block de-asserts `ce_n`, gates `sck`, drives `sio_oe=0`, and suspends BUFFERING/REPLAY state progression. The same APS6404L device is then reserved for a future alternate access path.
 
-**`PSRAM_STATUS`** `0xB1` (R, default `0x00`)
+**`PSRAM_STATUS`** `0x71` (R, default `0x00`)
 
 | Bit | Name | Description |
 |---|---|---|
@@ -427,15 +427,9 @@ When `QSPI_OWNER=1`, this block de-asserts `ce_n`, gates `sck`, drives `sio_oe=0
 | [4] | `REPLAY_ACTIVE` | In REPLAY; SX1302 receiving MRC-combined PSRAM stream |
 | [5] | `REPLAY_MISSED` | Sticky: `packet_end` fired before `W_commit`; last packet used bypass (no MRC gain) |
 | [6] | `OVERFLOW` | Sticky: wr_ptr wrapped — buffer exhausted |
-| [7] | `PAD_CONFLICT` | Sticky: `JTAG_EN=1` and `PSRAM_EN=1` asserted simultaneously |
+| [7] | `BUF_ACTIVE` | Same-packet capture window active |
 
-**`PSRAM_PKT_BYTES_HI`** `0xB2` / **`PSRAM_PKT_BYTES_LO`** `0xB3` (R, default `0x00`)
-
-Bytes written to PSRAM for the current (or most recent) packet. Big-endian 16-bit value. Useful for verifying buffer depth against SF at bring-up.
-
-**`PSRAM_RD_OFFSET`** `0xB4` (R, default `0x00`)
-
-Replay start offset [7:0] — low 8 bits of `buf_base` relative to the PSRAM base address. Diagnostic readback.
+The former `PSRAM_PKT_BYTES_HI/LO` and `PSRAM_RD_OFFSET` diagnostic registers are removed (never wired in RTL; cut under the 128-register constraint — see Register Map.md "Removed registers"). The PSRAM debug readback window (`0x72`–`0x76`) covers bring-up inspection instead.
 
 ---
 
@@ -464,7 +458,7 @@ Replay start offset [7:0] — low 8 bits of `buf_base` relative to the PSRAM bas
 | SX1302 output | Monitor SX1302 input during BUFFERING | Zeros; no live samples forwarded |
 | Packet end | `packet_end` during REPLAY | Returns to IDLE; SIO[0–3] tristated; `buf_active` deasserts |
 | No W_commit | `packet_end` during BUFFERING | `REPLAY_MISSED` set; bypass replay from buf_base; SX1302 receives packet without MRC gain |
-| PAD_CONFLICT | Set `JTAG_EN=1` and `PSRAM_EN=1` simultaneously | `PAD_CONFLICT` bit set in `PSRAM_STATUS`; SIO[0–3] tristated; PSRAM transactions suspended |
+| Pad release on handover | Set `QSPI_OWNER=1` while IDLE | Block de-asserts `ce_n`, gates `sck`, tristates SIO[0–3]; BUFFERING/REPLAY suspended (JTAG removed — no JTAG-vs-QPI conflict case remains) |
 | SF12 buffer depth | SF12 packet with PSRAM_EN=1 | wr_ptr − rd_ptr ≈ 8M+50 samples ≈ 256 kB (16-bit mode); no wrap; no OVERFLOW flag |
 
 ---

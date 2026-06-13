@@ -35,11 +35,11 @@ Add to `reg_bank` (or `trouper_top`): four 8-bit registers latched from `dcr_i[0
 
 | Register | Address | Content |
 |---|---|---|
-| `LIVE_I0` | 0xD8 | `dcr_i[0]` — 8-bit signed, ant0 I |
-| `LIVE_Q0` | 0xD9 | `dcr_q[0]` — 8-bit signed, ant0 Q |
-| `LIVE_I1` | 0xDA | `dcr_i[1]` — 8-bit signed, ant1 I |
-| `LIVE_Q1` | 0xDB | `dcr_q[1]` — 8-bit signed, ant1 Q |
-| `LIVE_VALID` | 0xDC | `[0]` — pulses 1 for one 32 MHz cycle on each `dcr_valid`. Reading `LIVE_I0` auto-clears. |
+| `LIVE_I0` | 0x77 (proposed; from reserved pool) | `dcr_i[0]` — 8-bit signed, ant0 I |
+| `LIVE_Q0` | 0x78 (proposed) | `dcr_q[0]` — 8-bit signed, ant0 Q |
+| `LIVE_I1` | 0x79 (proposed) | `dcr_i[1]` — 8-bit signed, ant1 I |
+| `LIVE_Q1` | 0x7A (proposed) | `dcr_q[1]` — 8-bit signed, ant1 Q |
+| `LIVE_VALID` | 0x7B (proposed) | `[0]` — pulses 1 for one 32 MHz cycle on each `dcr_valid`. Reading `LIVE_I0` auto-clears. |
 
 **RTL change:** ~10 lines in `trouper_top.v` or `reg_bank.v`. Estimated area: **~2k µm²** (4 × 8-bit snapshot registers + valid flag + read logic). No changes to existing blocks.
 
@@ -137,7 +137,7 @@ The only thing lost vs. hardware `energy_meas_coarse`:
 
 ## Open items
 
-1. **Confirm address space:** Registers 0xD8–0xDC are currently unallocated in the register map. Verify no conflict.
+1. **Confirm address space:** The register map is now constrained to 7-bit addresses (0x00–0x7F, see Register Map.md). Proposed slots 0x77–0x7B come from the reserved pool 0x77–0x7E; allocate formally in Register Map.md before implementing.
 2. **LIVE_VALID auto-clear on `LIVE_I0` read:** Must be implemented carefully to avoid race between 32 MHz `dcr_valid` and 16 MHz firmware read clock.
 3. **Gain control table:** Firmware AGC loop needs a mapping from noise_floor measurement → SX1257 gain register value. Calibrate on bench.
 4. **Inter-packet quiet window detection:** Firmware must detect when the channel is idle (sc_detector IDLE state readable via `packet_active` bit in reg_bank 0x34).

@@ -189,5 +189,5 @@ Saves area on the `training_acc` side. Moderate complexity; cross-module interfa
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — 8-bit signed input
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — optional software override path via AHB-Lite
 - [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md) — consumes int8 input; combiner int16 output is arithmetic right-shifted 1 (÷2) and saturated to int8 at the remod input boundary
-- [Register Map](../Register%20Map.md) — `W` matrix at `0x90`–`0xAF`
+- [Register Map](../Register%20Map.md) — `W` vector at `0x30`–`0x3F`
 - [DSP Flow](../DSP%20Flow.md)

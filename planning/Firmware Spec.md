@@ -143,7 +143,7 @@ This is the first tapeout-useful firmware feature.
 
 ### Required behavior
 - trigger on `IRQ_CORR_LOCK` for AGC updates.
-- periodically trigger noise measurement via `TACC_NOISE_TRIG` (0x6C) during idle windows (when `!PACKET_ACTIVE`).
+- periodically trigger noise measurement via `TACC_NOISE_TRIG` (0x1F) during idle windows (when `!PACKET_ACTIVE`).
 - maintain per-branch `sigma2` estimate via EMA in DMEM.
 - read `ENERGY_*` (at lock) and `ZDIAG_k` (after noise trig completion).
 - decide whether to adjust gain per branch.

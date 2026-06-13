@@ -535,7 +535,7 @@ Chipathon shared die constraint: top side is not accessible. Pin assignment:
 |---|---|---|
 | East (right, 9) | IQ inputs + clock | `IQ_CLK`, `IQ_DATA_I/Q[3:0]` |
 | West (left, 14) | Remod output + PSRAM | `REMOD_A_I/Q`, `PSRAM_SCK`, `PSRAM_CE_N`, `PSRAM_SIO_OUT/IN/OE[3:0]` |
-| South (bottom, 13) | Host/ctrl | `RESETB`, `HOST_CS`, `SPI_SCK/MOSI/MISO`, `CS_A[0:1]`, `TCK_IRQ`, `TMS_GPIO0`, `TDI_GPIO1`, `TDO_GPIO2` |
+| South (bottom, 6) | Host/ctrl | `RESETB`, `HOST_CS`, `SPI_SCK/MOSI/MISO`, `IRQ_OUT` (dedicated). `CS_A[0:1]` (SPI master) and the `TCK_IRQ/TMS_GPIO0/TDI_GPIO1/TDO_GPIO2` JTAG/GPIO nibble are removed — see [Pinout](Pinout.md) |
 | North | — | Empty (top not accessible) |
 
 Placement file: `rtl-test/ol_mimo_rx_top/io_placement.cfg` wired via `"IO_PIN_ORDER_CFG": "dir::io_placement.cfg"` in both `config_trial_top_1150.json` and `config_trial_top_1150_32m.json`.
@@ -883,4 +883,16 @@ SS timing analysis:
 - Conclusion: the −7 to −10 ns SS gap is distributed across the SC detector accumulator chain. Closing it would require AS cells (unproven) or significant RTL restructuring of the TDM FSM. The design is accepted with TT as the guaranteed operating corner.
 
 Area: stdcell area 630k µm², die 1.21 mm² (1100×1100), stdcell utilisation 52%.
+
+---
+
+## Routing congestion reduction
+
+See [`planning/congestion-reduction-techniques.md`](congestion-reduction-techniques.md) for the full
+catalogue of techniques investigated during the June 2026 die-shrink sweep, including:
+
+- Clock gating (`training_acc` multiplier pipeline, `SYNTH_CLOCK_GATING`)
+- Fanout reduction (`MAX_FANOUT_CONSTRAINT`)
+- Post-GPL design repair
+- `DPL_CELL_PADDING` tradeoffs at high utilisation
 

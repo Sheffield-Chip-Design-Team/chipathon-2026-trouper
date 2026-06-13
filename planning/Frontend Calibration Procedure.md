@@ -154,7 +154,7 @@ cal_0 = cal_1 = cal_2 = cal_3 = 1 + 0j
 
 1. Set `MIMO_CTRL.MODE=0` (MRC mode) and enable all four branches (`ANTENNA_EN = 0xF`).
 2. Arm the SC detector and wait for `IRQ_TRAINING_DONE`. The Training Accumulator produces the all-pairs Z matrix.
-3. Read the required Z values from the register bank. For the current firmware path, prefer the full all-pairs matrix (`0x70`–`0xEF`) rather than the legacy `Z_j` subset.
+3. Read the required Z values from the register bank. For the current firmware path, prefer the full all-pairs matrix (`0x40`–`0x6B`) rather than the legacy `Z_j` subset.
 4. Record the per-branch complex estimates needed to derive `cal_j` for all four branches.
 
 Repeat steps 3–5 three times and average in the complex domain to reduce noise:

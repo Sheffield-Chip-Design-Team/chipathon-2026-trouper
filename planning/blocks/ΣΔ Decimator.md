@@ -154,9 +154,15 @@ These modes remain encoded in the module interface and are useful for bench comp
 
 ---
 
-## Rejected alternative: `sd_decimator_cic_tdm8`
+## Rejected alternative: `sd_decimator_cic_tdm8` (earlier R=256 variant)
 
-`sd_decimator_cic_tdm8` implements a boxcar-4 pre-stage + 4-slot TDM CIC(N=3, R=64) across all 4 channels. It was evaluated and **rejected** for the following reasons:
+> **Note:** this section describes an **earlier R=256 variant** that carried the
+> same filename. The RTL currently on disk is the **R=128 (250 kS/s)** staged
+> TDM experiment described under
+> [2026-06-11 structural TDM experiment](#2026-06-11-structural-tdm-experiment),
+> which does **not** suffer the rate/BW objections below.
+
+The earlier `sd_decimator_cic_tdm8` implemented a boxcar-4 pre-stage + 4-slot TDM CIC(N=3, R=64) across all 4 channels. It was evaluated and **rejected** for the following reasons:
 
 - **Fixed at R=256 (125 kHz only).** The system requires both 125 kHz and 250 kHz BW modes, both served at R=128 by `sd_decimator_cic_only`. Using `tdm8` eliminates 250 kHz mode permanently.
 - **Output rate halves** from 250 kS/s to 125 kS/s. Every downstream block (`dc_removal`, `sc_detector`, `mrc_combiner`, front buffer write rate, SDC input delay) was sized for 250 kS/s — a non-trivial re-verification burden.
@@ -164,6 +170,106 @@ These modes remain encoded in the module interface and are useful for bench comp
 - No FIR compensation (identical signal quality to current CIC-only).
 
 The module stays on disk as a synthesis reference. It will not be instantiated in `trouper_top.v`.
+
+---
+
+## Current area context
+
+Fresh `chipathon26` FD-cell synthesis of the current standalone `trouper_top`
+(`2026-06-11`, current checked-in RTL boundary with `spi_slave`) gives:
+
+- total flat top area: **~879.9 kµm²**
+- decimator contribution: **4 × 75.1 kµm² = 300.2 kµm²**
+- decimator share of current top: **~34.1%**
+
+Current top-level area ranking after the decimator bank:
+
+- `training_acc`: ~132.1 kµm²
+- `sc_detector`: ~107.2 kµm²
+- `reg_bank`: ~83.7 kµm²
+- `mrc_combiner`: ~61.8 kµm²
+
+This confirms that the decimator bank is still the single largest remaining
+area lever in the current `trouper_top`.
+
+### 2026-06-11 structural TDM experiment
+
+A new synthesis-only test RTL at
+[`rtl-test/rtl/sd_decimator_cic_tdm8.v`](../../rtl-test/rtl/sd_decimator_cic_tdm8.v)
+was written to estimate a more aggressive staged TDM architecture:
+
+- per-branch **boxcar-4** front end at `32 MHz`
+- shared **4-slot CIC** back end with total `R=128`
+- integrated local scheduler / buffering / common `iq_valid` release
+
+Measured standalone synthesis result:
+
+| Variant | Area |
+| --- | --- |
+| `sd_decim_4ch_cic_only` | **300.2 kµm²** |
+| `sd_decimator_cic_tdm8` test RTL | **207.1 kµm²** |
+| Delta | **−93.1 kµm²** (**−31%**) |
+
+Important scope note:
+
+- this is a **structural area experiment only**
+- it **does include** local TDM control logic
+- it is now **simulation-validated** (see below) but **not** integrated into `trouper_top`
+- the area number above predates the 2026-06-11 functional fixes (which added a
+  4-way slot mux ahead of the shared CIC adders and changed a shift constant) —
+  **re-synthesise before quoting**; the delta is expected to be small
+
+### 2026-06-11 functional validation and fixes
+
+The test RTL was simulation-checked against `sd_decimator_cic_only` at R=128
+(iverilog, SGE jobs 1608/1612; testbench at
+[`rtl-test/tb/tb_sd_decimator_cic_tdm8.v`](../../rtl-test/tb/tb_sd_decimator_cic_tdm8.v),
+rerunnable via `/srv/eda/designs/timothyjabez/lora-mimo/tdm8_check/run_sim.sh`).
+The TB drives all 4 branches and the reference with the same 1st-order ΣΔ
+bitstream (DC at 0.5 FS, then a 30 kHz sine at 0.7 FS) and measures output
+rate, amplitude, branch consistency, and Stage A frame drops.
+
+Two functional bugs were found and fixed:
+
+1. **Shared-stage overrun (1 in 5 frames dropped).** Stage A produced a
+   4-branch frame every 4 clocks but the shared stage spent 5 clocks per frame
+   (1 pickup + 4 slots), so every 5th frame was overwritten in the double
+   buffer before being read — effective decimation 160 instead of 128
+   (200 kS/s instead of 250 kS/s). Fixed by folding frame pickup into the
+   slot-0 processing cycle (combinational `proc_en`/`proc_slot`/`proc_bank`
+   view; pickup now sets `slot <= 1`), making the sweep exactly 4 clocks.
+2. **Normalisation shift wrong by 7 bits.** Chain gain is boxcar-4 × 32³ =
+   2¹⁷, so full scale needs `>>> 10` to map to int8 — the code used `>>> 17`
+   (copied from the R=256 case of `sd_decimator_cic_only`, gain 2²⁴), which
+   quantised the output to {−1, 0, +1}.
+
+Post-fix results (800k cycles, both phases):
+
+| Metric | tdm8 | `cic_only` R=128 |
+| --- | --- | --- |
+| Output interval (min/max) | 128/128 clk | 128/128 clk |
+| Max \|out\| DC @ 0.5 FS | 64 | 64 |
+| Max \|out\| sine @ 0.7 FS | 83 | 84 |
+| Stage A frame overwrites | 0 | — |
+| Inter-branch byte mismatches | 0 / 6249 samples | — |
+
+The ±1 LSB amplitude difference vs the reference is expected: the
+boxcar-4 + CIC-32 partition has a slightly different passband response than a
+monolithic CIC-128; bit-exactness is not a goal.
+
+**Branch synchronism:** the TDM is an internal processing-order detail only.
+All branches share one `box_cnt` (identical input windows), the per-slot
+`decim_cnt` counters stay in lockstep, and outputs are released atomically
+with a common `iq_valid = 4'b1111` — zero inter-branch skew, same contract as
+4× `cic_only` under common reset. Absolute group delay differs from
+`cic_only` by ~100 ns (common-mode across branches), so the two decimator
+types must not be mixed across branches in one chip.
+
+Practical estimate for a hardened version of this idea is roughly **220–240 kµm²**
+once extra verification-grade control and alignment logic are added. If that
+estimate holds, the current top-level `trouper_top` would drop from ~879.9 kµm²
+to roughly **800–820 kµm²**, with the decimator bank falling from ~34% of top
+area to roughly **26–29%**.
 
 ---
 

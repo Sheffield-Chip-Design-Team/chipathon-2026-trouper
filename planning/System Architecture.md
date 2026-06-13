@@ -11,7 +11,11 @@ Full pad list: [Pinout](Pinout.md)
 Deployment configurations: [Applications](Applications.md)
 
 
-RTL integration note: `trouper_top` is the canonical standalone Trouper hard-macro RTL. `mimo_rx_top` is retained only as a legacy compatibility wrapper for older synthesis and P&R flows. Grouper and any host SPI/AHB adaptation now sit outside this hardened Trouper boundary.
+RTL integration note: `trouper_top` is the canonical standalone Trouper
+hard-macro RTL. `mimo_rx_top` is deprecated and retained only as a legacy
+compatibility wrapper for archived synthesis/P&R comparisons. New work should
+not target `mimo_rx_top`. Grouper and any host SPI/AHB adaptation now sit
+outside this hardened Trouper boundary.
 
 ---
 
@@ -48,7 +52,6 @@ hardened PicoRV32 macro
 AHB-Lite master"]
     OTHER_PER["Other MPW
 peripherals"]
-    JTAG([JTAG Probe])
 
     NODE1 -->|868 MHz| ANT1 & ANT2 & ANT3 & ANT4
     ANT1 -->|RF| SX1
@@ -64,8 +67,6 @@ peripherals"]
     RPI <-->|"Host SPI (dedicated)"| CHIP
     GROUPER <-->|"On-chip AHB-Lite"| CHIP
     GROUPER --- OTHER_PER
-    JTAG <-->|"TCK/TMS/TDI/TDO
-(JTAG_EN=1)"| CHIP
     CLKBUF["PCB Clock Buffer
 TCXO 32 MHz · 1→5 fan-out"] -->|"32 MHz IQ_CLK"| CHIP
     CLKBUF -->|"32 MHz XTB ×4
@@ -187,7 +188,6 @@ decimated IQ replay buffer"]
 | SX1302 SPI | RPi SPI0 CS0 | SX1302 | SX1302 HAL (packets, config) | 10 MHz |
 | AHB-Lite | Grouper (Bus Master) | Trouper (Slave) + Other Peripherals | MPW System Bus | 32 MHz |
 | IRQ | Trouper (ASIC) | Grouper (PicoRV32) | Packet ready, error | Interrupt |
-| JTAG | JTAG probe | ASIC JTAG TAP | TCK + TMS + TDI + TDO | — |
 
 ### SX1257 → ASIC (RX, per antenna)
 
@@ -237,7 +237,7 @@ The following SX1257 pins require a PCB-level decision; none connect to ASIC pad
 | `SPI_SCK` | RPi → ASIC | Shared SPI clock |
 | `SPI_MOSI` | RPi → ASIC | Register writes and debug commands |
 | `SPI_MISO` | ASIC → RPi | Status register readback |
-| `TCK_IRQ` | ASIC → RPi (JTAG_EN=0) | Interrupt: packet ready, preamble lock |
+| `IRQ_OUT` | ASIC → RPi | Interrupt: packet ready, preamble lock (dedicated pad) |
 
 ### Grouper-Inactive / Host-Assisted Operation
 
@@ -273,45 +273,51 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | SPI MOSI / MISO / SCK | 3 | Host↔ASIC SPI slave interface |
 | HOST_CS | 1 | RPi SPI0 CS1 for the Trouper host SPI slave |
 | RESETB | 1 | Active-low chip reset |
-| JTAG / IRQ / GPIO mux (TCK_IRQ + TMS_GPIO0 + TDI_GPIO1 + TDO_GPIO2) | 4 | TCK_IRQ = IRQ (JTAG_EN=0) / TCK (JTAG_EN=1); TMS/TDI/TDO_GPIO0–2 = GPIO_0–2 (JTAG_EN=0) / JTAG pins (JTAG_EN=1); see [Pinout](Pinout.md) |
-| VDD IO 3.3V | 1 | |
+| PSRAM SCK / CE_N | 2 | APS6404L serial clock and active-low chip enable |
+| IRQ_OUT | 1 | Dedicated level-high interrupt to host RPi |
+| PSRAM SIO[3:0] | 4 | PSRAM QPI data bus (dedicated; JTAG/GPIO removed — see [Pinout](Pinout.md)) |
+| VDD IO 5.0V | 1 | |
 | VDD core 3.3V | 1 | Single pad — IR drop must be verified in floorplan |
 | GND | 1 | Single pad — place at highest switching-current region |
-| **Total** | **23** | Within the ≤25 per-team allocation limit |
+| **Total** | **26** | Within the ≤26 per-team allocation limit |
 
 ---
 
 ## Clock domain crossing boundaries
 
-The design has a single internal clock domain (32 MHz, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins). All blocks instantiated in `trouper_top` are synchronous to this domain, including the DSP chain, Trouper-side AHB-Lite endpoint/bridge, SPI slave, register bank, and IRQ logic.
+The design uses two internal clock domains derived from the single 32 MHz external reference (`IQ_CLK`, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins):
 
-### Clock Partition Guidance
+| Domain | Clock | Period | Blocks |
+|---|---|---|---|
+| 32 MHz tier | `IQ_CLK` | 31.25 ns | `sd_decimator_cic_only` ×4, `sd_remod`, `psram_buf_ctrl`, `sc_detector`, `trouper_top` glue |
+| 16 MHz tier | `CLK_16M` (IQ_CLK÷2) | 62.5 ns | `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `packet_ctrl_fsm`, `reg_bank` (incl. interrupt aggregation), `spi_slave` |
 
-For the current tapeout revision, the preferred implementation remains a **single `IQ_CLK` domain** with sample-enable strobes (`iq_valid`, `raw_valid`) and carefully-scoped multicycle constraints. Introducing many local divided clocks would create avoidable CTS, STA, reset, and CDC complexity.
+`CLK_16M` is generated **once at top level** as a registered divide-by-2 of IQ_CLK and distributed as a normal clock tree. Per-block local clock dividers are not used. The divider FF is synchronously reset so phase is deterministic after RESETB de-assertion.
 
-If a future revision introduces a true slow DSP clock, it should be generated **once at top level** as a global `/2` clock and distributed as a normal clock tree. Per-block local clock dividers are not recommended.
+Rationale for block placement:
 
-Recommended block classification:
+- `sd_decimator_cic_only`, `sd_remod`, and `psram_buf_ctrl` have true 32 MHz bit-level timing obligations.
+- `sc_detector` has a TDM FSM with single-cycle path dependencies; moving it to 16 MHz does not eliminate the SS violation (the TDM chain still needs one full cycle, and at 62.5 ns it still exceeds the ~72 ns SS path). Fix requires pipelining the TDM accumulator into 2 cycles.
+- All remaining blocks update only on `iq_valid` or `raw_valid` and have no 32 MHz timing obligations; they run comfortably at 62.5 ns.
 
-- Keep on `IQ_CLK`: `sd_decimator_cic_only`, `sd_remod`, `psram_buf_ctrl`, `dc_removal`, `spi_slave`, `reg_bank`, `irq_ctrl`, `trouper_top` glue logic
-- Candidate for a future global `clk_16m` domain: `mrc_combiner`, `training_acc`, `frontend_buf_ctrl`, `packet_ctrl_fsm`
-- Requires RTL restructuring rather than only a slower clock: `sc_detector`
+### Domain crossing treatment
 
-Rationale:
+Because CLK_16M is phase-aligned with IQ_CLK (derived by registered divide-by-2), there is no metastability risk at domain crossings. No 2-FF synchronisers are required. The SDC declares CLK_16M as a generated clock and the timing analyser constrains all crossings automatically:
 
-- `sd_decimator_cic_only`, `sd_remod`, and `psram_buf_ctrl` have true 32 MHz external or bit-level timing obligations.
-- `dc_removal` is light arithmetic immediately after the decimator; it already updates only on `raw_valid`, so a local divided clock buys little and adds a new boundary before SC/training.
-- `mrc_combiner` and `training_acc` are sample-triggered arithmetic blocks with large idle gaps between valid samples, making them natural slow-domain candidates if a clean 2-clock architecture is ever adopted.
-- `sc_detector` is the present SS timing limiter, but the issue is the internal TDM combinational chain; simply moving it to a slower domain is not a complete fix without extra pipelining or state restructuring.
+```
+create_generated_clock -divide_by 2 -source [get_ports IQ_CLK] \
+  [get_pins clk_div_reg/Q] -name CLK_16M
+```
 
 > **CFO is a transmitter-only property.** Because all four SX1257 AFEs and the ASIC itself derive their clocks from one TCXO, there is no sampling-rate offset (SRO) between antennas or between the ADC outputs and ASIC processing. Any observed carrier frequency offset `df` is entirely due to the remote transmitter's TCXO offset. The digital CFO correction `exp(−j2π·df_est·n/Fs)` applied in firmware operates with cycle-accurate sample indexing — no accumulated phase error from clock-domain mismatch. The residuals quantified in `sim/notebooks/02_cfo_estimation.ipynb` are therefore the complete error budget.
 
-The following boundaries require explicit CDC treatment:
+The following boundaries require explicit treatment:
 
-| Boundary | Async signal(s) | Direction | Required treatment | Documented in |
+| Boundary | Signal(s) | Direction | Required treatment | Documented in |
 | --- | --- | --- | --- | --- |
-| RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with AHB-Lite handshake | [SPI Slave](blocks/SPI%20Slave.md) |
-| JTAG TAP | `TCK_IRQ`, `TMS_GPIO0`, `TDI_GPIO1` | Probe → ASIC | 2-FF synchroniser on `TCK_IRQ` into 32 MHz domain; or implement TAP entirely in TCK domain with handshake | [JTAG TAP](blocks/JTAG%20TAP.md) |
+| RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi (async) → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with AHB-Lite handshake | [SPI Slave](blocks/SPI%20Slave.md) |
+| IQ_CLK → CLK_16M | `raw_valid`, decimated I/Q samples | 32 MHz → 16 MHz | STA-constrained via `create_generated_clock`; no synchroniser logic required (phase-aligned clocks) | TRPR-SYS-003, TRPR-SYS-016 |
+| CLK_16M → IQ_CLK | weight shadow registers, control strobes to `sd_remod`/`psram_buf_ctrl` | 16 MHz → 32 MHz | STA-constrained via `create_generated_clock`; no synchroniser logic required (phase-aligned clocks) | TRPR-SYS-003, TRPR-SYS-015 |
 
 **SX1257 I/Q bitstreams are NOT a CDC boundary.** All four SX1257s receive the 32 MHz reference on their **XTB** pins (sourced from a shared TCXO via a clock buffer), so their `I_OUT`/`Q_OUT` signals change on the falling edge of the same clock the ASIC uses. This is a timing-constraint problem (board-level setup/hold on pad inputs), not a metastability problem. **Note: Using CLK_IN (pin 11) is incorrect as it only feeds the TX DAC.**
 
@@ -397,8 +403,7 @@ See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignme
 | SPI Master (→ SX1257) | TBD | [SPI Master](blocks/SPI%20Master.md) |
 | AHB-Lite Bus | TBD | — |
 | Register Bank (generated) | TBD | [Register Map](Register%20Map.md) |
-| IRQ Controller | TBD | [IRQ Controller](blocks/IRQ%20Controller.md) |
-| JTAG TAP | TBD | — |
+| Interrupt aggregation (in reg_bank) | TBD | [Interrupt Aggregation](blocks/Interrupt%20Aggregation.md) |
 | PicoRV32 firmware + algorithms | TBD | [MIMO Algorithms](MIMO%20Algorithms.md) |
 | Physical design & floorplan | TBD | — |
 | Verification (cocotb) | TBD | — |

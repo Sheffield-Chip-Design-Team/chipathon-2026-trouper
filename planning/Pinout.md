@@ -1,64 +1,78 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC — logical pad list. Total: **23 pads** (20 signal + 3 supply/ground).
+GF180MCU MIMO ASIC logical pad list. Total: **26 pads** (**23 signal + 3 supply/ground**).
 
-This pinout follows the Chipathon 2026 per-team allocation limit of ≤25 pads.
+This pinout is within the Chipathon 2026 per-team allocation limit of **<=26 pads** and matches the current Trouper physical allocation in the chip specification.
 
 **Related:** [System Architecture](System%20Architecture.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md)
 
 ---
 
-## Signal pads (20)
+## Signal pads (23)
 
-All signal pads use **GF180 5V-capable IO cells** operated on a **3.3V `VDD_IO` rail**. Core logic runs at **3.3V**.
+All signal pads use **GF180 5 V-capable IO cells**. The pad-ring supply is **`VDD_IO = 5.0 V`** and the digital core supply is **`VDD_CORE = 3.3 V`**.
 
 ### RX data from SX1257 (8 pads, input)
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `IQ_DATA_I[n]` | in | SX1257_n I_OUT | 1-bit ΣΔ RX I stream, antennas 1–4 |
-| `IQ_DATA_Q[n]` | in | SX1257_n Q_OUT | 1-bit ΣΔ RX Q stream, antennas 1–4 |
+| `IQ_DATA_I[0]` | in | SX1257_0 I_OUT | 1-bit ΣΔ RX I stream, antenna 0 |
+| `IQ_DATA_Q[0]` | in | SX1257_0 Q_OUT | 1-bit ΣΔ RX Q stream, antenna 0 |
+| `IQ_DATA_I[1]` | in | SX1257_1 I_OUT | 1-bit ΣΔ RX I stream, antenna 1 |
+| `IQ_DATA_Q[1]` | in | SX1257_1 Q_OUT | 1-bit ΣΔ RX Q stream, antenna 1 |
+| `IQ_DATA_I[2]` | in | SX1257_2 I_OUT | 1-bit ΣΔ RX I stream, antenna 2 |
+| `IQ_DATA_Q[2]` | in | SX1257_2 Q_OUT | 1-bit ΣΔ RX Q stream, antenna 2 |
+| `IQ_DATA_I[3]` | in | SX1257_3 I_OUT | 1-bit ΣΔ RX I stream, antenna 3 |
+| `IQ_DATA_Q[3]` | in | SX1257_3 Q_OUT | 1-bit ΣΔ RX Q stream, antenna 3 |
 
-### Clock (1 pad, input)
+### Clock and reset (2 pads, input)
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `IQ_CLK` | in | PCB TCXO buffer | 32 MHz master clock. Shared reference for ASIC and SX1257s. |
+| `IQ_CLK` | in | PCB TCXO buffer | 32 MHz master clock shared by ASIC and SX1257 receivers |
+| `RESETB` | in | PCB reset / host | Active-low global reset |
 
 ### ΣΔ re-mod outputs to SX1302 (2 pads, output)
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `REMOD_A_I` | out | SX1302 Radio A I | 1-bit ΣΔ MRC combined stream (I) |
-| `REMOD_A_Q` | out | SX1302 Radio A Q | 1-bit ΣΔ MRC combined stream (Q) |
+| `REMOD_A_I` | out | SX1302 Radio A I | 1-bit ΣΔ MRC-combined output stream (I) |
+| `REMOD_A_Q` | out | SX1302 Radio A Q | 1-bit ΣΔ MRC-combined output stream (Q) |
 
-### Host SPI — Trouper dedicated control (4 pads, input/output)
-
-Dedicated interface for external host register access and debug (e.g., Raspberry Pi).
+### PSRAM dedicated control (2 pads, output)
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `SPI_MOSI` | in | RPi SPI0 MOSI | Host-to-ASIC register writes and debug commands |
-| `SPI_MISO` | out | RPi SPI0 MISO | ASIC-to-host readback |
-| `SPI_SCK` | in | RPi SPI0 SCLK | Host SPI clock (up to 10 MHz) |
-| `HOST_CS` | in | RPi SPI0 CE1 | Active-low slave select |
+| `PSRAM_SCK` | out | APS6404L `CLK` | PSRAM serial clock |
+| `PSRAM_CE_N` | out | APS6404L `CE#` | PSRAM active-low chip enable |
 
-### Chip Reset (1 pad, input)
+### Host SPI (4 pads)
+
+Dedicated interface for external register access and bring-up.
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `RESETB` | in | PCB Reset / RPi | Active-low global reset. |
+| `SPI_MOSI` | in | Host SPI MOSI | Host-to-Trouper register writes and commands |
+| `SPI_MISO` | out | Host SPI MISO | Trouper-to-host readback |
+| `SPI_SCK` | in | Host SPI SCK | SPI clock, Mode 0, up to 10 MHz |
+| `HOST_CS` | in | Host SPI chip select | Active-low slave select |
 
-### JTAG / IRQ / GPIO nibble (4 pads, muxed)
+### Interrupt output (1 pad, output)
 
-Muxed pads providing debug, interrupt, and general-purpose IO. Function is selected by `JTAG_EN`.
-
-| Pad name | JTAG_EN=0 | JTAG_EN=1 | Description |
+| Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `TCK_IRQ` | `IRQ` (out) | `TCK` (in) | Interrupt / JTAG Clock |
-| `TMS_GPIO0` | `GPIO[0]` | `TMS` (in) | GPIO / JTAG Mode |
-| `TDI_GPIO1` | `GPIO[1]` | `TDI` (in) | GPIO / JTAG Data In |
-| `TDO_GPIO2` | `GPIO[2]` | `TDO` (out) | GPIO / JTAG Data Out |
+| `IRQ_OUT` | out | Host RPi IRQ GPIO | Dedicated level-high sticky interrupt (packet ready, preamble lock, etc.). Mirrors the inter-project `IRQ_GROUPER` line. |
+
+### PSRAM data bus (4 pads, bidirectional)
+
+Dedicated PSRAM QPI data nibble. JTAG and GPIO have been removed (no TAP in RTL; see Trouper Chip Specification §4.16), so these four pads carry only `PSRAM_SIO[3:0]`.
+
+| Pad name | Dir | Connected to | Description |
+|---|---|---|---|
+| `PSRAM_SIO[0]` | bidir | APS6404L `SIO0` | PSRAM QPI data bit 0 |
+| `PSRAM_SIO[1]` | bidir | APS6404L `SIO1` | PSRAM QPI data bit 1 |
+| `PSRAM_SIO[2]` | bidir | APS6404L `SIO2` | PSRAM QPI data bit 2 |
+| `PSRAM_SIO[3]` | bidir | APS6404L `SIO3` | PSRAM QPI data bit 3 |
 
 ---
 
@@ -66,26 +80,27 @@ Muxed pads providing debug, interrupt, and general-purpose IO. Function is selec
 
 | Pad name | Voltage | Count | Description |
 |---|---|---|---|
-| `VDD_IO` | 3.3V | 1 | IO ring supply |
-| `VDD_CORE` | 3.3V | 1 | Digital core supply |
-| `GND` | 0V | 1 | Shared ground |
+| `VDD_IO` | 5.0 V | 1 | IO ring supply |
+| `VDD_CORE` | 3.3 V | 1 | Digital core supply |
+| `GND` | 0 V | 1 | Shared ground |
 
 ---
 
 ## Inter-Project Interconnect (No ASIC Pads)
 
-The following signals connect Trouper to the **Grouper** project on the same MPW. These are internal "wires" or shared harness signals and do not consume Trouper project pads.
+The following signals connect Trouper to the Grouper project on the same MPW. They are internal interconnects and do not consume Trouper package pads.
 
 | Interface | Signals | Description |
 |---|---|---|
-| AHB-Lite Bus | `HADDR`, `HWDATA`, `HRDATA`, etc. | Connecting Grouper (Master) to Trouper (Slave) |
-| IRQ | `IRQ_TO_CPU` | Internal interrupt line to Grouper's PicoRV32 |
+| Grouper register bus (AHB-Lite slave) | target: `HSEL/HADDR/HTRANS/HWRITE/HSIZE/HWDATA/HRDATA/HREADYOUT/HRESP`; current placeholder: `GRP_ADDR[7:0]`, `GRP_WDATA[7:0]`, `GRP_WE`, `GRP_RE`, `GRP_RDATA[7:0]`, `GRP_READY` | Grouper (AHB-Lite master) accesses Trouper's reg_bank as an AHB-Lite slave peripheral via a small adapter. **Inter-project MPW wires only — not bonded to any package pad.** Current RTL still exposes the simplified `GRP_*` byte bus pending the adapter (see Trouper Chip Specification §5.2). |
+| Interrupt | `IRQ_GROUPER` | Internal interrupt line from Trouper to Grouper (mirrors the dedicated `IRQ_OUT` pad) |
 
 ---
 
-## Pads NOT on ASIC
+## Pads Not Allocated
 
-- **SX1257 DIOs:** Not connected to Trouper pads. Any AFE polling or bring-up control is handled outside Trouper's hardened RTL.
-- **SX1257 CLK_IN:** Not needed; using shared TCXO reference.
-- **AFE chip-select / config pins:** No Trouper `CS_A[1:0]` outputs are allocated in the current revision. AFE configuration is board/system logic territory, not a Trouper pad function.
-- **PSRAM QSPI:** The current 23-pad plan excludes dedicated PSRAM pads. Same-packet replay via PSRAM therefore requires either shared/internal routing not yet committed or a future larger-pad revision.
+- **SX1257 DIO pins:** Not connected to Trouper pads. AFE polling and bring-up remain external to Trouper.
+- **SX1257 `CLK_IN`:** Not connected; the radios and ASIC share the board clock reference instead.
+- **AFE chip-select / configuration pins:** Not allocated to Trouper package pads in the current revision.
+- **Additional PSRAM control pins:** Not required. The current allocation uses dedicated `PSRAM_SCK` and `PSRAM_CE_N`, with `PSRAM_SIO[3:0]` on four dedicated data pads.
+- **JTAG / GPIO pins:** Removed. No JTAG TAP is instantiated in the RTL and GPIO was never wired out of the macro; host debug uses the SPI register / PSRAM-readback path. See Trouper Chip Specification §4.16.
