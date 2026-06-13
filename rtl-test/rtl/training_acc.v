@@ -62,11 +62,11 @@ module training_acc (
     output wire        training_armed
 );
 
-    assign training_armed = armed;
-
     reg [31:0] sample_count;
     reg [31:0] acc_start, acc_end;
     reg        armed;
+
+    assign training_armed = armed;
     reg        noise_mode_r;    // 1 = firmware-triggered noise measurement in progress
     reg        noise_trig_r;    // previous-cycle noise_trig for edge detect
 

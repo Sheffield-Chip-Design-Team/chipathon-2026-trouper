@@ -1,5 +1,12 @@
 // mimo_rx_top.v
-// Legacy compatibility wrapper around the radio-only Trouper hard macro.
+// DEPRECATED: legacy compatibility wrapper around trouper_top.
+//
+// Do not use this module for new RTL, synthesis, or P&R work.
+// Canonical top: rtl-test/rtl/trouper_top.v
+//
+// This wrapper is retained only so archived scripts/configs/netlists that
+// still name mimo_rx_top can elaborate. Its extra TCK/TMS/TDI/TDO ports are
+// compatibility stubs around the newer dedicated IRQ + PSRAM-SIO boundary.
 
 `default_nettype none
 `include "trouper_top.v"
@@ -26,9 +33,8 @@ module mimo_rx_top (
     output wire        TDO_GPIO2
 );
 
-    wire [7:0] cfg_rdata_unused;
-    wire       cfg_ready_unused;
     wire       irq_out;
+    wire       irq_grouper_unused;
 
     trouper_top u_trouper_top (
         .IQ_CLK      (IQ_CLK),
@@ -42,16 +48,20 @@ module mimo_rx_top (
         .PSRAM_SIO_OUT(PSRAM_SIO_OUT),
         .PSRAM_SIO_IN(PSRAM_SIO_IN),
         .PSRAM_SIO_OE(PSRAM_SIO_OE),
-        .CFG_ADDR    (8'h00),
-        .CFG_WDATA   (8'h00),
-        .CFG_WE      (1'b0),
-        .CFG_RE      (1'b0),
-        .CFG_RDATA   (cfg_rdata_unused),
-        .CFG_READY   (cfg_ready_unused),
-        .IRQ_OUT     (irq_out)
+        .HOST_CS     (HOST_CS),
+        .SPI_SCK     (SPI_SCK),
+        .SPI_MOSI    (SPI_MOSI),
+        .SPI_MISO    (SPI_MISO),
+        .GRP_ADDR    (8'h00),
+        .GRP_WDATA   (8'h00),
+        .GRP_WE      (1'b0),
+        .GRP_RE      (1'b0),
+        .GRP_RDATA   (),
+        .GRP_READY   (),
+        .IRQ_OUT     (irq_out),
+        .IRQ_GROUPER (irq_grouper_unused)
     );
 
-    assign SPI_MISO  = 1'b0;
     assign TCK_IRQ   = irq_out;
     assign TDO_GPIO2 = 1'b0;
 

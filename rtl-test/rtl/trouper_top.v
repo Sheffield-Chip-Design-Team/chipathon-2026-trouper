@@ -2,10 +2,11 @@
 // Standalone Trouper top-level integration
 // GF180MCU 3.3V 32 MHz — SSCS PICO Chipathon 2026
 //
-// Pad count: 22 signal + 3 power = 25 total (at Chipathon limit)
+// Pad count: 23 signal + 3 power = 26 total (within Chipathon allocation)
 //            clk/rst×2, IQ×8, remod×2, PSRAM SCK+CE_N×2,
 //            SPI HOST_CS/SCK/MOSI/MISO×4,
-//            JTAG/PSRAM-SIO/IRQ TCK_IRQ/TMS/TDI/TDO×4 (shared pads)
+//            IRQ_OUT×1 (dedicated pad) + PSRAM-SIO[3:0]×4 (dedicated).
+//            JTAG/GPIO removed — no TAP in RTL.
 //            VDD_IO/VDD_CORE/GND×3. CS_A removed (SPI master not present).
 //
 // Signal flow:
@@ -16,7 +17,7 @@
 // Control plane:
 //   Host RPi → SPI slave (HOST_CS/SCK/MOSI/MISO pads) → reg_bank byte interface
 //   Grouper  → GRP_ADDR/WDATA/WE/RE/RDATA/READY inter-chip bus → reg_bank (priority)
-//   IRQ: irq_out (sticky) → IRQ_OUT pad (TCK_IRQ when JTAG_EN=0) + IRQ_GROUPER inter-chip
+//   IRQ: irq_out (sticky) → IRQ_OUT dedicated pad + IRQ_GROUPER inter-chip
 
 `ifndef TROUPER_TOP_V
 `define TROUPER_TOP_V
@@ -36,7 +37,7 @@ module trouper_top (
     output wire        REMOD_A_I,
     output wire        REMOD_A_Q,
 
-    // ---- PSRAM QPI (shared with JTAG pads at padframe level) ----
+    // ---- PSRAM QPI (SIO[3:0] on four dedicated pads) ----
     output wire        PSRAM_SCK,     // PSRAM clock (32 MHz, gated in psram_buf_ctrl)
     output wire        PSRAM_CE_N,
     output wire [3:0]  PSRAM_SIO_OUT,
@@ -58,7 +59,7 @@ module trouper_top (
     output wire        GRP_READY,
 
     // ---- Interrupt outputs ----
-    output wire        IRQ_OUT,       // → TCK_IRQ pad (when JTAG_EN=0); sticky, level-high
+    output wire        IRQ_OUT,       // → dedicated IRQ pad; sticky, level-high
     output wire        IRQ_GROUPER    // → Grouper inter-project IRQ line; same signal as IRQ_OUT
 );
 
@@ -67,6 +68,15 @@ module trouper_top (
     // =========================================================================
     wire clk   = IQ_CLK;
     wire rst_n = RESETB;
+
+    // ---- Forward declarations (declared before first use; iverilog requires
+    //      nets to be declared ahead of references) ----
+    wire        dcr_valid;          // dc_removal output valid; driven below
+    wire        packet_done_pulse;  // falling edge of packet_active; driven below
+    wire        spi_reg_re;         // SPI read-side-effect strobe; driven below
+    wire [7:0]  spi_reg_re_addr;
+    wire        psram_dbg_busy_w;
+    wire [7:0]  psram_dbg_data_w;
 
     // =========================================================================
     // Free-running 32-bit sample counter (for packet_ctrl_fsm)
@@ -86,9 +96,6 @@ module trouper_top (
     // Register bank outputs (config forwarded to DSP blocks)
     // =========================================================================
     // Declare wires for all reg_bank outputs used here; tie unused inputs below.
-    wire        rb_cpu_reset, rb_jtag_en;
-    wire [2:0]  rb_gpio_dir, rb_gpio_out;
-    wire [1:0]  rb_cpu_sram_ctrl;
     wire [7:0]  cfg_rdata_w;
     wire [7:0]  rb_peek_rdata_w;
     wire        cfg_ready_w;
@@ -124,7 +131,6 @@ module trouper_top (
     wire [22:0] rb_psram_dbg_addr;
     wire        rb_psram_dbg_auto_inc;
     wire        rb_psram_dbg_rd_trig;
-    wire [1:0]  rb_ref_sel;
 
     // =========================================================================
     // Stage 1: ΣΔ Decimators — CIC N=3 only, no FIR (×4 sd_decimator_cic_only)
@@ -171,7 +177,6 @@ module trouper_top (
     // =========================================================================
     wire signed [7:0] dcr_i [0:3];
     wire signed [7:0] dcr_q [0:3];
-    wire              dcr_valid;
 
     dc_removal u_dcr (
         .clk_32m  (clk),
@@ -281,22 +286,15 @@ module trouper_top (
     );
 
     // =========================================================================
-    // Stage 5: sigma2 register path.
-    // sigma2_hw[0..3] are repurposed to carry Z_23 (pair 5) at reg_bank 0xE0-0xE7:
-    //   sigma2_hw[0] = Zpair_i5[31:16], [1] = Zpair_i5[15:0]
-    //   sigma2_hw[2] = Zpair_q5[31:16], [3] = Zpair_q5[15:0]
-    // sigma2_valid pulses when a firmware-triggered noise window completes without SC contamination.
+    // Stage 5: noise-window qualification.
+    // Z_23 (pair 5) is read back directly at reg_bank 0x5E–0x63 like the other
+    // pairs.  sigma2_valid pulses when a firmware-triggered noise window
+    // completes without SC contamination; it sets IRQ_STATUS.NOISE_READY.
     // =========================================================================
-    wire [15:0] sigma2_hw [0:3];
     wire        sigma2_valid;
     reg         noise_window_active;
     reg         noise_window_sc_seen;
     reg         sigma2_valid_r;
-
-    assign sigma2_hw[0] = Zpair_i[5][31:16];
-    assign sigma2_hw[1] = Zpair_i[5][15:0];
-    assign sigma2_hw[2] = Zpair_q[5][31:16];
-    assign sigma2_hw[3] = Zpair_q[5][15:0];
 
     // Firmware-triggered noise measurements reuse training_acc noise mode.
     // Accept the resulting Zdiag window only if no SC activity appeared while
@@ -345,6 +343,13 @@ module trouper_top (
         else if (W_valid_set) W_valid <= 1'b1;
         else if (!packet_active) W_valid <= 1'b0;
 
+    // W_pending: training complete but W not yet committed this packet
+    reg  w_pending;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n)             w_pending <= 1'b0;
+        else if (training_done) w_pending <= 1'b1;
+        else if (W_commit_hw || !packet_active) w_pending <= 1'b0;
+
     packet_ctrl_fsm u_pcfsm (
         .clk             (clk),
         .rst_n           (rst_n),
@@ -358,7 +363,7 @@ module trouper_top (
         .mode_shadow     (rb_mimo_mode),
         .antenna_en_shadow (rb_antenna_en),
         .psram_en        (rb_psram_ctrl[0]),
-        .psram_replay_active (1'b0),
+        .psram_replay_active (psram_replay_active_w),
         .pkt_timeout_syms (rb_pkt_timeout_syms),
         .safe_switch     (safe_switch),
         .W_valid_set     (W_valid_set),
@@ -429,7 +434,7 @@ module trouper_top (
         .dbg_addr     (rb_psram_dbg_addr),
         .dbg_auto_inc (rb_psram_dbg_auto_inc),
         .dbg_rd_trig  (rb_psram_dbg_rd_trig),
-        .dbg_data_pop (spi_reg_re && (spi_reg_re_addr == 8'hB9)),
+        .dbg_data_pop (spi_reg_re && (spi_reg_re_addr == 8'h76)),
         .dbg_busy     (psram_dbg_busy_w),
         .dbg_data     (psram_dbg_data_w)
     );
@@ -484,10 +489,8 @@ module trouper_top (
     // During REPLAY: combiner processes PSRAM replay IQ → normal remod path.
     // =========================================================================
     wire psram_silence = psram_buf_active && !psram_replay_active_w;
-    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 :
-                                   (active_mode[0] ? comb_y_i : ($signed(comb_y_i) >>> rb_remod_backoff_shift));
-    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 :
-                                   (active_mode[0] ? comb_y_q : ($signed(comb_y_q) >>> rb_remod_backoff_shift));
+    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 : ($signed(comb_y_i) >>> rb_remod_backoff_shift);
+    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 : ($signed(comb_y_q) >>> rb_remod_backoff_shift);
     sd_remod u_remod (
         .clk_32m  (clk),
         .rst_n    (rst_n),
@@ -508,10 +511,11 @@ module trouper_top (
     always @(posedge clk or negedge rst_n)
         if (!rst_n) packet_active_r <= 1'b0;
         else        packet_active_r <= packet_active;
-    wire packet_done_pulse = packet_active_r && !packet_active;
+    assign packet_done_pulse = packet_active_r && !packet_active;
 
-    // irq_set for reg_bank: level signals; reg_bank latches rising edges into sticky bits
-    wire [7:0] rb_irq_set = {1'b0, 1'b0, 1'b0, 1'b0,
+    // irq_set for reg_bank: [0] CORR_LOCK, [1] TRAINING_DONE, [2] W_MISSED_PACKET,
+    // [3] PACKET_DONE, [4] NOISE_READY (uncontaminated noise window complete)
+    wire [7:0] rb_irq_set = {3'b000, sigma2_valid,
                              packet_done_pulse, W_missed_packet, training_done, sc_lock};
 
     // =========================================================================
@@ -521,11 +525,7 @@ module trouper_top (
     wire [7:0] spi_reg_wdata;
     wire       spi_reg_we;
     wire [7:0] spi_reg_rd_addr;
-    wire [7:0] spi_reg_re_addr;
-    wire       spi_reg_re;
     wire [7:0] spi_reg_rdata;
-    wire       psram_dbg_busy_w;
-    wire [7:0] psram_dbg_data_w;
 
     spi_slave u_spi (
         .clk_32m     (clk),
@@ -540,14 +540,7 @@ module trouper_top (
         .reg_rd_addr (spi_reg_rd_addr),
         .reg_re_addr (spi_reg_re_addr),
         .reg_re      (spi_reg_re),
-        .reg_rdata   (spi_reg_rdata),
-        // Firmware-load port: not connected (no on-chip CPU SRAM in Trouper)
-        .fw_ld_addr  (),
-        .fw_ld_wdata (),
-        .fw_ld_we    (),
-        .fw_ld_rdata (8'h00),
-        .fw_ld_req   (),
-        .fw_ld_ready (1'b1)
+        .reg_rdata   (spi_reg_rdata)
     );
 
     // =========================================================================
@@ -582,42 +575,27 @@ module trouper_top (
         .ready      (cfg_ready_w),
         .irq_out    (rb_irq_out_sticky),
         // Hardware status inputs
-        .gpio_in    (3'b000),
-        .cpu_sram_status (6'd0),
-        .buf_mode        (2'b00),   // frontend_buf_ctrl removed
-        .buf_valid       (1'b0),
-        .sram0_bist_pass (1'b1),
-        .sram1_bist_pass (1'b1),
-        .buf_freeze      (buf_freeze),
-        .buf_wr_ptr      (7'd0),
         .rx_gain_active_0 (rx_gain_active_r[0]), .rx_gain_active_1 (rx_gain_active_r[1]),
         .rx_gain_active_2 (rx_gain_active_r[2]), .rx_gain_active_3 (rx_gain_active_r[3]),
         .rx_gain_pending  (rb_rx_gain_commit),
-        .rx_gain_owner    (1'b1),
-        .rx_gain_error    (1'b0),
         .active_mode_rb   (active_mode),
         .active_antenna_en_rb (active_antenna_en),
         .packet_active    (packet_active),
         .packet_phase     (packet_phase),
         .training_done_rb (training_done),
-        .w_pending_rb     (1'b0),
+        .w_pending_rb     (w_pending),
         .w_valid_rb       (W_valid),
         .w_missed_rb      (W_missed_packet),
         .irq_set          (rb_irq_set),
-        .corr_mag_0 (16'd0), .corr_mag_1 (16'd0),
-        .corr_mag_2 (16'd0), .corr_mag_3 (16'd0),
         .sc_stat         (sc_stat),
         .training_armed  (training_armed),
         .n_acc           (n_acc),
-        .z_shift         (6'd0),
-        .c_pool_i        (16'd0),
-        .c_pool_q        (16'd0),
-        .cfo_diag        (16'd0),
         .zpair_i0 (Zpair_i[0]), .zpair_q0 (Zpair_q[0]),
         .zpair_i1 (Zpair_i[1]), .zpair_q1 (Zpair_q[1]),
         .zpair_i2 (Zpair_i[2]), .zpair_q2 (Zpair_q[2]),
         .zpair_i3 (Zpair_i[3]), .zpair_q3 (Zpair_q[3]),
         .zpair_i4 (Zpair_i[4]), .zpair_q4 (Zpair_q[4]),
+        .zpair_i5 (Zpair_i[5]), .zpair_q5 (Zpair_q[5]),
         .zdiag_0  (Zdiag[0]),   .zdiag_1  (Zdiag[1]),
         .zdiag_2  (Zdiag[2]),   .zdiag_3  (Zdiag[3]),
         .sc_hit_dbg          (sc_hit_dbg),
@@ -625,39 +603,24 @@ module trouper_top (
         .sc_lock_dbg         (sc_lock),
         .sc_first_hit_dbg    (sc_first_hit_dbg),
         .sc_lock_snap_dbg    (sc_lock_snap_dbg),
-        .sigma2_hw_0 (sigma2_hw[0]), .sigma2_hw_1 (sigma2_hw[1]),
-        .sigma2_hw_2 (sigma2_hw[2]), .sigma2_hw_3 (sigma2_hw[3]),
         .psram_status_rb  ({psram_buf_active, psram_overflow,
                             psram_replay_missed, psram_replay_active_w,
                             psram_qe_init_done, psram_state_dbg}),
-        .psram_pkt_bytes  (16'd0),
-        .psram_rd_offset  (8'd0),
         .psram_dbg_busy   (psram_dbg_busy_w),
         .psram_dbg_data   (psram_dbg_data_w),
         // Hardware control outputs
-        .cpu_reset       (rb_cpu_reset),
-        .jtag_en         (rb_jtag_en),
-        .gpio_dir        (rb_gpio_dir),
-        .gpio_out        (rb_gpio_out),
-        .cpu_sram_ctrl   (rb_cpu_sram_ctrl),
         .mimo_mode       (rb_mimo_mode),
         .antenna_en      (rb_antenna_en),
         .sf_cfg          (rb_sf_cfg),
         .decim_ratio     (rb_decim_ratio),
-        .bist_run        (),
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
-        .energy_gate_en  (),
-        .energy_thr      (),
         .pkt_timeout_syms(rb_pkt_timeout_syms),
         .rx_gain_shadow_0(rb_rx_gain_shadow_0),
         .rx_gain_shadow_1(rb_rx_gain_shadow_1),
         .rx_gain_shadow_2(rb_rx_gain_shadow_2),
         .rx_gain_shadow_3(rb_rx_gain_shadow_3),
         .rx_gain_commit  (rb_rx_gain_commit),
-        .wgt_src         (),
-        .wgt_auto_commit (),
-        .wgt_mode        (),
         .w_commit_pulse  (rb_w_commit_pulse),
         .comb_post_gain_shift(rb_comb_post_gain_shift),
         .remod_backoff_shift(rb_remod_backoff_shift),
@@ -666,8 +629,6 @@ module trouper_top (
         .psram_dbg_addr  (rb_psram_dbg_addr),
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
-        .noise_en        (),
-        .ref_sel         (rb_ref_sel),
         .noise_trig      (rb_noise_trig)
     );
 
