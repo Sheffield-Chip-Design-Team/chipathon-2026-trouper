@@ -7,8 +7,12 @@
 //
 // Pipeline (all clk_32m):
 //   Cycle 0-N : CIC integrators (every cycle)
-//   Cycle N   : cic_strobe fires → combinational comb chain → shifted_i/q
-//   Cycle N+1 : output register latches shifted_i/q, asserts iq_valid
+//   Cycle N   : cic_strobe fires, captures the next decimated snapshot
+//   Cycle N+1 : comb stage 1
+//   Cycle N+2 : comb stage 2
+//   Cycle N+3 : comb stage 3
+//   Cycle N+4 : normalise / shift
+//   Cycle N+5 : output register latches, asserts iq_valid
 //
 // Normalisation:
 //   shifted_i = comb_i3_w >>> norm_shift  (same as combchain)
@@ -109,50 +113,80 @@ module sd_decimator_cic_only (
     end
 
     // =========================================================
-    // CIC comb stages + normalisation (32 MHz, strobe-gated)
+    // CIC comb stages + normalisation
+    //
+    // The comb tail only has work to do on decimated samples. Splitting it
+    // over several clk_32m cycles removes the long strobe-gated path that
+    // dominated SS timing while staying well inside the minimum 32-cycle
+    // spacing between cic_strobe pulses.
     // =========================================================
 
     reg signed [25:0] intg_i3_lat, intg_q3_lat;
     reg signed [25:0] comb_i1_d, comb_i2_d, comb_i3_d;
     reg signed [25:0] comb_q1_d, comb_q2_d, comb_q3_d;
+    reg signed [25:0] comb_i1_pipe, comb_i2_pipe, comb_i3_pipe;
+    reg signed [25:0] comb_q1_pipe, comb_q2_pipe, comb_q3_pipe;
     reg signed [25:0] shifted_i, shifted_q;
+    reg               comb1_valid, comb2_valid, comb3_valid, shift_valid;
 
     wire signed [25:0] comb_i1_w = intg_i3_lat - comb_i1_d;
     wire signed [25:0] comb_q1_w = intg_q3_lat - comb_q1_d;
-    wire signed [25:0] comb_i2_w = comb_i1_w   - comb_i2_d;
-    wire signed [25:0] comb_q2_w = comb_q1_w   - comb_q2_d;
-    wire signed [25:0] comb_i3_w = comb_i2_w   - comb_i3_d;
-    wire signed [25:0] comb_q3_w = comb_q2_w   - comb_q3_d;
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
             intg_i3_lat <= 26'sd0; intg_q3_lat <= 26'sd0;
             comb_i1_d   <= 26'sd0; comb_i2_d   <= 26'sd0; comb_i3_d   <= 26'sd0;
             comb_q1_d   <= 26'sd0; comb_q2_d   <= 26'sd0; comb_q3_d   <= 26'sd0;
+            comb_i1_pipe <= 26'sd0; comb_i2_pipe <= 26'sd0; comb_i3_pipe <= 26'sd0;
+            comb_q1_pipe <= 26'sd0; comb_q2_pipe <= 26'sd0; comb_q3_pipe <= 26'sd0;
             shifted_i   <= 26'sd0; shifted_q   <= 26'sd0;
-        end else if (cic_strobe) begin
-            intg_i3_lat <= intg_i3;
-            intg_q3_lat <= intg_q3;
+            comb1_valid <= 1'b0;
+            comb2_valid <= 1'b0;
+            comb3_valid <= 1'b0;
+            shift_valid <= 1'b0;
+        end else begin
+            comb1_valid <= cic_strobe;
+            comb2_valid <= comb1_valid;
+            comb3_valid <= comb2_valid;
+            shift_valid <= comb3_valid;
 
-            comb_i1_d <= intg_i3_lat;
-            comb_q1_d <= intg_q3_lat;
-            comb_i2_d <= comb_i1_w;
-            comb_q2_d <= comb_q1_w;
-            comb_i3_d <= comb_i2_w;
-            comb_q3_d <= comb_q2_w;
+            if (cic_strobe) begin
+                comb_i1_pipe <= comb_i1_w;
+                comb_q1_pipe <= comb_q1_w;
+                comb_i1_d    <= intg_i3_lat;
+                comb_q1_d    <= intg_q3_lat;
+                intg_i3_lat  <= intg_i3;
+                intg_q3_lat  <= intg_q3;
+            end
 
-            case (norm_shift)
-                5'd17: begin shifted_i <= comb_i3_w >>> 17; shifted_q <= comb_q3_w >>> 17; end
-                5'd14: begin shifted_i <= comb_i3_w >>> 14; shifted_q <= comb_q3_w >>> 14; end
-                5'd11: begin shifted_i <= comb_i3_w >>> 11; shifted_q <= comb_q3_w >>> 11; end
-                5'd8:  begin shifted_i <= comb_i3_w >>> 8;  shifted_q <= comb_q3_w >>> 8;  end
-                default: begin shifted_i <= comb_i3_w >>> 17; shifted_q <= comb_q3_w >>> 17; end
-            endcase
+            if (comb1_valid) begin
+                comb_i2_pipe <= comb_i1_pipe - comb_i2_d;
+                comb_q2_pipe <= comb_q1_pipe - comb_q2_d;
+                comb_i2_d    <= comb_i1_pipe;
+                comb_q2_d    <= comb_q1_pipe;
+            end
+
+            if (comb2_valid) begin
+                comb_i3_pipe <= comb_i2_pipe - comb_i3_d;
+                comb_q3_pipe <= comb_q2_pipe - comb_q3_d;
+                comb_i3_d    <= comb_i2_pipe;
+                comb_q3_d    <= comb_q2_pipe;
+            end
+
+            if (comb3_valid) begin
+                case (norm_shift)
+                    5'd17: begin shifted_i <= comb_i3_pipe >>> 17; shifted_q <= comb_q3_pipe >>> 17; end
+                    5'd14: begin shifted_i <= comb_i3_pipe >>> 14; shifted_q <= comb_q3_pipe >>> 14; end
+                    5'd11: begin shifted_i <= comb_i3_pipe >>> 11; shifted_q <= comb_q3_pipe >>> 11; end
+                    5'd8:  begin shifted_i <= comb_i3_pipe >>> 8;  shifted_q <= comb_q3_pipe >>> 8;  end
+                    default: begin shifted_i <= comb_i3_pipe >>> 17; shifted_q <= comb_q3_pipe >>> 17; end
+                endcase
+            end
         end
     end
 
     // =========================================================
-    // Output register (32 MHz, fires 1 cycle after cic_strobe)
+    // Output register
     //
     // shifted_i/q are 26-bit signed; after norm_shift the useful range is
     // ±128 LSB at full scale (bits [8:0] have the signal, [25:9] are sign ext).
@@ -161,18 +195,18 @@ module sd_decimator_cic_only (
     // CDC note: the testbench (and any downstream consumer) captures iq_valid
     // on posedge clk_16m.  clk_16m is derived as clk_32m/2, so its posedge
     // fires every 2 clk_32m cycles.  A 1-cycle iq_valid pulse has a 50%
-    // chance of being missed.  Extend to 2 clk_32m cycles (same trick as the
-    // combchain fir_strobe_ext) so the clk_16m edge always catches it.
+    // chance of being missed.  Extend to 2 clk_32m cycles so the clk_16m
+    // edge always catches it.
     // =========================================================
 
-    reg strobe_out, strobe_out_r;
+    reg out_fire, out_fire_r;
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            strobe_out   <= 1'b0;
-            strobe_out_r <= 1'b0;
+            out_fire   <= 1'b0;
+            out_fire_r <= 1'b0;
         end else begin
-            strobe_out   <= cic_strobe;
-            strobe_out_r <= strobe_out;
+            out_fire   <= shift_valid;
+            out_fire_r <= out_fire;
         end
     end
 
@@ -186,8 +220,8 @@ module sd_decimator_cic_only (
             iq_out_q <= 8'sd0;
             iq_valid <= 1'b0;
         end else begin
-            iq_valid <= strobe_out | strobe_out_r;
-            if (strobe_out) begin
+            iq_valid <= out_fire | out_fire_r;
+            if (out_fire) begin
                 if      (out_val_i > 18'sd127)  iq_out_i <= 8'sd127;
                 else if (out_val_i < -18'sd128) iq_out_i <= -8'sd128;
                 else                            iq_out_i <= out_val_i[7:0];
