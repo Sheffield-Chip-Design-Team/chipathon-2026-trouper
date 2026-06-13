@@ -11,6 +11,11 @@
 // for 4-antenna MRC. Firmware writes weight to high byte of 16-bit shadow reg;
 // trouper_top passes rb_w_shadow[hi_byte] to W_re/im ports.
 // Multiplier: 8×8→16-bit (was 16×8→24-bit). Accumulator: 18-bit (was 26-bit).
+// Output shift: acc >>> 8 (Q0.7 scaling — effective weight = W_byte/128). Firmware
+// writes Q1.15; trouper_top passes the high byte. The >>> 8 shift keeps the
+// accumulator linear for input amplitudes up to ~67 counts with W_max=120.
+// post_gain_shift (0–7) is set per-packet by firmware from Zdiag to recover
+// output amplitude for weak signals without touching the weight encoding.
 // State count: 11. Budget at R=128: 128 cycles.
 // GF180MCU, 3.3V, 16 MHz DSP clock domain
 
@@ -62,8 +67,8 @@ module mrc_combiner (
     wire signed [15:0] mul_q_next = w_r * xq_r;
 
     // Saturation path
-    wire signed [17:0] guarded_i_f = acc_i_final_r >>> 1;
-    wire signed [17:0] guarded_q_f = acc_q_final_r >>> 1;
+    wire signed [17:0] guarded_i_f = acc_i_final_r >>> 8;
+    wire signed [17:0] guarded_q_f = acc_q_final_r >>> 8;
     wire signed [24:0] shifted_i_f = $signed({{7{guarded_i_f[17]}}, guarded_i_f}) <<< post_gain_shift;
     wire signed [24:0] shifted_q_f = $signed({{7{guarded_q_f[17]}}, guarded_q_f}) <<< post_gain_shift;
     wire signed [8:0] sat_i = (shifted_i_f >  25'sd127) ?  9'sd127 :
