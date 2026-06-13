@@ -22,6 +22,31 @@
 //   N = 2^(SF-1) samples.  del_offset_bytes = N × 8 = 4 << SF.
 //   del_rdy fires after N iq_valid pulses since qe_init_done.
 //
+// Debug readback path (no PicoRV32 / Grouper required):
+//   When packet_active=0 (IDLE) and QSPI_OWNER=0, the host RPi can read arbitrary
+//   PSRAM addresses via the SPI slave register bridge:
+//     0x72 PSRAM_DBG_ADDR_LO  [7:0]   — byte address bits [7:0]
+//     0x73 PSRAM_DBG_ADDR_MID [7:0]   — byte address bits [15:8]
+//     0x74 PSRAM_DBG_ADDR_HI  [6:0]   — byte address bits [22:16] (23-bit = 8 MB)
+//     0x75 PSRAM_DBG_CTRL     R/W     — [0] RD_TRIG (strobe, self-clearing)
+//                                        [1] AUTO_INC (re-arm after each 8-byte drain)
+//                                        [7] DBG_BUSY (read-only, clears when data ready)
+//     0x76 PSRAM_DBG_DATA     R only  — auto-incrementing byte window; 8 consecutive
+//                                        reads drain one full 8-byte IQ sample; address
+//                                        advances by 8 if AUTO_INC=1, else holds.
+//   Sequence: write 0x72-0x74, write 0x75[0]=1, poll 0x75[7]=0, read 0x76 ×8.
+//   Trigger and auto-inc refetch requests are latched into dbg_pend and serviced
+//   only in the S_WRITE idle slot, with capture writes taking priority — a debug
+//   fetch never starts in the same cycle an iq_valid write starts.
+//   Debug reads are blocked (DBG_BUSY held) while packet_active=1, while
+//   QSPI_OWNER=1 (pad handover), and before qe_init_done.
+//
+// Interface must remain QPI (not SPI): at 250 kHz iq_valid rate (128-cycle period),
+// one period must fit both a write (25 cyc QPI) and an SC delay read (19 cyc QPI) = 44 cyc.
+// SPI equivalents are ~96 cyc write + ~104 cyc read = 200 cyc — 1.56× over budget.
+// SIO[3:0] occupy 4 dedicated pads (TRPR-PHY-003), so QPI costs zero extra pads
+// vs SPI; there is no pin-count reason to downgrade.
+//
 // GF180MCU, 3.3V, 32 MHz
 
 module psram_buf_ctrl (
@@ -30,7 +55,8 @@ module psram_buf_ctrl (
 
     // Config
     input  wire        psram_en,     // 1 = capture and replay enabled
-    input  wire        init_start,   // firmware strobe after tPU ≥ 150 µs
+    input  wire        init_start,   // start init when the local controller owns the pads
+    input  wire        qspi_owner,   // 1 = ownership transferred away from local controller
     input  wire [3:0]  sf,           // spreading factor (7–12), for del address
 
     // Live IQ stream (4 branches, 8-bit signed)
@@ -44,6 +70,7 @@ module psram_buf_ctrl (
     input  wire [31:0] iq_sample_cnt, // free-running iq_valid counter from trouper_top
     input  wire        W_commit,
     input  wire        packet_end,
+    input  wire        packet_active,
 
     // QPI pad interface
     output wire        sck,           // PSRAM clock (32 MHz, gated internally)
@@ -68,7 +95,13 @@ module psram_buf_ctrl (
     output reg         qe_init_done,
     output reg         replay_missed, // sticky: packet_end before W_commit
     output reg         overflow,      // sticky: wr_ptr lapped rd_ptr
-    output reg  [2:0]  state_dbg
+    output reg  [2:0]  state_dbg,
+    input  wire [22:0] dbg_addr,
+    input  wire        dbg_auto_inc,
+    input  wire        dbg_rd_trig,
+    input  wire        dbg_data_pop,
+    output wire        dbg_busy,
+    output wire [7:0]  dbg_data
 );
 
     // -----------------------------------------------------------------------
@@ -116,6 +149,23 @@ module psram_buf_ctrl (
     reg [63:0] wr_data;  // {i0,q0,i1,q1,i2,q2,i3,q3} latched from iq_valid
     reg [63:0] rd_data;  // accumulated nibbles from PSRAM during read phase
 
+    reg         dbg_mode;
+    reg         dbg_fetch_busy;
+    reg         dbg_pend;     // latched fetch request (RD_TRIG or auto-inc refetch)
+    reg [22:0]  dbg_addr_cur;
+    reg [63:0]  dbg_buf;
+    reg [2:0]   dbg_idx;
+
+    assign dbg_busy = qspi_owner || packet_active || dbg_fetch_busy || !qe_init_done;
+    assign dbg_data = dbg_busy ? 8'h00 :
+                      (dbg_idx == 3'd0) ? dbg_buf[63:56] :
+                      (dbg_idx == 3'd1) ? dbg_buf[55:48] :
+                      (dbg_idx == 3'd2) ? dbg_buf[47:40] :
+                      (dbg_idx == 3'd3) ? dbg_buf[39:32] :
+                      (dbg_idx == 3'd4) ? dbg_buf[31:24] :
+                      (dbg_idx == 3'd5) ? dbg_buf[23:16] :
+                      (dbg_idx == 3'd6) ? dbg_buf[15:8]  : dbg_buf[7:0];
+
     // -----------------------------------------------------------------------
     // QE_INIT sub-cycle FSM (32 sub-cycles, same as original)
     // -----------------------------------------------------------------------
@@ -148,6 +198,12 @@ module psram_buf_ctrl (
             rd_data        <= 64'd0;
             init_sub       <= 6'd0;
             init_sr        <= 8'd0;
+            dbg_mode       <= 1'b0;
+            dbg_fetch_busy <= 1'b0;
+            dbg_pend       <= 1'b0;
+            dbg_addr_cur   <= 23'd0;
+            dbg_buf        <= 64'd0;
+            dbg_idx        <= 3'd0;
             sck_en         <= 1'b0;
             ce_n           <= 1'b1;
             sio_out        <= 4'd0;
@@ -172,7 +228,7 @@ module psram_buf_ctrl (
             del_valid    <= 1'b0;
             state_dbg    <= state;
 
-            sck_en <= (state == S_QE_INIT) || qpi_busy;
+            sck_en <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner;
 
             // del_rdy counter: accumulate iq_valid pulses after init
             if (!qe_init_done) begin
@@ -185,13 +241,41 @@ module psram_buf_ctrl (
                     del_cnt <= del_cnt + 12'd1;
             end
 
+            // Debug-data pop: advance the byte index; on the eighth byte with
+            // AUTO_INC set, request a refetch of the next sample.  The fetch
+            // itself starts only from the S_WRITE idle slot below — never here —
+            // so it cannot collide with a capture-write start or fire in a
+            // state that would leave qpi_busy/dbg_fetch_busy orphaned.
+            if (!dbg_busy && dbg_data_pop) begin
+                if (dbg_idx == 3'd7) begin
+                    dbg_idx <= 3'd0;
+                    if (dbg_auto_inc) begin
+                        dbg_addr_cur   <= (dbg_addr_cur + 23'd8) & AMASK;
+                        dbg_fetch_busy <= 1'b1;
+                        dbg_pend       <= 1'b1;
+                    end
+                end else begin
+                    dbg_idx <= dbg_idx + 3'd1;
+                end
+            end
+
+            // RD_TRIG: latch a fetch request whenever the debug engine is idle.
+            // Pends until the S_WRITE idle slot services it, so a trigger that
+            // lands while the QPI bus is busy is not lost.
+            if (dbg_rd_trig && !dbg_fetch_busy && !packet_active && !qspi_owner
+                && qe_init_done) begin
+                dbg_addr_cur   <= dbg_addr;
+                dbg_fetch_busy <= 1'b1;
+                dbg_pend       <= 1'b1;
+            end
+
             case (state)
 
                 // ------------------------------------------------------------
                 S_UNINIT: begin
                     ce_n   <= 1'b1;
                     sio_oe <= 4'd0;
-                    if (init_start) begin
+                    if (init_start && !qspi_owner) begin
                         state    <= S_QE_INIT;
                         init_sub <= 6'd0;
                         init_sr  <= 8'h66; // RSTEN
@@ -272,15 +356,69 @@ module psram_buf_ctrl (
                     if (!qpi_busy) begin
                         ce_n   <= 1'b1;
                         sio_oe <= 4'd0;
-                        if (iq_valid && psram_en && qe_init_done) begin
+                        // Capture writes take priority; pending debug fetches
+                        // are serviced in the spare idle cycles between them.
+                        if (iq_valid && psram_en && qe_init_done && !qspi_owner) begin
                             wr_data  <= {iq_i0, iq_q0, iq_i1, iq_q1,
                                          iq_i2, iq_q2, iq_i3, iq_q3};
                             del_addr <= (wr_ptr - del_offset) & AMASK;
+                            dbg_mode <= 1'b0;
+                            qpi_busy <= 1'b1;
+                            sub      <= 6'd0;
+                        end else if (dbg_pend && !packet_active && !qspi_owner
+                                     && qe_init_done) begin
+                            dbg_pend <= 1'b0;
+                            dbg_mode <= 1'b1;
                             qpi_busy <= 1'b1;
                             sub      <= 6'd0;
                         end
                     end else begin
-                        case (sub)
+                        if (dbg_mode) begin
+                            case (sub)
+                                6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd1; end
+                                6'd1:  begin sio_out<=4'hB; sub<=6'd2; end
+                                6'd2:  begin sio_out<=dbg_addr_cur[22:20]; sub<=6'd3; end
+                                6'd3:  begin sio_out<=dbg_addr_cur[19:16]; sub<=6'd4; end
+                                6'd4:  begin sio_out<=dbg_addr_cur[15:12]; sub<=6'd5; end
+                                6'd5:  begin sio_out<=dbg_addr_cur[11:8];  sub<=6'd6; end
+                                6'd6:  begin sio_out<=dbg_addr_cur[7:4];   sub<=6'd7; end
+                                6'd7:  begin sio_out<=dbg_addr_cur[3:0];   sub<=6'd8; end
+                                6'd8:  begin sio_oe<=4'd0; sub<=6'd9; end
+                                6'd9:  sub<=6'd10;
+                                6'd10: sub<=6'd11;
+                                6'd11: sub<=6'd12;
+                                6'd12: sub<=6'd13;
+                                6'd13: sub<=6'd14;
+                                6'd14: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd15; end
+                                6'd15: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd16; end
+                                6'd16: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd17; end
+                                6'd17: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd18; end
+                                6'd18: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd19; end
+                                6'd19: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd20; end
+                                6'd20: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd21; end
+                                6'd21: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd22; end
+                                6'd22: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd23; end
+                                6'd23: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd24; end
+                                6'd24: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd25; end
+                                6'd25: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd26; end
+                                6'd26: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd27; end
+                                6'd27: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd28; end
+                                6'd28: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd29; end
+                                6'd29: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd30; end
+                                6'd30: begin
+                                    ce_n          <= 1'b1;
+                                    sio_oe        <= 4'd0;
+                                    dbg_buf       <= rd_data;
+                                    dbg_idx       <= 3'd0;
+                                    dbg_fetch_busy<= 1'b0;
+                                    dbg_mode      <= 1'b0;
+                                    qpi_busy      <= 1'b0;
+                                    sub           <= 6'd0;
+                                end
+                                default: sub <= 6'd0;
+                            endcase
+                        end else begin
+                            case (sub)
                             // ---- QPI WRITE: CMD 0x02 ----
                             6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
                             6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
@@ -351,7 +489,8 @@ module psram_buf_ctrl (
                                 sub       <= 6'd0;
                             end
                             default: sub <= 6'd0;
-                        endcase
+                            endcase
+                        end
                     end
                 end
 
