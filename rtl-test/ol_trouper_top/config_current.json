@@ -10,13 +10,15 @@
         "dir::../rtl/sc_detector.v",
         "dir::../rtl/sd_decimator_cic_only.v",
         "dir::../rtl/sd_remod.v",
+        "dir::../rtl/spi_slave.v",
         "dir::../rtl/training_acc.v"
     ],
     "CLOCK_PORT": "IQ_CLK",
     "CLOCK_PERIOD": 31.25,
     "FP_SIZING": "absolute",
-    "DIE_AREA": "0 0 1100 1100",
-    "PL_TARGET_DENSITY_PCT": 45,
+    "DIE_AREA": "0 0 1300 1300",
+    "PL_TARGET_DENSITY_PCT": 35,
+    "DPL_CELL_PADDING": 4,
     "PL_MAX_DISPLACEMENT_X": 500,
     "PL_MAX_DISPLACEMENT_Y": 200,
     "PL_ROUTABILITY_DRIVEN": true,
@@ -34,10 +36,11 @@
         "max_ss_125C_3v00",
         "max_ff_n40C_3v60"
     ],
-    "CTS_ROOT_BUFFER": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_12",
+    "CTS_ROOT_BUFFER": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_16",
     "CTS_CLK_BUFFERS": [
+        "gf180mcu_fd_sc_mcu7t5v0__clkbuf_2",
         "gf180mcu_fd_sc_mcu7t5v0__clkbuf_4",
-        "gf180mcu_fd_sc_mcu7t5v0__clkbuf_12"
+        "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8"
     ],
     "LIB": {
         "*_tt_025C_3v30": [
@@ -53,8 +56,8 @@
     "RUN_MAGIC_DRC": false,
     "RUN_LVS": false,
     "RUN_IRDROP_REPORT": false,
-    "PNR_SDC_FILE": "dir::pnr_32m_mcp_v4.sdc",
-    "SIGNOFF_SDC_FILE": "dir::pnr_32m_mcp_v4.sdc",
+    "PNR_SDC_FILE": "dir::pnr_32m_mcp_v6.sdc",
+    "SIGNOFF_SDC_FILE": "dir::pnr_32m_mcp_v6.sdc",
     "RUN_POST_GRT_DESIGN_REPAIR": true,
     "GRT_DESIGN_REPAIR_RUN_GRT": true,
     "GRT_RESIZER_SETUP_MAX_BUFFER_PCT": 20,

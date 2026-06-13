@@ -6,7 +6,6 @@
         "dir::../rtl/dc_removal.v",
         "dir::../rtl/noise_est_bb.v",
         "dir::../rtl/frontend_buf_ctrl.v",
-        "dir::../rtl/irq_ctrl.v",
         "dir::../rtl/mimo_rx_top.v",
         "dir::../rtl/mrc_combiner.v",
         "dir::../rtl/packet_ctrl_fsm.v",

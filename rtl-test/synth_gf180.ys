@@ -1,42 +1,29 @@
-# synth_gf180.ys — Trial synthesis: mimo_rx_top → GF180MCU mcu7t5v0 TT 3.3V 25C
+# synth_gf180.ys — Trial synthesis: trouper_top → GF180MCU mcu7t5v0 TT 3.3V 25C
 #
-# Blackboxed:
-#   picorv32       — external PicoRV32 CPU core (IP not included)
-#   picorv32_wrap  — contains 4 kB CPU SRAM; blackboxed to avoid FF explosion
-#
-# Behavioural models synthesised as FF arrays (area over-estimate, noted):
-#   sram0_mem / sram1_mem in mimo_rx_top — two 512×8 frontend buffer SRAMs
-#   In layout these become gf180mcu_fd_ip_sram__sram512x8m8wm1 macros.
+# Canonical top-level RTL: trouper_top.
+# mimo_rx_top is deprecated and retained only for archived comparisons.
 
 # ---- Read RTL ---------------------------------------------------------------
-read_verilog -sv /work/sd_decimator.v
-read_verilog -sv /work/dc_removal.v
-read_verilog -sv /work/frontend_buf_ctrl.v
-read_verilog -sv /work/sc_detector.v
-read_verilog -sv /work/energy_meas_coarse.v
-read_verilog -sv /work/training_acc.v
-read_verilog -sv /work/packet_ctrl_fsm.v
-read_verilog -sv /work/mrc_combiner.v
-read_verilog -sv /work/sd_remod.v
-read_verilog -sv /work/irq_ctrl.v
-read_verilog -sv /work/reg_bank.v
-read_verilog -sv /work/ahb_lite_bus.v
-read_verilog -sv /work/spi_master.v
-read_verilog -sv /work/spi_slave.v
-read_verilog -sv /work/mimo_rx_top.v
-
-# ---- Blackboxes -------------------------------------------------------------
-read_verilog    /work/picorv32_stub.v
-read_verilog -sv /work/picorv32_wrap_bb.v
-read_verilog    /work/sram512x8_bb.v
-read_verilog    /work/weight_gen_bb.v
+read_verilog -sv /work/rtl/sd_cic_chan.v
+read_verilog -sv /work/rtl/sd_decim_2ch_cic_only.v
+read_verilog -sv /work/rtl/sd_decimator_cic_only.v
+read_verilog -sv /work/rtl/dc_removal.v
+read_verilog -sv /work/rtl/sc_detector.v
+read_verilog -sv /work/rtl/training_acc.v
+read_verilog -sv /work/rtl/packet_ctrl_fsm.v
+read_verilog -sv /work/rtl/psram_buf_ctrl.v
+read_verilog -sv /work/rtl/mrc_combiner.v
+read_verilog -sv /work/rtl/sd_remod.v
+read_verilog -sv /work/rtl/reg_bank.v
+read_verilog -sv /work/rtl/spi_slave.v
+read_verilog -sv /work/rtl/trouper_top.v
 
 # ---- Elaborate --------------------------------------------------------------
-hierarchy -check -top mimo_rx_top
+hierarchy -check -top trouper_top
 
 # ---- Synthesise -------------------------------------------------------------
 # Keep hierarchy for a tractable trial synthesis run inside OSIC Docker.
-synth -top mimo_rx_top
+synth -top trouper_top
 
 # ---- Technology mapping -----------------------------------------------------
 dfflibmap -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
@@ -49,4 +36,4 @@ opt_clean -purge
 stat -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
 
 tee -o /work/out/stat.txt stat -liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib
-write_verilog -noattr /work/out/netlist_mimo_rx_top.v
+write_verilog -noattr /work/out/netlist_trouper_top.v
