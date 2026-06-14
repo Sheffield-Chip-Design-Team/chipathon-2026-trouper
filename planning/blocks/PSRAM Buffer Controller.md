@@ -390,6 +390,7 @@ SX1302 input ◄────┬─ IDLE or PSRAM_EN=0 ───────► l
 | `sc_lock` | in | 1 | Preamble detection event |
 | `W_commit` | in | 1 | Weight generation complete strobe |
 | `packet_end` | in | 1 | Packet end event from Packet Control FSM |
+| `clr_err` | in | 1 | Write-1 pulse from `PSRAM_CLR_ERR` (`0x70[1]`); clears `OVERFLOW`/`REPLAY_MISSED`/`SAMPLE_SKIP` |
 | `sck_en` | out | 1 | Enable 32 MHz CLK to PSRAM; gated low in IDLE |
 | `ce_n` | out | 1 | PSRAM CE# active-low; via CS mux |
 | `sio_out[3:0]` | out | 4 | Data driven to PSRAM during cmd/addr/write phases |
@@ -422,7 +423,8 @@ When `QSPI_OWNER=1`, this block de-asserts `ce_n`, gates `sck`, drives `sio_oe=0
 
 | Bit | Name | Description |
 |---|---|---|
-| [2:0] | `STATE` | Current FSM state: 0=IDLE, 1=QE_INIT, 2=BUFFERING, 3=REPLAY |
+| [1:0] | `STATE` | Current FSM state: 0=IDLE, 1=QE_INIT, 2=BUFFERING, 3=REPLAY (only 4 states → 2 bits) |
+| [2] | `SAMPLE_SKIP` | Sticky: an `iq_valid` arrived while the QPI engine was busy; the sample was not captured. Always 0 at 125/250 kHz (TRPR-PSR-014 budget). Clear via `PSRAM_CLR_ERR` |
 | [3] | `INIT_DONE` | QE init complete; safe to set `PSRAM_EN=1` |
 | [4] | `REPLAY_ACTIVE` | In REPLAY; SX1302 receiving MRC-combined PSRAM stream |
 | [5] | `REPLAY_MISSED` | Sticky: `packet_end` fired before `W_commit`; last packet used bypass (no MRC gain) |
@@ -460,6 +462,8 @@ The former `PSRAM_PKT_BYTES_HI/LO` and `PSRAM_RD_OFFSET` diagnostic registers ar
 | No W_commit | `packet_end` during BUFFERING | `REPLAY_MISSED` set; bypass replay from buf_base; SX1302 receives packet without MRC gain |
 | Pad release on handover | Set `QSPI_OWNER=1` while IDLE | Block de-asserts `ce_n`, gates `sck`, tristates SIO[0–3]; BUFFERING/REPLAY suspended (JTAG removed — no JTAG-vs-QPI conflict case remains) |
 | SF12 buffer depth | SF12 packet with PSRAM_EN=1 | wr_ptr − rd_ptr ≈ 8M+50 samples ≈ 256 kB (16-bit mode); no wrap; no OVERFLOW flag |
+| No-skip (TRPR-PSR-020) | Sustained `iq_valid` across a full packet at 125 and 250 kHz | `SAMPLE_SKIP` (0x71[2]) stays 0; every sample captured |
+| SAMPLE_SKIP clear | Force a skip (drive `iq_valid` while `qpi_busy`), then write `PSRAM_CLR_ERR` | `SAMPLE_SKIP` sets, then clears on the pulse; a skip coincident with the clear is not lost |
 
 ---
 

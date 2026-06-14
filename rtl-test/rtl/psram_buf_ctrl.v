@@ -72,6 +72,7 @@ module psram_buf_ctrl (
     input  wire        W_commit,
     input  wire        packet_end,
     input  wire        packet_active,
+    input  wire        clr_err,       // write-1 pulse: clear sticky error flags
 
     // QPI pad interface
     output wire        sck,           // PSRAM clock (32 MHz, gated internally)
@@ -96,6 +97,7 @@ module psram_buf_ctrl (
     output reg         qe_init_done,
     output reg         replay_missed, // sticky: packet_end before W_commit
     output reg         overflow,      // sticky: wr_ptr lapped rd_ptr
+    output reg         sample_skip,   // sticky: iq_valid arrived while QPI busy (sample lost)
     output reg  [2:0]  state_dbg,
     input  wire [22:0] dbg_addr,
     input  wire        dbg_auto_inc,
@@ -131,9 +133,14 @@ module psram_buf_ctrl (
     reg [ABITS-1:0] del_addr;
     wire [ABITS-1:0] del_offset = ({{(ABITS-4){1'b0}}, 4'd8} << sf[3:0]);
 
-    // del_rdy: true once N iq_valid pulses have accumulated since qe_init_done
+    // del_rdy: true once N iq_valid pulses have accumulated since qe_init_done.
+    // Re-armed whenever sf changes so a future SF-sweep mode cannot present a
+    // stale (shorter-warmup) delayed sample after the delay distance grows.
+    // SF is fixed at start-up in the current revision (TRPR-PSR-019); this guard
+    // is inert in that case and only activates if SF is retuned live.
     reg             del_rdy;
     reg [12:0]      del_cnt;
+    reg [3:0]       sf_prev;
     wire [12:0]     del_n = (13'd1 << sf[3:0]);  // 2^SF, 128..4096
 
     // -----------------------------------------------------------------------
@@ -192,7 +199,8 @@ module psram_buf_ctrl (
             sc_lock_prev   <= 1'b0;
             del_addr       <= {ABITS{1'b0}};
             del_rdy        <= 1'b0;
-            del_cnt        <= 12'd0;
+            del_cnt        <= 13'd0;
+            sf_prev        <= 4'd0;
             sub            <= 6'd0;
             qpi_busy       <= 1'b0;
             wr_data        <= 64'd0;
@@ -222,24 +230,49 @@ module psram_buf_ctrl (
             qe_init_done   <= 1'b0;
             replay_missed  <= 1'b0;
             overflow       <= 1'b0;
+            sample_skip    <= 1'b0;
             state_dbg      <= 3'd0;
         end else begin
             sc_lock_prev <= sc_lock;
+            sf_prev      <= sf;
             rpl_valid    <= 1'b0;
             del_valid    <= 1'b0;
             state_dbg    <= state;
 
             sck_en <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner;
 
-            // del_rdy counter: accumulate iq_valid pulses after init
+            // Sticky error clear (write-1 pulse via PSRAM_CLR_ERR). Placed before
+            // the per-state error sets below and before sample_skip detection, so a
+            // genuine error landing in the same cycle as a clear is not lost.
+            if (clr_err) begin
+                overflow      <= 1'b0;
+                replay_missed <= 1'b0;
+                sample_skip   <= 1'b0;
+            end
+
+            // Sample-skip detection: a live sample arrived while the QPI engine was
+            // still busy with a prior transaction, so it could not be captured.
+            // Within the supported 125/250 kHz envelope the timing budget
+            // (TRPR-PSR-014) guarantees this never fires; the flag makes any
+            // out-of-budget condition observable (TRPR-PSR-020).
+            if (iq_valid && qpi_busy && psram_en && qe_init_done && !qspi_owner)
+                sample_skip <= 1'b1;
+
+            // del_rdy counter: accumulate iq_valid pulses after init. An sf change
+            // re-arms the warm-up (clears del_rdy/del_cnt) so the SC detector never
+            // sees a delayed sample read from an address that has not yet been
+            // written with N = 2^SF fresh samples at the new delay distance.
             if (!qe_init_done) begin
                 del_rdy <= 1'b0;
-                del_cnt <= 12'd0;
+                del_cnt <= 13'd0;
+            end else if (sf != sf_prev) begin
+                del_rdy <= 1'b0;
+                del_cnt <= 13'd0;
             end else if (!del_rdy && iq_valid) begin
-                if (del_cnt + 12'd1 >= del_n)
+                if (del_cnt + 13'd1 >= del_n)
                     del_rdy <= 1'b1;
                 else
-                    del_cnt <= del_cnt + 12'd1;
+                    del_cnt <= del_cnt + 13'd1;
             end
 
             // Debug-data pop: advance the byte index; on the eighth byte with

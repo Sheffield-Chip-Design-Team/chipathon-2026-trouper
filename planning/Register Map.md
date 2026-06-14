@@ -98,7 +98,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x6C`–`0x6F` | — | — | — | — | Reserved for training-derived metrics |
 | **External Memory (PSRAM)** (`0x70`–`0x76`) | | | | | |
 | `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] `SAMPLE_WIDTH`; [3] `QSPI_OWNER`; [7:4] reserved |
-| `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [2:0] state; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
+| `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [1:0] state; [2] `SAMPLE_SKIP`; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
 | `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [7:0] |
 | `0x73` | `PSRAM_DBG_ADDR_MID` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [15:8] |
 | `0x74` | `PSRAM_DBG_ADDR_HI` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [22:16] (bit [7] reserved) |
@@ -388,7 +388,8 @@ Only meaningful when `PSRAM_CTRL.QSPI_OWNER=0` and `PSRAM_CTRL.PSRAM_EN=1`. Expo
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [2:0] | `STATE` | Controller state (0 = UNINIT … see `psram_buf_ctrl.v` `state_dbg`) |
+| [1:0] | `STATE` | Controller state (0 = UNINIT, 1 = QE_INIT, 2 = WRITE, 3 = REPLAY; see `psram_buf_ctrl.v` `state_dbg`) |
+| [2] | `SAMPLE_SKIP` | Sticky: an `iq_valid` arrived while the QPI engine was busy and a sample was not captured. Always 0 at 125/250 kHz (timing budget guarantees no skip); non-zero only out of spec. Clear via `PSRAM_CLR_ERR` (0x70[1]) |
 | [3] | `INIT_DONE` | QE init sequence complete |
 | [4] | `REPLAY_ACTIVE` | Replay in progress |
 | [5] | `REPLAY_MISSED` | Sticky: `packet_end` before `W_commit` |

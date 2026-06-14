@@ -77,6 +77,7 @@ module trouper_top (
     wire [7:0]  spi_reg_re_addr;
     wire        psram_dbg_busy_w;
     wire [7:0]  psram_dbg_data_w;
+    wire        psram_replay_active_w;
 
     // =========================================================================
     // Free-running 32-bit sample counter (for packet_ctrl_fsm)
@@ -133,42 +134,35 @@ module trouper_top (
     wire        rb_psram_dbg_rd_trig;
 
     // =========================================================================
-    // Stage 1: ΣΔ Decimators — CIC N=3 only, no FIR (×4 sd_decimator_cic_only)
-    // Zero multipliers. −3.15 dB average droop vs FIR-compensated path; chirp
-    // processing gain makes this irrelevant for LoRa demodulation (42+ dB margin
-    // at SF=7, all BWs).  See planning/cic-only-decimator-findings.md.
-    //
-    // Pass-through comparison for MIMO demo: set rb_mimo_mode to select
-    // mrc_combiner.mode=1 (single-antenna bypass) vs mode=0 (4-antenna MRC).
-    //
-    // TDM+FIR upgrade (−86 k µm² vs this, full sensitivity): see
-    // planning/blocks/ΣΔ Decimator.md, section Optional FIR Upgrade — implement if area/time permit.
+    // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128, no FIR.
+    // Boxcar-4 front end + shared CIC back end reduces area versus 4×
+    // sd_decimator_cic_only.  This is the experimental TDM path.
     // =========================================================================
     wire signed [7:0] dec_i [0:3];
     wire signed [7:0] dec_q [0:3];
-    wire [3:0]        dec_valid_all;
-    wire              iq_valid = dec_valid_all[0];
+    wire [31:0]      dec_pack_i;
+    wire [31:0]      dec_pack_q;
+    wire [3:0]       dec_valid_all;
+    wire             iq_valid = |dec_valid_all;
 
-    sd_decimator_cic_only u_dec_0 (
-        .clk_32m(clk), .clk_16m(clk), .rst_n(rst_n),
-        .iq_in_i(IQ_DATA_I[0]), .iq_in_q(IQ_DATA_Q[0]),
-        .decim_ratio(rb_decim_ratio),
-        .iq_out_i(dec_i[0]), .iq_out_q(dec_q[0]), .iq_valid(dec_valid_all[0]));
-    sd_decimator_cic_only u_dec_1 (
-        .clk_32m(clk), .clk_16m(clk), .rst_n(rst_n),
-        .iq_in_i(IQ_DATA_I[1]), .iq_in_q(IQ_DATA_Q[1]),
-        .decim_ratio(rb_decim_ratio),
-        .iq_out_i(dec_i[1]), .iq_out_q(dec_q[1]), .iq_valid(dec_valid_all[1]));
-    sd_decimator_cic_only u_dec_2 (
-        .clk_32m(clk), .clk_16m(clk), .rst_n(rst_n),
-        .iq_in_i(IQ_DATA_I[2]), .iq_in_q(IQ_DATA_Q[2]),
-        .decim_ratio(rb_decim_ratio),
-        .iq_out_i(dec_i[2]), .iq_out_q(dec_q[2]), .iq_valid(dec_valid_all[2]));
-    sd_decimator_cic_only u_dec_3 (
-        .clk_32m(clk), .clk_16m(clk), .rst_n(rst_n),
-        .iq_in_i(IQ_DATA_I[3]), .iq_in_q(IQ_DATA_Q[3]),
-        .decim_ratio(rb_decim_ratio),
-        .iq_out_i(dec_i[3]), .iq_out_q(dec_q[3]), .iq_valid(dec_valid_all[3]));
+    sd_decimator_cic_tdm8 u_dec (
+        .clk_32m (clk),
+        .rst_n   (rst_n),
+        .iq_in_i (IQ_DATA_I),
+        .iq_in_q (IQ_DATA_Q),
+        .iq_out_i(dec_pack_i),
+        .iq_out_q(dec_pack_q),
+        .iq_valid(dec_valid_all)
+    );
+
+    assign dec_i[0] = dec_pack_i[7:0];
+    assign dec_i[1] = dec_pack_i[15:8];
+    assign dec_i[2] = dec_pack_i[23:16];
+    assign dec_i[3] = dec_pack_i[31:24];
+    assign dec_q[0] = dec_pack_q[7:0];
+    assign dec_q[1] = dec_pack_q[15:8];
+    assign dec_q[2] = dec_pack_q[23:16];
+    assign dec_q[3] = dec_pack_q[31:24];
 
     // =========================================================================
     // Stage 2: DC Removal ×4 — simplified IIR, α=2^{-4}, 12-bit Q8.4 accumulator.
@@ -386,8 +380,9 @@ module trouper_top (
     wire signed [7:0] rpl_i [0:3];
     wire signed [7:0] rpl_q [0:3];
     wire              rpl_valid;
-    wire              psram_buf_active, psram_replay_active_w;
+    wire              psram_buf_active;
     wire              psram_qe_init_done, psram_replay_missed, psram_overflow;
+    wire              psram_sample_skip;
     wire [2:0]        psram_state_dbg;
 
     psram_buf_ctrl u_psram (
@@ -408,6 +403,7 @@ module trouper_top (
         .iq_sample_cnt(iq_samp_cnt),
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
+        .clr_err      (rb_psram_ctrl[1]),
         .sck          (PSRAM_SCK),
         .ce_n         (PSRAM_CE_N),
         .sio_out      (PSRAM_SIO_OUT),
@@ -430,6 +426,7 @@ module trouper_top (
         .qe_init_done (psram_qe_init_done),
         .replay_missed(psram_replay_missed),
         .overflow     (psram_overflow),
+        .sample_skip  (psram_sample_skip),
         .state_dbg    (psram_state_dbg),
         .dbg_addr     (rb_psram_dbg_addr),
         .dbg_auto_inc (rb_psram_dbg_auto_inc),
@@ -603,9 +600,12 @@ module trouper_top (
         .sc_lock_dbg         (sc_lock),
         .sc_first_hit_dbg    (sc_first_hit_dbg),
         .sc_lock_snap_dbg    (sc_lock_snap_dbg),
+        // [7] BUF_ACTIVE [6] OVERFLOW [5] REPLAY_MISSED [4] REPLAY_ACTIVE
+        // [3] INIT_DONE [2] SAMPLE_SKIP [1:0] STATE (only 4 states, so 2 bits)
         .psram_status_rb  ({psram_buf_active, psram_overflow,
                             psram_replay_missed, psram_replay_active_w,
-                            psram_qe_init_done, psram_state_dbg}),
+                            psram_qe_init_done, psram_sample_skip,
+                            psram_state_dbg[1:0]}),
         .psram_dbg_busy   (psram_dbg_busy_w),
         .psram_dbg_data   (psram_dbg_data_w),
         // Hardware control outputs
