@@ -41,7 +41,7 @@ module reg_bank (
     input  wire [15:0] sc_stat,
     // Training accumulator readback
     input  wire        training_armed,
-    input  wire [14:0] n_acc,
+    input  wire [15:0] n_acc,
     // Z_kl pair readback — top 24 bits [31:8] of the int32 accumulators,
     // big-endian, 3 bytes per component (I then Q), 6 bytes per pair.
     // Pairs: 0=Z_01 1=Z_02 2=Z_03 3=Z_12 4=Z_13 5=Z_23 @ 0x40–0x63
@@ -286,7 +286,7 @@ module reg_bank (
             8'h1E: rdata_next = {4'h0, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
             8'h1F: rdata_next = 8'h00;                              // TACC_NOISE_TRIG (WO)
             8'h20: rdata_next = {6'h0, training_armed, training_done_rb};
-            8'h21: rdata_next = {1'b0, n_acc[14:8]};
+            8'h21: rdata_next = n_acc[15:8];
             8'h22: rdata_next = n_acc[7:0];
             // --- SC status / bring-up debug ---
             8'h24: rdata_next = sc_stat[15:8];

@@ -56,7 +56,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [7:4] reserved |
 | `0x1F` | `TACC_NOISE_TRIG` | W | `0x00` | Training Accumulator | [0] W1P: arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`) |
 | `0x20` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
-| `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [14:8] (bit [7] reads 0) |
+| `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [15:8] |
 | `0x22` | `N_ACC_LO` | R | `0x00` | Training Accumulator | Samples accumulated [7:0] |
 | `0x23` | — | — | — | — | Reserved |
 | **SC Status / Bring-Up Debug** (`0x24`–`0x2F`) | | | | | |
@@ -296,7 +296,7 @@ Software EMA flow:
 
 ### `0x20`–`0x22` — TRAINING_STATUS / N_ACC (read-only)
 
-Training-window bookkeeping: arm/done flags and the accumulated sample count `n_acc` (15-bit, big-endian across `0x21`–`0x22`).
+Training-window bookkeeping: arm/done flags and the accumulated sample count `n_acc` (full 16-bit unsigned, big-endian across `0x21`–`0x22`).
 
 ---
 

@@ -160,13 +160,13 @@ Effective transfer function: `z[n] = (15/16)·z[n-1] + (1/16)·x[n]` where `z = 
 
 ### 4.3 Schmidl-Cox Detector (`sc_detector.v`) — TRPR-SCD
 
-Generates `sc_lock` and `timing_ref` using the implemented block-based Schmidl-Cox detector on branch 0 only. The current RTL is not a full four-branch pooled sliding correlator: it accumulates one symbol-block metric over `L = min(2^SF, 256)` stored samples, evaluates one hit decision per symbol, and relies on the downstream training accumulator for four-branch channel estimation after lock.
+Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on branch 0 only. With the active PSRAM delay path, the detector sees a true `M = 2^SF` sample delay for all supported spreading factors and accumulates over the full symbol period on each hit decision. The detector remains single-branch: four-branch diversity gain begins only after lock in the downstream training accumulator and combiner path.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-SCD-001 | C | F | The detector SHALL compute a per-symbol complex autocorrelation `C[s] = Σ_{n in S_s} x_0[n] · conj(x_0[n−M])` on antenna branch 0, where `M = 2^SF` for `SF6–SF7` and `M = 256` for `SF8–SF12`, and `S_s` is the stored phase subset of length `L = min(2^SF, 256)`. | I |
+| TRPR-SCD-001 | C | F | The detector SHALL compute a per-symbol complex autocorrelation `C[s] = Σ_{n=0}^{M-1} x_0[n] · conj(x_0[n−M])` on antenna branch 0, where `M = 2^SF` for all supported spreading factors `SF7–SF12`. | I |
 | TRPR-SCD-002 | C | F | The detector SHALL form the Schmidl-Cox hit test without an explicit divider: `|C[s]|² >= THR_eff · E[s]`, where `E[s] = (Σ_{n in S_s} |x_0[n]|²) · (Σ_{n in S_s} |x_0[n−M]|²)`. | T |
-| TRPR-SCD-003 | C | F | The detector SHALL evaluate one hit decision per completed symbol block. For `SF8–SF12`, only the stored `L=256` samples participate; the ignored phase region contributes no correlation energy. | I |
+| TRPR-SCD-003 | C | F | The detector SHALL evaluate one hit decision per completed symbol using the full `M` delayed samples supplied by the PSRAM path. | I |
 | TRPR-SCD-004 | C | F | `sc_lock` SHALL assert after `SC_HITS_REQ+1` consecutive symbol-hit decisions. | T |
 | TRPR-SCD-005 | C | F | `timing_ref` SHALL back-calculate the first symbol boundary of the qualifying hit run as `lock_sample - (SC_HITS_REQ+1)·2^SF + 1`. | T |
 | TRPR-SCD-006 | C | F | The current RTL SHALL operate on antenna branch 0 only. Four-branch diversity gain begins after lock in the training accumulator and combiner path; the SC detector itself is not pooled across branches. | I |
@@ -184,7 +184,7 @@ Generates `sc_lock` and `timing_ref` using the implemented block-based Schmidl-C
 
 ### 4.4 Frontend Buffer Controller — TRPR-FBC
 
-The on-chip SRAM delay line has been removed. The SC correlator M-sample delay (`x[n−M]`, M = 2^SF) is now served entirely by the PSRAM Buffer Controller, which reads back branch-0 I/Q at address `(write_ptr − M)` on each `iq_valid`. This eliminates the on-chip SRAM macro instances and supports all SFs (SF12 requires 8 kB delay — well beyond the 1 kB the on-chip SRAM could provide). The `frontend_buf_ctrl.v` block is reduced to a fanout shim that routes the decimator output to both the SC detector (live x[n]) and the PSRAM controller.
+The on-chip SRAM delay line has been removed. The SC correlator M-sample delay (`x[n−M]`, M = 2^SF) is now served entirely by the PSRAM Buffer Controller, which reads back branch-0 I/Q at address `(write_ptr − M)` on each `iq_valid`. This eliminates the on-chip SRAM macro instances and supports all SFs (SF12 requires a 4096-sample delay = 32 kB at 8 bytes/sample, well beyond the 1 kB the on-chip SRAM could provide). The `frontend_buf_ctrl.v` block is reduced to a fanout shim that routes the decimator output to both the SC detector (live x[n]) and the PSRAM controller.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
@@ -204,7 +204,7 @@ Computes all-pairs cross-correlations Z_kl and diagonal autocorrelations Z_kk ov
 |---|---|---|---|---|
 | TRPR-TAC-001 | C | F | The accumulator SHALL compute all C(4,2) = 6 off-diagonal complex cross-correlations Z_kl = Σ raw_k[n] · conj(raw_l[n]) and all 4 diagonal autocorrelations Z_kk = Σ \|raw_k[n]\|² over the training window. | T |
 | TRPR-TAC-002 | C | F | The training window SHALL span (8 − SC_HITS_REQ − 1) × M samples starting from `timing_ref`. | T |
-| TRPR-TAC-003 | C | F | `training_done` SHALL assert at the end of the training window. The accumulated sample count n_acc SHALL be latched and readable from `N_ACC` (0x61–0x62). | T |
+| TRPR-TAC-003 | C | F | `training_done` SHALL assert at the end of the training window. The accumulated sample count n_acc SHALL be latched as a full 16-bit unsigned count and readable from `N_ACC` (0x21–0x22). | T |
 | TRPR-TAC-004 | C | I | All 6 off-diagonal Z_kl pairs SHALL be readable from the register bank as the top 24 bits [31:8] of the signed int32 accumulators, big-endian, 3 bytes per component (I then Q): Z_01 (0x40–0x45), Z_02 (0x46–0x4B), Z_03 (0x4C–0x51), Z_12 (0x52–0x57), Z_13 (0x58–0x5D), Z_23 (0x5E–0x63). | T |
 | TRPR-TAC-005 | C | I | The diagonal Z_kk top 16 bits [31:16] SHALL be readable from `ZDIAG_k` (0x64–0x6B), two bytes per branch. | T |
 | TRPR-TAC-006 | H | F | A common right-shift `Z_SHIFT` (0x63) SHALL be applied to all Z_kl readback values to prevent register overflow. The shift value SHALL be determined by the accumulator word width and n_acc. | T |
@@ -246,7 +246,7 @@ Weight generation is performed entirely in software. There is no `weight_gen.v` 
 
 ```
 training_done IRQ fires
-  → controlling software (host SPI or Grouper bus) reads Z_kl (0x40–0x63) and n_acc (0x21–0x22)
+  → controlling software (host SPI or Grouper bus) reads Z_kl (0x40–0x63) and 16-bit N_ACC (0x21–0x22)
   → software computes W_k = Z_k* / ||Z|| (MRC normalisation)
      or principal eigenvector via 8-step power iteration (sim/models/eigvec_fw.py)
   → software writes W shadow regs (0x30–0x3F): 4 × int16 I + 4 × int16 Q
@@ -437,7 +437,7 @@ Trouper has no on-chip SPI master. Grouper firmware owns SX1257 LNA gain control
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-AGC-001 | C | I | Per-antenna preamble power SHALL be measured via `Zdiag[k][31:16] / n_acc` after `training_done`. Controlling software reads Zdiag at 0x64–0x6B and n_acc at 0x21–0x22. | T |
+| TRPR-AGC-001 | C | I | Per-antenna preamble power SHALL be measured via `Zdiag[k][31:16] / n_acc` after `training_done`. Controlling software reads Zdiag at 0x64–0x6B and the full 16-bit `N_ACC` at 0x21–0x22. | T |
 | TRPR-AGC-002 | C | I | The AGC strategy SHALL be "maximum gain before saturation": Grouper firmware SHALL increase LNA gain unless Zdiag/n_acc exceeds `AGC_THR_HI` (0x2B–0x2C), and decrease gain if it exceeds `AGC_THR_SAT` (0x2D–0x2E). One SX1257 LNA gain step per packet. All four antennas are controlled independently. | T |
 | TRPR-AGC-003 | H | I | After programming each SX1257 (board-level SPI master), controlling software SHALL write the applied gain byte to `RX_GAIN_SHADOW_k` (0x10–0x13) and strobe `RX_GAIN_COMMIT` (0x18[0]=1). Trouper SHALL latch shadow→`RX_GAIN_ACTIVE_k` (0x14–0x17) on the commit pulse within one 32 MHz clock cycle. | T |
 

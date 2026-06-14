@@ -19,7 +19,8 @@
 //   byte 0=i0, 1=q0, 2=i1, 3=q1, 4=i2, 5=q2, 6=i3, 7=q3
 //
 // SC delay:
-//   N = 2^(SF-1) samples.  del_offset_bytes = N × 8 = 4 << SF.
+//   N = 2^SF samples (one full LoRa symbol in the decimated sample domain).
+//   del_offset_bytes = N × 8 = 8 << SF.
 //   del_rdy fires after N iq_valid pulses since qe_init_done.
 //
 // Debug readback path (no PicoRV32 / Grouper required):
@@ -126,14 +127,14 @@ module psram_buf_ctrl (
     reg             sc_lock_prev;
 
     // del address = wr_ptr − N×8, latched at iq_valid trigger
-    // del_offset = 4 << sf  (= N × 8 = 2^(SF-1) × 8 = 4 × 2^SF)
+    // del_offset = 8 << sf  (= N × 8 = 2^SF × 8)
     reg [ABITS-1:0] del_addr;
-    wire [ABITS-1:0] del_offset = ({{(ABITS-4){1'b0}}, 4'd4} << sf[3:0]);
+    wire [ABITS-1:0] del_offset = ({{(ABITS-4){1'b0}}, 4'd8} << sf[3:0]);
 
     // del_rdy: true once N iq_valid pulses have accumulated since qe_init_done
     reg             del_rdy;
-    reg [11:0]      del_cnt;
-    wire [11:0]     del_n = (12'd1 << (sf[3:0] - 4'd1));  // 2^(SF-1), 64..2048
+    reg [12:0]      del_cnt;
+    wire [12:0]     del_n = (13'd1 << sf[3:0]);  // 2^SF, 128..4096
 
     // -----------------------------------------------------------------------
     // QPI transaction sub-cycle FSM

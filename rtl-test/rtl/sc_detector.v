@@ -23,7 +23,7 @@
 //     gives 3 bits headroom. sym_E_ref eliminated (was unused). sc_stat now
 //     reads sym_mag_sc[27:12] (same top-16-bits-of-useful-range semantics).
 //   timing_ref offset: replaced 32×32 hardware multiply with shift+concat.
-//     (sc_hits_req+1)*M_val where M_val ∈ {64,128} — pure wiring, no multiplier.
+//     (sc_hits_req+1)*M where M = 2^SF — pure wiring, no multiplier.
 
 /* verilator lint_off DECLFILENAME */
 module signed_mul24_pipe (
@@ -86,13 +86,18 @@ module sc_detector (
     end
 
     reg [31:0] sample_count;
-    reg [8:0]  sym_cnt;  // 9-bit to count up to 255 (SF8-SF12 L=256)
-    reg [8:0]  M_val;  // 9-bit: SF8 needs 256
+    reg [11:0] sym_cnt;  // up to 4095 (SF12 full-symbol window)
+    reg [11:0] M_val;    // full symbol period M = 2^SF
     always @(*) begin
         case (sf)
-            4'd6:    M_val = 9'd64;
-            4'd7:    M_val = 9'd128;
-            default: M_val = 9'd256;  // SF8-SF12: accumulate L=256 samples per block
+            4'd6:    M_val = 12'd64;
+            4'd7:    M_val = 12'd128;
+            4'd8:    M_val = 12'd256;
+            4'd9:    M_val = 12'd512;
+            4'd10:   M_val = 12'd1024;
+            4'd11:   M_val = 12'd2048;
+            4'd12:   M_val = 12'd4096;
+            default: M_val = 12'd128;
         endcase
     end
 
@@ -175,7 +180,7 @@ module sc_detector (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             sample_count    <= 32'd0;
-            sym_cnt         <= 8'd0;
+            sym_cnt         <= 12'd0;
             acc_ci0  <= 24'sd0; acc_cq0  <= 24'sd0;
             acc_E0cur<= 24'sd0; acc_E0del<= 24'sd0;
             tlat_ci0 <= 8'sd0; tlat_qi0 <= 8'sd0;
@@ -263,8 +268,8 @@ module sc_detector (
                         tdm_busy     <= 1'b0;
                         sample_count <= sample_count + 32'd1;
 
-                        if (sym_cnt == M_val - 8'd1) begin
-                            sym_cnt <= 8'd0;
+                        if (sym_cnt == M_val - 12'd1) begin
+                            sym_cnt <= 12'd0;
                             sym_ci0 <= acc_ci0; sym_cq0 <= acc_cq0;
 
                             // Snapshot for eval: shift right by 10 → 13-bit signed

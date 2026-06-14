@@ -58,7 +58,7 @@ module training_acc (
     // Z_kk autocorrelation (real, for noise estimation)
     output reg  [31:0] Zdiag_0, Zdiag_1, Zdiag_2, Zdiag_3,
     output reg         training_done,
-    output reg  [14:0] n_acc,  // up to 32768 samples (SF=12: 2^(12+3))
+    output reg  [15:0] n_acc,  // up to 32768 samples inclusive (SF12 = 2^(12+3))
     output wire        training_armed
 );
 
@@ -106,8 +106,10 @@ module training_acc (
     reg signed [7:0] raw_q0_r, raw_q1_r, raw_q2_r, raw_q3_r;
     reg              last_samp;
 
-    // Registered operands → pipelined 8×8 multiplier
-    reg signed [7:0]  op_a, op_b;
+    // Combinational operand selection → single-cycle registered product.
+    // Using wires (not registers) for op_a/op_b eliminates the extra pipeline
+    // stage that caused mul_out to lag acc_pair by one TDM step, which produced
+    // cross-pair contamination in the diagonal (Zdiag) accumulation.
     reg signed [15:0] mul_out;
     reg signed [7:0]  tdm_i_a_r, tdm_q_a_r, tdm_i_b_r, tdm_q_b_r, diag_i_r, diag_q_r;
     always @(*) begin
@@ -130,15 +132,13 @@ module training_acc (
             default: begin diag_i_r = raw_i3_r; diag_q_r = raw_q3_r; end
         endcase
     end
+    wire signed [7:0] op_a = (tdm_pair >= 4'd6)
+        ? (tdm_sub[0] ? diag_q_r : diag_i_r)
+        : ((tdm_sub[0]^tdm_sub[1]) ? tdm_q_a_r : tdm_i_a_r);
+    wire signed [7:0] op_b = (tdm_pair >= 4'd6)
+        ? (tdm_sub[0] ? diag_q_r : diag_i_r)
+        : (tdm_sub[0] ? tdm_q_b_r : tdm_i_b_r);
     always @(posedge clk) begin
-        if (tdm_pair >= 4'd6) begin
-            // Diagonal: both operands from the same branch k
-            op_a <= tdm_sub[0] ? diag_q_r : diag_i_r;
-            op_b <= tdm_sub[0] ? diag_q_r : diag_i_r;
-        end else begin
-            op_a <= (tdm_sub[0]^tdm_sub[1]) ? tdm_q_a_r : tdm_i_a_r;
-            op_b <= tdm_sub[0] ? tdm_q_b_r : tdm_i_b_r;
-        end
         mul_out <= op_a * op_b;
     end
 
@@ -173,7 +173,7 @@ module training_acc (
             noise_mode_r  <= 1'b0;
             noise_trig_r  <= 1'b0;
             training_done <= 1'b0;
-            n_acc         <= 15'd0;
+            n_acc         <= 16'd0;
             acc_start     <= 32'd0;
             acc_end       <= 32'd0;
             tdm_pair      <= 4'd0;
@@ -229,7 +229,7 @@ module training_acc (
                 Zpair_i5 <= 32'sd0; Zpair_q5 <= 32'sd0;
                 Zdiag_0 <= 32'd0; Zdiag_1 <= 32'd0;
                 Zdiag_2 <= 32'd0; Zdiag_3 <= 32'd0;
-                n_acc <= 15'd0;
+                n_acc <= 16'd0;
             end
 
             // Trigger TDM on iq_valid within window when idle.
@@ -241,7 +241,7 @@ module training_acc (
                 raw_i2_r <= raw_i2; raw_q2_r <= raw_q2;
                 raw_i3_r <= raw_i3; raw_q3_r <= raw_q3;
                 last_samp  <= (sample_count == acc_end);
-                n_acc <= n_acc + 15'd1;
+                n_acc <= n_acc + 16'd1;
                 tdm_pair   <= 4'd0;
                 tdm_sub    <= 2'd0;
                 tdm_active <= 1'b1;
