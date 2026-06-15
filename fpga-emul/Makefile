@@ -46,7 +46,7 @@ FPGA_SRCS   = $(RTL)/fpga_sram512x8.v \
 # ============================================================================
 
 .PHONY: sge_sim_inject sge_sim_decim_eth sge_sim_all \
-        sim_inject sim_decim_eth sim_all clean vivado_project vivado_synth \
+        sim_inject sim_decim_eth sim_all sim_psram clean vivado_project vivado_synth \
         test_fw run_test_fw eth_fw run_eth_fw
 
 sge_sim_inject:
@@ -86,6 +86,14 @@ obj_dir_decim_eth/Vtb_fpga_decim_eth: tb/tb_fpga_decim_eth.v $(FPGA_SRCS) $(ASIC
 	    --top-module tb_fpga_decim_eth $^
 
 sim_all: sim_inject sim_decim_eth
+
+# PSRAM model cosim: psram_buf_ctrl ⇄ psram_model, checks the SC delay path
+sim_psram: obj_dir_psram/Vtb_psram_model
+	$<
+
+obj_dir_psram/Vtb_psram_model: tb/tb_psram_model.v $(RTL)/psram_model.v $(ASIC_RTL)/psram_buf_ctrl.v
+	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_psram \
+	    --top-module tb_psram_model $^
 
 # ============================================================================
 # Vivado project
@@ -151,6 +159,6 @@ run_eth_fw: $(SW)/lora_mimo_fw.elf
 # Clean
 # ============================================================================
 clean:
-	rm -rf obj_dir_inject obj_dir_decim_eth *.vcd
+	rm -rf obj_dir_inject obj_dir_decim_eth obj_dir_psram *.vcd
 	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map
 	rm -f $(SW)/lora_mimo_fw.elf
