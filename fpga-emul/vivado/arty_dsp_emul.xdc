@@ -44,11 +44,15 @@ set_property PACKAGE_PIN G14  [get_ports {MII_0_crs}]
 set_property PACKAGE_PIN C16  [get_ports {phy_rst_n_0}]
 set_property PACKAGE_PIN F16  [get_ports {phy_mdc_0}]
 set_property PACKAGE_PIN K13  [get_ports {MDIO_0_mdio_io}]
+# 25 MHz reference clock driven from FPGA to the DP83848 PHY (Sch=eth_ref_clk).
+# Required for the PHY to run; without it there is no link and no link LED.
+set_property PACKAGE_PIN G18  [get_ports {eth_ref_clk}]
 
 set_property IOSTANDARD LVCMOS33 [get_ports {MII_0_*}]
 set_property IOSTANDARD LVCMOS33 [get_ports {phy_rst_n_0}]
 set_property IOSTANDARD LVCMOS33 [get_ports {phy_mdc_0}]
 set_property IOSTANDARD LVCMOS33 [get_ports {MDIO_0_*}]
+set_property IOSTANDARD LVCMOS33 [get_ports {eth_ref_clk}]
 
 # ============================================================================
 # UART (USB-UART bridge, Arty A7)

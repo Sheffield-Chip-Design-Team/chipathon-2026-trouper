@@ -78,12 +78,27 @@ add_files -fileset constrs_1 -norecurse \
 create_bd_design "system"
 current_bd_design [get_bd_designs system]
 
-# --- Clock wizard (MMCM) — single 32 MHz output; MicroBlaze + DSP same domain,
-#     eliminates AXI clock converter and cross-domain automation complexity.
+# --- Clock wizard (MMCM) — three outputs:
+#   CLKOUT1 = 100 MHz  MicroBlaze + AXI peripherals (EmacLite, SPI, UART) bus.
+#             EmacLite needs a comfortable AXI:MII clock ratio. At 32 MHz AXI
+#             (1.28:1 over the 25 MHz MII clock) the EmacLite AXI↔MII CDC is
+#             marginal and produces MII bit-slips → CRC/alignment errors. 100 MHz
+#             (4:1) matches the proven Arty A7 EmacLite ping design.
+#   CLKOUT2 = 32 MHz   DSP chain (axi_dsp_ctrl), bridged to the 100 MHz bus by an
+#             AXI clock converter (inserted by axi4 automation).
+#   CLKOUT3 = 25 MHz   reference clock driven OUT to the Arty A7 Ethernet PHY
+#             (TI DP83848, MII mode) on eth_ref_clk / pin G18. Without it the PHY
+#             PLL never starts → no link, no link LED.
+# VCO = 100*8 = 800 MHz gives integer divides for all three (8, 25, 32).
 set clk_wiz [create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_0]
 set_property -dict [list \
     CONFIG.PRIM_IN_FREQ              {100.000} \
-    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {32.000} \
+    CONFIG.NUM_OUT_CLKS             {3} \
+    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {100.000} \
+    CONFIG.CLKOUT2_USED              {true} \
+    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {32.000} \
+    CONFIG.CLKOUT3_USED              {true} \
+    CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {25.000} \
     CONFIG.RESET_TYPE                {ACTIVE_LOW} \
     CONFIG.RESET_PORT                {resetn} \
 ] $clk_wiz
@@ -99,12 +114,19 @@ connect_bd_net [get_bd_ports ext_resetn] [get_bd_pins clk_wiz_0/resetn]
 set rst_const [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant xlconstant_1]
 set_property -dict [list CONFIG.CONST_VAL {1} CONFIG.CONST_WIDTH {1}] $rst_const
 
-# Single proc_sys_reset for the 32 MHz domain
-set psr [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_32m]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins rst_32m/slowest_sync_clk]
+# proc_sys_reset for the 100 MHz AXI bus domain
+set psr100 [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100m]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins rst_100m/slowest_sync_clk]
+connect_bd_net [get_bd_pins clk_wiz_0/locked]   [get_bd_pins rst_100m/dcm_locked]
+connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_100m/ext_reset_in]
+connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_100m/aux_reset_in]
+
+# proc_sys_reset for the 32 MHz DSP domain
+set psr32 [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_32m]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins rst_32m/slowest_sync_clk]
 connect_bd_net [get_bd_pins clk_wiz_0/locked]   [get_bd_pins rst_32m/dcm_locked]
-connect_bd_net [get_bd_pins xlconstant_1/dout]   [get_bd_pins rst_32m/ext_reset_in]
-connect_bd_net [get_bd_pins xlconstant_1/dout]   [get_bd_pins rst_32m/aux_reset_in]
+connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_32m/ext_reset_in]
+connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_32m/aux_reset_in]
 
 # --- MicroBlaze — created after clock wizard so automation can resolve the clock
 set mb [create_bd_cell -type ip -vlnv xilinx.com:ip:microblaze:11.0 microblaze_0]
@@ -120,14 +142,14 @@ set_property -dict [list \
 # MicroBlaze MCS-style automation (creates LMB BRAM, debug, AXI interconnect)
 apply_bd_automation -rule xilinx.com:bd_rule:microblaze \
     -config { local_mem "64KB" ecc "None" cache "None" debug_module "Debug Only" \
-              axi_periph "Enabled" axi_intc "0" clk "/clk_wiz_0/clk_out1 (32 MHz)" } \
+              axi_periph "Enabled" axi_intc "0" clk "/clk_wiz_0/clk_out1 (100 MHz)" } \
     [get_bd_cells microblaze_0]
 
 # --- EthernetLite --------------------------------------------------------------
 set eth [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_ethernetlite:3.0 axi_ethernetlite_0]
 set_property -dict [list CONFIG.C_INCLUDE_GLOBAL_BUFFERS {1}] $eth
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-    -config { Clk_master "/clk_wiz_0/clk_out1 (32 MHz)" \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
               Clk_slave  "Auto" Clk_xbar "Auto" \
               Master "/microblaze_0 (Periph)" \
               intc_ip "New AXI SmartConnect" master_apm "0" } \
@@ -139,6 +161,11 @@ make_bd_pins_external [get_bd_pins axi_ethernetlite_0/PHY_RST_N]
 make_bd_pins_external [get_bd_pins axi_ethernetlite_0/PHY_MDC]
 make_bd_intf_pins_external [get_bd_intf_pins axi_ethernetlite_0/MDIO]
 
+# 25 MHz reference clock OUT to the PHY (pin G18), driven directly from clk_wiz
+# CLKOUT3 — matching the proven-good Arty A7 EmacLite ping design.
+create_bd_port -dir O -type clk eth_ref_clk
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out3] [get_bd_ports eth_ref_clk]
+
 # --- AXI Quad SPI (for SX1257) -----------------------------------------------
 set spi [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_quad_spi:3.2 axi_quad_spi_0]
 set_property -dict [list \
@@ -147,7 +174,7 @@ set_property -dict [list \
     CONFIG.C_SPI_MODE       {0} \
 ] $spi
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-    -config { Clk_master "/clk_wiz_0/clk_out1 (32 MHz)" \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
               Clk_slave  "Auto" Master "/microblaze_0 (Periph)" \
               intc_ip "Auto" master_apm "0" } \
     [get_bd_intf_pins axi_quad_spi_0/AXI_LITE]
@@ -158,23 +185,25 @@ make_bd_intf_pins_external [get_bd_intf_pins axi_quad_spi_0/SPI_0]
 set uart [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_uartlite:2.0 axi_uartlite_0]
 set_property CONFIG.C_BAUDRATE {115200} $uart
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-    -config { Clk_master "/clk_wiz_0/clk_out1 (32 MHz)" \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
               Clk_slave  "Auto" Master "/microblaze_0 (Periph)" \
               intc_ip "Auto" master_apm "0" } \
     [get_bd_intf_pins axi_uartlite_0/S_AXI]
 make_bd_intf_pins_external [get_bd_intf_pins axi_uartlite_0/UART]
 
-# --- axi_dsp_ctrl (custom peripheral, same 32 MHz domain) --------------------
+# --- axi_dsp_ctrl (custom peripheral, 32 MHz DSP domain) ---------------------
 set dsp_ctrl [create_bd_cell -type module -reference axi_dsp_ctrl axi_dsp_ctrl_0]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dsp_ctrl_0/dsp_clk]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_dsp_ctrl_0/s_axi_aclk]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins axi_dsp_ctrl_0/dsp_clk]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins axi_dsp_ctrl_0/s_axi_aclk]
 connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
                [get_bd_pins axi_dsp_ctrl_0/s_axi_aresetn]
 
-# Connect axi_dsp_ctrl to the MicroBlaze peripheral bus via automation
+# Connect axi_dsp_ctrl to the MicroBlaze peripheral bus. Master is the 100 MHz
+# bus, slave is the 32 MHz DSP domain — the differing Clk_master/Clk_slave makes
+# the axi4 automation insert an AXI clock converter for the CDC.
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-    -config { Clk_master "/clk_wiz_0/clk_out1 (32 MHz)" \
-              Clk_slave  "/clk_wiz_0/clk_out1 (32 MHz)" \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "/clk_wiz_0/clk_out2 (32 MHz)" \
               Master "/microblaze_0 (Periph)" intc_ip "Auto" master_apm "0" } \
     [get_bd_intf_pins axi_dsp_ctrl_0/s_axi]
 

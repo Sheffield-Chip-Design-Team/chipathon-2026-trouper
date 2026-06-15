@@ -1,8 +1,10 @@
 // fpga_dsp_wrap.v
 // FPGA emulation wrapper for the LoRa MIMO ASIC DSP chain.
 // Instantiates the full ASIC RTL (sd_decimator, dc_removal, frontend_buf_ctrl,
-// noise_est, sc_detector, packet_ctrl_fsm, training_acc, weight_gen,
-// mrc_combiner, sd_remod) and exposes a mode-selectable interface.
+// noise_est, sc_detector, packet_ctrl_fsm, training_acc, mrc_combiner,
+// sd_remod) and exposes a mode-selectable interface. MRC weights are computed
+// in firmware/host and delivered via the fw_W_* registers (no on-chip
+// weight_gen, matching trouper_top).
 //
 // Mode register (mode[1:0]):
 //   2'b00  DECIM_ETH  — 4× SX1257 → sd_decimator × 4 → eth_fifo
@@ -311,11 +313,12 @@ module fpga_dsp_wrap (
     // =========================================================================
     // Stage 5b: Training Accumulator
     // =========================================================================
-    wire signed [31:0] Z_i [0:3];
-    wire signed [31:0] Z_q [0:3];
+    // training_acc now emits all-pairs cross-correlations (Zpair) plus the
+    // diagonal autocorrelations (Zdiag), matching the ASIC trouper_top. In the
+    // firmware-weight model these feed the host/firmware eigenvector path; the
+    // FPGA emulation receives committed weights back via the fw_W_* registers,
+    // so the Z outputs are left unconnected here.
     wire               training_done_int;
-    wire [9:0]         n_acc;
-    wire               noise_sample_en;  // driven by packet_ctrl_fsm
 
     assign training_done = training_done_int;
 
@@ -330,59 +333,34 @@ module fpga_dsp_wrap (
         .sc_lock    (sc_lock_int),
         .timing_ref (timing_ref_int),
         .sf         (sf),
-        .Z_i0 (Z_i[0]), .Z_q0 (Z_q[0]),
-        .Z_i1 (Z_i[1]), .Z_q1 (Z_q[1]),
-        .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
-        .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
+        .noise_trig (1'b0),
+        .Zpair_i0 (), .Zpair_q0 (),
+        .Zpair_i1 (), .Zpair_q1 (),
+        .Zpair_i2 (), .Zpair_q2 (),
+        .Zpair_i3 (), .Zpair_q3 (),
+        .Zpair_i4 (), .Zpair_q4 (),
+        .Zpair_i5 (), .Zpair_q5 (),
+        .Zdiag_0 (), .Zdiag_1 (), .Zdiag_2 (), .Zdiag_3 (),
         .training_done (training_done_int),
-        .n_acc         (n_acc)
+        .n_acc          (),
+        .training_armed ()
     );
 
     // =========================================================================
-    // Stage 6: Weight Generation
+    // Stage 6: MRC weights (firmware-computed)
+    // weight_gen has been removed from the ASIC (trouper_top): the eigenvector /
+    // MRC weight computation now runs in firmware (or the host), and the result
+    // is delivered through the fw_W_* registers with a fw_W_commit pulse marking
+    // a fresh set. We surface the committed weights on the W_* status outputs
+    // for read-back/debug. wgt_mode/wgt_src/wgt_auto_commit are no longer used.
     // =========================================================================
-    wire signed [15:0] W_hw_re [0:3];
-    wire signed [15:0] W_hw_im [0:3];
-    wire               W_commit_int;
+    wire W_commit_int = fw_W_commit;
     assign W_commit = W_commit_int;
 
-    weight_gen u_wgen (
-        .clk           (clk),
-        .rst_n         (rst_n),
-        .training_done (training_done_int),
-        .Z_i0 (Z_i[0]), .Z_q0 (Z_q[0]),
-        .Z_i1 (Z_i[1]), .Z_q1 (Z_q[1]),
-        .Z_i2 (Z_i[2]), .Z_q2 (Z_q[2]),
-        .Z_i3 (Z_i[3]), .Z_q3 (Z_q[3]),
-        .n_acc         (n_acc),
-        .sf            (sf),
-        .wgt_src       (wgt_src),
-        .wgt_auto_commit (wgt_auto_commit),
-        .wgt_mode      (wgt_mode),
-        .antenna_en    (antenna_en),
-        .cal_re0 (cal_re0), .cal_im0 (cal_im0),
-        .cal_re1 (cal_re1), .cal_im1 (cal_im1),
-        .cal_re2 (cal_re2), .cal_im2 (cal_im2),
-        .cal_re3 (cal_re3), .cal_im3 (cal_im3),
-        .fw_W_re0 (fw_W_re0), .fw_W_im0 (fw_W_im0),
-        .fw_W_re1 (fw_W_re1), .fw_W_im1 (fw_W_im1),
-        .fw_W_re2 (fw_W_re2), .fw_W_im2 (fw_W_im2),
-        .fw_W_re3 (fw_W_re3), .fw_W_im3 (fw_W_im3),
-        .fw_W_commit   (fw_W_commit),
-        .W_hw_re0 (W_hw_re[0]), .W_hw_im0 (W_hw_im[0]),
-        .W_hw_re1 (W_hw_re[1]), .W_hw_im1 (W_hw_im[1]),
-        .W_hw_re2 (W_hw_re[2]), .W_hw_im2 (W_hw_im[2]),
-        .W_hw_re3 (W_hw_re[3]), .W_hw_im3 (W_hw_im[3]),
-        .W_commit      (W_commit_int),
-        .wgen_hw_done  (),
-        .wgen_active   (),
-        .wgen_mode_dbg ()
-    );
-
-    assign W_re0 = W_hw_re[0]; assign W_im0 = W_hw_im[0];
-    assign W_re1 = W_hw_re[1]; assign W_im1 = W_hw_im[1];
-    assign W_re2 = W_hw_re[2]; assign W_im2 = W_hw_im[2];
-    assign W_re3 = W_hw_re[3]; assign W_im3 = W_hw_im[3];
+    assign W_re0 = fw_W_re0; assign W_im0 = fw_W_im0;
+    assign W_re1 = fw_W_re1; assign W_im1 = fw_W_im1;
+    assign W_re2 = fw_W_re2; assign W_im2 = fw_W_im2;
+    assign W_re3 = fw_W_re3; assign W_im3 = fw_W_im3;
 
     // =========================================================================
     // Stage 7: Packet Control FSM
@@ -417,9 +395,6 @@ module fpga_dsp_wrap (
         .psram_en          (1'b0),
         .psram_replay_active (1'b0),
         .pkt_timeout_syms  (pkt_timeout_syms),
-        .noise_thresh      (noise_thresh),
-        .energy0 (energy_snap[0]), .energy1 (energy_snap[1]),
-        .energy2 (energy_snap[2]), .energy3 (energy_snap[3]),
         .safe_switch        (safe_switch),
         .W_valid_set        (W_valid_set),
         .W_missed_packet    (W_missed_packet),
@@ -432,8 +407,7 @@ module fpga_dsp_wrap (
         .packet_phase       (packet_phase),
         .packet_active      (packet_active_int),
         .active_mode        (active_mode),
-        .active_antenna_en  (active_antenna_en),
-        .noise_sample_en    (noise_sample_en)
+        .active_antenna_en  (active_antenna_en)
     );
 
     // =========================================================================
@@ -454,10 +428,10 @@ module fpga_dsp_wrap (
         .x_i2 (dcr_i[2]), .x_q2 (dcr_q[2]),
         .x_i3 (dcr_i[3]), .x_q3 (dcr_q[3]),
         .x_valid  (dcr_valid),
-        .W_re0 (W_hw_re[0][15:8]), .W_im0 (W_hw_im[0][15:8]),
-        .W_re1 (W_hw_re[1][15:8]), .W_im1 (W_hw_im[1][15:8]),
-        .W_re2 (W_hw_re[2][15:8]), .W_im2 (W_hw_im[2][15:8]),
-        .W_re3 (W_hw_re[3][15:8]), .W_im3 (W_hw_im[3][15:8]),
+        .W_re0 (fw_W_re0[15:8]), .W_im0 (fw_W_im0[15:8]),
+        .W_re1 (fw_W_re1[15:8]), .W_im1 (fw_W_im1[15:8]),
+        .W_re2 (fw_W_re2[15:8]), .W_im2 (fw_W_im2[15:8]),
+        .W_re3 (fw_W_re3[15:8]), .W_im3 (fw_W_im3[15:8]),
         .W_valid          (W_valid),
         .mode             (active_mode[0]),
         .bypass_ant       (bypass_ant),
