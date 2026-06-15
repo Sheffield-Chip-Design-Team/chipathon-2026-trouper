@@ -48,7 +48,8 @@ FPGA_SRCS   = $(RTL)/fpga_sram512x8.v \
 # ============================================================================
 
 .PHONY: sge_sim_inject sge_sim_decim_eth sge_sim_all \
-        sim_inject sim_decim_eth sim_all clean vivado_project vivado_synth
+        sim_inject sim_decim_eth sim_all clean vivado_project vivado_synth \
+        test_fw run_test_fw
 
 sge_sim_inject:
 	HLAB_SGE_URL=$(HLAB_SGE_URL) hqsub \
@@ -100,7 +101,30 @@ vivado_synth:
 	$(VIVADO) -mode batch -source vivado/run_synth.tcl 2>&1 | tee vivado_synth.log
 
 # ============================================================================
+# Bare-metal MicroBlaze test firmware (sw/test_fw.c)
+# Built with mb-gcc + crt0.S + lscript.ld — no Vitis BSP / -lxil dependency.
+# Produces a known-good ELF for `xsdb vivado/run_test_fw.tcl`.
+# ============================================================================
+MB_BIN   = /home/timothyjabez/tools/Xilinx/2025.2/Vitis/gnu/microblaze/lin/bin
+MB_GCC   = $(MB_BIN)/mb-gcc
+XSDB     = /home/timothyjabez/tools/Xilinx/2025.2/Vivado/bin/xsdb
+MB_FLAGS = -mlittle-endian -O2 -G0 -nostdlib -nostartfiles -ffreestanding
+SW       = sw
+
+test_fw: $(SW)/test_fw.elf
+
+$(SW)/test_fw.elf: $(SW)/crt0.S $(SW)/test_fw.c $(SW)/lscript.ld
+	$(MB_GCC) $(MB_FLAGS) -Wl,-T,$(SW)/lscript.ld -Wl,-Map,$(SW)/test_fw.map \
+	    -o $@ $(SW)/crt0.S $(SW)/test_fw.c \
+	    `$(MB_GCC) -mlittle-endian -print-libgcc-file-name`
+
+# Program bitstream + download/run the bare-metal firmware over JTAG (xsdb)
+run_test_fw: $(SW)/test_fw.elf
+	$(XSDB) vivado/run_test_fw.tcl
+
+# ============================================================================
 # Clean
 # ============================================================================
 clean:
 	rm -rf obj_dir_inject obj_dir_decim_eth *.vcd
+	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map

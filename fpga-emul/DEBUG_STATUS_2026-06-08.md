@@ -54,3 +54,29 @@ Add internal observability on the UARTLite path:
 - Expose a few internal UARTLite status signals to spare pins/LEDs in a reproducible source-level way.
 
 The last temporary LED-mirror experiment was done only in generated Vivado output and is intentionally not committed.
+
+## Resolution (2026-06-15)
+
+Root cause: **the UART pins were swapped in the XDC.** FPGA TX (`UART_0_txd`)
+was constrained to `A9`, but on the Arty A7 `A9 = uart_txd_in` is the FTDI's
+*output into the FPGA* (FPGA RX). The pin the FTDI forwards to USB is
+`D10 = uart_rxd_out`. So the UARTLite was transmitting correctly onto a pin the
+FTDI does not read, and the host saw 0 bytes — independent of baud/reset/clock.
+
+Verification that the rest of the path was already fine:
+- UARTLite generated IP: `C_S_AXI_ACLK_FREQ_HZ = 32 MHz`, `C_BAUDRATE = 115200`
+  (baud divisor correct).
+- `rst_32m` proc_sys_reset: `C_EXT_RESET_HIGH` auto-propagated to 0 (active-low),
+  so `xlconstant=1` deasserts reset; `peripheral_aresetn` driver value = 1.
+- Address map: `SEG_axi_uartlite_0_Reg @ 0x40600000` matches firmware `UART_BASE`.
+
+Note: the earlier "direct A9 drive visible on /dev/ttyUSB1" observation (and the
+`uart_pin_test` driving A9) was the misobservation that pointed debugging at the
+UARTLite internals. The "LED stayed solid" evidence is also void: one byte at
+115200 baud is ~87 µs, far too brief to see on an LED.
+
+Fix applied:
+- `vivado/arty_dsp_emul.xdc`: `UART_0_txd -> D10`, `UART_0_rxd -> A9`.
+- `uart_pin_test/uart_pin_test.xdc`: `uart_txd -> D10`.
+
+Both require a re-synth / re-implementation and a fresh bitstream to take effect.

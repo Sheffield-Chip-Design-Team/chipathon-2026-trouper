@@ -11,9 +11,13 @@
 #define UART_STATUS    (*(volatile unsigned int *)(UART_BASE + 0x08))
 #define UART_CTRL      (*(volatile unsigned int *)(UART_BASE + 0x0C))
 
-/* DSP ctrl register offsets (from axi_dsp_ctrl.v register map) */
-#define DSP_STATUS     (*(volatile unsigned int *)(DSP_BASE + 0x00))
-#define DSP_CTRL       (*(volatile unsigned int *)(DSP_BASE + 0x04))
+/* DSP ctrl register offsets (from axi_dsp_ctrl.v register map):
+ *   0x00 = CTRL   (R/W, 29-bit ctrl_reg — top 3 bits read back 0)
+ *   0x04 = STATUS (read-only)
+ * NOTE: these were previously swapped, so the w/r test wrote to the read-only
+ * STATUS register and always reported FAIL. */
+#define DSP_CTRL       (*(volatile unsigned int *)(DSP_BASE + 0x00))
+#define DSP_STATUS     (*(volatile unsigned int *)(DSP_BASE + 0x04))
 
 #define UART_STATUS_TXEMPTY (1U << 2)
 
@@ -53,12 +57,14 @@ int main(void) {
     uart_puthex(dsp_ctrl_val);
     uart_puts("\r\n");
 
-    /* Write a known pattern and read back */
-    DSP_CTRL = 0xDEAD0001U;
+    /* Write a known pattern and read back. ctrl_reg is 29-bit, so the pattern
+     * must fit in [28:0] to round-trip exactly. */
+    #define CTRL_TEST_PAT 0x0EAD0001U
+    DSP_CTRL = CTRL_TEST_PAT;
     unsigned int readback = DSP_CTRL;
     uart_puts("CTRL w/r:   ");
     uart_puthex(readback);
-    uart_puts(readback == 0xDEAD0001U ? "  PASS\r\n" : "  FAIL\r\n");
+    uart_puts(readback == CTRL_TEST_PAT ? "  PASS\r\n" : "  FAIL\r\n");
 
     uart_puts("=== done ===\r\n");
 

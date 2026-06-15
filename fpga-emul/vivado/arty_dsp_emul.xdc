@@ -52,9 +52,14 @@ set_property IOSTANDARD LVCMOS33 [get_ports {MDIO_0_*}]
 
 # ============================================================================
 # UART (USB-UART bridge, Arty A7)
+# Digilent schematic net names (FPGA perspective):
+#   D10 = uart_rxd_out -> FPGA OUTPUT to host  => FPGA TX  (UART_0_txd)
+#   A9  = uart_txd_in  -> FPGA INPUT from host => FPGA RX  (UART_0_rxd)
+# NOTE: these were previously swapped (TX on A9), so the FPGA was driving the
+# FTDI's own TXD pin and the host received 0 bytes. Corrected per master XDC.
 # ============================================================================
-set_property PACKAGE_PIN D10  [get_ports {UART_0_rxd}]
-set_property PACKAGE_PIN A9   [get_ports {UART_0_txd}]
+set_property PACKAGE_PIN A9   [get_ports {UART_0_rxd}]
+set_property PACKAGE_PIN D10  [get_ports {UART_0_txd}]
 set_property IOSTANDARD LVCMOS33 [get_ports {UART_0_*}]
 
 # ============================================================================
