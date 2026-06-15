@@ -27,13 +27,11 @@ RTL         = rtl
 ASIC_RTL    = ../rtl-test/rtl
 
 # All ASIC RTL modules needed by fpga_dsp_wrap
-ASIC_SRCS   = $(ASIC_RTL)/sd_decimator.v       \
+ASIC_SRCS   = $(ASIC_RTL)/sd_decimator_cic_tdm8.v \
               $(ASIC_RTL)/dc_removal.v          \
               $(ASIC_RTL)/frontend_buf_ctrl.v   \
-              $(ASIC_RTL)/noise_est.v           \
               $(ASIC_RTL)/sc_detector.v         \
               $(ASIC_RTL)/training_acc.v        \
-              $(ASIC_RTL)/weight_gen.v          \
               $(ASIC_RTL)/packet_ctrl_fsm.v     \
               $(ASIC_RTL)/mrc_combiner.v        \
               $(ASIC_RTL)/sd_remod.v

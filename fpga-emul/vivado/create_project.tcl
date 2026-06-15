@@ -39,15 +39,15 @@ set emul_srcs [list \
     "$rtl_dir/axi_dsp_ctrl.v"     \
 ]
 
-# ASIC RTL (the modules under test — same files used by Verilator testbenches)
+# ASIC RTL (the modules under test — same files used by Verilator testbenches).
+# Topology kept in sync with trouper_top: TDM8 decimator, no weight_gen (firmware
+# weights), no noise_est (noise via training_acc Zdiag).
 set asic_srcs [list \
-    "$asic_rtl/sd_decimator.v"       \
+    "$asic_rtl/sd_decimator_cic_tdm8.v" \
     "$asic_rtl/dc_removal.v"         \
     "$asic_rtl/frontend_buf_ctrl.v"  \
-    "$asic_rtl/noise_est.v"           \
     "$asic_rtl/sc_detector.v"        \
     "$asic_rtl/training_acc.v"       \
-    "$asic_rtl/weight_gen.v"         \
     "$asic_rtl/packet_ctrl_fsm.v"    \
     "$asic_rtl/mrc_combiner.v"       \
     "$asic_rtl/sd_remod.v"           \

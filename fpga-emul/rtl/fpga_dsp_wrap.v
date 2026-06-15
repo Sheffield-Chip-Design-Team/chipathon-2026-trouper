@@ -1,17 +1,19 @@
 // fpga_dsp_wrap.v
 // FPGA emulation wrapper for the LoRa MIMO ASIC DSP chain.
-// Instantiates the full ASIC RTL (sd_decimator, dc_removal, frontend_buf_ctrl,
-// noise_est, sc_detector, packet_ctrl_fsm, training_acc, mrc_combiner,
-// sd_remod) and exposes a mode-selectable interface. MRC weights are computed
-// in firmware/host and delivered via the fw_W_* registers (no on-chip
-// weight_gen, matching trouper_top).
+// Instantiates the ASIC RTL (sd_decimator_cic_tdm8, dc_removal,
+// frontend_buf_ctrl, sc_detector, packet_ctrl_fsm, training_acc, mrc_combiner,
+// sd_remod) and exposes a mode-selectable interface. Topology tracks
+// trouper_top: TDM8 decimator, firmware MRC weights via the fw_W_* registers
+// (no on-chip weight_gen), and noise power from training_acc Zdiag (no live
+// noise_est). The SC delay line still uses frontend_buf_ctrl + on-chip BRAM
+// here (trouper uses external PSRAM via psram_buf_ctrl).
 //
 // Mode register (mode[1:0]):
-//   2'b00  DECIM_ETH  — 4× SX1257 → sd_decimator × 4 → eth_fifo
+//   2'b00  DECIM_ETH  — 4× SX1257 → TDM8 decimator → eth_fifo
 //                       (raw decimated I/Q, no further processing)
 //   2'b01  FULL_DSP   — 4× SX1257 → full chain → combined I/Q → eth_fifo
 //   2'b10  INJECT     — injected int8 I/Q (from inj FIFO) → full chain
-//                       (bypasses sd_decimator; for pre-chip testing)
+//                       (bypasses the decimator; for pre-chip testing)
 //
 // Clock domain: single clock (clk = 32 MHz from MMCM).
 // The ASIC RTL drives both clk_32m and clk_16m ports from the same 32 MHz
@@ -114,31 +116,32 @@ module fpga_dsp_wrap (
 );
 
     // =========================================================================
-    // Stage 1: ΣΔ Decimators × 4
-    // Both clk_32m and clk_16m tied to clk (32 MHz), matching mimo_rx_top.v.
+    // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128 (matches
+    // trouper_top). Replaces the 4× per-branch sd_decimator with the area-shared
+    // TDM8 variant: all four 1-bit IQ streams in, 4×int8 packed out. The
+    // decim_ratio input is no longer used (R is fixed at 128 in this variant).
     // =========================================================================
     wire signed [7:0] dec_i [0:3];
     wire signed [7:0] dec_q [0:3];
-    wire              dec_valid [0:3];
+    wire [31:0]       dec_pack_i, dec_pack_q;
+    wire [3:0]        dec_valid_all;
 
-    genvar g;
-    generate
-        for (g = 0; g < 4; g = g + 1) begin : gen_dec
-            sd_decimator u_dec (
-                .clk_32m     (clk),
-                .clk_16m     (clk),
-                .rst_n       (rst_n),
-                .iq_in_i     (hw_iq_i[g]),
-                .iq_in_q     (hw_iq_q[g]),
-                .decim_ratio (decim_ratio),
-                .iq_out_i    (dec_i[g]),
-                .iq_out_q    (dec_q[g]),
-                .iq_valid    (dec_valid[g])
-            );
-        end
-    endgenerate
+    sd_decimator_cic_tdm8 u_dec (
+        .clk_32m  (clk),
+        .rst_n    (rst_n),
+        .iq_in_i  (hw_iq_i),
+        .iq_in_q  (hw_iq_q),
+        .iq_out_i (dec_pack_i),
+        .iq_out_q (dec_pack_q),
+        .iq_valid (dec_valid_all)
+    );
 
-    wire hw_dec_valid = dec_valid[0];  // all 4 are synchronous, use ch0 as strobe
+    assign dec_i[0] = dec_pack_i[7:0];   assign dec_q[0] = dec_pack_q[7:0];
+    assign dec_i[1] = dec_pack_i[15:8];  assign dec_q[1] = dec_pack_q[15:8];
+    assign dec_i[2] = dec_pack_i[23:16]; assign dec_q[2] = dec_pack_q[23:16];
+    assign dec_i[3] = dec_pack_i[31:24]; assign dec_q[3] = dec_pack_q[31:24];
+
+    wire hw_dec_valid = |dec_valid_all;  // all 4 lanes update together
 
     // =========================================================================
     // Injection mux: select data source for the full DSP chain
@@ -188,28 +191,18 @@ module fpga_dsp_wrap (
     );
 
     // =========================================================================
-    // Stage 3: Noise Estimation (Manhattan norm; feeds packet_ctrl_fsm threshold)
-    // noise_snap[k] is 8-bit; zero-pad to 16-bit for downstream consumers.
+    // Stage 3: Noise power readback (from training_acc Zdiag).
+    // The live noise_est block has been removed to match trouper_top, where noise
+    // qualification uses training_acc noise-mode windows instead. Zdiag_k =
+    // Σ|raw_k|² ≈ σ²_k·n_acc in noise mode; surface its high word on the per-
+    // branch energy[] readback outputs. zdiag[] is driven by u_tacc below.
     // =========================================================================
-    wire [7:0]  noise_snap [0:3];
+    wire [31:0] zdiag [0:3];
     wire [15:0] energy_snap [0:3];
-    assign energy_snap[0] = {noise_snap[0], 8'h0};
-    assign energy_snap[1] = {noise_snap[1], 8'h0};
-    assign energy_snap[2] = {noise_snap[2], 8'h0};
-    assign energy_snap[3] = {noise_snap[3], 8'h0};
-
-    noise_est u_nest (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .iq_valid   (dcr_valid),
-        .sc_lock    (sc_lock_int),
-        .dcr_i0 (dcr_i[0]), .dcr_i1 (dcr_i[1]),
-        .dcr_i2 (dcr_i[2]), .dcr_i3 (dcr_i[3]),
-        .dcr_q0 (dcr_q[0]), .dcr_q1 (dcr_q[1]),
-        .dcr_q2 (dcr_q[2]), .dcr_q3 (dcr_q[3]),
-        .noise_snap_0 (noise_snap[0]), .noise_snap_1 (noise_snap[1]),
-        .noise_snap_2 (noise_snap[2]), .noise_snap_3 (noise_snap[3])
-    );
+    assign energy_snap[0] = zdiag[0][31:16];
+    assign energy_snap[1] = zdiag[1][31:16];
+    assign energy_snap[2] = zdiag[2][31:16];
+    assign energy_snap[3] = zdiag[3][31:16];
 
     assign energy0 = energy_snap[0];
     assign energy1 = energy_snap[1];
@@ -340,7 +333,8 @@ module fpga_dsp_wrap (
         .Zpair_i3 (), .Zpair_q3 (),
         .Zpair_i4 (), .Zpair_q4 (),
         .Zpair_i5 (), .Zpair_q5 (),
-        .Zdiag_0 (), .Zdiag_1 (), .Zdiag_2 (), .Zdiag_3 (),
+        .Zdiag_0 (zdiag[0]), .Zdiag_1 (zdiag[1]),
+        .Zdiag_2 (zdiag[2]), .Zdiag_3 (zdiag[3]),
         .training_done (training_done_int),
         .n_acc          (),
         .training_armed ()
