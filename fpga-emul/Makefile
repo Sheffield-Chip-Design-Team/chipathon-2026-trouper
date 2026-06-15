@@ -49,7 +49,7 @@ FPGA_SRCS   = $(RTL)/fpga_sram512x8.v \
 
 .PHONY: sge_sim_inject sge_sim_decim_eth sge_sim_all \
         sim_inject sim_decim_eth sim_all clean vivado_project vivado_synth \
-        test_fw run_test_fw
+        test_fw run_test_fw eth_fw run_eth_fw
 
 sge_sim_inject:
 	HLAB_SGE_URL=$(HLAB_SGE_URL) hqsub \
@@ -123,8 +123,36 @@ run_test_fw: $(SW)/test_fw.elf
 	$(XSDB) vivado/run_test_fw.tcl
 
 # ============================================================================
+# Full Ethernet/SPI firmware (sw/main.c) — Vitis BSP build from the XSA.
+# Vitis 2025.2 xsct needs an X display, so the BSP generation runs under Xvfb.
+# We then link main.c directly against libxil to avoid the Vitis app-build's
+# missing -L for the BSP lib dir.
+# ============================================================================
+XSCT     = /home/timothyjabez/tools/Xilinx/2025.2/Vitis/bin/xsct
+BSP_DIR  = $(SW)/vitis_ws/arty_dsp_emul/export/arty_dsp_emul/sw/arty_dsp_emul/standalone_domain
+ETH_LD   = $(SW)/vitis_ws/lora_mimo_fw/src/lscript.ld
+ETH_FLAGS = -Wall -O2 -g -mlittle-endian -mcpu=v11.0 -mxl-soft-mul -Wl,--no-relax \
+            -ffunction-sections -fdata-sections
+
+eth_fw: $(SW)/lora_mimo_fw.elf
+
+# BSP (libxil.a + headers) generated from the XSA by xsct under Xvfb.
+$(BSP_DIR)/bsplib/lib/libxil.a: $(SW)/arty_dsp_emul.xsa $(SW)/build_fw.tcl
+	cd $(SW) && xvfb-run -a $(XSCT) build_fw.tcl
+
+$(SW)/lora_mimo_fw.elf: $(SW)/main.c $(BSP_DIR)/bsplib/lib/libxil.a
+	$(MB_GCC) $(ETH_FLAGS) -I$(BSP_DIR)/bspinclude/include \
+	    -Wl,-T -Wl,$(ETH_LD) -Wl,--gc-sections -L$(BSP_DIR)/bsplib/lib \
+	    -o $@ $(SW)/main.c -Wl,--start-group,-lxil,-lgcc,-lc,--end-group
+
+# Program bitstream + download/run the full Ethernet firmware over JTAG (xsdb)
+run_eth_fw: $(SW)/lora_mimo_fw.elf
+	$(XSDB) vivado/run_eth_fw.tcl
+
+# ============================================================================
 # Clean
 # ============================================================================
 clean:
 	rm -rf obj_dir_inject obj_dir_decim_eth *.vcd
 	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map
+	rm -f $(SW)/lora_mimo_fw.elf

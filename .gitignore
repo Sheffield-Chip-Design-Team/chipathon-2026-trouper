@@ -68,6 +68,9 @@ fpga-emul/vivado_synth*.log
 fpga-emul/sw/*.elf
 fpga-emul/sw/*.map
 fpga-emul/sw/*.xsa
+fpga-emul/sw/vitis_ws/
+fpga-emul/sw/.Xil/
+fpga-emul/vivado/.Xil/
 fpga-emul/sw/updatemem*.jou
 fpga-emul/sw/updatemem*.log
 fpga-emul/sw/vivado*.jou

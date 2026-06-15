@@ -23,7 +23,7 @@
  *     Use before SX1257 chips arrive to test DSP correctness.
  *
  * Network (direct cable):
- *   FPGA  192.168.10.2  MAC 02:12:34:56:78:9A
+ *   FPGA  192.168.10.2  MAC 02:12:34:56:78:9B
  *   Host  192.168.10.1
  *   UDP data port:    5005  (FPGA → host)
  *   UDP status port:  5006  (FPGA → host)
