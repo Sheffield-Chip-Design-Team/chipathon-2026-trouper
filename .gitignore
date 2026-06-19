@@ -52,8 +52,13 @@ vivado*.log
 updatemem*.jou
 updatemem*.log
 
-# P&R config bundle zips
+# P&R config bundle zips (ad-hoc root-level zips, not pd-bundles/)
 *.zip
+
+# PD bundles — tarballs in pd/ are intentionally tracked
+# Ignore LibreLane run outputs if bundle is extracted and run locally
+pd/*/ol_*/runs/
+pd/*/ol_*/*.log
 
 # FPGA emulation generated artifacts
 fpga-emul/vivado_proj/
