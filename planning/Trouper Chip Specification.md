@@ -5,9 +5,9 @@
 | Field | Value |
 |---|---|
 | Document ID | TRPR-SPEC-001 |
-| Version | 0.2 |
+| Version | 0.3 |
 | Status | DRAFT |
-| Date | 2026-06-10 |
+| Date | 2026-06-19 |
 | Project | SSCS PICO Chipathon 2026 — Trouper (DSP) |
 | Companion | Grouper is a separate hardened control macro; Trouper is hardened independently and integrated with Grouper only at a later top level |
 
@@ -47,7 +47,7 @@ Trouper is a standalone hardened DSP macro. In the current top-level RTL it expo
 | TRPR-SYS-001 | C | F | Trouper SHALL receive four independent 1-bit I+Q ΣΔ bitstreams from SX1257 AFEs at 32 MS/s per branch. | T |
 | TRPR-SYS-002 | C | F | Trouper SHALL output a single MRC-combined 1-bit I+Q ΣΔ stream at 32 MS/s to SX1302 Radio A. | T |
 | TRPR-SYS-003 | C | P | Trouper operates from a single external 32 MHz clock (IQ_CLK). Two internal clock domains are derived from it: the **32 MHz tier** (IQ_CLK directly) for blocks that must act on every clock edge, and the **16 MHz tier** (CLK_16M = IQ_CLK÷2, generated as a registered divide-by-2 at top level) for blocks updated only on `iq_valid` or `raw_valid`. Because CLK_16M is phase-aligned with IQ_CLK, no metastability synchronisers are required at domain crossings — correct STA coverage is achieved by declaring CLK_16M as a generated clock in the SDC (`create_generated_clock -divide_by 2 -source IQ_CLK`). The SDC defines `IQ_CLK` at 31.25 ns and `CLK_16M` at 62.5 ns; no global multicycle-path override is required. The divider FF SHALL be held in synchronous reset to guarantee a deterministic CLK_16M phase after RESETB de-assertion. | I |
-| TRPR-SYS-015 | C | P | **32 MHz tier (IQ_CLK)** — the following blocks SHALL run on IQ_CLK and meet single-cycle (31.25 ns) setup timing: `sd_decimator_cic_only` (CIC integrators accumulate every edge), `sd_remod` (1-bit output pipeline), `psram_buf_ctrl` (QPI FSM), `sc_detector` (TDM FSM has single-cycle path dependencies; moving to a slower clock does not eliminate the SS timing violation without structural pipelining of the TDM accumulator chain — see TRPR-PHY-008). | I |
+| TRPR-SYS-015 | C | P | **32 MHz tier (IQ_CLK)** — the following blocks SHALL run on IQ_CLK and meet single-cycle (31.25 ns) setup timing: `sd_decimator_cic_tdm8` (the shared TDM CIC datapath accumulates every edge), `sd_remod` (1-bit output pipeline), `psram_buf_ctrl` (QPI FSM), `sc_detector` (TDM FSM has single-cycle path dependencies; moving to a slower clock does not eliminate the SS timing violation without structural pipelining of the TDM accumulator chain — see TRPR-PHY-008). | I |
 | TRPR-SYS-016 | C | P | **16 MHz tier (CLK_16M)** — the following blocks SHALL run on CLK_16M and meet single-cycle (62.5 ns) setup timing: `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `reg_bank` (incl. interrupt aggregation), `spi_slave`, `packet_ctrl_fsm`. Domain crossings (STA-constrained, no synchronisers required): `raw_valid` + decimated I/Q samples (IQ_CLK→CLK_16M); weight shadow registers and control strobes (CLK_16M→IQ_CLK). Weight generation is not an RTL block in Trouper; it is performed entirely by Grouper firmware or an equivalent host-assisted software path (see §4.6). | I |
 | TRPR-SYS-004 | C | F | Trouper SHALL support LoRa bandwidths of 125 kHz and 250 kHz only. 500 kHz BW is out of scope. | A |
 | TRPR-SYS-005 | C | F | Trouper SHALL operate in standalone bypass mode when no weight commit is received, routing the lowest-numbered enabled antenna to the output. | T |
@@ -100,21 +100,21 @@ Open verification note: the new noise-window accept/reject path uses `training_d
 
 ---
 
-### 4.1 ΣΔ Decimator (`sd_decimator_cic_only.v`) — TRPR-DEC
+### 4.1 ΣΔ Decimator (`sd_decimator_cic_tdm8.v`) — TRPR-DEC
 
-Four identical instances, one per RX branch. Converts 1-bit ΣΔ input to int8 complex baseband.
+The active RTL uses one shared time-division-multiplexed decimator datapath across the four RX branches. It accepts four 1-bit ΣΔ I/Q branch inputs at 32 MS/s and emits per-branch signed int8 complex baseband samples on the decimated schedule.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-DEC-001 | C | F | Each decimator instance SHALL accept a 1-bit I and a 1-bit Q input at 32 MS/s and produce a signed 8-bit I and 8-bit Q output. | T |
-| TRPR-DEC-002 | C | F | The decimator SHALL implement a CIC-only filter with decimation ratio R=128, giving an output rate of 250 kS/s for both supported BWs. | T |
+| TRPR-DEC-002 | C | F | The decimator SHALL implement the active TDM CIC-only filter with decimation ratio R=128, giving an output rate of 250 kS/s for both supported BWs. | T |
 | TRPR-DEC-003 | C | P | SQNR at the decimator output SHALL be ≥ 30 dB (measured at R=128 with a −3 dBFS tone input). | T |
-| TRPR-DEC-004 | C | F | All four decimator instances SHALL produce bit-identical outputs when presented with identical 1-bit input streams. | T |
+| TRPR-DEC-004 | C | F | For identical per-branch 1-bit input streams, the shared TDM decimator path SHALL produce bit-identical per-branch outputs. | T |
 | TRPR-DEC-005 | H | F | The CIC accumulator SHALL use saturating arithmetic to prevent wrap-around overflow on all-ones or all-zeros input. | T |
 | TRPR-DEC-006 | H | F | The decimator SHALL produce a valid-strobe output (`iq_valid`) every R=128 input clocks to gate downstream DSP. | T |
 | TRPR-DEC-007 | H | P | Stopband attenuation SHALL exceed 40 dB for tones above 500 kHz (half the 1 MS/s intermediate rate). | A |
 | TRPR-DEC-008 | M | I | The active decimation ratio SHALL be configurable via `DECIM_CFG[1:0]` in the register bank (see §5 Register Map). Only ratio index 3 (R=128, 250 kS/s) is in-spec; other values are reserved for test. | I |
-| TRPR-DEC-009 | L | P | CIC passband droop of −7.3 dB at 0.4× Nyquist is accepted; no FIR compensation filter is required. | A |
+| TRPR-DEC-009 | L | P | A 2-tap CIC droop equalizer `y[n] = x[n] + (5/16)·(x[n] − x[n−1])` is implemented in both `sd_decimator_cic_only.v` and `sd_decimator_cic_tdm8.v` using shift-and-add only (no multiplier). Per-channel `raw_prev` state is maintained for the TDM path. Residual passband error after equalization < 0.1 dB across the LoRa signal band. | A |
 
 ---
 
@@ -179,6 +179,7 @@ Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on
 | TRPR-SCD-013 | H | P | `sc_lock` SHALL assert within ±1 symbol of the Python block-model prediction on a clean branch-0 SF7 125 kHz preamble at 0 dB SNR. | T |
 | TRPR-SCD-014 | M | F | `sc_lock` SHALL de-assert when the Packet Control FSM returns to IDLE. | T |
 | TRPR-SCD-015 | L | F | `ENERGY_GATE_EN` (SC_CFG bit 0) is reserved; energy gating prior to SC lock is not implemented in the current RTL and SHALL be left at 0. | I |
+| TRPR-SCD-016 | H | F | The hit decision SHALL include an e_slice guard: `eval_e_acc[25:13] > 0` (energy² ≥ 8192 ADU). When this condition is false the energy is too low for a meaningful threshold comparison; the hit is suppressed to prevent false alarms on noise. This guard is SF-adaptive because minimum detectable amplitude `A_min ∝ 1/√M`. | I |
 
 ---
 
@@ -299,12 +300,12 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-MRC-001 | C | F | The combiner SHALL compute ŷ[n] = Σ_{k=0}^{3} conj(w_k) · x_k[n] where x_k is int8 and w_k is int16 Q1.15 complex. | T |
-| TRPR-MRC-002 | C | F | The accumulator SHALL be int32. The final output SHALL be divided by 2 (guard shift) then saturated to int8. | T |
+| TRPR-MRC-002 | C | F | The accumulator SHALL be 18-bit signed (16-bit product sign-extended + 2 guard bits for 4 additions). The final output SHALL be produced by a single combined arithmetic right-shift of `(8 − pgs)` bits applied to the accumulator, then saturated to int8. `pgs` is `COMB_POST_GAIN_SHIFT` (0–7); combined shift ∈ [1,8], always a right shift. | T |
 | TRPR-MRC-003 | C | F | The combiner SHALL operate sample-by-sample at 250 kS/s (one output per `iq_valid` strobe). | T |
 | TRPR-MRC-004 | C | F | The combiner SHALL use a shadow/active weight bank: weights are written to the shadow bank (0x30–0x3F) and promoted atomically to `W_ACTIVE` only when `WGT_CTRL.W_COMMIT` is pulsed AND the FSM reaches a safe-switch boundary. | T |
 | TRPR-MRC-005 | C | F | Before any W_COMMIT, the combiner SHALL output the bypass signal (lowest-enabled antenna int8 sample, no weighting). | T |
 | TRPR-MRC-006 | H | I | Weights SHALL be stored as 4 complex pairs (w_RE, w_IM) of int16 Q1.15 at registers 0x30–0x3F. | I |
-| TRPR-MRC-007 | H | F | An optional post-combine left-shift of 0–7 bits (`COMB_POST_GAIN`, 0x36) SHALL be applied after the fixed guard divide-by-2, before int8 saturation. Reset value 0. | T |
+| TRPR-MRC-007 | H | F | `COMB_POST_GAIN_SHIFT` (pgs, 0x36[2:0], reset 0, range 0–7) adjusts output amplitude by varying the combined shift: effective division = 2^(8−pgs). Firmware SHALL set pgs per-packet from ZDIAG to target ≈ 90 combined output counts. Worst-case quantisation loss with combined shift: < 0.2 dB (pgs=0); boundary cases at pgs=3/4 show 0.000 dB loss (verified tb_mrc_fw_rand, SGE job 2010). | T |
 | TRPR-MRC-008 | H | P | Post-combining SNR improvement SHALL be ≥ 5 dB relative to single-antenna baseline on a flat channel with equal-power branches (theoretical MRC gain ≈ 6 dB for NR=4). | T |
 | TRPR-MRC-009 | H | P | AGC SHALL keep per-branch amplitude ≤ −3 dBFS (≤ 90 counts int8) so the combined int32 sum fits within int8 after ÷2. Int8 saturation is a safety net only, not the normal operating path. | T |
 | TRPR-MRC-010 | H | P | `ŷ[n]` SHALL match `W @ x` computed in numpy to within ±2 LSB (int8). | T |
