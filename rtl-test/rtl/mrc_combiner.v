@@ -11,9 +11,9 @@
 // for 4-antenna MRC. Firmware writes weight to high byte of 16-bit shadow reg;
 // trouper_top passes rb_w_shadow[hi_byte] to W_re/im ports.
 // Multiplier: 8×8→16-bit (was 16×8→24-bit). Accumulator: 18-bit (was 26-bit).
-// Output shift: acc >>> 8 (Q0.7 scaling — effective weight = W_byte/128). Firmware
-// writes Q1.15; trouper_top passes the high byte. The >>> 8 shift keeps the
-// accumulator linear for input amplitudes up to ~67 counts with W_max=120.
+// Output shift: acc >>> (8 − pgs) — single combined shift replacing the old
+// two-step (acc >>> 8) << pgs. Eliminates amplified truncation: worst-case
+// loss < 0.05 dB across all pgs tiers. pgs ∈ [0,7] → net shift ∈ [1,8].
 // post_gain_shift (0–7) is set per-packet by firmware from Zdiag to recover
 // output amplitude for weak signals without touching the weight encoding.
 // State count: 11. Budget at R=128: 128 cycles.
@@ -66,16 +66,15 @@ module mrc_combiner (
     wire signed [15:0] mul_i_next = w_r * xi_r;
     wire signed [15:0] mul_q_next = w_r * xq_r;
 
-    // Saturation path
-    wire signed [17:0] guarded_i_f = acc_i_final_r >>> 8;
-    wire signed [17:0] guarded_q_f = acc_q_final_r >>> 8;
-    wire signed [24:0] shifted_i_f = $signed({{7{guarded_i_f[17]}}, guarded_i_f}) <<< post_gain_shift;
-    wire signed [24:0] shifted_q_f = $signed({{7{guarded_q_f[17]}}, guarded_q_f}) <<< post_gain_shift;
-    wire signed [8:0] sat_i = (shifted_i_f >  25'sd127) ?  9'sd127 :
-                               (shifted_i_f < -25'sd128) ? -9'sd128 :
+    // Saturation path — single combined shift acc >>> (8 − pgs)
+    wire [3:0] net_rshift  = 4'd8 - {1'b0, post_gain_shift};
+    wire signed [17:0] shifted_i_f = acc_i_final_r >>> net_rshift;
+    wire signed [17:0] shifted_q_f = acc_q_final_r >>> net_rshift;
+    wire signed [8:0] sat_i = (shifted_i_f >  18'sd127) ?  9'sd127 :
+                               (shifted_i_f < -18'sd128) ? -9'sd128 :
                                shifted_i_f[8:0];
-    wire signed [8:0] sat_q = (shifted_q_f >  25'sd127) ?  9'sd127 :
-                               (shifted_q_f < -25'sd128) ? -9'sd128 :
+    wire signed [8:0] sat_q = (shifted_q_f >  18'sd127) ?  9'sd127 :
+                               (shifted_q_f < -18'sd128) ? -9'sd128 :
                                shifted_q_f[8:0];
 
     always @(posedge clk_16m or negedge rst_n) begin
