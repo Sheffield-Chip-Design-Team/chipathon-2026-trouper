@@ -1,16 +1,16 @@
-// sd_remod.v
-// 3rd-order CIFF single-bit ΣΔ re-modulator (SX1257 Figure 6-3 compliant).
+// sd_remod_ciff.v — 3rd-order CIFF ΣΔ re-modulator, synthesised CIFF coefficients
 //
-// Architecture: Cascade of Integrators, Feed-Forward (CIFF).
-//   Three saturating int16 integrators; Q8 weighted feed-forward summer; sign quantizer.
+// Architecture: Cascade of Integrators, Feed-Forward (CIFF)
+//   Three saturating integrators; weighted feed-forward summer into sign quantizer.
 //   Coefficients from synthesizeNTF(order=3, OSR=64) via python-deltasigma:
-//     a = [0.79973886, 0.2881357, 0.04398262]  →  Q8: A1=205, A2=74, A3=11
+//     a = [0.79973886, 0.2881357, 0.04398262]  (represented as Q8 fixed-point)
+//   Q8 approximations: a1=205/256=0.8008, a2=74/256=0.2891, a3=11/256=0.0430
 //
-// SX1257 §6.2.3: "noise shaper should be stable for input signals lower than -3 dBFS;
-//   integrator outputs are saturated to avoid wraparound."
+// Stability: requires input < -3 dBFS (Lee criterion); integrators saturate not wrap.
+// Interface identical to sd_remod.v for drop-in comparison.
 
 `default_nettype none
-module sd_remod (
+module sd_remod_ciff (
     input  wire        clk_32m,
     input  wire        rst_n,
     input  wire signed [7:0] in_i,
@@ -21,7 +21,7 @@ module sd_remod (
     output reg         out_q
 );
 
-    // Q8 feedforward coefficients (a_k * 256)
+    // Q8 feedforward coefficients  (a_k * 256)
     localparam signed [8:0] A1 = 9'sd205;   // 0.800
     localparam signed [8:0] A2 = 9'sd74;    // 0.289
     localparam signed [8:0] A3 = 9'sd11;    // 0.043
@@ -54,7 +54,7 @@ module sd_remod (
     wire signed [16:0] s3_i_next = $signed({s3_i[15], s3_i}) + $signed({s2_i[15], s2_i});
     wire signed [16:0] s3_q_next = $signed({s3_q[15], s3_q}) + $signed({s2_q[15], s2_q});
 
-    // CIFF Q8 weighted feed-forward summer
+    // CIFF weighted feed-forward summer (Q8 multiply, then >> 8)
     wire signed [24:0] w1_i = $signed({s1_i[15], s1_i}) * A1;
     wire signed [24:0] w2_i = $signed({s2_i[15], s2_i}) * A2;
     wire signed [24:0] w3_i = $signed({s3_i[15], s3_i}) * A3;
@@ -62,7 +62,7 @@ module sd_remod (
     wire signed [24:0] w2_q = $signed({s2_q[15], s2_q}) * A2;
     wire signed [24:0] w3_q = $signed({s3_q[15], s3_q}) * A3;
 
-    // Scale e by 256 (Q8) to match weighted integrators, then sum
+    // Sum scaled integrators (Q8) + error term (scaled to Q8 by *256)
     wire signed [26:0] v_i = {{2{e_i[12]}}, e_i, 13'b0}
                            + {{2{w1_i[24]}}, w1_i}
                            + {{2{w2_i[24]}}, w2_i}

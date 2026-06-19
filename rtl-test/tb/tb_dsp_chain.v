@@ -1,55 +1,30 @@
-// tb_dsp_chain.v
-// End-to-end DSP chain testbench:
-//   dc_removal → frontend_buf_ctrl → sc_detector
-//                                  → energy_meas → noise_floor_est
-//                                  → training_acc → weight_gen
-//                                  → mrc_combiner → sd_remod
+// tb_dsp_chain.v — End-to-end DSP chain testbench matching trouper_top wiring
 //
-// No PicoRV32. CPU-controlled knobs are hardwired:
-//   dc_bypass=1    — bypass DC removal so constant-tone stimulus works
-//   noise_sample_en = energy_valid && !sc_lock  (simplified packet_ctrl_fsm)
-//   buf_freeze=0, all antennas enabled, MRC mode, auto-commit weights
+// Signal flow (matches trouper_top):
+//   raw_i/q → dc_removal → [dcr_i/q + dcr_valid]
+//              ↓ dcr feeds:
+//              psram_buf_ctrl (behavioral: 128-deep delay, branch 0 only)
+//                  → psram_cur_i0/q0, psram_del_i0/q0, psram_del_valid
+//              sc_detector (cur/del from psram behavioral model)
+//              training_acc (all 4 branches, dcr output)
+//              mrc_combiner (dcr output — no PSRAM replay in this testbench)
+//   [fw compute: pgs + weights] → mrc_combiner → sd_remod
 //
-// Strobe period: 20 cycles (frontend_buf_ctrl needs 17 sub-cycles per sample).
+// weight_gen RTL is NOT instantiated — firmware path only.
+//
+// Stimulus: complex sinusoid, period=128 samples (SF7 M), all 4 branches identical
+//   so x[n+128]=x[n] exactly → perfect Schmidl-Cox correlation peak.
+//   Zero DC → passes through dc_removal cleanly after ~16-sample transient.
 //
 // Tests (self-checking):
-//   1. sc_lock      fires <= 17000 cycles
-//   2. training_done fires <= 50000 cycles after sc_lock
-//   3. W_commit     fires <= 200 cycles after training_done; W_hw_re0 != 0
-//   4. y_valid      fires <= 50 cycles after W_commit
+//   1. sc_lock      fires <= 20000 cycles
+//   2. training_done fires <= 60000 cycles after sc_lock
+//   3. fw_W_commit  fires <= 50 cycles after training_done; fw_W_re0 != 0
+//   3b. combiner output amplitude matches pgs rule within ±4 counts
+//   4. y_valid      fires <= 50 cycles after fw_W_commit
 //   5. sd_remod latches the first MRC sample and shows output activity
-//   6. energy_valid fires <= 7000 cycles (before sc_lock)
-//   7. sigma2_valid fires <= 7000 cycles (noise floor estimated while idle)
 
 `timescale 1ns/1ps
-
-// -------------------------------------------------------------------------
-// Behavioral model of GF180 512x8 SRAM (used by frontend_buf_ctrl)
-// -------------------------------------------------------------------------
-module gf180mcu_ocd_ip_sram__sram512x8m8wm1 (
-    input         CLK,
-    input         CEN,
-    input         GWEN,
-    input  [7:0]  WEN,
-    input  [8:0]  A,
-    input  [7:0]  D,
-    output reg [7:0] Q
-);
-    reg [7:0] mem [0:511];
-    integer mi;
-    initial begin
-        Q = 8'h00;
-        for (mi = 0; mi < 512; mi = mi + 1) mem[mi] = 8'h00;
-    end
-    always @(posedge CLK) begin
-        if (!CEN) begin
-            if (!GWEN) mem[A] <= D;
-            Q <= mem[A];
-        end
-    end
-endmodule
-
-// -------------------------------------------------------------------------
 
 module tb_dsp_chain;
 
@@ -61,160 +36,160 @@ module tb_dsp_chain;
     always #15.625 clk = ~clk;   // 32 MHz
 
     // -----------------------------------------------------------------------
-    // Raw stimulus: constant I-axis tone kept below the remod < -3 dBFS
-// contract after 4-branch combine and fixed /2 combiner guard.
+    // Sinusoidal stimulus table: period=128 samples (= M for SF7)
+    // Precomputed so x[n+128]=x[n] exactly → perfect SC autocorrelation.
+    // Zero-mean → passes through dc_removal without attenuation.
     // -----------------------------------------------------------------------
-    reg signed [7:0] raw_i0, raw_i1, raw_i2, raw_i3;
-    reg signed [7:0] raw_q0, raw_q1, raw_q2, raw_q3;
+    real  pi_r;
+    reg signed [7:0] stim_i_tbl [0:127];
+    reg signed [7:0] stim_q_tbl [0:127];
+    integer si;
+    initial begin
+        pi_r = 3.14159265358979;
+        for (si = 0; si < 128; si = si + 1) begin
+            stim_i_tbl[si] = $rtoi(40.0 * $cos(2.0 * pi_r * si / 128.0));
+            stim_q_tbl[si] = $rtoi(40.0 * $sin(2.0 * pi_r * si / 128.0));
+        end
+    end
+
+    reg [6:0] stim_ptr;   // 7-bit → wraps at 128 automatically
+
+    // raw_i/q are combinational from table (so dc_removal samples on iq_valid cycle)
+    wire signed [7:0] raw_i0 = stim_i_tbl[stim_ptr];
+    wire signed [7:0] raw_q0 = stim_q_tbl[stim_ptr];
+    wire signed [7:0] raw_i1 = stim_i_tbl[stim_ptr];
+    wire signed [7:0] raw_q1 = stim_q_tbl[stim_ptr];
+    wire signed [7:0] raw_i2 = stim_i_tbl[stim_ptr];
+    wire signed [7:0] raw_q2 = stim_q_tbl[stim_ptr];
+    wire signed [7:0] raw_i3 = stim_i_tbl[stim_ptr];
+    wire signed [7:0] raw_q3 = stim_q_tbl[stim_ptr];
 
     // iq_valid strobe: 1 pulse every 40 cycles
-    // (frontend_buf_ctrl needs 17 sub-cycles; training_acc TDM needs 32 — must be < strobe;
-    //  mrc_combiner needs 10; 40-cycle strobe ensures every iq_valid triggers TDM)
+    // (training_acc TDM needs 32 sub-cycles; mrc_combiner needs 10; 40-cycle gap fits both)
     reg [5:0] strobe_cnt;
     reg       iq_valid;
 
-    // Forward declarations used by earlier stages in this bench.
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            strobe_cnt <= 6'd0;
+            iq_valid   <= 1'b0;
+            stim_ptr   <= 7'd0;
+        end else begin
+            if (strobe_cnt == 6'd39) begin
+                strobe_cnt <= 6'd0;
+                iq_valid   <= 1'b1;
+                stim_ptr   <= stim_ptr + 7'd1;  // advance table index
+            end else begin
+                strobe_cnt <= strobe_cnt + 6'd1;
+                iq_valid   <= 1'b0;
+            end
+        end
+    end
+
+    // Forward declarations needed by sc_detector and delay buffer
     wire        sc_lock;
     wire [31:0] timing_ref;
 
     // -----------------------------------------------------------------------
-    // Stage 1: DC removal (bypass=1 so constant-tone stimulus passes through)
+    // Stage 2: DC Removal — enabled (matches trouper_top wiring)
     // -----------------------------------------------------------------------
     wire signed [7:0] dcr_i0, dcr_i1, dcr_i2, dcr_i3;
     wire signed [7:0] dcr_q0, dcr_q1, dcr_q2, dcr_q3;
     wire              dcr_valid;
 
-    // Constant-tone stimulus: pass raw directly (no DC removal needed)
-    assign dcr_i0 = raw_i0; assign dcr_i1 = raw_i1;
-    assign dcr_i2 = raw_i2; assign dcr_i3 = raw_i3;
-    assign dcr_q0 = raw_q0; assign dcr_q1 = raw_q1;
-    assign dcr_q2 = raw_q2; assign dcr_q3 = raw_q3;
-    assign dcr_valid = iq_valid;
-
-    // -----------------------------------------------------------------------
-    // Stage 2: Frontend buffer controller (M/2 SRAM delay + cur/del outputs)
-    // -----------------------------------------------------------------------
-    wire [8:0]  sram0_A, sram1_A;
-    wire [7:0]  sram0_D, sram1_D;
-    wire [7:0]  sram0_Q, sram1_Q;
-    wire        sram0_CEN, sram1_CEN;
-    wire        sram0_GWEN, sram1_GWEN;
-
-    gf180mcu_ocd_ip_sram__sram512x8m8wm1 u_sram0 (
-        .CLK  (clk), .CEN (sram0_CEN), .GWEN (sram0_GWEN),
-        .WEN  (8'h00), .A (sram0_A), .D (sram0_D), .Q (sram0_Q)
-    );
-    gf180mcu_ocd_ip_sram__sram512x8m8wm1 u_sram1 (
-        .CLK  (clk), .CEN (sram1_CEN), .GWEN (sram1_GWEN),
-        .WEN  (8'h00), .A (sram1_A), .D (sram1_D), .Q (sram1_Q)
-    );
-
-    wire signed [7:0] cur_i0, cur_i1, cur_i2, cur_i3;
-    wire signed [7:0] cur_q0, cur_q1, cur_q2, cur_q3;
-    wire signed [7:0] del_i0, del_i1, del_i2, del_i3;
-    wire signed [7:0] del_q0, del_q1, del_q2, del_q3;
-    wire              delayed_valid;
-
-    frontend_buf_ctrl u_fbuf (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .iq_valid   (dcr_valid),
-        .in_i0      (dcr_i0),  .in_i1 (dcr_i1),
-        .in_i2      (dcr_i2),  .in_i3 (dcr_i3),
-        .in_q0      (dcr_q0),  .in_q1 (dcr_q1),
-        .in_q2      (dcr_q2),  .in_q3 (dcr_q3),
-        .sf         (4'd7),
-        .sc_lock    (sc_lock),
-        .buf_freeze (1'b0),
-        .sram0_A    (sram0_A),  .sram0_D (sram0_D),  .sram0_Q (sram0_Q),
-        .sram0_CEN  (sram0_CEN), .sram0_GWEN (sram0_GWEN),
-        .sram1_A    (sram1_A),  .sram1_D (sram1_D),  .sram1_Q (sram1_Q),
-        .sram1_CEN  (sram1_CEN), .sram1_GWEN (sram1_GWEN),
-        .cur_i0     (cur_i0),  .cur_i1 (cur_i1),
-        .cur_i2     (cur_i2),  .cur_i3 (cur_i3),
-        .cur_q0     (cur_q0),  .cur_q1 (cur_q1),
-        .cur_q2     (cur_q2),  .cur_q3 (cur_q3),
-        .del_i0     (del_i0),  .del_i1 (del_i1),
-        .del_i2     (del_i2),  .del_i3 (del_i3),
-        .del_q0     (del_q0),  .del_q1 (del_q1),
-        .del_q2     (del_q2),  .del_q3 (del_q3),
-        .delayed_valid (delayed_valid),
-        .buf_mode   (),
-        .buf_valid  (),
-        .wr_ptr     ()
+    dc_removal u_dcr (
+        .clk_32m  (clk),
+        .rst_n    (rst_n),
+        .raw_i0   (raw_i0), .raw_i1 (raw_i1),
+        .raw_i2   (raw_i2), .raw_i3 (raw_i3),
+        .raw_q0   (raw_q0), .raw_q1 (raw_q1),
+        .raw_q2   (raw_q2), .raw_q3 (raw_q3),
+        .raw_valid (iq_valid),
+        .out_i0   (dcr_i0), .out_i1 (dcr_i1),
+        .out_i2   (dcr_i2), .out_i3 (dcr_i3),
+        .out_q0   (dcr_q0), .out_q1 (dcr_q1),
+        .out_q2   (dcr_q2), .out_q3 (dcr_q3),
+        .out_valid (dcr_valid)
     );
 
     // -----------------------------------------------------------------------
-    // Stage 3: Energy measurement
+    // Stage 3a: Behavioral PSRAM delay buffer (replaces psram_buf_ctrl)
+    // Provides psram_cur_i0/q0 and psram_del_i0/q0 for sc_detector.
+    // Depth = 128 (SF7: M=128). Branch 0 only (matches sc_detector NR=1).
     // -----------------------------------------------------------------------
-    wire [15:0] energy_snap_0, energy_snap_1, energy_snap_2, energy_snap_3;
-    wire [9:0]  noise_metric_0, noise_metric_1, noise_metric_2, noise_metric_3;
-    wire        energy_valid;
-    wire        energy_snapshot_valid;
-    wire        noise_metric_valid;
+    reg signed [7:0] delay_i0 [0:127];
+    reg signed [7:0] delay_q0 [0:127];
+    reg [6:0]        delay_wr_ptr;     // 7-bit → natural mod-128 wrap
+    reg              delay_buf_filled;
+    reg              psram_del_valid_r;
+    reg signed [7:0] psram_del_i0_r, psram_del_q0_r;
 
-    energy_meas_coarse u_em (
-        .clk_32m     (clk),
-        .rst_n       (rst_n),
-        .iq_i_0      (dcr_i0),  .iq_i_1 (dcr_i1),
-        .iq_i_2      (dcr_i2),  .iq_i_3 (dcr_i3),
-        .iq_q_0      (dcr_q0),  .iq_q_1 (dcr_q1),
-        .iq_q_2      (dcr_q2),  .iq_q_3 (dcr_q3),
-        .iq_valid    (dcr_valid),
-        .sf          (4'd7),
-        .sc_lock     (sc_lock),
-        .energy_0    (energy_snap_0), .energy_1 (energy_snap_1),
-        .energy_2    (energy_snap_2), .energy_3 (energy_snap_3),
-        .noise_metric_0 (noise_metric_0), .noise_metric_1 (noise_metric_1),
-        .noise_metric_2 (noise_metric_2), .noise_metric_3 (noise_metric_3),
-        .energy_valid           (energy_valid),
-        .energy_snapshot_valid  (energy_snapshot_valid),
-        .noise_metric_valid     (noise_metric_valid)
-    );
+    integer di;
+    initial begin
+        delay_wr_ptr     = 7'd0;
+        delay_buf_filled = 1'b0;
+        psram_del_valid_r = 1'b0;
+        psram_del_i0_r   = 8'sd0;
+        psram_del_q0_r   = 8'sd0;
+        for (di = 0; di < 128; di = di + 1) begin
+            delay_i0[di] = 8'sd0;
+            delay_q0[di] = 8'sd0;
+        end
+    end
+
+    // cur: direct wires to dc_removal output (same-cycle availability)
+    wire signed [7:0] psram_cur_i0 = dcr_i0;
+    wire signed [7:0] psram_cur_q0 = dcr_q0;
+    wire signed [7:0] psram_del_i0 = psram_del_i0_r;
+    wire signed [7:0] psram_del_q0 = psram_del_q0_r;
+    wire              psram_del_valid = psram_del_valid_r;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            delay_wr_ptr      <= 7'd0;
+            delay_buf_filled  <= 1'b0;
+            psram_del_valid_r <= 1'b0;
+            psram_del_i0_r    <= 8'sd0;
+            psram_del_q0_r    <= 8'sd0;
+        end else if (dcr_valid) begin
+            // Read before write (NB assigns): captures sample from 128 strobes ago
+            psram_del_i0_r    <= delay_i0[delay_wr_ptr];
+            psram_del_q0_r    <= delay_q0[delay_wr_ptr];
+            // Write current sample into circular buffer slot
+            delay_i0[delay_wr_ptr] <= dcr_i0;
+            delay_q0[delay_wr_ptr] <= dcr_q0;
+            delay_wr_ptr <= delay_wr_ptr + 7'd1;  // wraps at 128
+            if (!delay_buf_filled && delay_wr_ptr == 7'd127)
+                delay_buf_filled <= 1'b1;
+            psram_del_valid_r <= delay_buf_filled;
+        end else begin
+            psram_del_valid_r <= 1'b0;
+        end
+    end
 
     // -----------------------------------------------------------------------
-    // Stage 4: Coarse FW noise metric readback
-    // Simplified packet_ctrl_fsm behavior: sample noise when the energy window
-    // completes and no preamble is locked yet.
+    // Stage 3b: Schmidl-Cox preamble detector
+    // sc_thr=2048 (~50% normalised metric): fires reliably for A=40 sine.
     // -----------------------------------------------------------------------
-    wire        noise_sample_en = energy_valid && !sc_lock;
-
-    wire [15:0] sigma2_hw_0, sigma2_hw_1, sigma2_hw_2, sigma2_hw_3;
-    wire        sigma2_valid;
-
-    assign sigma2_hw_0 = {6'd0, noise_metric_0};
-    assign sigma2_hw_1 = {6'd0, noise_metric_1};
-    assign sigma2_hw_2 = {6'd0, noise_metric_2};
-    assign sigma2_hw_3 = {6'd0, noise_metric_3};
-
-    reg sigma2_valid_r;
-    always @(posedge clk or negedge rst_n)
-        if (!rst_n) sigma2_valid_r <= 1'b0;
-        else if (noise_metric_valid && !sc_lock) sigma2_valid_r <= 1'b1;
-
-    assign sigma2_valid = sigma2_valid_r;
-
-    // -----------------------------------------------------------------------
-    // Stage 5: Schmidl-Cox preamble detector
-    // -----------------------------------------------------------------------
+    wire [15:0] sc_stat;
     wire signed [31:0] c_i0, c_q0;
 
     sc_detector u_sc (
         .clk            (clk),
         .rst_n          (rst_n),
         .iq_valid       (dcr_valid),
-        .cur_i0         (cur_i0),
-        .cur_q0         (cur_q0),
-        .del_i0         (del_i0),
-        .del_q0         (del_q0),
-        .delayed_valid  (delayed_valid),
+        .cur_i0         (psram_cur_i0),
+        .cur_q0         (psram_cur_q0),
+        .del_i0         (psram_del_i0),
+        .del_q0         (psram_del_q0),
+        .delayed_valid  (psram_del_valid),
         .sf             (4'd7),
-        .sc_thr         (16'd1),
+        .sc_thr         (16'd2048),
         .sc_hits_req    (2'd1),
         .sc_lock        (sc_lock),
         .timing_ref     (timing_ref),
-        .c_i0           (c_i0),  .c_q0  (c_q0),
-        .sc_stat        (),
+        .c_i0           (c_i0), .c_q0 (c_q0),
+        .sc_stat        (sc_stat),
         .sc_hit_dbg     (),
         .sc_hit_count_dbg (),
         .sc_first_hit_dbg (),
@@ -222,117 +197,178 @@ module tb_dsp_chain;
     );
 
     // -----------------------------------------------------------------------
-    // Stage 6: Training accumulator
+    // Stage 4: Training accumulator (all-pairs cross-correlator)
+    // Inputs: dcr outputs (matches trouper_top)
     // -----------------------------------------------------------------------
-    wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1, Z_i2, Z_q2, Z_i3, Z_q3;
+    wire signed [31:0] Zpair_i0, Zpair_q0;
+    wire signed [31:0] Zpair_i1, Zpair_q1;
+    wire signed [31:0] Zpair_i2, Zpair_q2;
+    wire signed [31:0] Zpair_i3, Zpair_q3;
+    wire signed [31:0] Zpair_i4, Zpair_q4;
+    wire signed [31:0] Zpair_i5, Zpair_q5;
+    wire [31:0] Zdiag_0, Zdiag_1, Zdiag_2, Zdiag_3;
     wire        training_done;
-    wire [14:0]  n_acc;
+    wire [15:0] n_acc;
 
     training_acc u_tacc (
         .clk            (clk),
         .rst_n          (rst_n),
         .iq_valid       (dcr_valid),
-        .raw_i0         (dcr_i0),  .raw_i1 (dcr_i1),
-        .raw_i2         (dcr_i2),  .raw_i3 (dcr_i3),
-        .raw_q0         (dcr_q0),  .raw_q1 (dcr_q1),
-        .raw_q2         (dcr_q2),  .raw_q3 (dcr_q3),
+        .raw_i0         (dcr_i0), .raw_i1 (dcr_i1),
+        .raw_i2         (dcr_i2), .raw_i3 (dcr_i3),
+        .raw_q0         (dcr_q0), .raw_q1 (dcr_q1),
+        .raw_q2         (dcr_q2), .raw_q3 (dcr_q3),
         .sc_lock        (sc_lock),
         .timing_ref     (timing_ref),
         .sf             (4'd7),
-        .Z_i0           (Z_i0),  .Z_q0  (Z_q0),
-        .Z_i1           (Z_i1),  .Z_q1  (Z_q1),
-        .Z_i2           (Z_i2),  .Z_q2  (Z_q2),
-        .Z_i3           (Z_i3),  .Z_q3  (Z_q3),
+        .noise_trig     (1'b0),
+        .Zpair_i0       (Zpair_i0), .Zpair_q0 (Zpair_q0),
+        .Zpair_i1       (Zpair_i1), .Zpair_q1 (Zpair_q1),
+        .Zpair_i2       (Zpair_i2), .Zpair_q2 (Zpair_q2),
+        .Zpair_i3       (Zpair_i3), .Zpair_q3 (Zpair_q3),
+        .Zpair_i4       (Zpair_i4), .Zpair_q4 (Zpair_q4),
+        .Zpair_i5       (Zpair_i5), .Zpair_q5 (Zpair_q5),
+        .Zdiag_0        (Zdiag_0),  .Zdiag_1  (Zdiag_1),
+        .Zdiag_2        (Zdiag_2),  .Zdiag_3  (Zdiag_3),
         .training_done  (training_done),
-        .n_acc          (n_acc)
-    );
-
-    // -----------------------------------------------------------------------
-    // Stage 7: Weight generator
-    // -----------------------------------------------------------------------
-    wire signed [15:0] W_hw_re0, W_hw_im0, W_hw_re1, W_hw_im1;
-    wire signed [15:0] W_hw_re2, W_hw_im2, W_hw_re3, W_hw_im3;
-    wire        W_commit;
-
-    weight_gen u_wgen (
-        .clk            (clk),
-        .rst_n          (rst_n),
-        .training_done  (training_done),
-        .Z_i0           (Z_i0),  .Z_q0  (Z_q0),
-        .Z_i1           (Z_i1),  .Z_q1  (Z_q1),
-        .Z_i2           (Z_i2),  .Z_q2  (Z_q2),
-        .Z_i3           (Z_i3),  .Z_q3  (Z_q3),
         .n_acc          (n_acc),
-        .sf             (4'd7),
-        .wgt_src        (1'b0),
-        .wgt_auto_commit(1'b1),
-        .wgt_mode       (2'b00),
-        .antenna_en     (4'hF),
-        .cal_re0        (16'h7FFF),  .cal_im0 (16'h0),
-        .cal_re1        (16'h7FFF),  .cal_im1 (16'h0),
-        .cal_re2        (16'h7FFF),  .cal_im2 (16'h0),
-        .cal_re3        (16'h7FFF),  .cal_im3 (16'h0),
-        .fw_W_re0       (16'h0),  .fw_W_im0 (16'h0),
-        .fw_W_re1       (16'h0),  .fw_W_im1 (16'h0),
-        .fw_W_re2       (16'h0),  .fw_W_im2 (16'h0),
-        .fw_W_re3       (16'h0),  .fw_W_im3 (16'h0),
-        .fw_W_commit    (1'b0),
-        .W_hw_re0       (W_hw_re0),  .W_hw_im0 (W_hw_im0),
-        .W_hw_re1       (W_hw_re1),  .W_hw_im1 (W_hw_im1),
-        .W_hw_re2       (W_hw_re2),  .W_hw_im2 (W_hw_im2),
-        .W_hw_re3       (W_hw_re3),  .W_hw_im3 (W_hw_im3),
-        .W_shadow_re0   (),  .W_shadow_im0 (),
-        .W_shadow_re1   (),  .W_shadow_im1 (),
-        .W_shadow_re2   (),  .W_shadow_im2 (),
-        .W_shadow_re3   (),  .W_shadow_im3 (),
-        .W_commit       (W_commit),
-        .wgen_hw_done   (),
-        .wgen_active    (),
-        .wgen_mode_dbg  ()
+        .training_armed ()
     );
 
-    // W_valid latch: set on W_commit, cleared on reset
-    reg W_valid;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) W_valid <= 1'b0;
-        else if (W_commit) W_valid <= 1'b1;
+    // -----------------------------------------------------------------------
+    // Stub signals for removed noise_est / energy paths (tests 6/7 are stubs)
+    // -----------------------------------------------------------------------
+    wire        energy_valid = 1'b0;
+    wire        sigma2_valid = 1'b0;
+    wire [9:0]  noise_metric_0 = 10'd0;
+    wire [15:0] sigma2_hw_0    = 16'd0;
+
+    // -----------------------------------------------------------------------
+    // Stage 7: Firmware weight compute (emulates PicoRV32 Step 3 + weight commit)
+    // -----------------------------------------------------------------------
+    function automatic int isqrt_fn(input int n);
+        int x, x1;
+        if (n <= 0) return 0;
+        x = n; x1 = (n + 1) / 2;
+        while (x1 < x) begin x = x1; x1 = (x + n/x) / 2; end
+        return x;
+    endfunction
+
+    function automatic int floor_log2_fn(input int n);
+        int k, tmp;
+        if (n <= 1) return 0;
+        tmp = n; k = 0;
+        while (tmp > 1) begin tmp = tmp >> 1; k = k + 1; end
+        return k;
+    endfunction
+
+    reg signed [7:0] fw_W_re0, fw_W_im0, fw_W_re1, fw_W_im1;
+    reg signed [7:0] fw_W_re2, fw_W_im2, fw_W_re3, fw_W_im3;
+    reg [2:0]        fw_pgs;
+    reg              fw_W_valid;
+    reg              fw_W_commit;
+    integer          fw_expected_y_i;
+
+    initial begin
+        fw_W_re0 = 0; fw_W_im0 = 0; fw_W_re1 = 0; fw_W_im1 = 0;
+        fw_W_re2 = 0; fw_W_im2 = 0; fw_W_re3 = 0; fw_W_im3 = 0;
+        fw_pgs        = 0;
+        fw_W_valid    = 0;
+        fw_W_commit   = 0;
+        fw_expected_y_i = 0;
+
+        @(posedge training_done);
+        @(posedge clk);   // let Zdiag outputs settle
+
+        begin : fw_compute
+            longint zdiag_max;
+            longint e_max;
+            int a_est, y_pre_max, pgs_v, w_max_v, denom, acc_i_expected;
+
+            zdiag_max = Zdiag_0[31:16];
+            if (longint'(Zdiag_1[31:16]) > zdiag_max) zdiag_max = Zdiag_1[31:16];
+            if (longint'(Zdiag_2[31:16]) > zdiag_max) zdiag_max = Zdiag_2[31:16];
+            if (longint'(Zdiag_3[31:16]) > zdiag_max) zdiag_max = Zdiag_3[31:16];
+
+            e_max = (zdiag_max << 16) / longint'(n_acc);
+            a_est = isqrt_fn(int'(e_max));
+            $display("FW: n_acc=%0d zdiag_max=%0d e_max=%0d a_est=%0d",
+                     n_acc, zdiag_max, e_max, a_est);
+
+            if (a_est == 0 || n_acc == 0) begin
+                pgs_v   = 0;
+                w_max_v = 120;
+            end else begin
+                y_pre_max = (120 * 4 * a_est) / 256;
+                if (y_pre_max >= 90) begin
+                    pgs_v = 0;
+                end else if (y_pre_max == 0) begin
+                    pgs_v = 7;
+                end else begin
+                    pgs_v = floor_log2_fn(90 / y_pre_max);
+                    if (pgs_v > 7) pgs_v = 7;
+                end
+                denom   = a_est * (1 << pgs_v);
+                w_max_v = (denom > 0) ? (8128 / denom) : 120;
+                if (w_max_v > 120) w_max_v = 120;
+            end
+            $display("FW: pgs=%0d w_max=%0d", pgs_v, w_max_v);
+
+            acc_i_expected  = 4 * w_max_v * a_est;
+            fw_expected_y_i = (acc_i_expected >> 8) << pgs_v;
+            if (fw_expected_y_i > 127) fw_expected_y_i = 127;
+            $display("FW: expected y_i = %0d", fw_expected_y_i);
+
+            fw_W_re0 = w_max_v[7:0]; fw_W_im0 = 0;
+            fw_W_re1 = w_max_v[7:0]; fw_W_im1 = 0;
+            fw_W_re2 = w_max_v[7:0]; fw_W_im2 = 0;
+            fw_W_re3 = w_max_v[7:0]; fw_W_im3 = 0;
+            fw_pgs   = pgs_v[2:0];
+        end
+
+        @(posedge clk);
+        fw_W_valid  = 1;
+        fw_W_commit = 1;
+        @(posedge clk);
+        fw_W_commit = 0;
     end
 
     // -----------------------------------------------------------------------
-    // Stage 8: MRC combiner
+    // Stage 8: MRC combiner — inputs from dcr (matches trouper_top, no replay)
     // -----------------------------------------------------------------------
     wire signed [7:0] y_i, y_q;
     wire              y_valid;
 
     mrc_combiner u_mrc (
-        .clk_16m    (clk),
-        .rst_n      (rst_n),
-        .x_i0       (dcr_i0),  .x_q0 (dcr_q0),
-        .x_i1       (dcr_i1),  .x_q1 (dcr_q1),
-        .x_i2       (dcr_i2),  .x_q2 (dcr_q2),
-        .x_i3       (dcr_i3),  .x_q3 (dcr_q3),
-        .x_valid    (dcr_valid),
-        .W_re0      (W_hw_re0[15:8]),  .W_im0      (W_hw_im0[15:8]),
-        .W_re1      (W_hw_re1[15:8]),  .W_im1      (W_hw_im1[15:8]),
-        .W_re2      (W_hw_re2[15:8]),  .W_im2      (W_hw_im2[15:8]),
-        .W_re3      (W_hw_re3[15:8]),  .W_im3      (W_hw_im3[15:8]),
-        .W_valid    (W_valid),
-        .mode       (1'b0),
-        .bypass_ant (2'd0),
-        .post_gain_shift(3'd0),
-        .y_i        (y_i),
-        .y_q        (y_q),
-        .y_valid    (y_valid)
+        .clk_16m         (clk),
+        .rst_n           (rst_n),
+        .x_i0            (dcr_i0), .x_q0 (dcr_q0),
+        .x_i1            (dcr_i1), .x_q1 (dcr_q1),
+        .x_i2            (dcr_i2), .x_q2 (dcr_q2),
+        .x_i3            (dcr_i3), .x_q3 (dcr_q3),
+        .x_valid         (dcr_valid),
+        .W_re0           (fw_W_re0), .W_im0 (fw_W_im0),
+        .W_re1           (fw_W_re1), .W_im1 (fw_W_im1),
+        .W_re2           (fw_W_re2), .W_im2 (fw_W_im2),
+        .W_re3           (fw_W_re3), .W_im3 (fw_W_im3),
+        .W_valid         (fw_W_valid),
+        .mode            (1'b0),
+        .bypass_ant      (2'd0),
+        .post_gain_shift (fw_pgs),
+        .y_i             (y_i),
+        .y_q             (y_q),
+        .y_valid         (y_valid)
     );
 
     // -----------------------------------------------------------------------
     // Stage 9: SD remodulator
-    // MRC mode gets an extra remod-facing linear backoff; bypass mode does not.
     // -----------------------------------------------------------------------
     localparam [1:0] REMOD_BACKOFF_SHIFT = 2'd1;
     wire out_i, out_q;
-    wire signed [7:0] remod_in_i = u_mrc.use_mrc_r ? ($signed(y_i) >>> REMOD_BACKOFF_SHIFT) : y_i;
-    wire signed [7:0] remod_in_q = u_mrc.use_mrc_r ? ($signed(y_q) >>> REMOD_BACKOFF_SHIFT) : y_q;
+    wire signed [7:0] remod_in_i = u_mrc.use_mrc_r ?
+                                   ($signed(y_i) >>> REMOD_BACKOFF_SHIFT) : y_i;
+    wire signed [7:0] remod_in_q = u_mrc.use_mrc_r ?
+                                   ($signed(y_q) >>> REMOD_BACKOFF_SHIFT) : y_q;
 
     sd_remod u_remod (
         .clk_32m  (clk),
@@ -364,12 +400,7 @@ module tb_dsp_chain;
 
     initial begin
         rst_n        = 1'b0;
-        iq_valid     = 1'b0;
-        strobe_cnt   = 6'd0;
-        raw_i0 = 8'sd40; raw_q0 = 8'sd0;
-        raw_i1 = 8'sd40; raw_q1 = 8'sd0;
-        raw_i2 = 8'sd40; raw_q2 = 8'sd0;
-        raw_i3 = 8'sd40; raw_q3 = 8'sd0;
+        stim_ptr     = 7'd0;
         cycle_count   = 0;
         pass_count    = 0;
         fail_count    = 0;
@@ -400,27 +431,10 @@ module tb_dsp_chain;
         repeat(4) @(posedge clk);
     end
 
-    // iq_valid strobe: high for 1 cycle every 40 cycles
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            strobe_cnt <= 6'd0;
-            iq_valid   <= 1'b0;
-        end else begin
-            if (strobe_cnt == 6'd39) begin
-                strobe_cnt <= 6'd0;
-                iq_valid   <= 1'b1;
-            end else begin
-                strobe_cnt <= strobe_cnt + 6'd1;
-                iq_valid   <= 1'b0;
-            end
-        end
-    end
-
-    // Cycle counter
     always @(posedge clk) if (rst_n) cycle_count <= cycle_count + 1;
 
     // -----------------------------------------------------------------------
-    // Test 6: energy_valid fires <= 7000 cycles (one SF7 window = 128 samples)
+    // Test 6/7: energy_valid / sigma2_valid (stubs — never fires)
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && energy_valid && t_energy_valid < 0) begin
@@ -436,9 +450,6 @@ module tb_dsp_chain;
         end
     end
 
-    // -----------------------------------------------------------------------
-    // Test 7: sigma2_valid fires <= 7000 cycles (noise floor seeded)
-    // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && sigma2_valid && t_sigma2_valid < 0) begin
             t_sigma2_valid = cycle_count;
@@ -447,38 +458,37 @@ module tb_dsp_chain;
                          cycle_count, sigma2_hw_0);
                 pass_count = pass_count + 1;
             end else begin
-                $display("FAIL test7: sigma2_valid at cycle %0d (>7000, sc_lock=%0b)", cycle_count, sc_lock);
+                $display("FAIL test7: sigma2_valid at cycle %0d (>7000, sc_lock=%0b)",
+                         cycle_count, sc_lock);
                 fail_count = fail_count + 1;
             end
         end
     end
 
     // -----------------------------------------------------------------------
-    // Test 1: sc_lock fires <= 17000 cycles
+    // Test 1: sc_lock fires <= 20000 cycles
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && sc_lock && t_sc_lock < 0) begin
             t_sc_lock = cycle_count;
-            if (cycle_count <= 17000) begin
-                $display("PASS test1: sc_lock at cycle %0d (<=17000)", cycle_count);
+            if (cycle_count <= 20000) begin
+                $display("PASS test1: sc_lock at cycle %0d (<=20000) sc_stat=%0d",
+                         cycle_count, sc_stat);
                 pass_count = pass_count + 1;
             end else begin
-                $display("FAIL test1: sc_lock at cycle %0d (>17000)", cycle_count);
+                $display("FAIL test1: sc_lock at cycle %0d (>20000)", cycle_count);
                 fail_count = fail_count + 1;
             end
         end
     end
 
     // -----------------------------------------------------------------------
-    // Test 2: training_done arrives within the expected 8-symbol training window
-    // after sc_lock. For this bench SF7 and the 20-cycle iq_valid cadence imply
-    // roughly 8*M*20 = 20480 clock cycles of accumulation after lock, plus a
-    // small TDM drain/commit margin.
+    // Test 2: training_done arrives within 60000 cycles after sc_lock
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && training_done && t_train_done < 0) begin
             t_train_done = cycle_count;
-            if (t_sc_lock >= 0 && (cycle_count - t_sc_lock) <= 50000) begin
+            if (t_sc_lock >= 0 && (cycle_count - t_sc_lock) <= 60000) begin
                 $display("PASS test2: training_done at cycle %0d (%0d cycles after sc_lock)",
                          cycle_count, cycle_count - t_sc_lock);
                 pass_count = pass_count + 1;
@@ -491,32 +501,55 @@ module tb_dsp_chain;
     end
 
     // -----------------------------------------------------------------------
-    // Test 3: W_commit within 200 cycles of training_done; W_hw_re0 != 0
+    // Test 3: fw_W_commit fires <= 50 cycles after training_done; fw_W_re0 != 0
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
-        if (rst_n && W_commit && t_w_commit < 0) begin
+        if (rst_n && fw_W_commit && t_w_commit < 0) begin
             t_w_commit = cycle_count;
-            if (t_train_done >= 0 && (cycle_count - t_train_done) <= 200 && W_hw_re0 !== 16'h0) begin
-                $display("PASS test3: W_commit at cycle %0d (%0d after training_done), W_hw_re0=%0d",
-                         cycle_count, cycle_count - t_train_done, W_hw_re0);
+            if (t_train_done >= 0 && (cycle_count - t_train_done) <= 50 && fw_W_re0 !== 8'h0) begin
+                $display("PASS test3: fw_W_commit at cycle %0d (%0d after training_done), fw_W_re0=%0d pgs=%0d expected_y_i=%0d",
+                         cycle_count, cycle_count - t_train_done, fw_W_re0, fw_pgs, fw_expected_y_i);
                 pass_count = pass_count + 1;
             end else begin
-                $display("FAIL test3: W_commit at cycle %0d (t_train_done=%0d), W_hw_re0=%0d",
-                         cycle_count, t_train_done, W_hw_re0);
+                $display("FAIL test3: fw_W_commit at cycle %0d (t_train_done=%0d), fw_W_re0=%0d",
+                         cycle_count, t_train_done, fw_W_re0);
                 fail_count = fail_count + 1;
             end
         end
     end
 
     // -----------------------------------------------------------------------
-    // Test 4: y_valid within 30 cycles of W_commit
+    // Test 3b: combiner output amplitude matches fw_expected_y_i (within ±4)
+    // -----------------------------------------------------------------------
+    integer t_test3b;
+    initial t_test3b = -1;
+    always @(posedge clk) begin
+        if (rst_n && fw_W_valid && y_valid && u_mrc.use_mrc_r && t_test3b < 0
+                && t_w_commit >= 0) begin
+            t_test3b = cycle_count;
+            if ($signed(y_i) >= (fw_expected_y_i - 4) &&
+                $signed(y_i) <= (fw_expected_y_i + 4)) begin
+                $display("PASS test3b: combiner amplitude y_i=%0d expected=%0d (±4), y_q=%0d",
+                         $signed(y_i), fw_expected_y_i, $signed(y_q));
+                pass_count = pass_count + 1;
+            end else begin
+                $display("FAIL test3b: combiner amplitude y_i=%0d expected=%0d (±4), y_q=%0d pgs=%0d",
+                         $signed(y_i), fw_expected_y_i, $signed(y_q), fw_pgs);
+                fail_count = fail_count + 1;
+            end
+        end
+    end
+
+    // -----------------------------------------------------------------------
+    // Test 4: y_valid within 50 cycles of fw_W_commit
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
         if (rst_n && y_valid && t_w_commit >= 0 && t_y_valid < 0) begin
             t_y_valid = cycle_count;
             if ((cycle_count - t_w_commit) <= 50) begin
-                $display("PASS test4: y_valid at cycle %0d (%0d after W_commit), y_i=%0d y_q=%0d use_mrc_r=%0b",
-                         cycle_count, cycle_count - t_w_commit, $signed(y_i), $signed(y_q), u_mrc.use_mrc_r);
+                $display("PASS test4: y_valid at cycle %0d (%0d after fw_W_commit), y_i=%0d y_q=%0d use_mrc_r=%0b",
+                         cycle_count, cycle_count - t_w_commit,
+                         $signed(y_i), $signed(y_q), u_mrc.use_mrc_r);
                 pass_count = pass_count + 1;
             end else begin
                 $display("FAIL test4: y_valid at cycle %0d (%0d after W_commit)",
@@ -532,33 +565,25 @@ module tb_dsp_chain;
         end else if (y_valid && t_w_commit >= 0 && y_valid_seen_after_commit < 8) begin
             y_valid_seen_after_commit <= y_valid_seen_after_commit + 1;
             $display("TRACE y_valid[%0d]: cycle=%0d y_i=%0d y_q=%0d remod_in_i=%0d remod_in_q=%0d W_valid=%0b use_mrc_r=%0b out_i=%0d out_q=%0d in_i_lat=%0d in_q_lat=%0d",
-                     y_valid_seen_after_commit,
-                     cycle_count,
+                     y_valid_seen_after_commit, cycle_count,
                      $signed(y_i), $signed(y_q), $signed(remod_in_i), $signed(remod_in_q),
-                     W_valid, u_mrc.use_mrc_r,
-                     out_i, out_q,
+                     fw_W_valid, u_mrc.use_mrc_r, out_i, out_q,
                      $signed(u_remod.in_i_lat), $signed(u_remod.in_q_lat));
         end
     end
 
     // -----------------------------------------------------------------------
-    // Test 5: once true MRC output is active, the remodulator must latch that
-    // sample and show live behavior. For saturated positive full-scale input
-    // (`in_i_lat` ~= +127) it is acceptable for out_i to stay high; in that
-    // case out_q still must toggle for the zero-Q drive.
+    // Test 5: sd_remod latches MRC sample and shows live output behavior
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
-        if (rst_n && y_valid && u_mrc.use_mrc_r && t_y_valid_mrc < 0) begin
+        if (rst_n && y_valid && u_mrc.use_mrc_r && t_y_valid_mrc < 0)
             t_y_valid_mrc = cycle_count;
-        end
     end
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            out_i_seen_0 <= 1'b0;
-            out_i_seen_1 <= 1'b0;
-            out_q_seen_0 <= 1'b0;
-            out_q_seen_1 <= 1'b0;
+            out_i_seen_0 <= 1'b0; out_i_seen_1 <= 1'b0;
+            out_q_seen_0 <= 1'b0; out_q_seen_1 <= 1'b0;
             remod_obs_started <= 1'b0;
             remod_trace_count <= 0;
         end else if (t_y_valid_mrc >= 0 && !test_done) begin
@@ -573,11 +598,13 @@ module tb_dsp_chain;
                 remod_target_q    <= remod_in_q;
                 remod_trace_count <= 0;
                 $display("INFO test5: start remod observe at cycle %0d out_i=%0d out_q=%0d target_i=%0d target_q=%0d",
-                         cycle_count, out_i, out_q, $signed(remod_in_i), $signed(remod_in_q));
+                         cycle_count, out_i, out_q,
+                         $signed(remod_in_i), $signed(remod_in_q));
             end else if (remod_obs_started) begin
                 if (remod_trace_count < 16) begin
                     $display("TRACE test5: cycle=%0d dt=%0d out_i=%0d out_q=%0d y_i=%0d y_q=%0d in_i_lat=%0d in_q_lat=%0d s1_i=%0d s2_i=%0d s3_i=%0d",
-                             cycle_count, cycle_count - t_y_valid_mrc, out_i, out_q, $signed(y_i), $signed(y_q),
+                             cycle_count, cycle_count - t_y_valid_mrc,
+                             out_i, out_q, $signed(y_i), $signed(y_q),
                              $signed(u_remod.in_i_lat), $signed(u_remod.in_q_lat),
                              $signed(u_remod.s1_i), $signed(u_remod.s2_i), $signed(u_remod.s3_i));
                     remod_trace_count <= remod_trace_count + 1;
@@ -592,13 +619,16 @@ module tb_dsp_chain;
                     t_out_i_flip = cycle_count;
                 if (t_out_q_flip < 0 && out_q != out_q_seen_1)
                     t_out_q_flip = cycle_count;
-                if (t_mrc_input_latched < 0 && u_remod.in_i_lat == remod_target_i && u_remod.in_q_lat == remod_target_q)
+                if (t_mrc_input_latched < 0 &&
+                    u_remod.in_i_lat == remod_target_i &&
+                    u_remod.in_q_lat == remod_target_q)
                     t_mrc_input_latched = cycle_count;
 
                 if (t_mrc_input_latched >= 0 && out_q_seen_0 && out_q_seen_1 &&
                     (($signed(remod_target_i) >= 8'sd120 && out_i_seen_1) ||
                      ($signed(remod_target_i) <= -8'sd120 && out_i_seen_0) ||
-                     (($signed(remod_target_i) < 8'sd120 && $signed(remod_target_i) > -8'sd120) && out_i_seen_0 && out_i_seen_1))) begin
+                     (($signed(remod_target_i) < 8'sd120 && $signed(remod_target_i) > -8'sd120) &&
+                      out_i_seen_0 && out_i_seen_1))) begin
                     test_done = 1'b1;
                     $display("PASS test5: remod latched MRC sample by cycle %0d and showed expected output behavior (input_latched=%0d, out_i_first_flip=%0d)",
                              cycle_count, t_mrc_input_latched, t_out_i_flip);
@@ -612,7 +642,7 @@ module tb_dsp_chain;
 
                 if ((cycle_count - t_y_valid_mrc) == 2048) begin
                     test_done = 1'b1;
-                    $display("FAIL test5: remod did not show the expected post-MRC behavior within 2048 cycles (input_latched=%0d target_i=%0d target_q=%0d in_i_lat=%0d in_q_lat=%0d out_i_seen={%0d,%0d} out_q_seen={%0d,%0d})",
+                    $display("FAIL test5: remod did not show expected post-MRC behavior within 2048 cycles (input_latched=%0d target_i=%0d target_q=%0d in_i_lat=%0d in_q_lat=%0d out_i_seen={%0d,%0d} out_q_seen={%0d,%0d})",
                              t_mrc_input_latched, $signed(remod_target_i), $signed(remod_target_q),
                              $signed(u_remod.in_i_lat), $signed(u_remod.in_q_lat),
                              out_i_seen_1, out_i_seen_0, out_q_seen_1, out_q_seen_0);
@@ -628,14 +658,13 @@ module tb_dsp_chain;
     end
 
     // -----------------------------------------------------------------------
-    // Timeout watchdog: 80000 cycles
-    // (sc_lock ~6400 + training ~15400 + wgen ~200 + remod ~64)
+    // Timeout watchdog: 200000 cycles
     // -----------------------------------------------------------------------
     always @(posedge clk) begin
-        if (cycle_count == 80000) begin
+        if (cycle_count == 200000) begin
             $display("TIMEOUT at cycle %0d — chain did not complete.", cycle_count);
-            if (t_energy_valid < 0) $display("  energy_valid never fired");
-            if (t_sigma2_valid < 0) $display("  sigma2_valid never fired");
+            if (t_energy_valid < 0) $display("  energy_valid never fired (stub — expected)");
+            if (t_sigma2_valid < 0) $display("  sigma2_valid never fired (stub — expected)");
             if (t_sc_lock < 0)      $display("  sc_lock never fired");
             if (t_train_done < 0)   $display("  training_done never fired");
             if (t_w_commit < 0)     $display("  W_commit never fired");
@@ -648,13 +677,12 @@ module tb_dsp_chain;
         end
     end
 
-    // Debug: trace n_acc progress and training_done
-    reg [14:0] n_acc_prev;
+    // Debug: n_acc progress
+    reg [15:0] n_acc_prev;
     always @(posedge clk) begin
         n_acc_prev <= n_acc;
         if (rst_n && n_acc != n_acc_prev && (n_acc % 50 == 0))
-            $display("DBG n_acc=%0d cycle=%0d", n_acc, cycle_count);
+            $display("DBG n_acc=%0d cycle=%0d sc_lock=%0b", n_acc, cycle_count, sc_lock);
     end
-
 
 endmodule

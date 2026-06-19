@@ -320,7 +320,12 @@ module sc_detector (
                             sym_mag_sc <= eval_mag_acc;
                         end
                         default: begin
+                            // e_slice==0 means energy² < 8192 ADU — threshold
+                            // comparison degenerates to 0; suppress hit to avoid
+                            // false alarms on noise. Threshold is implicitly
+                            // SF-adaptive: A_min ∝ 1/√M, matching LoRa sensitivity.
                             eval_hit           <= (eval_e_acc > 28'sd0) &&
+                                                  (eval_e_acc[25:13] > 13'sd0) &&
                                                   ({1'b0, eval_mag_acc[27:1]} >=
                                                    {{2{eval_prod[25]}}, eval_prod});
                             eval_busy          <= 1'b0;

@@ -23,7 +23,7 @@ module weight_gen (
     input  wire        rst_n,
     input  wire        training_done,
     input  wire signed [31:0] Z_i0, Z_q0, Z_i1, Z_q1, Z_i2, Z_q2, Z_i3, Z_q3,
-    /* verilator lint_off UNUSEDSIGNAL */ input  wire [14:0]  n_acc, /* verilator lint_on UNUSEDSIGNAL */
+    /* verilator lint_off UNUSEDSIGNAL */ input  wire [15:0]  n_acc, /* verilator lint_on UNUSEDSIGNAL */
     input  wire [3:0]  sf,
     input  wire        wgt_src,
     input  wire        wgt_auto_commit,

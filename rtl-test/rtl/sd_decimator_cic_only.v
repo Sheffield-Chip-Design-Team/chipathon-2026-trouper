@@ -213,21 +213,41 @@ module sd_decimator_cic_only (
     wire signed [17:0] out_val_i = shifted_i[17:0];
     wire signed [17:0] out_val_q = shifted_q[17:0];
 
+    // 2-tap CIC-3 droop equalizer: y[n] = x[n] + (5/16)*(x[n] - x[n-1])
+    // alpha=5/16 = (diff>>>2) + (diff>>>4) — no multiplier, only shifts and adds.
+    // eq_raw_prev holds the UNCORRECTED previous CIC output (true FIR, not IIR).
+    reg signed [7:0]   eq_raw_prev_i, eq_raw_prev_q;
+
+    wire signed [7:0]  eq_cic_i = (out_val_i > 18'sd127)  ?  8'sd127 :
+                                   (out_val_i < -18'sd128) ? -8'sd128 : out_val_i[7:0];
+    wire signed [7:0]  eq_cic_q = (out_val_q > 18'sd127)  ?  8'sd127 :
+                                   (out_val_q < -18'sd128) ? -8'sd128 : out_val_q[7:0];
+    wire signed [8:0]  eq_diff_i = {eq_cic_i[7], eq_cic_i} - {eq_raw_prev_i[7], eq_raw_prev_i};  // same-width: modular sub correct
+    wire signed [8:0]  eq_diff_q = {eq_cic_q[7], eq_cic_q} - {eq_raw_prev_q[7], eq_raw_prev_q};
+    wire signed [8:0]  eq_corr_i = (eq_diff_i >>> 2) + (eq_diff_i >>> 4);
+    wire signed [8:0]  eq_corr_q = (eq_diff_q >>> 2) + (eq_diff_q >>> 4);
+    wire signed [9:0]  eq_sum_i  = {{2{eq_cic_i[7]}}, eq_cic_i} + {{1{eq_corr_i[8]}}, eq_corr_i};
+    wire signed [9:0]  eq_sum_q  = {{2{eq_cic_q[7]}}, eq_cic_q} + {{1{eq_corr_q[8]}}, eq_corr_q};
+    wire signed [7:0]  eq_out_i  = (eq_sum_i > 10'sd127)  ?  8'sd127 :
+                                    (eq_sum_i < -10'sd128) ? -8'sd128 : eq_sum_i[7:0];
+    wire signed [7:0]  eq_out_q  = (eq_sum_q > 10'sd127)  ?  8'sd127 :
+                                    (eq_sum_q < -10'sd128) ? -8'sd128 : eq_sum_q[7:0];
+
     // iq_valid is high for 2 clk_32m cycles; iq_out latched on the first.
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            iq_out_i <= 8'sd0;
-            iq_out_q <= 8'sd0;
-            iq_valid <= 1'b0;
+            iq_out_i       <= 8'sd0;
+            iq_out_q       <= 8'sd0;
+            eq_raw_prev_i  <= 8'sd0;
+            eq_raw_prev_q  <= 8'sd0;
+            iq_valid       <= 1'b0;
         end else begin
             iq_valid <= out_fire | out_fire_r;
             if (out_fire) begin
-                if      (out_val_i > 18'sd127)  iq_out_i <= 8'sd127;
-                else if (out_val_i < -18'sd128) iq_out_i <= -8'sd128;
-                else                            iq_out_i <= out_val_i[7:0];
-                if      (out_val_q > 18'sd127)  iq_out_q <= 8'sd127;
-                else if (out_val_q < -18'sd128) iq_out_q <= -8'sd128;
-                else                            iq_out_q <= out_val_q[7:0];
+                iq_out_i      <= eq_out_i;
+                iq_out_q      <= eq_out_q;
+                eq_raw_prev_i <= eq_cic_i;   // store uncorrected x[n] for next diff
+                eq_raw_prev_q <= eq_cic_q;
             end
         end
     end

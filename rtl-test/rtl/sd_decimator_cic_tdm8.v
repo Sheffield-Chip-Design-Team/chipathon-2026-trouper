@@ -79,6 +79,17 @@ module sd_decimator_cic_tdm8 (
     reg signed [25:0] shifted_i, shifted_q;
     reg [3:0] next_pending_bits;
 
+    // 2-tap droop equalizer: per-channel uncorrected previous (true FIR, not IIR)
+    reg signed [7:0]  raw_prev_i [0:3];
+    reg signed [7:0]  raw_prev_q [0:3];
+
+    // Equalizer intermediates (computed combinatorially per active slot)
+    reg signed [7:0]  eq_raw_i,  eq_raw_q;
+    reg signed [8:0]  eq_diff_i, eq_diff_q;
+    reg signed [8:0]  eq_corr_i, eq_corr_q;
+    reg signed [9:0]  eq_sum_i,  eq_sum_q;
+    reg signed [7:0]  eq_i,      eq_q;
+
     // Active slot this cycle: slot 0 is processed in the pickup cycle itself
     // so a frame is serviced in 4 clocks, matching Stage A's frame rate.
     reg       proc_en;
@@ -138,6 +149,21 @@ module sd_decimator_cic_tdm8 (
         shifted_i = comb_i3_w >>> 10;
         shifted_q = comb_q3_w >>> 10;
 
+        // 2-tap droop equalizer: y[n] = x[n] + (5/16)*(x[n] - y[n-1])
+        // out_hold_i[proc_slot] holds the corrected previous for this channel.
+        eq_raw_i  = sat8(shifted_i);
+        eq_raw_q  = sat8(shifted_q);
+        eq_diff_i = {eq_raw_i[7], eq_raw_i} - {raw_prev_i[proc_slot][7], raw_prev_i[proc_slot]};
+        eq_diff_q = {eq_raw_q[7], eq_raw_q} - {raw_prev_q[proc_slot][7], raw_prev_q[proc_slot]};
+        eq_corr_i = (eq_diff_i >>> 2) + (eq_diff_i >>> 4);
+        eq_corr_q = (eq_diff_q >>> 2) + (eq_diff_q >>> 4);
+        eq_sum_i  = {{2{eq_raw_i[7]}}, eq_raw_i} + {{1{eq_corr_i[8]}}, eq_corr_i};
+        eq_sum_q  = {{2{eq_raw_q[7]}}, eq_raw_q} + {{1{eq_corr_q[8]}}, eq_corr_q};
+        eq_i = (eq_sum_i > 10'sd127)  ?  8'sd127 :
+               (eq_sum_i < -10'sd128) ? -8'sd128 : eq_sum_i[7:0];
+        eq_q = (eq_sum_q > 10'sd127)  ?  8'sd127 :
+               (eq_sum_q < -10'sd128) ? -8'sd128 : eq_sum_q[7:0];
+
         next_pending_bits = {
             pending_valid[3],
             pending_valid[2],
@@ -179,8 +205,10 @@ module sd_decimator_cic_tdm8 (
                 comb_q2_d[k] <= 26'sd0;
                 comb_q3_d[k] <= 26'sd0;
                 pending_valid[k] <= 1'b0;
-                out_hold_i[k] <= 8'sd0;
-                out_hold_q[k] <= 8'sd0;
+                out_hold_i[k]  <= 8'sd0;
+                out_hold_q[k]  <= 8'sd0;
+                raw_prev_i[k]  <= 8'sd0;
+                raw_prev_q[k]  <= 8'sd0;
             end
         end else begin
             iq_valid <= 4'd0;
@@ -254,26 +282,28 @@ module sd_decimator_cic_tdm8 (
                     comb_q1_d[proc_slot] <= intg_q3[proc_slot];
                     comb_q2_d[proc_slot] <= comb_q1_w;
                     comb_q3_d[proc_slot] <= comb_q2_w;
-                    out_hold_i[proc_slot] <= sat8(shifted_i);
-                    out_hold_q[proc_slot] <= sat8(shifted_q);
+                    out_hold_i[proc_slot] <= eq_i;
+                    out_hold_q[proc_slot] <= eq_q;
+                    raw_prev_i[proc_slot] <= eq_raw_i;   // uncorrected x[n] for next diff
+                    raw_prev_q[proc_slot] <= eq_raw_q;
 
                     if (next_pending_bits == 4'b1111) begin
                         iq_out_i <= {
                             out_hold_i[3],
                             out_hold_i[2],
                             out_hold_i[1],
-                            (proc_slot == 2'd0) ? sat8(shifted_i) : out_hold_i[0]
+                            (proc_slot == 2'd0) ? eq_i : out_hold_i[0]
                         };
                         iq_out_q <= {
                             out_hold_q[3],
                             out_hold_q[2],
                             out_hold_q[1],
-                            (proc_slot == 2'd0) ? sat8(shifted_q) : out_hold_q[0]
+                            (proc_slot == 2'd0) ? eq_q : out_hold_q[0]
                         };
                         case (proc_slot)
-                            2'd1: begin iq_out_i[15:8]  <= sat8(shifted_i); iq_out_q[15:8]  <= sat8(shifted_q); end
-                            2'd2: begin iq_out_i[23:16] <= sat8(shifted_i); iq_out_q[23:16] <= sat8(shifted_q); end
-                            2'd3: begin iq_out_i[31:24] <= sat8(shifted_i); iq_out_q[31:24] <= sat8(shifted_q); end
+                            2'd1: begin iq_out_i[15:8]  <= eq_i; iq_out_q[15:8]  <= eq_q; end
+                            2'd2: begin iq_out_i[23:16] <= eq_i; iq_out_q[23:16] <= eq_q; end
+                            2'd3: begin iq_out_i[31:24] <= eq_i; iq_out_q[31:24] <= eq_q; end
                             default: begin end
                         endcase
                         iq_valid <= 4'b1111;

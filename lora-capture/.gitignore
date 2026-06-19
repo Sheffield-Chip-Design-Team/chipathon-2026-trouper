@@ -1,0 +1,4 @@
+captures/
+!captures/README.md
+*.iq
+*.npy
