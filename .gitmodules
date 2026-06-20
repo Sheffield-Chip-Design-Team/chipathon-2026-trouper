@@ -1,6 +1,6 @@
 [submodule "ip/gf180mcu_ocd_ip_sram"]
 	path = ip/gf180mcu_ocd_ip_sram
-	url = https://github.com/RTimothyEdwards/gf180mcu_ocd_ip_sram
+	url = https://github.com/TimothyJNewman/gf180mcu_ocd_ip_sram
 [submodule "ip/gf180mcu_fd_ip_sram"]
 	path = ip/gf180mcu_fd_ip_sram
 	url = https://github.com/google/globalfoundries-pdk-ip-gf180mcu_fd_ip_sram
@@ -10,3 +10,7 @@
 [submodule "ip/sscs-chipathon-2026"]
 	path = ip/sscs-chipathon-2026
 	url = https://github.com/sscs-ose/sscs-chipathon-2026.git
+[submodule "ip/chipathon-2026-grouper"]
+	path = ip/chipathon-2026-grouper
+	url = https://github.com/Sheffield-Chip-Design-Team/chipathon-2026-grouper.git
+	branch = picorv32_minimal

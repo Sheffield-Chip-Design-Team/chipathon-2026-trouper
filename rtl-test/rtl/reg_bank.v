@@ -149,7 +149,7 @@ module reg_bank (
             antenna_en       <= 4'hF;
             sf_cfg           <= 4'h7;
             decim_ratio      <= 2'h0;
-            sc_thr           <= 16'h7333;
+            sc_thr           <= 16'h01CC;   // 0x7333 ÷ 64; sc_thr[11:0] used (12-bit positive)
             sc_hits_req      <= 2'h2;
             pkt_timeout_syms <= 8'h50;
             rx_gain_shadow_0 <= 8'h3E;

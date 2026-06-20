@@ -167,7 +167,10 @@ module sc_detector (
                 4'd1: begin eval_mul_a_sel <= eval_cq0;   eval_mul_b_sel <= eval_cq0;   end
                 4'd2: begin eval_mul_a_sel <= eval_E0cur; eval_mul_b_sel <= eval_E0del;  end
                 default: begin
-                    eval_mul_a_sel <= $signed({1'b0, sc_thr[12:0]});
+                    // sc_thr[11:0] caps the threshold at 12 bits (0..4095) so bit 12
+                    // of the 13-bit signed register is always 0 (always positive).
+                    // Firmware must write sc_thr ÷ 64 of the legacy value (see header).
+                    eval_mul_a_sel <= {1'b0, sc_thr[11:0]};
                     eval_mul_b_sel <= $signed(eval_e_acc[25:13]);
                 end
             endcase

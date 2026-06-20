@@ -122,8 +122,8 @@ module tb_trouper_top;
     initial begin
         pi_r = 3.14159265358979;
         for (si = 0; si < 128; si = si + 1) begin
-            stim_i_tbl[si] = $rtoi(40.0 * $cos(2.0 * pi_r * si / 128.0));
-            stim_q_tbl[si] = $rtoi(40.0 * $sin(2.0 * pi_r * si / 128.0));
+            stim_i_tbl[si] = $rtoi(80.0 * $cos(2.0 * pi_r * si / 128.0));
+            stim_q_tbl[si] = $rtoi(80.0 * $sin(2.0 * pi_r * si / 128.0));
         end
     end
 
@@ -146,7 +146,9 @@ module tb_trouper_top;
             iq_data_i <= 4'h0;
             iq_data_q <= 4'h0;
         end else begin
-            // First-order SDM: feedback ±127 to match chain gain
+            // First-order SDM: feedback ±127 to match chain gain.
+            // Amplitude 80 in stim table → CIC output ≈ 80 → after dc_removal ≈ 52.
+            // 52 is safely within int8 and above the sc_detector e_slice guard (≥27).
             if (sdm_acc_i >= 16'sd0) begin
                 sdm_bit_i <= 1'b1;
                 sdm_acc_i <= sdm_acc_i + $signed(stim_i_tbl[sine_ptr][15:0]) - 16'sd127;
@@ -295,20 +297,43 @@ module tb_trouper_top;
         repeat (8) @(posedge clk);
 
         // -------------------------------------------------------------------
+        // 1b. SPI smoke test: read CHIP_ID before touching PSRAM
+        // -------------------------------------------------------------------
+        spi_read(7'h00, rd);
+        $display("DBG   CHIP_ID=0x%02h (expect 0xA7) at cycle %0d", rd, cycle_count);
+        spi_read(7'h09, rd);
+        $display("DBG   SF_CFG=0x%02h (expect 0x07) at cycle %0d", rd, cycle_count);
+
+        // -------------------------------------------------------------------
         // 2. Enable PSRAM (PSRAM_CTRL 0x70 = 0x01: psram_en=1, qspi_owner=0)
         // -------------------------------------------------------------------
         spi_write(7'h70, 8'h01);
         $display("INFO  PSRAM_CTRL write 0x01 at cycle %0d", cycle_count);
+
+        // Verify write took effect
+        repeat (4) @(posedge clk);
+        spi_read(7'h70, rd);
+        $display("DBG   PSRAM_CTRL readback=0x%02h (expect 0x01) psram_ctrl_int=0x%01h at cycle %0d",
+                 rd, dut.u_rb.psram_ctrl, cycle_count);
+
+        // Give PSRAM init plenty of time (init takes ~30 cycles from when init_start asserts)
+        repeat (200) @(posedge clk);
+        $display("DBG   psram state=%0d qe_init_done=%0b init_start=%0b psram_en=%0b at cycle %0d",
+                 dut.u_psram.state, dut.u_psram.qe_init_done,
+                 dut.rb_psram_ctrl[0] & ~dut.rb_psram_ctrl[3],
+                 dut.rb_psram_ctrl[0], cycle_count);
 
         // -------------------------------------------------------------------
         // 3. Poll PSRAM_STATUS (0x71) until INIT_DONE (bit 3) = 1
         // -------------------------------------------------------------------
         poll_cnt = 0;
         rd = 8'h00;
-        while (!(rd[3]) && poll_cnt < 2000) begin
-            @(posedge clk);
-            @(posedge clk);
+        while (!(rd[3]) && poll_cnt < 500) begin
+            repeat (8) @(posedge clk);
             spi_read(7'h71, rd);
+            if (poll_cnt < 5)
+                $display("DBG   PSRAM_STATUS poll[%0d]=0x%02h state=%0d qe=%0b cycle=%0d",
+                         poll_cnt, rd, dut.u_psram.state, dut.u_psram.qe_init_done, cycle_count);
             poll_cnt = poll_cnt + 1;
         end
         t_init_done = cycle_count;
@@ -318,6 +343,8 @@ module tb_trouper_top;
             pass_count = pass_count + 1;
         end else begin
             $display("FAIL  PSRAM INIT_DONE never set within poll limit (cycle %0d)", cycle_count);
+            $display("DBG   qe_init_done=%0b state=%0d psram_ctrl=0x%01h",
+                     dut.u_psram.qe_init_done, dut.u_psram.state, dut.rb_psram_ctrl);
             fail_count = fail_count + 1;
         end
 
@@ -326,12 +353,33 @@ module tb_trouper_top;
         //    Default sc_thr=0x7333, sc_hits_req=2 are sufficient for a
         //    perfect sinusoidal preamble (math verified in tb comments).
         // -------------------------------------------------------------------
+        // sc_thr: must use sc_thr[12:0] < 4096 (bit12=0) to stay positive as 13-bit signed.
+        // Default 0x7333 has sc_thr[12:0]=0x1333=4915 (bit12=1→negative→broken).
+        // Use 0x0100 = sc_thr[12:0]=256, well within positive 13-bit range.
+        spi_write(7'h0C, 8'h01);   // sc_thr[15:8] = 0x01
+        spi_write(7'h0D, 8'h00);   // sc_thr[7:0]  = 0x00  → sc_thr = 0x0100 = 256
+        spi_write(7'h0E, 8'h01);   // sc_hits_req  = 1 (need 2 consecutive hits)
+        $display("INFO  sc_thr=0x0100, sc_hits_req=1 set at cycle %0d", cycle_count);
+
         $display("INFO  waiting for sc_lock (IRQ_STATUS[0])...");
         rd = 8'h00;
         poll_cnt = 0;
-        while (!(rd[0]) && poll_cnt < 20000) begin
-            repeat (32) @(posedge clk);   // wait ~1 iq_valid period between polls
+        while (!(rd[0]) && poll_cnt < 5000) begin
+            repeat (128) @(posedge clk);   // ~1 iq_valid period
             spi_read(7'h02, rd);
+            // Print diagnostics for first 10 polls and every 100 after that
+            if (poll_cnt < 10 || (poll_cnt % 100) == 0) begin
+                $display("DBG   sc poll[%0d] del_rdy=%0b tdm_busy=%0b sym_cnt=%0d acc_ci0=%0d eval_busy=%0b sym_mag=%0d sc_stat=%0d cycle=%0d",
+                         poll_cnt,
+                         dut.u_psram.del_rdy,
+                         dut.u_sc.tdm_busy,
+                         dut.u_sc.sym_cnt,
+                         dut.u_sc.acc_ci0,
+                         dut.u_sc.eval_busy,
+                         dut.u_sc.sym_mag_sc,
+                         dut.u_sc.sc_stat,
+                         cycle_count);
+            end
             poll_cnt = poll_cnt + 1;
         end
         t_sc_lock = cycle_count;
@@ -376,19 +424,25 @@ module tb_trouper_top;
 
         // -------------------------------------------------------------------
         // 7. Write MRC weights via SPI (W shadow bank 0x30–0x3F):
-        //    Equal-gain combining: W_re=0x40 (0.5 in Q0.7), W_im=0x00
-        //    8 branches × 2 bytes (re, im) = 16 bytes burst.
-        //    Layout per reg_bank: 0x30=W0_re, 0x31=W0_im, ..., 0x3E=W7_re, 0x3F=W7_im
-        //    (map packs 4 complex weights: re0,im0,re1,im1,...,re3,im3, then 0 padding)
+        //    Equal-gain combining: W_re=0x40 (≈0.5 in Q0.7), W_im=0x00.
+        //    The 128-bit shadow word is big-endian over 16 bytes (0x30=MSB).
+        //    mrc_combiner reads W_rek from even byte-pair slots:
+        //      0x30=W_re0, 0x31=unused, 0x32=W_im0, 0x33=unused,
+        //      0x34=W_re1, 0x35=unused, 0x36=W_im1, 0x37=unused,
+        //      0x38=W_re2, 0x39=unused, 0x3A=W_im2, 0x3B=unused,
+        //      0x3C=W_re3, 0x3D=unused, 0x3E=W_im3, 0x3F=unused.
+        //    Burst: {0x40,0,0,0} × 4 sets W_rek=0x40, W_imk=0x00.
         // -------------------------------------------------------------------
         begin : write_weights
             reg [7:0] dump;
             integer ww;
             spi_start;
             spi_byte({1'b0, 7'h30}, dump);
-            for (ww = 0; ww < 8; ww = ww + 1) begin
-                spi_byte(8'h40, dump);   // W_re = 0x40 (≈0.5)
-                spi_byte(8'h00, dump);   // W_im = 0x00
+            for (ww = 0; ww < 4; ww = ww + 1) begin
+                spi_byte(8'h40, dump);   // W_re_k = 0x40 (≈0.5)
+                spi_byte(8'h00, dump);   // unused slot
+                spi_byte(8'h00, dump);   // W_im_k = 0x00
+                spi_byte(8'h00, dump);   // unused slot
             end
             spi_stop;
         end
