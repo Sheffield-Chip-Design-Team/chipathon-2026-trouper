@@ -21,16 +21,14 @@ Increase separation or add an RF attenuator to reduce SNR further.
 ## Repository layout
 
 ```
-lora-sample-capture/
-├── capture.py          # RTL-SDR capture script
-├── README.md           # this file
-└── examples/           # short IQ clips with matching spectrograms
-    ├── 1_packet.iq
-    ├── 5_packets.iq
-    └── *.png
-
-~/Arduino/lora_tx/
-└── lora_tx.ino         # transmitter sketch (Heltec V3 / RadioLib)
+lora-capture/
+├── capture.py                # RTL-SDR one-shot capture script
+├── monitor_and_capture.py    # serial monitor → auto-trigger capture per config
+├── firmware/
+│   └── lora_tx.ino           # Heltec V3 transmitter sketch (RadioLib)
+├── captures/                 # output directory (git-ignored except README)
+│   └── README.md             # file format reference
+└── README.md                 # this file
 ```
 
 ---
@@ -153,10 +151,30 @@ usage: capture.py [-h] [--freq MHz] [--sr SPS] [--gain dB]
 | `--outdir` | script dir | Where to save output files |
 | `--label` | (empty) | Tag appended to filename, e.g. `SF12-BW125-Pre8` |
 
-### Example workflow
+### Automated capture — `monitor_and_capture.py`
 
-Monitor the Heltec serial port to see which config is active, then start a
-labelled capture for that config:
+The preferred workflow. Watches the Heltec serial port line-by-line and
+triggers a capture automatically when the target config banner appears.
+Trigger logic is line-accurate so a TX payload and a config banner arriving
+in the same serial read chunk can never cross-contaminate.
+
+```sh
+# Capture specific configs (waits up to --timeout seconds):
+python monitor_and_capture.py --port /dev/ttyUSB0 \
+    --configs SF7-BW250-Pre8 SF7-BW500-Pre8 \
+    --duration 12 --gain 30
+
+# Capture every distinct config once across a full cycle:
+python monitor_and_capture.py --port /dev/ttyUSB0 \
+    --all --duration 12 --gain 30
+
+# Dry-run — print banners without capturing:
+python monitor_and_capture.py --port /dev/ttyUSB0 --all --dry-run
+```
+
+### Manual capture — `capture.py`
+
+For one-off recordings when you already know which config is active:
 
 ```sh
 # Terminal 1 — watch serial output
