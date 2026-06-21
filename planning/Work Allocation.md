@@ -6,57 +6,56 @@ This note turns the block specs into assignable workstreams. The intent is to ma
 
 Blocks:
 - `ΣΔ Decimator ×4`
+- `DC Removal ×4`
 - `Schmidl-Cox Preamble Detector`
-- `Energy Measurement`
+- `PSRAM Buffer Controller`
 
 Subblocks:
 - decimator ratio control and `iq_valid` timing
 - downchirp reference / dechirp front end
 - symbol window manager
 - per-antenna SC correlator
-- per-antenna energy measurement
-- normalizer / threshold comparator
 - `SC_HITS_REQ` lock FSM
 - `timing_ref` back-calculator
-- status export for `SC_STAT` and `ENERGY[0..3]`
+- status export for `SC_STAT`
+- PSRAM QSPI interface and replay FSM
 
 Responsibilities:
 - produce stable packet-detection and lock timing
 - tune `SC_THR` and `SC_HITS_REQ` sensitivity behavior
-- keep energy snapshots consistent for AGC
 - define the handoff from detection to capture
+- manage the PSRAM delay line and replay buffer
 
 Deliverables:
-- `sc_lock`, `timing_ref`, and energy snapshot behavior
+- `sc_lock`, `timing_ref`, and PSRAM replay behavior
 - threshold and hit-count verification
-- Python reference model for SC and energy estimation
+- Python reference model for SC and PSRAM replay
 - correlation against live hardware captured from the [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
 
-## 2. Training Accumulator & Weight Generation (Trouper hardware)
+## 2. Parameter Extraction & Training (Trouper Project)
+
+**Goal:** Extract channel statistics and energy metrics for the weight computation loop.
 
 Blocks:
 - `Training Accumulator`
-- `Frontend Buffer Controller`
 
 Subblocks:
 - preamble window and symbol boundary tracker
-- per-branch cross-correlation accumulator (`Z_j`)
+- per-branch cross-correlation accumulator (`Z_kl`) for **channel estimates**
+- per-branch auto-correlation accumulator (`Z_kk`) for **energy estimate** (noise/signal power)
 - `training_done` signal and handoff to software weight generation
-- hardware bypass path
-- `Z_j` readback registers for firmware weight computation
-- safe-switch gating at packet boundaries
+- `Z_kl` and `Z_kk` readback registers for firmware weight computation
 
 Responsibilities:
-- deliver `Z_j` and `training_done` after `sc_lock`
+- deliver `Z_kl`, `Z_kk` (energy), and `training_done` after `sc_lock`
 - ensure register bank correctly exposes correlation metrics to the AHB-Lite bus
 - handle late SC lock and reduced preamble accumulation cases
 
 Deliverables:
-- stable `Z_j` and per-packet channel estimate
-- hardware bypass/combined switching logic
-- Python-to-RTL comparison for `Z_j` and channel estimation
+- stable channel covariance matrix (`Z`) and per-packet energy metrics
+- Python-to-RTL comparison for `Z_kl` and `Z_kk`
 
-## 3. Live Combining / Remodulation (Trouper hardware)
+## 3. Combining & Modulation (Trouper Project)
 
 Blocks:
 - `MRC Combiner`
@@ -76,52 +75,69 @@ Responsibilities:
 - keep remodulated output within stable range
 
 Deliverables:
-- MRC and EGC output paths
-- bypass fallback behavior
+- MRC output path and bypass fallback behavior
 - fixed-point gain and saturation checks
+- End-to-end SNR validation (Python ref vs RTL remod output)
 
-## 4. Control Plane (Inter-Project Integration)
+## 4. Control Plane & Integration (Trouper Project)
 
 Blocks:
-- `AHB-Lite Bus (Grouper)`
-- `PicoRV32 Integration (Grouper)`
 - `Trouper AHB-Lite Slave`
 - `Trouper SPI Slave (Host)`
-- `Trouper SPI Master (SX1257)`
 - `IRQ Controller`
 - `Status Register Bank`
+- `Packet Control FSM`
+
+Subblocks:
+- slave decode and register access (Trouper)
+- host SPI transaction sequencing (Trouper)
+- IRQ latch/clear path (Trouper-to-Grouper)
+- sequencing of training vs combining (Packet Control FSM)
+
+Responsibilities:
+- ensure Trouper correctly integrates as an AHB-Lite peripheral.
+- support dual control: Host SPI (Trouper-only) vs AHB-Lite (Grouper-mastered).
+- avoid bus contention and wait-state bugs.
+
+Deliverables:
+- `trouper_top` RTL with all DSP blocks integrated
+- Register map documentation
+- Chip-level cocotb smoke test
+
+## 5. PicoRV32 Integration (Grouper Project)
+
+Blocks:
+- `PicoRV32 RV32IM core`
+- `AHB-Lite Bus Fabric`
+- `4 KB Unified SRAM (OCD macros)`
+- `BIST controller and overlay CAM`
 
 Subblocks:
 - custom PicoRV32-to-AHB-Lite wrapper (Grouper)
-- slave decode and register access (Trouper)
 - inter-project AHB-Lite interface (MPW-level)
-- host SPI transaction sequencing (Trouper)
-- IRQ latch/clear path (Trouper-to-Grouper)
+- BIST qualified banks and CAM logic
 
 Responsibilities:
 - deliver the central Grouper system bus and CPU macro.
-- ensure Trouper correctly integrates as an AHB-Lite peripheral.
-- support dual control: Host SPI (Trouper-only) vs AHB-Lite (Grouper-mastered).
-- avoid bus contention and wait-state bugs across projects.
+- handle bootloader / SPI-load functionality.
 
 Deliverables:
-- Grouper AHB-Lite system bus and PicoRV32 wrapper.
-- Trouper AHB-Lite slave interface and register bank.
-- interrupt handling path (Trouper-to-Grouper).
+- `grouper_top` hardened macro RTL/GDS
+- BIST verification report
 
-## 5. Firmware / Algorithms (Grouper Project)
+## 6. PicoRV32 Firmware & Algorithms
 
 Blocks / notes:
-- `PicoRV32 RV32IM Integration (Grouper)`
 - `AGC Firmware`
 - `MIMO Algorithms`
+- `SX1257 Initialization`
 
 Subblocks:
-- W computation for `NT=1` (MRC, EGC, SC) using RV32IM hardware MUL
-- AGC loop managing Trouper SX1257 gains via AHB-Lite
+- W computation for `NT=1` (MRC, EGC) using RV32IM hardware MUL
+- AGC loop managing SX1257 gains via SPI slave (host assist or Grouper)
+- SX1257 initialization and mode control
 - branch enable / disable policy
 - IRQ handling from Trouper events
-- algorithm selection and adaptation policy
 
 Responsibilities:
 - own the control-policy layer for the entire MPW.
@@ -131,33 +147,32 @@ Responsibilities:
 Deliverables:
 - firmware control loop (residing in Grouper).
 - Trouper AGC convergence behavior.
-- algorithm-comparison results (MRC vs SC vs EGC).
-- in-the-loop control policy documentation.
+- algorithm selection results (MRC vs SC vs EGC).
+- compiled ELF/Hex for SRAM loading.
 
-## 6. System Simulation / Algorithms
+## 7. System Simulation & Models
 
 Blocks / notes:
-- `MIMO Algorithms`
-- `01_dsp_chain_walkthrough.ipynb`
+- Python system model (bit-exact reference)
+- Algorithm selection report
 
 Subblocks:
-- Python system model (bit-exact reference)
+- bit-accurate dsp chain walkthrough
 - algorithm comparison harness
 - threshold and hit-count sweeps
-- MRC / SC / EGC comparisons
-- fallback-policy simulation
+- CFO estimation and compensation models
 
 Responsibilities:
 - define the behavioral truth before RTL implementation
-- keep algorithm choice separate from hardware implementation
 - produce the reference model for verification
+- define algorithm selection (Shift-MRC vs Oracle)
 
 Deliverables:
 - Python-first simulation ladder
 - algorithm recommendations
-- parameter sweeps and corner cases
+- golden test vectors for cocotb
 
-## 7. Verification
+## 8. Verification
 
 Blocks / notes:
 - `Test Plan`
@@ -169,7 +184,6 @@ Subblocks:
 - end-to-end packet regressions (Trouper hardware)
 - RTL-vs-Python comparison
 - inter-project bus verification (Grouper-Trouper AHB access)
-- AFE capture-path testing
 
 Responsibilities:
 - prove the implementation matches the spec
@@ -181,48 +195,46 @@ Deliverables:
 - integration simulation (full MPW model)
 - FPGA bring-up and common-tone AFE characterization
 
-## 8. RF / Hardware
-
-Blocks / notes:
-- `SE2435L Front-End Module`
-- AFE characterization notes in `IDEAS.md`
-
-Subblocks:
-- branch gain/phase stability
-- LO drift measurement
-- compression / blocker response
-- antenna correlation / placement sensitivity
-
-Responsibilities:
-- characterize the analog front end before full-system dependence
-- define what is calibratable versus what requires fallback
-- de-risk coherent combining
-
-Deliverables:
-- common-tone FPGA capture plan
-- branch-mismatch metrics
-- calibration and fallback thresholds
-
-## 9. Physical Design
+## 9. Physical Design & Floorplan
 
 Blocks / notes:
 - floorplan / P&R (Trouper and Grouper separate runs)
 
 Subblocks:
-- macro placement (Grouper PicoRV32/SRAM, Trouper DSP SRAMs)
+- macro placement (Grouper PicoRV32/SRAM)
 - area/timing/power closure for each project
 - MPW-level routing for AHB-Lite bus
-- 25-pad constraint management (Trouper)
+- 26-pad constraint management (Trouper)
 
 Responsibilities:
 - keep each project within its timing and area budgets
-- coordinate inter-project signal routing with the integration team
 - manage pad budget rigorously (≤26 pads for Trouper)
+- deliver GDSII / LEF for both macros
 
 Deliverables:
 - physical GDS for Trouper and Grouper
-- timing-signed-off netlists
-- MPW-level top-level routing plan
+- timing sign-off (32 MHz)
+- power analysis
+
+## 10. Hardware & Characterization
+
+Blocks / notes:
+- `AFE Characterisation Board`
+- Silicon bring-up notes
+
+Subblocks:
+- branch gain/phase stability
+- LO drift measurement
+- compression / blocker response
+
+Responsibilities:
+- characterize the analog front end before full-system dependence
+- characterize silicon performance (shmoo plots)
+
+Deliverables:
+- Schematic/Layout for test PCB
+- FPGA bitstream and driver
+- Characterization report
 
 ## Assignment Rule
 

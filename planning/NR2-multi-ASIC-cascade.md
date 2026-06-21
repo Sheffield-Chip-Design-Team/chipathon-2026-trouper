@@ -1,6 +1,10 @@
 # NR=2 Multi-ASIC Cascade — Architecture and Lock-Detect Scheme
 
-**Status:** Design exploration (2026-06-03)
+**Status:** Archived design exploration (2026-06-03)
+
+> This note evaluates an older `mimo_rx_top` / PicoRV32 / hardware-`weight_gen` architecture.
+> It is not the baseline for the current active `trouper_top` hard macro.
+> For current area ranking, use `rtl-test/syn_mimo_per_module/README.md` and the SGE-1965 synthesis report.
 
 ## Area Targets
 

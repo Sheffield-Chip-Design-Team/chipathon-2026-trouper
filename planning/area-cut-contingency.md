@@ -1,5 +1,18 @@
 # Area Cut Contingency List
 
+> **Status: archived baseline, not the current active macro.**
+>
+> This note models the older `mimo_rx_top` architecture from 2026-06-03: PicoRV32, hardware `weight_gen`, `energy_meas_coarse`, and the pre-TDM decimator arrangement. It is still useful as design history, but it is **not** the correct baseline for the current active `trouper_top` hard macro.
+>
+> For the current synthesis-only area breakdown of the active RTL, use:
+> `rtl-test/syn_mimo_per_module/README.md` and `rtl-test/syn_mimo_per_module/out_trouper_top_current_fd/stat_hier.txt`
+>
+> Current active `trouper_top` synthesis totals from SGE job `1965` (`2026-06-18`, FD TT):
+> - top total: `748,042.9376 µm²`
+> - largest blocks: `sd_decimator_cic_tdm8` `207,753.7280 µm²`, `training_acc` `131,229.0560 µm²`, `sc_detector` `108,486.7840 µm²`, `psram_buf_ctrl` `67,006.2848 µm²`, `mrc_combiner` `59,331.8656 µm²`
+>
+> Use this file only for historical comparison against the superseded CPU-containing architecture.
+
 **Date:** 2026-06-03  
 **Baseline:** NR=2, PicoRV32IM, HW weight_gen, TDM CIC (no FIR), ser-IQ mrc_combiner  
 **Baseline die (65% eff. density):** ~2.43 mm² stdcell ~1,167k µm², macros 0.41 mm²

@@ -261,22 +261,30 @@ where `A_est` is the RMS input amplitude on the strongest branch and `NR = 4`.
 **Estimate signal amplitude from Zdiag:**
 
 ```
-E_max    = max(ZDIAG_k) / N_ACC       // mean energy per sample, strongest branch
-A_est    = isqrt(E_max)               // integer square root; 0 if E_max == 0
+// ZDIAG_k is the uint16 hardware register (= Z_kk >> 16).
+// Left-shift by 16 to recover the Z_kk scale before dividing by N_ACC.
+E_max    = (max(ZDIAG_k) << 16) / N_ACC   // ≈ A^2 (mean squared amplitude)
+A_est    = isqrt(E_max)                    // integer square root; 0 if E_max == 0
 ```
+
+Note: `A_est` is only useful when `ZDIAG_reg × N_ACC >= 65536`. For very short
+training windows or very weak signals the register may read zero; in that case
+`A_est = 0` and the fallback defaults (pgs=0, W_max_byte=120) are applied.
 
 **Choose pgs to target ~90 counts output:**
 
 ```
 y_pre_max = 120 × 4 × A_est / 256    // = 1.875 × A_est  (with W_max_byte = 120)
-if y_pre_max == 0:
-    pgs = 0
+if y_pre_max >= 90:
+    pgs = 0                           // no boost needed
 else:
     pgs = clamp(floor_log2(90 / y_pre_max), 0, 7)
 ```
 
-where `floor_log2(x)` returns 0 for x ≤ 1. For strong signals (`A_est ≥ 48`) this
-yields `pgs = 0`; for weak signals it increases to recover output amplitude.
+where `floor_log2(x)` is the position of the highest set bit of `floor(x)`, i.e.
+`(90 / y_pre_max).bit_length() - 1` in Python. Returns 0 for x ≤ 1.
+For strong signals (`A_est ≥ 48`) this yields `pgs = 0`; for weak signals it
+increases to recover output amplitude.
 
 **Compute W_max_byte to avoid clipping after the shift:**
 

@@ -13,7 +13,11 @@ Time-domain, sample-by-sample combining of 4 antenna inputs using weight vector 
 
 **MRC:** inner product — scalar output
 ```
-y[n] = (w^H · x[n]) >> 1   // 4 complex MACs → int32 → arithmetic right-shift 1 (÷2) → int8
+y[n] = sat8( (w^H · x[n] >>> 8) << pgs )
+//  4 complex MACs → int32 accumulator
+//  >>> 8  Q0.7 guard shift  (÷256, i.e. effective weight = W_byte / 128)
+//  << pgs  adaptive post-gain shift (COMB_POST_GAIN_SHIFT, 0–7)
+//  sat8   saturate to signed int8
 ```
 
 **Passthrough (bypass):** single-antenna direct route, W ignored
@@ -33,15 +37,15 @@ W is produced by firmware after `training_done` from the Training Accumulator. U
 | `x_i[3:0]` | in | 4×8 signed | f_s | I from decimators (4 antennas) |
 | `x_q[3:0]` | in | 4×8 signed | f_s | Q from decimators |
 | `x_valid` | in | 1 | f_s | Sample strobe |
-| `W_re[3:0]` | in | 4×16 signed | static | W vector real — from W register bank |
-| `W_im[3:0]` | in | 4×16 signed | static | W vector imaginary |
+| `W_re[3:0]` | in | 4×8 signed | static | W vector real — from W register bank (int8 Q0.7) |
+| `W_im[3:0]` | in | 4×8 signed | static | W vector imaginary (int8 Q0.7) |
 | `W_valid` | in | 1 | static | Current-packet W has been atomically committed to the active W bank |
 | `mode` | in | 1 | static | 0 = MRC; 1 = passthrough |
 | `bypass_ant[1:0]` | in | 2 | static | Index (0–3) of antenna to route in passthrough mode; decoded from ANTENNA_EN by control logic |
 | `clk_32m` | in | — | 32 MHz | Master clock |
 | `rst_n` | in | — | — | Active-low reset |
-| `y_i` | out | 8 signed | f_s | Combined I output (MRC: int32 ÷2 → int8; bypass: direct int8) |
-| `y_q` | out | 8 signed | f_s | Combined Q output (MRC: int32 ÷2 → int8; bypass: direct int8) |
+| `y_i` | out | 8 signed | f_s | Combined I output (MRC: (acc>>>8)<<pgs saturated to int8; bypass: direct int8) |
+| `y_q` | out | 8 signed | f_s | Combined Q output (MRC: (acc>>>8)<<pgs saturated to int8; bypass: direct int8) |
 | `y_valid` | out | 1 | f_s | Sample strobe |
 
 ---
@@ -50,11 +54,13 @@ W is produced by firmware after `training_done` from the Training Accumulator. U
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
-| W precision | int16 Q1.15 | Written by firmware via the shadow weight bank |
-| x precision | 8-bit signed | From decimators |
-| Accumulator | int32 | 8×16 = 24-bit product; 4 complex MACs → max 2²⁴ < 2³¹; int32 sufficient with 7 bits of headroom |
-| MACs per sample | 4 complex = 8 real MACs | |
-| Output | int8 signed | MRC: int32 accumulator arithmetic right-shifted 1 (÷2), saturated to int8; bypass: direct int8 from antenna (no ÷2) |
+| W precision | int8 Q0.7 | Written by firmware; effective weight W_eff = W_byte / 128. Firmware caps W_byte ≤ 120 to preserve ≥ ½ LSB headroom. |
+| x precision | 8-bit signed | From decimators; typical operating range A ≤ 90 |
+| Accumulator | int32 | 8×8 = 16-bit product; 4 complex MACs; worst-case acc ≈ 4×120×90 = 43 200; 16 bits needed; int32 has 16 bits of headroom |
+| MACs per sample | 4 complex = 8 real MACs | Serialised I/Q: 2 multipliers, 11-cycle FSM |
+| Guard shift | `acc >>> 8` | Q0.7 normalisation: divides accumulator by 256, yielding effective output in approximately the same range as a single branch input |
+| Post-gain shift | `<< pgs`, pgs ∈ 0–7 | Adaptive amplitude recovery (COMB_POST_GAIN_SHIFT). Firmware Step 3 sets pgs to target ≈ 90 combined counts. |
+| Output | int8 signed | MRC: sat8((acc>>>8)<<pgs); bypass: direct int8 from antenna |
 
 ---
 
@@ -74,9 +80,9 @@ Distributed antenna deployments (antennas hundreds of metres apart) are outside 
 
 **MAC structure.** Each complex MAC: `acc_re += W_re×x_i − W_im×x_q`, `acc_im += W_re×x_q + W_im×x_i`. Four complex MACs per sample.
 
-**Output headroom.** MRC coherently adds branch amplitudes. The firmware path writes weights proportional to either `conj(H_j)` (row-sum MRC) or the dominant eigenvector of the Z matrix, both with final Q1.15 normalisation. The combiner applies a fixed ÷2 guard shift, then an optional `COMB_POST_GAIN` left shift before saturating to int8. Reset value `COMB_POST_GAIN=0` is conservative; firmware may increase it after observing output headroom. Bypass output is int8 directly, preserving the full per-branch amplitude. A separate remod-facing right shift (`REMOD_BACKOFF_SHIFT`, register `0x37`, default `1`) is applied only on the MRC path before `sd_remod`, so remod safety does not depend on AGC alone. Int8 saturation remains a safety net for AGC settling transients only.
+**Output headroom.** MRC coherently adds branch amplitudes. The firmware path writes int8 Q0.7 weights proportional to either `conj(H_j)` (row-sum MRC) or the dominant eigenvector of the Z matrix, normalised so the strongest branch weight ≤ 120. The combiner applies a `>>> 8` Q0.7 guard shift (÷256), then an adaptive `COMB_POST_GAIN_SHIFT` left shift (firmware Step 3) before saturating to int8. Reset value `COMB_POST_GAIN_SHIFT=0` is conservative; firmware computes the shift each packet from ZDIAG registers. Bypass output is int8 directly, preserving the full per-branch amplitude. A separate remod-facing right shift (`REMOD_BACKOFF_SHIFT`, register `0x37`, default `1`) is applied only on the MRC path before `sd_remod`, so remod safety does not depend on AGC alone. Int8 saturation remains a safety net for AGC settling transients only.
 
-**Accumulator saturation.** After the fixed ÷2 guard shift and optional post-combine gain, saturate to int8 bounds (±127) — do not allow 2's-complement wrap. This provides a safety net for AGC settling transients or unexpected strong signals, but should not be the normal operating condition.
+**Accumulator saturation.** After the `>>> 8` guard shift and adaptive post-gain, saturate to int8 bounds (±127) — do not allow 2's-complement wrap. This provides a safety net for AGC settling transients or unexpected strong signals, but should not be the normal operating condition.
 
 ### COMB_POST_GAIN policy
 
@@ -85,7 +91,7 @@ Distributed antenna deployments (antennas hundreds of metres apart) are outside 
 Register behavior:
 
 ```
-y_guarded = mrc_accumulator >>> 1
+y_guarded = mrc_accumulator >>> 8    // Q0.7 guard shift
 y_out     = sat8(y_guarded <<< COMB_POST_GAIN_SHIFT)
 ```
 
@@ -104,9 +110,9 @@ The `90` target preserves roughly -3 dBFS headroom for the ΣΔ re-modulator. La
 **Live output state.** Firmware weight computation runs in parallel with the live decimator-to-remod stream. The combiner output policy is:
 
 ```
-NO_W / ACQUIRING:   y = x[bypass_sel]          // int8 direct, no ÷2
-W_VALID, MODE=0:    y = (w^H · x) >> 1         // MRC: int32 ÷2 → int8
-MODE=1 passthrough: y = x[bypass_sel]          // int8 direct, no ÷2
+NO_W / ACQUIRING:   y = x[bypass_sel]                      // int8 direct, no shift
+W_VALID, MODE=0:    y = sat8((w^H·x >>> 8) << pgs)         // MRC: Q0.7 guard + post-gain
+MODE=1 passthrough: y = x[bypass_sel]                      // int8 direct, no shift
 ```
 
 This makes the first packet recoverable as a single-antenna packet if W arrives late, and prevents mid-preamble silence from breaking SX1302 detection.
@@ -117,7 +123,7 @@ This makes the first packet recoverable as a single-antenna packet if W arrives 
 
 **Degenerate case.** When only 1 antenna is enabled via `ANTENNA_EN`, W is a scalar — trivially computed by firmware. Combiner still works; unused antenna inputs are zero.
 
-**Passthrough MUX.** In passthrough mode, a 4:1 MUX on `bypass_ant` selects the raw int8 sample from one decimator and drives it directly to `y` — no sign-extension, no ÷2. The MAC array is clock-gated. This MUX sits at the output stage of the combiner block so the bypass path has identical clocking and output register timing as the combining paths.
+**Passthrough MUX.** In passthrough mode, a 4:1 MUX on `bypass_ant` selects the raw int8 sample from one decimator and drives it directly to `y` — no sign-extension, no shift. The MAC array is clock-gated. This MUX sits at the output stage of the combiner block so the bypass path has identical clocking and output register timing as the combining paths.
 
 ---
 
@@ -136,6 +142,35 @@ This makes the first packet recoverable as a single-antenna packet if W arrives 
 | Passthrough, ant2 selected | MODE=2, ANTENNA_EN=0100 | y[0] tracks ant2 exactly; ant0/1/3 ignored |
 | Passthrough vs MRC gain | Same signal, compare MODE=0 and MODE=2 output power | MRC output ≈ 6 dB higher (4 equal antennas) |
 | Latency constant | f_s input, MRC mode | `y_valid` asserts exactly P cycles after `x_valid` for every sample; P is fixed and does not vary with mode or W value |
+
+### Precision characterisation (2026-06-13)
+
+Verified by `rtl-test/tb/tb_mrc_fw_rand.v`: 14 fixed boundary cases + 1000 stratified
+random cases (200 per pgs tier), seed=42.  Metric: `quant_loss_dB = 20·log10(y_float / y_int)`
+where `y_float` uses exact float weights and `y_int` is the RTL integer output.
+
+| pgs | A_max range | Cases | Max loss | Mean loss | Cases > 0.5 dB | MRC gain vs 1 ant (min–mean–max) |
+|-----|-------------|-------|----------|-----------|----------------|----------------------------------|
+| 0 | 25–90 | 200 | 0.44 dB | 0.12 dB | 0 | 0.9–6.0–10.6 dB |
+| 1 | 13–24 | 200 | 1.29 dB | 0.32 dB | 37 | 0.4–6.2–11.6 dB |
+| 2 | 7–12 | 200 | 1.50 dB | 0.46 dB | 81 | 1.9–7.0–12.0 dB |
+| 3 | 4–6 | 200 | 2.36 dB | 0.84 dB | 130 | 2.5–8.2–12.0 dB |
+| 4 | 2–3 | 200 | 1.94 dB | 1.39 dB | 160 | 7.4–10.9–12.0 dB |
+
+**Loss source:** the dominant loss is the `>>> 8` guard-shift truncation
+*before* the `<< pgs` left-shift.  Truncation discards up to 0.996 counts, which
+the subsequent left-shift amplifies by 2^pgs.  Per-branch weight-ratio
+quantisation (`floor(W_max × A_k / A_max)`) contributes < 0.05 dB separately.
+
+**Operational significance:** pgs ≥ 3 cases (A_max ≤ 6) are below the
+minimum useful SNR for LoRa SF12/BW125 (A_decimator ≈ 15 at design sensitivity).
+In the expected operating range (**pgs = 0, A_max ≥ 25**) worst-case loss is
+**< 0.5 dB** and mean is **0.12 dB** — negligible for LoRa demodulation.
+
+**Potential improvement:** replacing `(acc >>> 8) << pgs` with the single combined
+shift `acc >>> (8 − pgs)` would eliminate the amplified truncation and reduce
+worst-case loss in all tiers to < 0.05 dB.  Not implemented in the current RTL;
+recorded for future revision consideration.
 
 ---
 
@@ -188,6 +223,6 @@ Saves area on the `training_acc` side. Moderate complexity; cross-module interfa
 
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — 8-bit signed input
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — optional software override path via AHB-Lite
-- [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md) — consumes int8 input; combiner int16 output is arithmetic right-shifted 1 (÷2) and saturated to int8 at the remod input boundary
+- [ΣΔ Re-modulator](ΣΔ%20Re-modulator.md) — consumes int8 input; combiner output is `sat8((acc>>>8)<<pgs)` before the remod input boundary
 - [Register Map](../Register%20Map.md) — `W` vector at `0x30`–`0x3F`
 - [DSP Flow](../DSP%20Flow.md)
