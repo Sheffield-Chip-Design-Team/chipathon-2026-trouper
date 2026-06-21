@@ -1,9 +1,19 @@
-# ΣΔ Decimator (CIC-only, deployed)
+# ΣΔ Decimator
 
 RX path stage 2. See [DSP Flow](../DSP%20Flow.md) for pipeline context.
 
-**Owner:** TBD  
-**Status:** Deployed — `sd_decimator_cic_only`, CIC N=3, `decim_ratio=1` for all supported modes
+**Owner:** TBD
+**Status:** **Production = fixed R=64 half-band chain** (`sd_decimator_poly`: CIC-3 R=16 → HB1 ÷2 → HB2 ÷2 → int8 @ 500 kS/s). Migrated to production 2026-06-21.
+
+> **The current design is the half-band chain.** Canonical detail lives in
+> [`decimator-hb-redesign.md`](../decimator-hb-redesign.md) (architecture),
+> [`decimator-hb-area-reduction.md`](../decimator-hb-area-reduction.md) (polyphase +
+> 14-bit CIC area work) and [`decimator-hb-migration-impact-plan.md`](../decimator-hb-migration-impact-plan.md)
+> (Gates 0–12). Bandwidth is selected by `BW_CFG.bw_sel` (sets `sample_shift`, not the
+> decimation ratio); the chain eliminates the legacy 250 kHz droop (−11.8 dB → ≈ −0.17 dB).
+>
+> **Everything below this banner describes the SUPERSEDED CIC-only R=128 design**
+> (`sd_decimator_cic_only`, 250 kS/s) and is retained only as historical context.
 
 ---
 
@@ -49,6 +59,26 @@ The deployed chain is:
 
 ```text
 SX1257 ΣΔ ADC -> CIC decimator -> on-chip DSP -> ΣΔ re-modulator -> SX1302
+```
+
+### Deployed receive-path context
+
+```mermaid
+flowchart LR
+    A["SX1257
+    1-bit I/Q ΣΔ streams
+    32 Msps"] --> B["ΣΔ Decimator
+    CIC N=3
+    R selected by decim_ratio"]
+    B --> C["On-chip DSP
+    DC removal, detection,
+    training, combining"]
+    C --> D["ΣΔ Re-modulator
+    1-bit I/Q
+    32 MHz output"]
+    D --> E["SX1302
+    final channel filtering
+    and LoRa demod"]
 ```
 
 That changes the requirement:
@@ -100,6 +130,129 @@ CIC gain is `G = R^3`, so the per-rate right shift is:
 - `R=32  -> 15 - 7 = 8`
 
 This matches the implemented `norm_shift` mapping in the RTL.
+
+---
+
+## DSP view
+
+### CIC signal-processing structure
+
+```mermaid
+flowchart LR
+    A["1-bit ΣΔ input
++1 / -1 stream
+32 Msps"] --> B["Integrator 1
+1 / 1-z^-1"]
+    B --> C["Integrator 2
+1 / 1-z^-1"]
+    C --> D["Integrator 3
+1 / 1-z^-1"]
+    D --> E["Downsample by R
+R = 256 / 128 / 64 / 32"]
+    E --> F["Comb 1
+1 - z^-1"]
+    F --> G["Comb 2
+1 - z^-1"]
+    G --> H["Comb 3
+1 - z^-1"]
+    H --> I["Right-shift normalise
+remove R^3 gain"]
+    I --> J["Saturate to int8
+IQ output"]
+```
+
+This is a standard 3rd-order CIC decimator:
+
+- transfer function: `H(z) = ((1 - z^-R) / (1 - z^-1))^3`
+- low-pass action comes from the moving-average envelope implicit in the CIC
+- DC gain is `R^3`, which is why the RTL applies a rate-dependent right shift
+
+### Rate-domain view
+
+```mermaid
+flowchart LR
+    A["SX1257 ΣΔ bitstream
+32 Msps"] --> B["3 integrators
+run every clk_32m"]
+    B --> C["Decimate by R"]
+    C --> D["3 combs
+run only on output strobe"]
+    D --> E["8-bit complex IQ
+32 MHz / R"]
+
+    C --> F["R=128 -> 250 kS/s
+deployed"]
+    C --> G["R=64 -> 500 kS/s
+unsupported"]
+    C --> H["R=32 -> 1 MS/s
+debug only"]
+```
+
+The important DSP point is that the integrators see the full 32 Msps noise-shaped stream, but the comb/output side runs at the reduced sample rate. That is where the area win comes from.
+
+### Frequency-response intuition
+
+```mermaid
+flowchart TD
+    A["ΣΔ quantisation noise
+pushed to high frequency"] --> B["CIC^3 low-pass envelope
+strongest near DC
+nulls at k * Fs / R"]
+    B --> C["Wanted LoRa baseband
+preserved near DC"]
+    B --> D["Passband droop
+increases toward band edge"]
+    B --> E["Alias folding after decimation
+if stopband rejection is insufficient"]
+```
+
+For this design, the tradeoff is:
+
+- higher `R` gives more oversampling and better alias rejection after decimation
+- lower `R` pushes the first CIC null outward and leaves more shaped ΣΔ noise near the kept band
+- without the FIR compensator, passband droop remains, but that is acceptable at the deployed operating point
+
+### Why `R=128` works in product
+
+```mermaid
+flowchart LR
+    A["125 kHz or 250 kHz LoRa
+selected in firmware"] --> B["Same hardware setting
+decim_ratio=1
+R=128"]
+    B --> C["Decimator output
+250 kS/s IQ"]
+    C --> D["On-chip DSP uses this IQ
+for detection/training/combining"]
+    D --> E["ΣΔ re-modulator
+back to 32 MHz 1-bit stream"]
+    E --> F["SX1302 channel filter
+performs final narrowband cleanup"]
+```
+
+Why this is acceptable:
+
+- at `R=128`, measured CIC-only SQNR is about `30.6 dB`, above the adopted 28 dB floor
+- 125 kHz mode is intentionally handed off at 2x oversampling (`250 kS/s`), so the downstream path still has filtering margin
+- the SX1302, not the decimator, performs the final LoRa channel filtering
+
+### Why `R=64` fails for 500 kHz mode
+
+```mermaid
+flowchart LR
+    A["R=64
+500 kS/s output"] --> B["Less oversampling
+first CIC null farther away"]
+    B --> C["More high-frequency ΣΔ noise
+leaks toward kept band"]
+    C --> D["After decimation
+noise folds into baseband"]
+    D --> E["Measured CIC-only SQNR
+about 9.6 dB
+not usable"]
+```
+
+This is the core DSP reason 500 kHz mode is out of spec in the CIC-only design: the 3rd-order CIC by itself does not provide enough rejection at `R=64` once the FIR is removed.
 
 ---
 

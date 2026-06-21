@@ -1,6 +1,6 @@
 # Memory Strategy
 
-Covers all on-chip SRAM across the **Trouper** and **Grouper** projects: macro selection, voltage domain, BIST, and fallback policy.
+Covers all on-chip SRAM in the **Grouper** project and the off-chip PSRAM strategy for the **Trouper** project.
 
 ---
 
@@ -8,31 +8,46 @@ Covers all on-chip SRAM across the **Trouper** and **Grouper** projects: macro s
 
 | Instance | Size | Macro | Project | Block |
 |---|---|---|---|---|
-| SRAM0 (ch0/ch1) | 512 B | `gf180mcu_fd_ip_sram__sram512x8m8wm1` | Trouper | Frontend Buffer Controller |
-| SRAM1 (ch2/ch3) | 512 B | `gf180mcu_fd_ip_sram__sram512x8m8wm1` | Trouper | Frontend Buffer Controller |
 | CPU SRAM (unified) | 4 KB | `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` ×4 | Grouper | PicoRV32 Integration |
 
-**Total on-chip SRAM: 5 KB**
+**Total on-chip SRAM: 4 KB (Grouper only)**
+
+Trouper contains **no internal SRAM macros**. All decimated sample storage, SC delay-line buffering, and same-packet replay are served by the **off-chip APS6404L PSRAM**. This eliminates the SRAM area and power penalty in the Trouper macro and allows the SC detector to use full-symbol integration across all SFs without depth constraints.
 
 A single unified SRAM in **Grouper** holds PicoRV32 `.text`, `.data`, `.bss`, and stack. It is partitioned logically into fixed `1 kB` banks for planning:
 
 - `BANK0` `0x0000`–`0x03FF`: firmware-visible
 - `BANK1` `0x0400`–`0x07FF`: firmware-visible
 - `BANK2` `0x0800`–`0x0BFF`: firmware-visible
-- `BANK3` `0x0C00`–`0x0FFF`: reserved
+- `BANK3` `0x0C00`–`0x1000`: firmware-visible / stack
 
 No separate IMEM/DMEM split in Grouper — one AHB-Lite port, one BIST instance.
 
-Linker/runtime rule:
+**Area:** Grouper CPU unified SRAM uses 4 × `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` = **~0.62 mm²**. This SRAM is part of the hardened Grouper macro and is not visible to the Trouper P&R run.
 
-- PicoRV32 `.text`, `.data`, `.bss`, and stack must be linked only into `BANK0`–`BANK2`
-- `BANK3` must be excluded from the linker memory map
-- C runtime startup must not clear, initialize, or use `BANK3`
-- any allocator, scratch buffer, or stack growth must also remain inside `BANK0`–`BANK2`
+---
 
-**Area:** Trouper Frontend Buffer uses 1 × `gf180mcu_fd_ip_sram__sram512x8m8wm1` = **~0.42 mm²**. Grouper CPU unified SRAM uses 4 × `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` = **~0.62 mm²**. Total SRAM area across the MPW is **~1.04 mm²**.
+## Off-Chip PSRAM Strategy (Trouper)
 
-### Post-extraction timing verification
+The APS6404L (8 MB, QSPI, 32 MHz) serves as the primary data buffer for the MIMO datapath.
+
+### Roles
+
+1. **SC Delay Line:** Replaces the internal 512 B SRAM for the Schmidl-Cox detector. Allows storing a full symbol period (M samples) for SF7–SF12.
+2. **Replay Buffer:** Stores decimated I/Q samples for the current packet. Allows the MRC combiner to re-process the preamble and payload with weights computed by the PicoRV32 after training is complete (same-packet MRC).
+3. **Firmware Scratchpad:** Optionally available to the Grouper PicoRV32 for large data structures or logging via the Trouper PSRAM controller's AHB-Lite slave interface.
+
+### Timing and Bandwidth
+
+At 32 MHz with 8-bit complex samples:
+- Sample rate: 500 kS/s (2 µs period)
+- Write burst (4 antennas, 8 bits): ~1 µs
+- Read burst (1 antenna for SC): ~0.5 µs
+- **Total utilization: ~38%** during concurrent capture and SC detection.
+
+---
+
+## Post-extraction timing verification (Grouper)
 
 **Parasitic-extracted SPICE simulations are required for both SRAM types. No verified 3.3 V timing exists for either macro — do not treat the 2-cycle multicycle path as confirmed until extraction is complete.**
 

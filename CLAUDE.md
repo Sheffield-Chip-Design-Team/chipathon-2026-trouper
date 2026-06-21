@@ -6,7 +6,7 @@ Read AGENTS.md
 
 ## Project Overview
 
-SSCS PICO Chipathon 2026 tapeout. An NT=1 NR=4 MRC MIMO LoRa gateway ASIC in GF180MCU (3.3 V core/IO), targeting September 2026. Four SX1257 front-ends feed four ΣΔ decimator branches on a single chip for ~6 dB diversity gain. Supported LoRa bandwidths: **125 kHz and 250 kHz only** (decim_ratio=1, R=128); 500 kHz BW is explicitly out of spec.
+SSCS PICO Chipathon 2026 tapeout. An NT=1 NR=4 MRC MIMO LoRa gateway ASIC in GF180MCU (3.3 V core/IO), targeting September 2026. Four SX1257 front-ends feed four ΣΔ decimator branches on a single chip for ~6 dB diversity gain. The decimator is a **fixed R=64 half-band chain** (`sd_decimator_poly`: 32 MS/s 1-bit IQ → CIC-3 R=16 → HB1 ÷2 → HB2 ÷2 → int8 IQ at **500 kS/s**). Supported LoRa bandwidths: **125 kHz and 250 kHz**, selected by register `0x0A` (`BW_CFG`, `bw_sel` bit[0]; 0 = 250 kHz, 1 = 125 kHz) — *not* by changing the decimation ratio. BW selects only `sample_shift` (oversampling): 250 kHz BW is 2× oversampled (`sample_shift=1`), 125 kHz BW is 4× oversampled (`sample_shift=2`); the symbol period every block uses is `M = 1 << (SF + sample_shift)`. The half-band redesign **eliminates the previous 250 kHz droop limitation**: the old R=128 CIC-only chain put the 250 kHz chirp band edge at Nyquist (−11.8 dB droop); the HB chain holds passband droop to ≈ −0.17 dB. 1 MHz output is out of scope (PSRAM timing budget exceeded). See `planning/decimator-hb-migration-impact-plan.md` for the full migration record (Gates 0–12).
 
 ## Repository Layout
 
@@ -131,8 +131,8 @@ Submit jobs via `hqsub`, monitor via `hqstat --json` or `curl $HLAB_SGE_URL/api/
 
 The ASIC digital signal chain (all synchronous at 32 MHz):
 
-1. **ΣΔ Decimator** (`sd_decimator_cic_only.v`) — CIC-only R=128, 1-bit → int8, ×4 branches
-2. **DC Removal** (`dc_removal.v`) — IIR leaky integrator, α=2^{−4} (12-bit Q8.4 acc), ×4
+1. **ΣΔ Decimator** (`sd_decimator_poly.v`) — half-band chain R=64 (CIC-3 R=16 → HB1 ÷2 → HB2 ÷2), polyphase HB delay lines + 14-bit CIC, 1-bit → int8 at 500 kS/s, ×4 branches (TDM)
+2. **DC Removal** (`dc_removal.v`) — IIR leaky integrator, α=2^{−5} (13-bit Q8.5 acc), ×4
 3. **Schmidl-Cox Detector** (`sc_detector.v`) — sliding autocorr, produces `sc_lock` + `timing_ref`
 4. **Frontend Buffer Controller** (`frontend_buf_ctrl.v`) — 1 kB SRAM rolling buffer for delayed-sample storage; optional PSRAM replay via APS6404L
 5. **Noise Estimation** (`noise_est.v`) — Manhattan-norm per-antenna noise snapshot (no multipliers); feeds energy_snap for packet-ctrl energy gating
@@ -140,7 +140,7 @@ The ASIC digital signal chain (all synchronous at 32 MHz):
 7. **Packet Control FSM** (`packet_ctrl_fsm.v`) — controls buf_freeze, W gating, safe_switch
 8. **Weight Generation** (`weight_gen.v`) — SHIFT→CAL→COMPUTE→SCALE; HW modes: EGC/MRC/SC; SW: ALMMSE via PicoRV32
 9. **MRC Combiner** (`mrc_combiner.v`) — ŷ[n] = w^H·x[n], int32→int8 (÷2 guard shift)
-10. **ΣΔ Re-modulator** (`sd_remod.v`) — 3rd-order, int8 → 1-bit, input must be < −3 dBFS (wrap-around causes permanent instability)
+10. **ΣΔ Re-modulator** (`sd_remod.v`) — 3rd-order NTF synthesised for **OSR=64** (int8 in at 500 kS/s, 1-bit out at 32 MS/s), input must be < −3 dBFS (wrap-around causes permanent instability)
 
 **Control plane:** PicoRV32 RV32IM (`ip/picorv32/`) connected via AHB-Lite bus to Register Bank (Python-generated), SPI Slave (RPi host), SPI Master (→ SX1257), IRQ Controller, JTAG TAP. Top-level integration: `mimo_rx_top.v`.
 

@@ -19,8 +19,8 @@
 //   byte 0=i0, 1=q0, 2=i1, 3=q1, 4=i2, 5=q2, 6=i3, 7=q3
 //
 // SC delay:
-//   N = 2^SF samples (one full LoRa symbol in the decimated sample domain).
-//   del_offset_bytes = N × 8 = 8 << SF.
+//   N = 2^(SF+sample_shift) samples (one full LoRa symbol in the decimated sample domain).
+//   del_offset_bytes = N × 8 = 8 << (SF+sample_shift).
 //   del_rdy fires after N iq_valid pulses since qe_init_done.
 //
 // Debug readback path (no PicoRV32 / Grouper required):
@@ -59,6 +59,7 @@ module psram_buf_ctrl (
     input  wire        init_start,   // start init when the local controller owns the pads
     input  wire        qspi_owner,   // 1 = ownership transferred away from local controller
     input  wire [3:0]  sf,           // spreading factor (7–12), for del address
+    input  wire [1:0]  sample_shift, // BW offset: 1=250 kHz, 2=125 kHz; N=2^(SF+sample_shift)
 
     // Live IQ stream (4 branches, 8-bit signed)
     input  wire signed [7:0] iq_i0, iq_i1, iq_i2, iq_i3,
@@ -129,19 +130,18 @@ module psram_buf_ctrl (
     reg             sc_lock_prev;
 
     // del address = wr_ptr − N×8, latched at iq_valid trigger
-    // del_offset = 8 << sf  (= N × 8 = 2^SF × 8)
+    // del_offset = 8 << (sf+sample_shift)  (= N × 8 = 2^(SF+sample_shift) × 8)
     reg [ABITS-1:0] del_addr;
-    wire [ABITS-1:0] del_offset = ({{(ABITS-4){1'b0}}, 4'd8} << sf[3:0]);
+    wire [ABITS-1:0] del_offset = ({{(ABITS-4){1'b0}}, 4'd8} << (sf[3:0] + sample_shift));
 
     // del_rdy: true once N iq_valid pulses have accumulated since qe_init_done.
-    // Re-armed whenever sf changes so a future SF-sweep mode cannot present a
-    // stale (shorter-warmup) delayed sample after the delay distance grows.
-    // SF is fixed at start-up in the current revision (TRPR-PSR-019); this guard
-    // is inert in that case and only activates if SF is retuned live.
+    // Re-armed whenever sf or sample_shift changes so a BW/SF change cannot present
+    // a stale delayed sample before the new delay distance has been fully written.
     reg             del_rdy;
-    reg [12:0]      del_cnt;
+    reg [14:0]      del_cnt;
     reg [3:0]       sf_prev;
-    wire [12:0]     del_n = (13'd1 << sf[3:0]);  // 2^SF, 128..4096
+    reg [1:0]       sample_shift_prev;
+    wire [14:0]     del_n = (15'd1 << (sf[3:0] + sample_shift));  // 2^(SF+shift), 128..16384
 
     // -----------------------------------------------------------------------
     // QPI transaction sub-cycle FSM
@@ -199,8 +199,9 @@ module psram_buf_ctrl (
             sc_lock_prev   <= 1'b0;
             del_addr       <= {ABITS{1'b0}};
             del_rdy        <= 1'b0;
-            del_cnt        <= 13'd0;
+            del_cnt        <= 15'd0;
             sf_prev        <= 4'd0;
+            sample_shift_prev <= 2'd0;
             sub            <= 6'd0;
             qpi_busy       <= 1'b0;
             wr_data        <= 64'd0;
@@ -233,8 +234,9 @@ module psram_buf_ctrl (
             sample_skip    <= 1'b0;
             state_dbg      <= 3'd0;
         end else begin
-            sc_lock_prev <= sc_lock;
-            sf_prev      <= sf;
+            sc_lock_prev      <= sc_lock;
+            sf_prev           <= sf;
+            sample_shift_prev <= sample_shift;
             rpl_valid    <= 1'b0;
             del_valid    <= 1'b0;
             state_dbg    <= state;
@@ -258,21 +260,21 @@ module psram_buf_ctrl (
             if (iq_valid && qpi_busy && psram_en && qe_init_done && !qspi_owner)
                 sample_skip <= 1'b1;
 
-            // del_rdy counter: accumulate iq_valid pulses after init. An sf change
-            // re-arms the warm-up (clears del_rdy/del_cnt) so the SC detector never
-            // sees a delayed sample read from an address that has not yet been
-            // written with N = 2^SF fresh samples at the new delay distance.
+            // del_rdy counter: accumulate iq_valid pulses after init. An sf or
+            // sample_shift change re-arms the warm-up so the SC detector never
+            // sees a delayed sample from an address not yet written with N =
+            // 2^(SF+sample_shift) fresh samples at the new delay distance.
             if (!qe_init_done) begin
                 del_rdy <= 1'b0;
-                del_cnt <= 13'd0;
-            end else if (sf != sf_prev) begin
+                del_cnt <= 15'd0;
+            end else if (sf != sf_prev || sample_shift != sample_shift_prev) begin
                 del_rdy <= 1'b0;
-                del_cnt <= 13'd0;
+                del_cnt <= 15'd0;
             end else if (!del_rdy && iq_valid) begin
-                if (del_cnt + 13'd1 >= del_n)
+                if (del_cnt + 15'd1 >= del_n)
                     del_rdy <= 1'b1;
                 else
-                    del_cnt <= del_cnt + 13'd1;
+                    del_cnt <= del_cnt + 15'd1;
             end
 
             // Debug-data pop: advance the byte index; on the eighth byte with
