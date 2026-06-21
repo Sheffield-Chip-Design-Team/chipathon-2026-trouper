@@ -257,6 +257,17 @@ sim_trouper_cocotb:
 sim_trouper_hb_cocotb:
 	$(MAKE) -C cocotb_trouper_top_hb
 
+# Measured-IQ playback (Verilator): drive trouper_top with a real capture.
+# Pass a capture and (optionally) SF/BW/window, e.g.:
+#   make sim_trouper_capture \
+#     CAPTURE_NPY=/foss/designs/lora-mimo/lora-capture/captures/<file>.npy \
+#     CAPTURE_SF=7 CAPTURE_BW=250 CAPTURE_NSAMP=60000
+# -----------------------------------------------------------------------
+.PHONY: sim_trouper_capture
+
+sim_trouper_capture:
+	$(MAKE) -C cocotb_trouper_capture
+
 clean:
 	rm -rf obj_dir_dsp_chain obj_dir_dsp_chain_real obj_dir_loopback_probe \
 		obj_dir_dsp_chain_real_probe obj_dir_dsp_chain_real_probe_osr256 \
@@ -264,3 +275,4 @@ clean:
 		obj_dir_mrc_fw_rand obj_dir_dsp_chain_rand *.vvp *.vcd
 	$(MAKE) -C cocotb_trouper_top clean 2>/dev/null || true
 	$(MAKE) -C cocotb_trouper_top_hb clean 2>/dev/null || true
+	$(MAKE) -C cocotb_trouper_capture clean 2>/dev/null || true

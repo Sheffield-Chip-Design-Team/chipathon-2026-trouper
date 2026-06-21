@@ -1,5 +1,23 @@
 # RTL Test TODO
 
+## SC detector — antenna-0-only detection (deep-fade single point of failure)
+
+**Open design risk.** `sc_detector` runs on antenna 0 only; the cross-branch
+incoherent combine (`Σ_j |c_j|²`) in the DSP Flow spec is not implemented, so a
+deep fade on ant0 blocks `sc_lock` even when ants 1–3 are strong. Found via
+`rtl-test/cocotb_trouper_capture` measured-IQ Rayleigh playback (seed 7 fails,
+seed 10 passes).
+
+**Proposed solution (designed, NOT implemented):** serial 4-channel TDM
+correlator — extend the existing single-multiplier TDM 8→32 steps to do all 4
+channels one after the other (`Σ_k` combine). Timing-safe: reuses the same
+multiplier so Fmax/SS critical path is unchanged; ~34 of 64 clk per sample (fits).
+Cost is area: ~666 added flops ≈ 20–23 k µm² (~+20% on sc_detector, ~3% of
+logic), plus an 8-byte PSRAM delayed read. Needs a synth-only area run vs
+floorplan headroom before committing. Fallbacks: (2) static firmware-selectable
+reference antenna, (3) document-and-accept ant0 as primary. Full writeup +
+implementation sketch: `planning/sc-detector-ant0-fading-risk.md`.
+
 ## MRC combiner — Q0.7 guard shift + adaptive post_gain_shift
 
 **Context:**
