@@ -178,7 +178,7 @@ Writing begins at `sc_lock` and continues until `rd_ptr` catches up to `wr_ptr` 
 
 At `f_s = BW`, 16-bit I/Q mode (8 bytes/sample across 4 branches):
 
-`B_max ≈ 8 × 2^SF × 8 bytes = 64 × 2^SF bytes`
+`B_max ≈ 8 × M × 8 bytes = 64 × M bytes`, where `M = 1 << (SF + sample_shift)` (worst case SF12/125 kHz: M = 16384 → ~1 MiB)
 
 | SF | Max buffer occupied |
 |---|---|
@@ -214,20 +214,20 @@ When `PSRAM_EN=0` or `JTAG_OVERRIDE=1`: SIO[0–3] are tristated and JTAG operat
 | Parameter | Value |
 |---|---|
 | Channels | 4 (NT=1, NR=4) |
-| Sample rate (post-decimation) | 250 kHz complex (32 MHz ÷ R=128) |
+| Sample rate (post-decimation) | 500 kHz complex (32 MHz ÷ R=64) |
 | Sample width | 1 byte I + 1 byte Q = 2 bytes/channel |
 | Bytes per sample (all channels) | 4 ch × 2 bytes = **8 bytes** |
-| **Write data rate** | **8 bytes × 250 000 S/s = 2 MB/s (16 Mbit/s)** |
+| **Write data rate** | **8 bytes × 500 000 S/s = 4 MB/s (32 Mbit/s)** |
 | APS6404L max throughput (QPI 133 MHz) | ~66 MB/s |
-| **Utilisation** | **~3% of device capacity** |
+| **Utilisation** | **~6% of device capacity** |
 
 ### Timing headroom at nominal operating point (32 MHz controller clock)
 
 | Parameter | Value |
 |---|---|
 | QPI 8-byte write latency | 25 cycles = **0.78 µs** |
-| `iq_valid` period at 250 kHz | 128 cycles = **4.0 µs** |
-| Slack per sample | 103 cycles = 3.22 µs (**80% idle**) |
+| `iq_valid` period at 500 kS/s | 64 cycles = **2.0 µs** |
+| Slack per sample | 39 cycles = 1.22 µs (**61% idle**) |
 
 Write completes in 20% of the available window — no back-pressure at 250 kHz. See TRPR-PSR-014 for full S_WRITE + SC delay read timing budget.
 
@@ -329,6 +329,52 @@ If same-packet replay is ever required at 1 MS/s, the PSRAM SCK could be sourced
 ### Refresh
 
 Self-managed internally. CE# is deasserted between every transaction giving continuous refresh windows. At 125 kS/s the bus is idle ~87% of each sample period; no host action required.
+
+---
+
+## Unified x1/x4 serializer (no separate SPI engine)
+
+The boot init sequence (`RSTEN`/`RST`/`Enter QPI`) is **not** implemented as a separate SPI block. SPI is treated as the degenerate single-lane case of the QPI serializer: same plumbing, ¼ the bits per clock. The init commands run in x1 for a few clocks at boot; everything else runs in x4. The only added hardware over a QPI-only engine is a 1-bit lane-mode flag plus stride/OE muxing — a handful of gates, not a second datapath.
+
+### Shared plumbing (identical x1 and x4)
+
+- CE# generation and SCK gating
+- The phase sequencer (cmd → addr → dummy → data); init uses the cmd phase only
+- The shift register and cycle counter
+- The SIO output mux and OE mask structure
+- Falling-edge input sampling for reads (unused during init — init is write-only)
+- The wait/dummy-cycle counter (needed for the `0xEB` read's 6 dummy cycles; reused for the `tRST ≥ 50 ns` gap after `0x99`)
+
+### What the `x4` flag parameterizes
+
+| Aspect | x1 (init / SPI) | x4 (QPI steady state) |
+|---|---|---|
+| Bits shifted per SCK | 1 (on SIO[0]) | 4 (on SIO[3:0]) |
+| `sio_oe` mask during drive | `4'b0001` | `4'b1111` |
+| Clocks for an 8-bit command | 8 | 2 |
+| Clocks for 24-bit address | n/a (init is cmd-only) | 6 |
+
+Phase lengths scale by the mode, not by separate code paths: `clocks = byte_count << (x4 ? 1 : 3)`. The shift register must shift by a **variable stride** (1 in x1, 4 in x4) — write it that way from the start rather than hardcoding nibble shifts.
+
+### Transaction types
+
+| Type | Phases | Used by |
+|---|---|---|
+| Command-only | cmd | `RSTEN 0x66`, `RST 0x99`, `Enter QPI 0x35` (all x1) |
+| Write | cmd → addr → data | QPI write `0x02`/`0x38` (x4) |
+| Read | cmd → addr → dummy → data | QPI fast read `0xEB` (x4) |
+
+The command-only type is a phase-skip of the existing sequencer (no address, no data), not new logic.
+
+### Mode-transition ordering
+
+`x4` powers up **clear** (device boots in single-SPI). It is set **after** the `0x35` command has fully clocked out: that command is itself sent in x1 (the device is still in SPI while it is being received), and only from the *next* CE# assertion does the device — and the serializer — operate in x4. This one-cycle ordering detail lives in the `QE_INIT → IDLE` transition. `x4` clears only on reset; there is no steady-state path back to x1.
+
+### Notes / gotchas
+
+- Keep init **write-only** so no MISO-on-SIO[1] half-duplex input handling is needed in x1 mode.
+- This mirrors the standard xSPI controller structure where lane count is a per-command field, so it carries no novel implementation risk.
+- Because the cost of supporting the SPI boot sequence in-macro is near zero, init stays in Trouper (keeping the macro self-recovering on a PSRAM brownout) rather than being offloaded to an external MCU.
 
 ---
 

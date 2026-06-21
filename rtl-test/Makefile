@@ -14,7 +14,7 @@ RTL = rtl
 TB  = tb
 
 DSP_SRCS  = $(RTL)/dc_removal.v $(RTL)/frontend_buf_ctrl.v \
-            $(RTL)/sc_detector.v $(RTL)/training_acc.v $(RTL)/weight_gen.v \
+            $(RTL)/sc_detector.v $(RTL)/training_acc.v \
             $(RTL)/mrc_combiner.v $(RTL)/sd_remod.v
 DSP_SRCS_SD = $(DSP_SRCS) $(RTL)/sd_decimator_cic_only.v
 
@@ -104,7 +104,147 @@ tb_sqnr.vvp: $(TB)/tb_sqnr.v $(RTL)/sd_decimator_cic_only.v
 
 # -----------------------------------------------------------------------
 
+# -----------------------------------------------------------------------
+# MRC combiner unit testbench (Verilator)
+# -----------------------------------------------------------------------
+.PHONY: sim_mrc_combiner
+
+sim_mrc_combiner: obj_dir_mrc_combiner/Vtb_mrc_combiner
+	$<
+
+obj_dir_mrc_combiner/Vtb_mrc_combiner: $(TB)/tb_mrc_combiner.v $(RTL)/mrc_combiner.v
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_mrc_combiner \
+	    --top-module tb_mrc_combiner $^
+
+# -----------------------------------------------------------------------
+# MRC firmware precision testbench (Verilator)
+# 5 channel scenarios; verifies Q0.7 weight quantisation vs float-optimal
+# -----------------------------------------------------------------------
+.PHONY: sim_mrc_fw_precision
+
+sim_mrc_fw_precision: obj_dir_mrc_fw_precision/Vtb_mrc_fw_precision
+	$<
+
+obj_dir_mrc_fw_precision/Vtb_mrc_fw_precision: $(TB)/tb_mrc_fw_precision.v $(RTL)/mrc_combiner.v
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_mrc_fw_precision \
+	    --top-module tb_mrc_fw_precision $^
+
+# -----------------------------------------------------------------------
+# MRC randomised precision testbench (Verilator)
+# 100 random A_k scenarios; +seed=<N> plusarg overrides default seed
+# -----------------------------------------------------------------------
+.PHONY: sim_mrc_fw_rand
+
+sim_mrc_fw_rand: obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand
+	$< +seed=42
+
+obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand: $(TB)/tb_mrc_fw_rand.v $(RTL)/mrc_combiner.v
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_mrc_fw_rand \
+	    --top-module tb_mrc_fw_rand $^
+
+# -----------------------------------------------------------------------
+# Randomised DSP chain end-to-end testbench (Verilator)
+# 20 random A_k/phase cases; +seed=<N> plusarg overrides default seed
+# -----------------------------------------------------------------------
+DSP_SRCS_RAND = $(RTL)/dc_removal.v $(RTL)/sc_detector.v \
+                $(RTL)/training_acc.v $(RTL)/mrc_combiner.v $(RTL)/sd_remod.v
+
+.PHONY: sim_dsp_chain_rand
+
+sim_dsp_chain_rand: obj_dir_dsp_chain_rand/Vtb_dsp_chain_rand
+	$< +seed=42
+
+obj_dir_dsp_chain_rand/Vtb_dsp_chain_rand: $(TB)/tb_dsp_chain_rand.v $(DSP_SRCS_RAND)
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_dsp_chain_rand \
+	    --top-module tb_dsp_chain_rand $^
+
+.PHONY: sim_dsp_chain_sf
+
+sim_dsp_chain_sf: obj_dir_dsp_chain_sf/Vtb_dsp_chain_sf
+	$< +seed=42
+
+obj_dir_dsp_chain_sf/Vtb_dsp_chain_sf: $(TB)/tb_dsp_chain_sf.v $(DSP_SRCS_RAND)
+	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_dsp_chain_sf \
+	    --top-module tb_dsp_chain_sf $^
+
+# -----------------------------------------------------------------------
+# sd_remod AC sine self-check (iverilog — uses $sin/$sqrt system functions)
+# PASS: correlation > 0.80 (CIFF tuned); FAIL: broken/unity coefficients
+# -----------------------------------------------------------------------
+.PHONY: sim_sd_remod
+
+sim_sd_remod: tb_sd_remod.vvp
+	$(VVP) $<
+
+tb_sd_remod.vvp: $(TB)/tb_sd_remod.v $(RTL)/sd_remod.v
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+# -----------------------------------------------------------------------
+# CIC-3 droop equalizer testbench (iverilog)
+# Drives 1st-order ΣΔ encoded tones at 31.25 kHz and 50 kHz, verifies
+# amplitude ratio > 0.97 after the 2-tap correction.
+# Without correction: 50 kHz gives ratio 0.82 — FAIL.
+# -----------------------------------------------------------------------
+.PHONY: sim_cic_droop_eq
+
+sim_cic_droop_eq: tb_cic_droop_eq.vvp
+	$(VVP) $<
+
+tb_cic_droop_eq.vvp: $(TB)/tb_cic_droop_eq.v $(RTL)/sd_decimator_cic_only.v
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+# -----------------------------------------------------------------------
+# Side-by-side CIC_ONLY vs TDM8 comparison (iverilog → Python DFT)
+# Streams IQ samples to stdout; pipe into compare_decimators.py.
+# -----------------------------------------------------------------------
+.PHONY: sim_compare_decimators
+
+sim_compare_decimators: tb_compare_decimators.vvp
+	$(VVP) $< | python3 ../sim/tests/compare_decimators.py
+
+tb_compare_decimators.vvp: $(TB)/tb_compare_decimators.v \
+                            $(RTL)/sd_decimator_cic_only.v \
+                            $(RTL)/sd_decimator_cic_tdm8.v
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+# -----------------------------------------------------------------------
+# trouper_top integration testbench (iverilog)
+# Exercises the full signal path: SDM IQ → decimator → PSRAM SC delay →
+# sc_detector → training_acc → MRC weights (via SPI) → mrc_combiner → sd_remod.
+# -----------------------------------------------------------------------
+TROUPER_TOP_SRCS = \
+    $(RTL)/trouper_top.v \
+    $(RTL)/sd_decimator_cic_tdm8.v \
+    $(RTL)/dc_removal.v \
+    $(RTL)/sc_detector.v \
+    $(RTL)/training_acc.v \
+    $(RTL)/packet_ctrl_fsm.v \
+    $(RTL)/psram_buf_ctrl.v \
+    $(RTL)/mrc_combiner.v \
+    $(RTL)/sd_remod.v \
+    $(RTL)/spi_slave.v \
+    $(RTL)/reg_bank.v \
+    ../fpga-emul/rtl/psram_model.v
+
+.PHONY: sim_trouper_top
+
+sim_trouper_top: tb_trouper_top.vvp
+	$(VVP) $<
+
+tb_trouper_top.vvp: $(TB)/tb_trouper_top.v $(TROUPER_TOP_SRCS)
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+# -----------------------------------------------------------------------
+# cocotb integration tests (SF7–SF12 × BW250/125) — requires chipathon26 container
+# -----------------------------------------------------------------------
+.PHONY: sim_trouper_cocotb
+
+sim_trouper_cocotb:
+	$(MAKE) -C cocotb_trouper_top
+
 clean:
 	rm -rf obj_dir_dsp_chain obj_dir_dsp_chain_real obj_dir_loopback_probe \
 		obj_dir_dsp_chain_real_probe obj_dir_dsp_chain_real_probe_osr256 \
-		obj_dir_const *.vvp *.vcd
+		obj_dir_const obj_dir_mrc_combiner obj_dir_mrc_fw_precision \
+		obj_dir_mrc_fw_rand obj_dir_dsp_chain_rand *.vvp *.vcd
+	$(MAKE) -C cocotb_trouper_top clean 2>/dev/null || true

@@ -35,10 +35,10 @@ The supported firmware-free fallback is specifically `RX-only bypass`:
 
 Two operating modes share the same hardware:
 
-| Mode | Config | Combining | Output |
-| --- | --- | --- | --- |
-| 1 | NT=1, NR=4 | MRC (requires firmware-computed W) | ΣΔ re-mod → SX1302 Radio A |
-| 2 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A |
+| Mode | `MIMO_CTRL.MODE` | Config | Combining | Output |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | NT=1, NR=4 | MRC (requires firmware-computed W) | ΣΔ re-mod → SX1302 Radio A |
+| 1 | 1 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A |
 
 ---
 
@@ -47,22 +47,22 @@ Two operating modes share the same hardware:
 | Stage | Block | Input | Output | Rate | Mode |
 | --- | --- | --- | --- | --- | --- |
 | 1 | SX1257 ΣΔ ADC (×4) | RF signal at each antenna | 1-bit I + 1-bit Q × 4 | 32 MS/s | All |
-| 2 | ΣΔ Decimator — CIC-only (×4) | 1-bit I+Q × 4 | int8 complex × 4 | **250 kS/s** (both BW modes) | All |
+| 2 | ΣΔ Decimator — half-band R=64 (×4) | 1-bit I+Q × 4 | int8 complex × 4 | **500 kS/s** (both BW modes) | All |
 | 3 | DC Removal (×4) | Full-precision complex × 4 | DC-removed complex × 4 | f_s | All |
-| 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 1 |
-| 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 1 |
-| 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `buf_freeze`, `combiner_source`, `safe_switch` | per packet | Mode 1 |
-| 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | all-pairs `Z_kl`, `Z_diag`, `training_done` | per packet | Mode 1 |
-| 7 | Firmware Weight Generation | register-bank `Z_kl`, `training_done` IRQ | `W_SHADOW`, `W_COMMIT` | per packet | Mode 1 |
-| 7' | Bypass MUX | int8 from selected antenna | int8 (no sign-extension needed) | f_s | Mode 2 only |
-| 8 | MRC Combiner | `W_ACTIVE`, `x_j[n]` (4 branches) | `ŷ[n]` (1 stream) | f_s | Mode 1 |
+| 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 0 |
+| 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 0 |
+| 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `buf_freeze`, `combiner_source`, `safe_switch` | per packet | Mode 0 |
+| 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | all-pairs `Z_kl`, `Z_diag`, `training_done` | per packet | Mode 0 |
+| 7 | Firmware Weight Generation | register-bank `Z_kl`, `training_done` IRQ | `W_SHADOW`, `W_COMMIT` | per packet | Mode 0 |
+| 7' | Bypass MUX | int8 from selected antenna | int8 (no sign-extension needed) | f_s | Mode 1 only |
+| 8 | MRC Combiner | `W_ACTIVE`, `x_j[n]` (4 branches) | `ŷ[n]` (1 stream) | f_s | Mode 0 |
 | 9 | ΣΔ Re-modulator (3rd order) | int8 I+Q from combiner | 1-bit I+Q | 32 MS/s | All |
 
 ---
 
-## Mode 2 — Passthrough (Bypass)
+## Mode 1 — Passthrough (Bypass)
 
-`MIMO_CTRL.MODE = 1` (register value 1, referred to as Mode 2 in human-facing numbering).
+`MIMO_CTRL.MODE = 1`.
 
 Stages 4–8 (SC detector, frontend buffer, training accumulator, firmware weight path trigger, combiner) are clock-gated and their outputs ignored. A bypass MUX immediately after the decimators routes a single antenna's int8 samples directly into REMOD_A:
 
@@ -73,7 +73,7 @@ remod_a_in = x[bypass_sel][n]   // int8 directly; no sign-extension needed
 
 **Antenna selection.** The lowest-numbered enabled antenna in `ANTENNA_EN` is used. Disable unwanted antennas via `ANTENNA_EN` before entering passthrough mode to choose a specific antenna.
 
-**Purpose.** Provides a hardware-verified single-antenna baseline with identical front-end, decimation, and re-modulation paths as MRC mode. BER vs SNR comparisons against Mode 1 isolate the combining gain contribution.
+**Purpose.** Provides a hardware-verified single-antenna baseline with identical front-end, decimation, and re-modulation paths as MRC mode. BER vs SNR comparisons against Mode 0 isolate the combining gain contribution.
 
 **Latency.** Passthrough introduces only the decimator pipeline latency plus 1 cycle for the bypass MUX.
 
@@ -81,15 +81,14 @@ remod_a_in = x[bypass_sel][n]   // int8 directly; no sign-extension needed
 
 ## Stage 2 — ΣΔ Decimation
 
-Programmable CIC filter decimates the 32 MS/s bitstream to the internal IQ rate used by the receive chain. In the deployed design, both supported LoRa bandwidths use `decim_ratio=1` and therefore run at 250 kS/s; 125 kHz mode is intentionally 2x oversampled while 250 kHz mode is 1x Nyquist.
+The fixed R=64 half-band chain (CIC-3 R=16 → HB1 ÷2 → HB2 ÷2) decimates the 32 MS/s bitstream to a fixed 500 kS/s internal IQ rate. Both supported LoRa bandwidths run at 500 kS/s; `BW_CFG.bw_sel` selects BW by setting `sample_shift` (the oversampling factor), not the decimation ratio.
 
-| BW Selection | Ratio (R) | Sample Rate (f_s) | decim_ratio | Notes |
+| BW Selection | Ratio (R) | Sample Rate (f_s) | sample_shift | Notes |
 | --- | --- | --- | --- | --- |
-| 125 kHz | 128× | 250 kS/s | 1 | 2× oversampled; sd_remod+SX1302 filter rejects extra noise BW |
-| 250 kHz | 128× | 250 kS/s | 1 | 1× Nyquist; same firmware setting as 125 kHz |
-| ~~500 kHz~~ | ~~64×~~ | ~~500 kS/s~~ | ~~2~~ | **Not supported** — CIC-only SQNR 9.6 dB at R=64; requires FIR |
+| 125 kHz | 64× | 500 kS/s | 2 | 4× oversampled |
+| 250 kHz | 64× | 500 kS/s | 1 | 2× oversampled |
 
-Both supported BW modes use `decim_ratio=1` (R=128). The downstream LoRa demodulator is
+Both BW modes share the fixed R=64 chain (500 kS/s). The downstream LoRa demodulator is
 off-chip (SX1302); the `sd_remod` always outputs a 32 MHz ΣΔ bitstream so the internal
 IQ sample rate is transparent to the SX1302. The SX1257 analog IF filter bandlimits the
 signal before the ΣΔ ADC, and the SX1302 channel filter rejects any residual alias noise.
@@ -153,7 +152,7 @@ Mag_SC >= θ_SC² · Energy_Ref     (default θ_SC = 0.90)
 
 `sc_lock` is the terminal acquisition event in the non-FFT path. No downstream FFT or sync/downchirp refiner is needed — `timing_ref` alone locates the full packet.
 
-**Note — complex IQ required for CFO immunity.** The SC metric `|c_j|² = ci² + cq²` is magnitude-squared of the complex autocorrelation and is independent of carrier frequency offset (the CFO phase rotates `c_j` but not its magnitude). Using only the I channel collapses the metric to `Re{c_j}² = |c_j|²·cos²(2πΔf·M·Ts)`, which drops to zero when CFO causes a 90° phase shift. In practice, all SX1257s and the ASIC share a single TCXO, so CFO is entirely due to the remote transmitter; at ±10 ppm / 915 MHz (≈ ±9 kHz) and M=128 at 250 kS/s the phase error is < 0.03 rad, making I-only detection viable — but this relies on a hidden hardware assumption and should not be made a deliberate design choice. Both I and Q must be fed to `sc_detector`.
+**Note — complex IQ required for CFO immunity.** The SC metric `|c_j|² = ci² + cq²` is magnitude-squared of the complex autocorrelation and is independent of carrier frequency offset (the CFO phase rotates `c_j` but not its magnitude). Using only the I channel collapses the metric to `Re{c_j}² = |c_j|²·cos²(2πΔf·M·Ts)`, which drops to zero when CFO causes a 90° phase shift. In practice, all SX1257s and the ASIC share a single TCXO, so CFO is entirely due to the remote transmitter; at ±10 ppm / 915 MHz (≈ ±9 kHz) the per-sample phase error at 500 kS/s is small, making I-only detection viable — but this relies on a hidden hardware assumption and should not be made a deliberate design choice. Both I and Q must be fed to `sc_detector`.
 
 See [Correlator Bank (SC)](blocks/Correlator%20Bank.md).
 
@@ -232,10 +231,9 @@ See [MRC Combiner](blocks/MRC%20Combiner.md).
 
 | BW | f_s (combiner output) | OSR | In-band SQNR (3rd order) | Status |
 | --- | --- | --- | --- | --- |
-| 125 kHz | 250 kS/s | 128 | > 115 dB | Deployed (2× oversampled; decimator R=128 for both BW modes) |
-| 250 kHz | 250 kS/s | 128 | > 115 dB | Deployed |
-| 500 kHz | 500 kS/s | 64 | > 100 dB | Extension — requires TDM+FIR decimator |
-| 500 kHz (2×) | 1 MS/s | 32 | > 85 dB | Extension — requires TDM+FIR decimator |
+| 125 kHz | 500 kS/s | 64 | > 100 dB | Production (4× oversampled; fixed R=64 half-band for both BW modes) |
+| 250 kHz | 500 kS/s | 64 | > 100 dB | Production (2× oversampled) |
+| 500 kHz (1 MS/s) | 1 MS/s | 32 | > 85 dB | Out of scope |
 
 All OSR values give SQNR far exceeding LoRa requirements. The 8-bit input gives ~44 dB effective SQNR (after ÷2); the quantisation noise floor is negligible at all supported bandwidths.
 
@@ -247,14 +245,12 @@ See [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md).
 
 ### 1. Analog Filter Matching
 
-The SX1257 analog roofing filter (`RegRxBw`, 0x0D) must be matched to the selected digital bandwidth in `DECIM_CFG`.
+The SX1257 analog roofing filter (`RegRxBw`, 0x0D) must be matched to the selected digital bandwidth in `BW_CFG`.
 
-| DECIM_CFG | Digital BW | Recommended SX1257 Analog BW |
+| BW_CFG.bw_sel | Digital BW | Recommended SX1257 Analog BW |
 | --- | --- | --- |
-| `0x02` | 125 kHz | 250 kHz (minimum setting) |
-| `0x01` | 250 kHz | 250 kHz |
-| `0x00` | 500 kHz | 500 kHz |
-| `0x03` | 500 kHz (1 MS/s) | 500 kHz |
+| `1` | 125 kHz | 250 kHz (minimum setting) |
+| `0` | 250 kHz | 250 kHz |
 
 If the analog filter is left wider than the digital sampling rate, signals and noise above the Nyquist frequency alias directly into the LoRa band.
 

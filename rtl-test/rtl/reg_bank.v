@@ -41,7 +41,7 @@ module reg_bank (
     input  wire [15:0] sc_stat,
     // Training accumulator readback
     input  wire        training_armed,
-    input  wire [15:0] n_acc,
+    input  wire [17:0] n_acc,
     // Z_kl pair readback — top 24 bits [31:8] of the int32 accumulators,
     // big-endian, 3 bytes per component (I then Q), 6 bytes per pair.
     // Pairs: 0=Z_01 1=Z_02 2=Z_03 3=Z_12 4=Z_13 5=Z_23 @ 0x40–0x63
@@ -71,7 +71,7 @@ module reg_bank (
     output reg [1:0]   mimo_mode,       // MIMO_CTRL[1:0]
     output reg [3:0]   antenna_en,      // MIMO_CTRL[7:4]
     output reg [3:0]   sf_cfg,          // SF_CFG[3:0], direct-coded 7–12
-    output reg [1:0]   decim_ratio,
+    output reg         bw_sel,        // BW_CFG[0]: 0=250 kHz (sample_shift=1), 1=125 kHz (sample_shift=2)
     // SC thresholds
     output reg [15:0]  sc_thr,
     output reg [1:0]   sc_hits_req,
@@ -148,8 +148,8 @@ module reg_bank (
             mimo_mode        <= 2'h0;
             antenna_en       <= 4'hF;
             sf_cfg           <= 4'h7;
-            decim_ratio      <= 2'h0;
-            sc_thr           <= 16'h7333;
+            bw_sel           <= 1'b0;
+            sc_thr           <= 16'h01CC;   // 0x7333 ÷ 64; sc_thr[11:0] used (12-bit positive)
             sc_hits_req      <= 2'h2;
             pkt_timeout_syms <= 8'h50;
             rx_gain_shadow_0 <= 8'h3E;
@@ -182,7 +182,7 @@ module reg_bank (
                                antenna_en   <= wdata[7:4];
                            end
                     8'h09: sf_cfg           <= wdata[3:0];
-                    8'h0A: decim_ratio      <= wdata[1:0];
+                    8'h0A: if (!packet_active) bw_sel <= wdata[0]; // blocked during active packet
                     8'h0B: pkt_timeout_syms <= wdata;
                     8'h0C: sc_thr[15:8]     <= wdata;
                     8'h0D: sc_thr[7:0]      <= wdata;
@@ -263,7 +263,7 @@ module reg_bank (
             // --- RX / modem configuration ---
             8'h08: rdata_next = {antenna_en, 2'h0, mimo_mode};
             8'h09: rdata_next = {4'h0, sf_cfg};
-            8'h0A: rdata_next = {6'h0, decim_ratio};
+            8'h0A: rdata_next = {7'h0, bw_sel};
             8'h0B: rdata_next = pkt_timeout_syms;
             8'h0C: rdata_next = sc_thr[15:8];
             8'h0D: rdata_next = sc_thr[7:0];
@@ -286,8 +286,9 @@ module reg_bank (
             8'h1E: rdata_next = {4'h0, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
             8'h1F: rdata_next = 8'h00;                              // TACC_NOISE_TRIG (WO)
             8'h20: rdata_next = {6'h0, training_armed, training_done_rb};
-            8'h21: rdata_next = n_acc[15:8];
-            8'h22: rdata_next = n_acc[7:0];
+            8'h21: rdata_next = {6'h0, n_acc[17:16]};  // N_ACC[17:16] (big-endian byte 0)
+            8'h22: rdata_next = n_acc[15:8];             // N_ACC[15:8]  (big-endian byte 1)
+            8'h23: rdata_next = n_acc[7:0];              // N_ACC[7:0]   (big-endian byte 2)
             // --- SC status / bring-up debug ---
             8'h24: rdata_next = sc_stat[15:8];
             8'h25: rdata_next = sc_stat[7:0];

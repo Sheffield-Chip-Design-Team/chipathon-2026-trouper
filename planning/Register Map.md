@@ -33,7 +33,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **RX / Modem Configuration** (`0x08`–`0x0F`) | | | | | |
 | `0x08` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
 | `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12) |
-| `0x0A` | `DECIM_CFG` | R/W | `0x00` | ΣΔ Decimator | [1:0] decimation-ratio / output-bandwidth select |
+| `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); write ignored while `PACKET_ACTIVE` |
 | `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
 | `0x0C` | `SC_THR_HI` | R/W | `0x73` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [12:0] only — values ≥ `0x2000` are unsupported. |
 | `0x0D` | `SC_THR_LO` | R/W | `0x33` | Schmidl-Cox | Detection threshold [7:0] |
@@ -56,9 +56,9 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [7:4] reserved |
 | `0x1F` | `TACC_NOISE_TRIG` | W | `0x00` | Training Accumulator | [0] W1P: arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`) |
 | `0x20` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
-| `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [15:8] |
-| `0x22` | `N_ACC_LO` | R | `0x00` | Training Accumulator | Samples accumulated [7:0] |
-| `0x23` | — | — | — | — | Reserved |
+| `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [17:16] (bits [1:0]; [7:2] read 0) |
+| `0x22` | `N_ACC_MID` | R | `0x00` | Training Accumulator | Samples accumulated [15:8] |
+| `0x23` | `N_ACC_LO` | R | `0x00` | Training Accumulator | Samples accumulated [7:0] |
 | **SC Status / Bring-Up Debug** (`0x24`–`0x2F`) | | | | | |
 | `0x24` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `\|C[s]\|^2` telemetry [15:8] |
 | `0x25` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `\|C[s]\|^2` telemetry [7:0] |
@@ -190,12 +190,18 @@ This configures `M = 2^SF` for the PSRAM delay line, SC detector, training accum
 
 ---
 
-### `0x0A` — DECIM_CFG (read/write)
+### `0x0A` — BW_CFG (read/write)
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [1:0] | `DECIM_RATIO` | Decimation-ratio / output-bandwidth select (supported LoRa bandwidths: 125 kHz and 250 kHz only) |
-| [7:2] | — | Reserved, write 0 |
+| [0] | `bw_sel` | LoRa bandwidth select: 0 = 250 kHz (2× oversample, `sample_shift=1`), 1 = 125 kHz (4× oversample, `sample_shift=2`) |
+| [7:1] | — | Reserved, write 0 |
+
+The decimator is a fixed R=64 half-band chain (500 kS/s output); bandwidth is **not**
+a decimation-ratio change. `bw_sel` selects only `sample_shift`, which sets the
+symbol period `M = 1 << (SF + sample_shift)` used by every symbol-domain block (SC
+detector, training accumulator, packet-control FSM, PSRAM delay). Writes are ignored
+while `PACKET_ACTIVE = 1`; a BW (or SF) change re-arms decimator/delay warm-up.
 
 ### `0x0B` — PKT_TIMEOUT_SYMS (read/write)
 
@@ -294,9 +300,13 @@ Software EMA flow:
 3. Read `ZDIAG_k` at `0x64`–`0x6B` (top 16 bits) for all branches
 4. Update per-branch EMA: `sigma2_k ← (1-α)·sigma2_k + α · ZDIAG_k[31:16] / n_acc`
 
-### `0x20`–`0x22` — TRAINING_STATUS / N_ACC (read-only)
+### `0x20`–`0x23` — TRAINING_STATUS / N_ACC (read-only)
 
-Training-window bookkeeping: arm/done flags and the accumulated sample count `n_acc` (full 16-bit unsigned, big-endian across `0x21`–`0x22`).
+Training-window bookkeeping: arm/done flags and the accumulated sample count `n_acc`
+(full **18-bit** unsigned, big-endian across `0x21`–`0x23`: `0x21`[1:0] = `[17:16]`,
+`0x22` = `[15:8]`, `0x23` = `[7:0]`). The training window is `8 × M` samples, so at
+500 kS/s the maximum is `8 × 2^(12+2) = 131072` samples (SF12 / 125 kHz), which needs
+18 bits.
 
 ---
 
@@ -420,7 +430,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | Former address(es) | Name | Reason removed |
 | --- | --- | --- |
 | `0x02`, `0x07`–`0x08` | `CPU_RESET`, `CPU_SRAM_CTRL/STATUS` | No PicoRV32 / CPU SRAM in Trouper |
-| `0x0A` | `LOW_BAT_THR` | No hardware; never implemented in RTL |
+| `0x0A` | `LOW_BAT_THR` | No hardware; never implemented in RTL. Address `0x0A` is now reused for `BW_CFG` (see active map). |
 | `0x13`–`0x15` | `FRONTEND_CFG/STATUS`, `BUF_WR_PTR` | frontend_buf_ctrl and on-chip frontend SRAMs removed (PSRAM delay line replaces them) |
 | `0x17`–`0x18`, `0x1C` | `ENERGY_THR`, `SC_CFG.ENERGY_GATE_EN` | Energy gating removed with `noise_est.v` |
 | `0x2B`–`0x2E` | `AGC_THR_HI`, `AGC_THR_SAT` | AGC comparison is software-owned; thresholds live host-side, never implemented in RTL |

@@ -47,6 +47,7 @@ module training_acc (
     input  wire        sc_lock,
     input  wire [31:0] timing_ref,
     input  wire [3:0]  sf,
+    input  wire [1:0]  sample_shift,
     input  wire        noise_trig,           // W1P from reg_bank: start noise-mode measurement
     // Individual Z_kl pairs (for firmware eigenvector path)
     output reg  signed [31:0] Zpair_i0, Zpair_q0,   // Z_01
@@ -58,7 +59,7 @@ module training_acc (
     // Z_kk autocorrelation (real, for noise estimation)
     output reg  [31:0] Zdiag_0, Zdiag_1, Zdiag_2, Zdiag_3,
     output reg         training_done,
-    output reg  [15:0] n_acc,  // up to 32768 samples inclusive (SF12 = 2^(12+3))
+    output reg  [17:0] n_acc,  // up to 131072 samples (SF12+shift=2 = 2^(12+2+3))
     output wire        training_armed
 );
 
@@ -173,7 +174,7 @@ module training_acc (
             noise_mode_r  <= 1'b0;
             noise_trig_r  <= 1'b0;
             training_done <= 1'b0;
-            n_acc         <= 16'd0;
+            n_acc         <= 18'd0;
             acc_start     <= 32'd0;
             acc_end       <= 32'd0;
             tdm_pair      <= 4'd0;
@@ -219,8 +220,8 @@ module training_acc (
                 noise_mode_r  <= ~sc_lock;
                 training_done <= 1'b0;
                 acc_start     <= sc_lock ? timing_ref : sample_count;
-                acc_end       <= sc_lock ? timing_ref + (32'd1 << (sf[3:0] + 4'd3)) - 32'd1
-                                         : sample_count + (32'd1 << (sf[3:0] + 4'd3)) - 32'd1;
+                acc_end       <= sc_lock ? timing_ref + (32'd1 << (sf + sample_shift + 5'd3)) - 32'd1
+                                         : sample_count + (32'd1 << (sf + sample_shift + 5'd3)) - 32'd1;
                 Zpair_i0 <= 32'sd0; Zpair_q0 <= 32'sd0;
                 Zpair_i1 <= 32'sd0; Zpair_q1 <= 32'sd0;
                 Zpair_i2 <= 32'sd0; Zpair_q2 <= 32'sd0;
@@ -229,7 +230,7 @@ module training_acc (
                 Zpair_i5 <= 32'sd0; Zpair_q5 <= 32'sd0;
                 Zdiag_0 <= 32'd0; Zdiag_1 <= 32'd0;
                 Zdiag_2 <= 32'd0; Zdiag_3 <= 32'd0;
-                n_acc <= 16'd0;
+                n_acc <= 18'd0;
             end
 
             // Trigger TDM on iq_valid within window when idle.
@@ -241,7 +242,7 @@ module training_acc (
                 raw_i2_r <= raw_i2; raw_q2_r <= raw_q2;
                 raw_i3_r <= raw_i3; raw_q3_r <= raw_q3;
                 last_samp  <= (sample_count == acc_end);
-                n_acc <= n_acc + 16'd1;
+                n_acc <= n_acc + 18'd1;
                 tdm_pair   <= 4'd0;
                 tdm_sub    <= 2'd0;
                 tdm_active <= 1'b1;

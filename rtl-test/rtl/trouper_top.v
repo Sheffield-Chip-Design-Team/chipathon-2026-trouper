@@ -103,7 +103,8 @@ module trouper_top (
     wire [1:0]  rb_mimo_mode;
     wire [3:0]  rb_antenna_en;
     wire [3:0]  rb_sf_cfg;
-    wire [1:0]  rb_decim_ratio;
+    wire        rb_bw_sel;
+    wire [1:0]  rb_sample_shift = rb_bw_sel ? 2'd2 : 2'd1;
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
@@ -137,6 +138,9 @@ module trouper_top (
     // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128, no FIR.
     // Boxcar-4 front end + shared CIC back end reduces area versus 4×
     // sd_decimator_cic_only.  This is the experimental TDM path.
+    // Folded area-reduction: sd_decimator_poly = polyphase HB delay lines
+    // (#2) + 14-bit CIC (#3), bit-exact vs sd_decimator_hb_tdm (SGE 2099,
+    // -13.8% decimator area). See planning/decimator-hb-area-reduction.md.
     // =========================================================================
     wire signed [7:0] dec_i [0:3];
     wire signed [7:0] dec_q [0:3];
@@ -145,7 +149,7 @@ module trouper_top (
     wire [3:0]       dec_valid_all;
     wire             iq_valid = |dec_valid_all;
 
-    sd_decimator_cic_tdm8 u_dec (
+    sd_decimator_poly u_dec (
         .clk_32m (clk),
         .rst_n   (rst_n),
         .iq_in_i (IQ_DATA_I),
@@ -219,6 +223,7 @@ module trouper_top (
         .del_q0 (psram_del_q0),
         .delayed_valid  (psram_del_valid),
         .sf             (rb_sf_cfg),
+        .sample_shift   (rb_sample_shift),
         .sc_thr         (rb_sc_thr),
         .sc_hits_req    (rb_sc_hits_req),
         .sc_lock        (sc_lock),
@@ -250,7 +255,7 @@ module trouper_top (
     // Z_kk diagonal autocorrelation → reg_bank noise estimation
     wire [31:0]        Zdiag [0:3];
     wire               training_done;
-    wire [14:0]        n_acc;
+    wire [17:0]        n_acc;
     wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
 
@@ -262,10 +267,11 @@ module trouper_top (
         .raw_i2 (dcr_i[2]), .raw_i3 (dcr_i[3]),
         .raw_q0 (dcr_q[0]), .raw_q1 (dcr_q[1]),
         .raw_q2 (dcr_q[2]), .raw_q3 (dcr_q[3]),
-        .sc_lock    (sc_lock),
-        .timing_ref (timing_ref),
-        .sf         (rb_sf_cfg),
-        .noise_trig (rb_noise_trig),
+        .sc_lock      (sc_lock),
+        .timing_ref   (timing_ref),
+        .sf           (rb_sf_cfg),
+        .sample_shift (rb_sample_shift),
+        .noise_trig   (rb_noise_trig),
         .Zpair_i0 (Zpair_i[0]), .Zpair_q0 (Zpair_q[0]),
         .Zpair_i1 (Zpair_i[1]), .Zpair_q1 (Zpair_q[1]),
         .Zpair_i2 (Zpair_i[2]), .Zpair_q2 (Zpair_q[2]),
@@ -348,8 +354,9 @@ module trouper_top (
         .clk             (clk),
         .rst_n           (rst_n),
         .iq_valid        (dcr_valid),
-        .sample_count    (sample_count),
+        .sample_count    (iq_samp_cnt),
         .sf              (rb_sf_cfg),
+        .sample_shift    (rb_sample_shift),
         .sc_lock         (sc_lock),
         .timing_ref      (timing_ref),
         .training_done   (training_done),
@@ -393,6 +400,7 @@ module trouper_top (
         .qspi_owner   (rb_psram_ctrl[3]),
         .packet_active(packet_active),
         .sf           (rb_sf_cfg),
+        .sample_shift (rb_sample_shift),
         .iq_i0 (dcr_i[0]), .iq_i1 (dcr_i[1]),
         .iq_i2 (dcr_i[2]), .iq_i3 (dcr_i[3]),
         .iq_q0 (dcr_q[0]), .iq_q1 (dcr_q[1]),
@@ -612,7 +620,7 @@ module trouper_top (
         .mimo_mode       (rb_mimo_mode),
         .antenna_en      (rb_antenna_en),
         .sf_cfg          (rb_sf_cfg),
-        .decim_ratio     (rb_decim_ratio),
+        .bw_sel          (rb_bw_sel),
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
         .pkt_timeout_syms(rb_pkt_timeout_syms),

@@ -13,85 +13,51 @@ class ADCModel:
 
 class SigmaDeltaRemodulator:
     """
-    Stage 8 — MASH 1-1-1 ΣΔ re-modulator.
+    Stage 8 — 3rd-order CIFF ΣΔ re-modulator. Matches sd_remod.v exactly.
 
-    Three cascaded 1st-order stages; unconditionally stable for any bounded input.
-    NTF = (1 − z⁻¹)³ — quantisation noise is 3rd-order high-pass shaped.
+    Architecture: Cascade of Integrators, Feed-Forward (CIFF).
+      Three saturating integrators; Q8 weighted feed-forward summer; sign quantizer.
+      Coefficients from synthesizeNTF(order=3, OSR=64) via python-deltasigma.
+      Matches SX1257 datasheet §6.2.3 Figure 6-3.
 
-    Each stage k:
-        u_k[n] = e_{k-1}[n]  +  s_k[n-1]     (e₀ = input x)
-        q_k[n] = sign(u_k[n])
-        s_k[n] = u_k[n] − q_k[n]              (integrator state = quantisation error)
-
-    process() / process_block() return q₁ (1-bit output of stage 1).
-    The full 3rd-order combined output Y = q₁ + Δq₂ + Δ²q₃ (multi-level)
-    is available via mash_combine() after a process_block() call.
-
-    Input must be normalised to |x| < 0.9 for stable operation.
+    Normalised convention: input |x| <= 1.0, feedback = ±1.0.
+    Integrators saturate at ±CLIP (= 32767/127, matching int16/int8 ratio in RTL).
+    Input must be < −3 dBFS (|x| < 0.708) for stability.
     """
 
+    A1   = 205 / 256   # 0.800 — Q8 coefficient matching RTL
+    A2   =  74 / 256   # 0.289
+    A3   =  11 / 256   # 0.043
+    CLIP = 32767 / 127  # integrator saturation limit in normalised units (~258)
+
     def __init__(self, order: int = 3):
+        # `order` kept for API compatibility; always 3rd-order CIFF
         self.order = order
-        self._states = [0j] * order   # integrator state per stage (= error from prev sample)
-        self._q_arr: list[np.ndarray] = []   # filled by process_block for mash_combine
+        self._s1 = self._s2 = self._s3 = 0j
+        self._prev_fb = 0j
 
     def reset(self):
-        self._states = [0j] * self.order
-        self._q_arr = []
+        self._s1 = self._s2 = self._s3 = 0j
+        self._prev_fb = 0j
+
+    def _sat(self, v: complex) -> complex:
+        c = self.CLIP
+        return complex(max(-c, min(c, v.real)), max(-c, min(c, v.imag)))
 
     def process(self, sample: complex) -> complex:
-        """Process one complex sample. Returns q₁ (1-bit)."""
-        x = sample
-        q1 = None
-        for k in range(self.order):
-            u = x + self._states[k]
-            q = np.sign(u.real) + 1j * np.sign(u.imag)
-            self._states[k] = u - q   # state becomes current error
-            if k == 0:
-                q1 = q
-            x = self._states[k]       # next stage input is current stage error
-        return q1
+        """Process one complex sample. Returns ±1+j·±1 (1-bit per I/Q)."""
+        e = sample - self._prev_fb
+        self._s1 = self._sat(self._s1 + e)
+        self._s2 = self._sat(self._s2 + self._s1)
+        self._s3 = self._sat(self._s3 + self._s2)
+        v = e + self.A1 * self._s1 + self.A2 * self._s2 + self.A3 * self._s3
+        q = (1.0 if v.real >= 0 else -1.0) + 1j * (1.0 if v.imag >= 0 else -1.0)
+        self._prev_fb = q
+        return q
 
     def process_block(self, samples: np.ndarray) -> np.ndarray:
-        """
-        Process a block of complex samples. Returns q₁ array (1-bit).
-        Also stores per-stage outputs internally for mash_combine().
-        """
-        n = len(samples)
-        qs = [np.zeros(n, dtype=complex) for _ in range(self.order)]
-        x_in = samples.copy()
-
-        for k in range(self.order):
-            x_out = np.zeros(n, dtype=complex)
-            s = self._states[k]
-            for i in range(n):
-                u = x_in[i] + s
-                q = np.sign(u.real) + 1j * np.sign(u.imag)
-                s = u - q
-                qs[k][i] = q
-                x_out[i] = s     # next stage input = current error
-            self._states[k] = s
-            x_in = x_out         # error feeds next stage
-
-        self._q_arr = qs
-        return qs[0]             # 1-bit output from stage 1
-
-    def mash_combine(self) -> np.ndarray:
-        """
-        Return the full MASH combined output after process_block():
-            Y = q₁ + Δq₂ + Δ²q₃
-        This multi-level signal has NTF = (1−z⁻¹)³ and is used for
-        SQNR analysis. Normalise by 3 before LPF for unit-scale.
-        """
-        if not self._q_arr:
-            raise RuntimeError("Call process_block() before mash_combine()")
-        q1 = self._q_arr[0].real
-        if self.order >= 2:
-            dq2 = np.diff(self._q_arr[1].real, prepend=0)
-        else:
-            dq2 = np.zeros_like(q1)
-        if self.order >= 3:
-            ddq3 = np.diff(np.diff(self._q_arr[2].real, prepend=0), prepend=0)
-        else:
-            ddq3 = np.zeros_like(q1)
-        return q1 + dq2 + ddq3
+        """Process a block of complex samples. Returns ±1+j·±1 array."""
+        out = np.empty(len(samples), dtype=complex)
+        for i, s in enumerate(samples):
+            out[i] = self.process(s)
+        return out

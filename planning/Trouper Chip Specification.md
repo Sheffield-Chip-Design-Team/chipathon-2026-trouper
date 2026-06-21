@@ -5,9 +5,9 @@
 | Field | Value |
 |---|---|
 | Document ID | TRPR-SPEC-001 |
-| Version | 0.3 |
+| Version | 0.4 |
 | Status | DRAFT |
-| Date | 2026-06-19 |
+| Date | 2026-06-20 |
 | Project | SSCS PICO Chipathon 2026 — Trouper (DSP) |
 | Companion | Grouper is a separate hardened control macro; Trouper is hardened independently and integrated with Grouper only at a later top level |
 
@@ -34,7 +34,9 @@ Trouper is a standalone hardened DSP macro. In the current top-level RTL it expo
 | SC lock | Schmidl-Cox preamble lock; triggers training accumulation |
 | W | Complex weight vector (4 × int16 Q1.15); written by Grouper firmware or host-assisted control software; applied by MRC combiner |
 | Z_kl | Cross-correlation accumulator between branches k and l; all 6 pairs C(4,2) + 4 diagonal |
-| Training window | 8 × 2^SF samples starting at SC lock; defines n_acc |
+| Training window | 8 × M samples from SC lock; defines n_acc |
+| sample_shift | Oversampling exponent: 1 (250 kHz), 2 (125 kHz), from `BW_CFG.bw_sel` |
+| M | Symbol period in output samples = 1 << (SF + sample_shift) |
 | Bypass mode | Combiner passes lowest-enabled antenna directly to output without weighting |
 | AHB-Lite | AMBA 3 AHB-Lite protocol used on the inter-project Grouper-to-Trouper control link and within Trouper's local register/peripheral fabric |
 
@@ -47,14 +49,14 @@ Trouper is a standalone hardened DSP macro. In the current top-level RTL it expo
 | TRPR-SYS-001 | C | F | Trouper SHALL receive four independent 1-bit I+Q ΣΔ bitstreams from SX1257 AFEs at 32 MS/s per branch. | T |
 | TRPR-SYS-002 | C | F | Trouper SHALL output a single MRC-combined 1-bit I+Q ΣΔ stream at 32 MS/s to SX1302 Radio A. | T |
 | TRPR-SYS-003 | C | P | Trouper operates from a single external 32 MHz clock (IQ_CLK). Two internal clock domains are derived from it: the **32 MHz tier** (IQ_CLK directly) for blocks that must act on every clock edge, and the **16 MHz tier** (CLK_16M = IQ_CLK÷2, generated as a registered divide-by-2 at top level) for blocks updated only on `iq_valid` or `raw_valid`. Because CLK_16M is phase-aligned with IQ_CLK, no metastability synchronisers are required at domain crossings — correct STA coverage is achieved by declaring CLK_16M as a generated clock in the SDC (`create_generated_clock -divide_by 2 -source IQ_CLK`). The SDC defines `IQ_CLK` at 31.25 ns and `CLK_16M` at 62.5 ns; no global multicycle-path override is required. The divider FF SHALL be held in synchronous reset to guarantee a deterministic CLK_16M phase after RESETB de-assertion. | I |
-| TRPR-SYS-015 | C | P | **32 MHz tier (IQ_CLK)** — the following blocks SHALL run on IQ_CLK and meet single-cycle (31.25 ns) setup timing: `sd_decimator_cic_tdm8` (the shared TDM CIC datapath accumulates every edge), `sd_remod` (1-bit output pipeline), `psram_buf_ctrl` (QPI FSM), `sc_detector` (TDM FSM has single-cycle path dependencies; moving to a slower clock does not eliminate the SS timing violation without structural pipelining of the TDM accumulator chain — see TRPR-PHY-008). | I |
+| TRPR-SYS-015 | C | P | **32 MHz tier (IQ_CLK)** — the following blocks SHALL run on IQ_CLK and meet single-cycle (31.25 ns) setup timing: `sd_decimator_poly` (the shared TDM half-band datapath accumulates every edge), `sd_remod` (1-bit output pipeline), `psram_buf_ctrl` (QPI FSM), `sc_detector` (TDM FSM has single-cycle path dependencies; moving to a slower clock does not eliminate the SS timing violation without structural pipelining of the TDM accumulator chain — see TRPR-PHY-008). | I |
 | TRPR-SYS-016 | C | P | **16 MHz tier (CLK_16M)** — the following blocks SHALL run on CLK_16M and meet single-cycle (62.5 ns) setup timing: `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `reg_bank` (incl. interrupt aggregation), `spi_slave`, `packet_ctrl_fsm`. Domain crossings (STA-constrained, no synchronisers required): `raw_valid` + decimated I/Q samples (IQ_CLK→CLK_16M); weight shadow registers and control strobes (CLK_16M→IQ_CLK). Weight generation is not an RTL block in Trouper; it is performed entirely by Grouper firmware or an equivalent host-assisted software path (see §4.6). | I |
-| TRPR-SYS-004 | C | F | Trouper SHALL support LoRa bandwidths of 125 kHz and 250 kHz only. 500 kHz BW is out of scope. | A |
+| TRPR-SYS-004 | C | F | Trouper SHALL support **125 kHz and 250 kHz** BW via the fixed R=64 half-band decimator (500 kS/s); `BW_CFG.bw_sel` selects BW (sets `sample_shift`, not decimation ratio). 1 MHz out of scope. See `planning/decimator-hb-migration-impact-plan.md`. | A |
 | TRPR-SYS-005 | C | F | Trouper SHALL operate in standalone bypass mode when no weight commit is received, routing the lowest-numbered enabled antenna to the output. | T |
 | TRPR-SYS-006 | C | I | Trouper SHALL expose a byte-oriented external configuration/status interface that can be driven by a higher-level integration wrapper or companion control macro. | T |
 | TRPR-SYS-007 | H | I | Host-side SPI access, if required in the final chip, SHALL be provided by the higher-level integration wrapper around the hardened Trouper macro rather than by logic embedded in the standalone Trouper hard macro. | T |
 | TRPR-SYS-008 | C | HW | Trouper SHALL be fabricated in GF180MCU (gf180mcuD PDK), 3.3 V core and IO, targeting the `gf180mcu_fd_sc_mcu7t5v0` standard-cell library. | I |
-| TRPR-SYS-009 | C | HW | The total pad count SHALL NOT exceed 26 | I |
+| TRPR-SYS-009 | C | HW | Trouper SHALL use the Chipathon workshop padring as the physical baseline: die `2935 um × 2935 um`, user core `2493 um × 2493 um`. Trouper itself targets **`1100 um × 1100 um`**, which fits within the quarter-slot budget. | I |
 | TRPR-SYS-010 | C | P | The end-to-end RTL implementation SHALL be validated bit-exactly against the Python reference model in `sim/models/receiver.py` across the full input dynamic range. | T |
 | TRPR-SYS-011 | H | P | Post-PNR setup WNS at TT/25 °C/3.3 V SHALL be positive. SS/125 °C/3.0 V timing shall be documented; MCP or clock-domain partitioning is the preferred path to closure. | A |
 | TRPR-SYS-012 | H | F | Trouper SHALL provide an active-low chip reset pad (RESETB). All state SHALL be cleared on assertion; DSP datapath SHALL resume within one IQ_CLK cycle after de-assertion. | T |
@@ -107,14 +109,14 @@ The active RTL uses one shared time-division-multiplexed decimator datapath acro
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-DEC-001 | C | F | Each decimator instance SHALL accept a 1-bit I and a 1-bit Q input at 32 MS/s and produce a signed 8-bit I and 8-bit Q output. | T |
-| TRPR-DEC-002 | C | F | The decimator SHALL implement the active TDM CIC-only filter with decimation ratio R=128, giving an output rate of 250 kS/s for both supported BWs. | T |
-| TRPR-DEC-003 | C | P | SQNR at the decimator output SHALL be ≥ 30 dB (measured at R=128 with a −3 dBFS tone input). | T |
+| TRPR-DEC-002 | C | F | The decimator SHALL implement the fixed R=64 half-band chain (CIC-3 R=16 → HB1 ÷2 → HB2 ÷2), giving 500 kS/s for both BWs. | T |
+| TRPR-DEC-003 | C | P | SQNR at the decimator output SHALL be ≥ 30 dB (measured at R=64 with a −3 dBFS tone input). | T |
 | TRPR-DEC-004 | C | F | For identical per-branch 1-bit input streams, the shared TDM decimator path SHALL produce bit-identical per-branch outputs. | T |
 | TRPR-DEC-005 | H | F | The CIC accumulator SHALL use saturating arithmetic to prevent wrap-around overflow on all-ones or all-zeros input. | T |
-| TRPR-DEC-006 | H | F | The decimator SHALL produce a valid-strobe output (`iq_valid`) every R=128 input clocks to gate downstream DSP. | T |
+| TRPR-DEC-006 | H | F | The decimator SHALL produce a valid-strobe output (`iq_valid`) every 64 input clocks (R=64) to gate downstream DSP. | T |
 | TRPR-DEC-007 | H | P | Stopband attenuation SHALL exceed 40 dB for tones above 500 kHz (half the 1 MS/s intermediate rate). | A |
-| TRPR-DEC-008 | M | I | The active decimation ratio SHALL be configurable via `DECIM_CFG[1:0]` in the register bank (see §5 Register Map). Only ratio index 3 (R=128, 250 kS/s) is in-spec; other values are reserved for test. | I |
-| TRPR-DEC-009 | L | P | A 2-tap CIC droop equalizer `y[n] = x[n] + (5/16)·(x[n] − x[n−1])` is implemented in both `sd_decimator_cic_only.v` and `sd_decimator_cic_tdm8.v` using shift-and-add only (no multiplier). Per-channel `raw_prev` state is maintained for the TDM path. Residual passband error after equalization < 0.1 dB across the LoRa signal band. | A |
+| TRPR-DEC-008 | M | I | `BW_CFG.bw_sel` selects BW only (sets `sample_shift`); the decimator ratio is fixed at R=64. | I |
+| TRPR-DEC-009 | L | P | The half-band chain SHALL hold passband droop ≤ 0.5 dB without a separate CIC droop equalizer (inherent ≈ −0.17 dB). | A |
 
 ---
 
@@ -126,33 +128,31 @@ Processes all four branches in a single module. Eliminates SX1257 direct-convers
 
 ```
 Per branch k, per sample n (updates on raw_valid only):
-  diff_k[n]  = raw_k[n] - acc_k[n-1][11:4]       // 9-bit signed: raw − dc_est_prev
-  acc_k[n]   = acc_k[n-1] + sign_extend(diff_k[n], 12)  // full error added (no shift)
-  dc_est_k   = acc_k[n][11:4]                     // top 8 bits of 12-bit Q8.4 acc
-  out_k[n]   = raw_k[n] - acc_k[n-1][11:4]        // subtract pre-update estimate (1-cycle lag)
+  diff_k[n]  = raw_k[n] - acc_k[n-1][12:5]       // raw − dc_est_prev
+  acc_k[n]   = acc_k[n-1] + sign_extend(diff_k[n], 13)  // full error added (no shift)
+  dc_est_k   = acc_k[n][12:5]                     // top 8 bits of 13-bit Q8.5 acc
+  out_k[n]   = raw_k[n] - acc_k[n-1][12:5]        // subtract pre-update estimate (1-cycle lag)
 ```
 
-The accumulator is 12-bit Q8.4 signed. The integer DC estimate is `acc[11:4]`; `acc[3:0]` holds sub-LSB precision. Adding the full diff (not `diff>>4`) eliminates the ±15 LSB positive-DC convergence deadband that would arise from flooring a small positive error to zero. The effective time constant is τ = 16 samples regardless.
-
-Effective transfer function: `z[n] = (15/16)·z[n-1] + (1/16)·x[n]` where `z = acc/16`.
+The accumulator is 13-bit Q8.5 signed (α = 1/32). The integer DC estimate is `acc[12:5]`; `acc[4:0]` holds sub-LSB precision. Adding the full diff (not `diff>>5`) eliminates the positive-DC convergence deadband. τ = 32 samples = 64 µs at 500 kS/s.
 
 #### Requirements
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-DCR-001 | C | F | The module SHALL process all four I+Q branches in parallel on the 16 MHz clock domain (`clk_16m`), updating accumulators only when `raw_valid` is asserted. | I |
-| TRPR-DCR-002 | C | F | Each branch accumulator SHALL be 12-bit signed Q8.4. The integer DC estimate is `acc[11:4]`; the output is `raw - acc_prev[11:4]` (pre-update estimate, one `raw_valid` cycle lag). | I |
+| TRPR-DCR-002 | C | F | Each branch accumulator SHALL be 13-bit signed Q8.5. The integer DC estimate is `acc[12:5]`; the output is `raw - acc_prev[12:5]` (pre-update estimate, one `raw_valid` cycle lag). | I |
 | TRPR-DCR-003 | C | F | The accumulator update SHALL add the full signed difference `(raw − dc_est_prev)` — not a right-shifted version — to eliminate the convergence deadband on small positive DC values. | I |
 | TRPR-DCR-004 | C | F | Input and output word widths SHALL both be int8 signed (8 bits). | I |
-| TRPR-DCR-005 | C | P | Effective time constant SHALL be τ = 16 samples (α = 1/16). At the nominal output rate of 250 kS/s this equals **64 µs**; 90% settling completes within ~37 samples (one-quarter of a SF7 symbol). | A |
+| TRPR-DCR-005 | C | P | Effective time constant SHALL be τ = 32 samples (α = 1/32) = **64 µs** at 500 kS/s; 90% settling within ~74 samples. | A |
 | TRPR-DCR-006 | C | P | Steady-state output DC SHALL be < 1 LSB (int8) after 256 samples of constant input. | T |
 | TRPR-DCR-007 | H | F | Output saturation is not required. The output `raw − dc_est` is bounded within the int8 range by construction: `dc_est` is an IIR-filtered version of `raw` and cannot exceed the input dynamic range. | A |
-| TRPR-DCR-008 | H | F | Maximum accumulator value at full-scale input (+127 raw, sustained) SHALL be 127 × 16 = 2032, which fits within the 12-bit signed range (±2047). No accumulator overflow is possible for int8 inputs. | A |
-| TRPR-DCR-009 | H | F | All four branches (I and Q independently) SHALL use the same fixed α = 1/16 coefficient with no runtime configurability. | I |
-| TRPR-DCR-010 | H | P | AC passband droop SHALL be < 0.1 dB at 1 kHz and above (the lowest LoRa chirp BW of 125 kHz is well above the filter corner at ~2.5 kHz for α=1/16 at 250 kS/s). | A |
+| TRPR-DCR-008 | H | F | Maximum accumulator value at full-scale input (+127 raw, sustained) SHALL be 127 × 32 = 4064, which fits within the 13-bit signed range (±4095). No accumulator overflow is possible for int8 inputs. | A |
+| TRPR-DCR-009 | H | F | All four branches (I and Q independently) SHALL use the same fixed α = 1/32 coefficient with no runtime configurability. | I |
+| TRPR-DCR-010 | H | P | AC passband droop SHALL be < 0.1 dB across the LoRa signal band (filter corner ≈ 2.5 kHz for α=1/32 at 500 kS/s). | A |
 | TRPR-DCR-011 | H | F | `out_valid` SHALL be `raw_valid` delayed by exactly one `clk_16m` cycle. All downstream blocks SHALL be timed from `out_valid`, not `raw_valid`. | I |
 | TRPR-DCR-012 | H | F | On RESETB assertion, all 8 accumulators (4 branches × I/Q) and all output registers SHALL clear to zero. | T |
-| TRPR-DCR-013 | M | P | After RESETB de-assertion with a non-zero DC input already present, the output SHALL settle to < 1 LSB DC within 37 samples (one 90% time constant). | T |
+| TRPR-DCR-013 | M | P | After RESETB de-assertion with a non-zero DC input already present, the output SHALL settle to < 1 LSB DC within ~74 samples (one 90% time constant). | T |
 | TRPR-DCR-014 | L | F | A bypass mode port is not present in the current RTL. If diagnostic bypass is needed it SHALL be implemented by asserting RESETB then observing raw outputs upstream, not via a module-level bypass register. | I |
 | TRPR-DCR-015 | C | F | The SC detector SHALL be held off from asserting `sc_lock` for at least 64 samples after RESETB de-assertion (4 × τ; residual DC < 0.1 LSB). In the current RTL no such hold-off exists — the SC detector begins evaluating from the first `iq_valid` pulse. **This is an open RTL gap.** The hold-off SHALL be implemented either as: (a) a `dc_settled` flag in `trouper_top` that gates `sc_lock` until `iq_valid_count ≥ 64`; or (b) a startup inhibit counter in `sc_detector.v` gated on the same count. Without this, a large SX1257 DC offset present at power-on can cause a spurious `sc_lock` within the first symbol. | T |
 
@@ -160,15 +160,15 @@ Effective transfer function: `z[n] = (15/16)·z[n-1] + (1/16)·x[n]` where `z = 
 
 ### 4.3 Schmidl-Cox Detector (`sc_detector.v`) — TRPR-SCD
 
-Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on branch 0 only. With the active PSRAM delay path, the detector sees a true `M = 2^SF` sample delay for all supported spreading factors and accumulates over the full symbol period on each hit decision. The detector remains single-branch: four-branch diversity gain begins only after lock in the downstream training accumulator and combiner path.
+Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on branch 0 only. With the active PSRAM delay path, the detector sees a true `M = 1 << (SF + sample_shift)` sample delay for all supported spreading factors and accumulates over the full symbol period on each hit decision. The detector remains single-branch: four-branch diversity gain begins only after lock in the downstream training accumulator and combiner path.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-SCD-001 | C | F | The detector SHALL compute a per-symbol complex autocorrelation `C[s] = Σ_{n=0}^{M-1} x_0[n] · conj(x_0[n−M])` on antenna branch 0, where `M = 2^SF` for all supported spreading factors `SF7–SF12`. | I |
+| TRPR-SCD-001 | C | F | The detector SHALL compute a per-symbol complex autocorrelation `C[s] = Σ_{n=0}^{M-1} x_0[n] · conj(x_0[n−M])` on antenna branch 0, where `M = 1 << (SF + sample_shift)` for all supported `SF7–SF12` and both BWs. | I |
 | TRPR-SCD-002 | C | F | The detector SHALL form the Schmidl-Cox hit test without an explicit divider: `|C[s]|² >= THR_eff · E[s]`, where `E[s] = (Σ_{n in S_s} |x_0[n]|²) · (Σ_{n in S_s} |x_0[n−M]|²)`. | T |
 | TRPR-SCD-003 | C | F | The detector SHALL evaluate one hit decision per completed symbol using the full `M` delayed samples supplied by the PSRAM path. | I |
 | TRPR-SCD-004 | C | F | `sc_lock` SHALL assert after `SC_HITS_REQ+1` consecutive symbol-hit decisions. | T |
-| TRPR-SCD-005 | C | F | `timing_ref` SHALL back-calculate the first symbol boundary of the qualifying hit run as `lock_sample - (SC_HITS_REQ+1)·2^SF + 1`. | T |
+| TRPR-SCD-005 | C | F | `timing_ref` SHALL back-calculate the first symbol boundary of the qualifying hit run as `lock_sample - (SC_HITS_REQ+1)·M + 1`. | T |
 | TRPR-SCD-006 | C | F | The current RTL SHALL operate on antenna branch 0 only. Four-branch diversity gain begins after lock in the training accumulator and combiner path; the SC detector itself is not pooled across branches. | I |
 | TRPR-SCD-007 | H | I | `SC_THR` SHALL remain writable through `SC_THR_HI` (0x0C) and `SC_THR_LO` (0x0D), but the current RTL consumes only `SC_THR[12:0]`. Firmware SHALL program the effective threshold in the low 13 bits. Reset default remains legacy `0x7333`, whose effective hardware value is `0x1333` until firmware overwrites it. | I |
 | TRPR-SCD-008 | H | I | `SC_HITS_REQ` SHALL be configurable via register 0x1B. Firmware-supported values are 1–3, corresponding to 2–4 required consecutive symbol hits in hardware. | T |
@@ -185,11 +185,11 @@ Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on
 
 ### 4.4 Frontend Buffer Controller — TRPR-FBC
 
-The on-chip SRAM delay line has been removed. The SC correlator M-sample delay (`x[n−M]`, M = 2^SF) is now served entirely by the PSRAM Buffer Controller, which reads back branch-0 I/Q at address `(write_ptr − M)` on each `iq_valid`. This eliminates the on-chip SRAM macro instances and supports all SFs (SF12 requires a 4096-sample delay = 32 kB at 8 bytes/sample, well beyond the 1 kB the on-chip SRAM could provide). The `frontend_buf_ctrl.v` block is reduced to a fanout shim that routes the decimator output to both the SC detector (live x[n]) and the PSRAM controller.
+The on-chip SRAM delay line has been removed. The SC correlator M-sample delay (`x[n−M]`, M = 1 << (SF + sample_shift)) is now served entirely by the PSRAM Buffer Controller, which reads back branch-0 I/Q at address `(write_ptr − M)` on each `iq_valid`. This eliminates the on-chip SRAM macro instances and supports all SFs/BWs (worst case SF12/125 kHz: M = 16384 samples = 128 kB at 8 bytes/sample, well beyond the 1 kB the on-chip SRAM could provide). The `frontend_buf_ctrl.v` block is reduced to a fanout shim that routes the decimator output to both the SC detector (live x[n]) and the PSRAM controller.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-FBC-001 | C | F | The SC correlator M-sample delay SHALL be provided by the PSRAM Buffer Controller. On each `iq_valid`, the PSRAM controller SHALL supply branch-0 `x[n−M]` (M = 2^SF) by issuing a QPI read at `write_ptr − M` before the next `iq_valid` arrives. The QPI read latency (30 cycles at 32 MHz) is well within the 128-cycle `iq_valid` period. | T |
+| TRPR-FBC-001 | C | F | The SC correlator M-sample delay SHALL be provided by the PSRAM Buffer Controller. On each `iq_valid`, the PSRAM controller SHALL supply branch-0 `x[n−M]` (M = 1 << (SF + sample_shift)) by issuing a QPI read at `write_ptr − M` before the next `iq_valid` arrives. The QPI read latency (30 cycles at 32 MHz) is well within the 64-cycle `iq_valid` period. | T |
 | TRPR-FBC-002 | C | F | On `buf_freeze` assertion from the Packet Control FSM, the PSRAM controller SHALL freeze the packet start pointer and cease updating the SC delay read address. | T |
 | TRPR-FBC-003 | C | F | The SC detector SHALL receive: `x[n]` — live branch-0 sample direct from the decimator; `x[n−M]` — branch-0 sample read back from PSRAM at offset M behind the current write pointer. Both SHALL be valid and stable before the SC detector evaluates each `iq_valid` pulse. | T |
 | TRPR-FBC-004 | C | P | The PSRAM controller SHALL arbitrate SC delay reads against same-packet capture writes. SC delay reads are issued in the idle cycles between writes; the 62% idle margin at 250 kHz (see TRPR-PSR-014) is sufficient to accommodate one additional QPI read per `iq_valid`. | A |
@@ -205,11 +205,11 @@ Computes all-pairs cross-correlations Z_kl and diagonal autocorrelations Z_kk ov
 |---|---|---|---|---|
 | TRPR-TAC-001 | C | F | The accumulator SHALL compute all C(4,2) = 6 off-diagonal complex cross-correlations Z_kl = Σ raw_k[n] · conj(raw_l[n]) and all 4 diagonal autocorrelations Z_kk = Σ \|raw_k[n]\|² over the training window. | T |
 | TRPR-TAC-002 | C | F | The training window SHALL span (8 − SC_HITS_REQ − 1) × M samples starting from `timing_ref`. | T |
-| TRPR-TAC-003 | C | F | `training_done` SHALL assert at the end of the training window. The accumulated sample count n_acc SHALL be latched as a full 16-bit unsigned count and readable from `N_ACC` (0x21–0x22). | T |
+| TRPR-TAC-003 | C | F | `training_done` SHALL assert at the end of the training window. The accumulated sample count n_acc SHALL be latched as a full 18-bit unsigned count and readable from `N_ACC` (0x21–0x23). | T |
 | TRPR-TAC-004 | C | I | All 6 off-diagonal Z_kl pairs SHALL be readable from the register bank as the top 24 bits [31:8] of the signed int32 accumulators, big-endian, 3 bytes per component (I then Q): Z_01 (0x40–0x45), Z_02 (0x46–0x4B), Z_03 (0x4C–0x51), Z_12 (0x52–0x57), Z_13 (0x58–0x5D), Z_23 (0x5E–0x63). | T |
 | TRPR-TAC-005 | C | I | The diagonal Z_kk top 16 bits [31:16] SHALL be readable from `ZDIAG_k` (0x64–0x6B), two bytes per branch. | T |
 | TRPR-TAC-006 | H | F | A common right-shift `Z_SHIFT` (0x63) SHALL be applied to all Z_kl readback values to prevent register overflow. The shift value SHALL be determined by the accumulator word width and n_acc. | T |
-| TRPR-TAC-007 | H | F | A firmware-triggered noise measurement mode SHALL be supported: writing bit 0 to `TACC_NOISE_TRIG` (0x1F) SHALL arm the accumulator for 8 × 2^SF samples without waiting for `sc_lock`. Off-diagonal Z_kl ≈ 0; diagonal ZDIAG_k ≈ σ²_k · n_acc. `training_done` SHALL fire on completion. | T |
+| TRPR-TAC-007 | H | F | A firmware-triggered noise measurement mode SHALL be supported: writing bit 0 to `TACC_NOISE_TRIG` (0x1F) SHALL arm the accumulator for 8 × M samples without waiting for `sc_lock`. Off-diagonal Z_kl ≈ 0; diagonal ZDIAG_k ≈ σ²_k · n_acc. `training_done` SHALL fire on completion. | T |
 | TRPR-TAC-008 | H | I | `TRAINING_STATUS` (0x60) SHALL expose `TRAINING_DONE` and `TRAINING_ARMED` bits. | T |
 | TRPR-TAC-009 | H | P | Z_kl / n_acc SHALL match the Python reference `h_k · conj(h_l)` within Q1.15 rounding on a noiseless channel. | T |
 | TRPR-TAC-010 | M | F | On each `sc_lock` event, the accumulator SHALL automatically reset internal state before beginning a new training window. | T |
@@ -301,7 +301,7 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 |---|---|---|---|---|
 | TRPR-MRC-001 | C | F | The combiner SHALL compute ŷ[n] = Σ_{k=0}^{3} conj(w_k) · x_k[n] where x_k is int8 and w_k is int16 Q1.15 complex. | T |
 | TRPR-MRC-002 | C | F | The accumulator SHALL be 18-bit signed (16-bit product sign-extended + 2 guard bits for 4 additions). The final output SHALL be produced by a single combined arithmetic right-shift of `(8 − pgs)` bits applied to the accumulator, then saturated to int8. `pgs` is `COMB_POST_GAIN_SHIFT` (0–7); combined shift ∈ [1,8], always a right shift. | T |
-| TRPR-MRC-003 | C | F | The combiner SHALL operate sample-by-sample at 250 kS/s (one output per `iq_valid` strobe). | T |
+| TRPR-MRC-003 | C | F | The combiner SHALL operate sample-by-sample at 500 kS/s (one output per `iq_valid` strobe). | T |
 | TRPR-MRC-004 | C | F | The combiner SHALL use a shadow/active weight bank: weights are written to the shadow bank (0x30–0x3F) and promoted atomically to `W_ACTIVE` only when `WGT_CTRL.W_COMMIT` is pulsed AND the FSM reaches a safe-switch boundary. | T |
 | TRPR-MRC-005 | C | F | Before any W_COMMIT, the combiner SHALL output the bypass signal (lowest-enabled antenna int8 sample, no weighting). | T |
 | TRPR-MRC-006 | H | I | Weights SHALL be stored as 4 complex pairs (w_RE, w_IM) of int16 Q1.15 at registers 0x30–0x3F. | I |
@@ -320,7 +320,7 @@ Third-order ΣΔ modulator. Converts int8 combined output back to 1-bit I+Q stre
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 3rd-order ΣΔ modulator, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. | T |
-| TRPR-RMD-002 | C | F | The re-modulator SHALL operate at 32 MS/s output rate with OSR=128 (int8 at 250 kS/s → 1-bit at 32 MS/s). | T |
+| TRPR-RMD-002 | C | F | The re-modulator SHALL operate at 32 MS/s output rate with OSR=64 (int8 at 500 kS/s → 1-bit at 32 MS/s). | T |
 | TRPR-RMD-003 | C | F | All integrators SHALL use saturating arithmetic. Wrap-around addition is prohibited; a wrapped integrator will cause permanent instability. | T |
 | TRPR-RMD-004 | C | P | Input amplitude SHALL be constrained to strictly < −3 dBFS (< 90 counts int8). Inputs at or above −3 dBFS MAY cause integrator saturation; this SHALL be detected and flagged if possible, or prevented by AGC. | T |
 | TRPR-RMD-005 | H | P | In-band SQNR SHALL exceed 40 dB at −6 dBFS input (measured by Python decimation of the 1-bit output stream). | T |
@@ -350,11 +350,11 @@ Packet end: REPLAY_ACTIVE de-asserts; circular write resumes
 |---|---|---|---|---|
 | TRPR-PSR-001 | C | F | The controller SHALL implement a QSPI master interface compatible with APS6404L (8 MB, 32 MHz QPI mode). Initialisation (enter QPI, set drive strength) SHALL complete within 1 ms of RESETB de-assertion. | T |
 | TRPR-PSR-002 | C | F | The controller SHALL continuously stream all decimated I/Q samples to PSRAM in a circular buffer pattern, recording every sample from power-on. On `sc_lock`, the controller SHALL latch the current PSRAM write address as the packet start pointer. | T |
-| TRPR-PSR-003 | C | F | On `W_commit` (from weight_gen or firmware register write), the controller SHALL assert `REPLAY_ACTIVE` and begin replaying from the latched packet start address through the MRC combiner, supplying the full packet including preamble with the committed weights applied. Replay rate SHALL match the live sample rate (250 kS/s). | T |
+| TRPR-PSR-003 | C | F | On `W_commit` (from weight_gen or firmware register write), the controller SHALL assert `REPLAY_ACTIVE` and begin replaying from the latched packet start address through the MRC combiner, supplying the full packet including preamble with the committed weights applied. Replay rate SHALL match the live sample rate (500 kS/s). | T |
 | TRPR-PSR-004 | C | F | `REPLAY_MISSED` SHALL assert and latch if `W_COMMIT` is not received before the payload window closes, preventing replay of an already-passed portion. The combiner SHALL fall back to next-packet weights for the remainder. | T |
 | TRPR-PSR-005 | H | F | The controller SHALL store samples in int8 format: 1 byte per I component + 1 byte per Q component per branch = **8 bytes per sample** for NR=4, in order i0,q0,i1,q1,i2,q2,i3,q3. No other storage width is implemented. | T |
 | TRPR-PSR-013 | C | P | **Maximum PSRAM write data rate (nominal operating point):** 4 channels × 2 bytes (int8 I + int8 Q) × 250 000 S/s = **2 MB/s (16 Mbit/s)**. The APS6404L rated maximum is ~66 MB/s (QPI at 133 MHz); nominal utilisation is ~3% of device capacity. | A |
-| TRPR-PSR-014 | C | P | **QPI timing headroom at nominal (32 MHz controller clock):** `iq_valid` arrives every 128 cycles (4.0 µs at 250 kHz). Per-`iq_valid` cost: S_WRITE = 25 cycles (write) + 19 cycles (SC delay read) = 44 cycles (1.375 µs), leaving **84 spare cycles (65.6% idle)**. S_REPLAY = 25 cycles (write) + 31 cycles (replay read) = 56 cycles (1.75 µs), leaving 72 spare cycles (56.25% idle). Both phases SHALL complete all QSPI operations before the next `iq_valid` at all supported bandwidths (125 kHz, 250 kHz). | A |
+| TRPR-PSR-014 | C | P | **QPI timing headroom (32 MHz controller clock):** `iq_valid` arrives every 64 cycles (2.0 µs at 500 kS/s). S_WRITE = 25 (write) + 19 (SC delay read) = 44 cycles, leaving **20 spare**. S_REPLAY = 25 (write) + 31 (replay read) = 56 cycles, leaving **8 spare**. Both phases SHALL complete before the next `iq_valid`. See Gate 8 in `planning/decimator-hb-migration-impact-plan.md`. | A |
 | TRPR-PSR-015 | C | P | **Buffer capacity (worst case SF12, int8 I/Q mode):** maximum occupied depth ≈ 8 × 2^12 × 8 bytes = **256 kB**. The APS6404L provides 8 MB; headroom ≥ 32×. No overflow SHALL occur for SF ≤ 12 at either supported bandwidth. | A |
 | TRPR-PSR-006 | H | I | `PSRAM_STATUS` (0x71) SHALL expose: `state[1:0]`, `SAMPLE_SKIP[2]`, `INIT_DONE[3]`, `REPLAY_ACTIVE[4]`, `REPLAY_MISSED[5]`, `OVERFLOW[6]`, `BUF_ACTIVE[7]`. STATE occupies 2 bits (only 4 FSM states); the freed bit [2] carries `SAMPLE_SKIP`. | T |
 | TRPR-PSR-007 | H | F | Sticky error flags (`OVERFLOW`, `REPLAY_MISSED`, `SAMPLE_SKIP`) SHALL be clearable by writing `PSRAM_CLR_ERR` (0x70[1]). The `PSRAM_CLR_ERR` pulse SHALL be routed into `psram_buf_ctrl` (`clr_err` port); a genuine error coinciding with a clear in the same cycle SHALL NOT be lost. | T |
@@ -363,11 +363,11 @@ Packet end: REPLAY_ACTIVE de-asserts; circular write resumes
 | TRPR-PSR-010 | C | I | `PSRAM_CTRL.QSPI_OWNER` (0x70[3]) SHALL select the active QSPI master: `0` = Trouper `psram_buf_ctrl` owns the pads for capture/replay, `1` = ownership is transferred away from the replay controller for a future firmware-managed external-memory mode. While `QSPI_OWNER=1`, the local replay controller SHALL de-assert CE#, hold SCK low, tri-state SIO[3:0], and suspend BUFFERING/REPLAY activity. | T |
 | TRPR-PSR-011 | H | F | Writes to `QSPI_OWNER` during BUFFERING or REPLAY SHALL NOT glitch the pads. The ownership change SHALL take effect only when `PSRAM_STATUS.STATE=IDLE`, after which the newly selected owner has exclusive control of the PSRAM QSPI pads. | T |
 | TRPR-PSR-012 | L | F | `PAD_CONFLICT` SHALL assert if any PSRAM QSPI pad is driven by another block simultaneously. | T |
-| TRPR-PSR-016 | C | F | **SC correlator delay reads:** on each `iq_valid` (pre-lock), the controller SHALL issue a QPI read of branch-0 I/Q at address `(write_ptr − M)`, where M = 2^SF, and present the result as `sc_delayed_sample` to the SC detector before the next `iq_valid`. SC delay reads SHALL be interleaved with circular writes in the idle cycles between writes; they SHALL NOT delay or preempt same-packet capture writes. After `sc_lock`, SC delay reads cease until the FSM returns to IDLE. | T |
+| TRPR-PSR-016 | C | F | **SC correlator delay reads:** on each `iq_valid` (pre-lock), the controller SHALL issue a QPI read of branch-0 I/Q at address `(write_ptr − M)`, where M = 1 << (SF + sample_shift), and present the result as `sc_delayed_sample` to the SC detector before the next `iq_valid`. SC delay reads SHALL be interleaved with circular writes in the idle cycles between writes; they SHALL NOT delay or preempt same-packet capture writes. After `sc_lock`, SC delay reads cease until the FSM returns to IDLE. | T |
 | TRPR-PSR-017 | H | F | **PSRAM debug readback (host SPI, no Grouper required):** When `PSRAM_STATUS.STATE=IDLE` (`packet_active=0`) and `QSPI_OWNER=0`, the controller SHALL accept register-mediated QPI read requests from the host SPI slave: (1) Host writes a 23-bit byte address to `PSRAM_DBG_ADDR_LO/MID/HI` (0x72–0x74). (2) Host writes `PSRAM_DBG_CTRL.RD_TRIG=1` (0x75[0]); the controller asserts `DBG_BUSY` (0x75[7]) and issues a QPI burst read of 8 bytes from the target address. (3) Host polls `DBG_BUSY` until clear (≤ 31 QSPI cycles ≈ 0.97 µs at 32 MHz). (4) Host reads `PSRAM_DBG_DATA` (0x76) eight times; bytes arrive in order i0,q0,i1,q1,i2,q2,i3,q3. (5) If `AUTO_INC=1` (0x75[1]), the address advances by 8 after the last byte is read and a new fetch begins automatically. `DBG_BUSY` SHALL remain asserted and reads of `PSRAM_DBG_DATA` SHALL return 0x00 while `packet_active=1` or `QSPI_OWNER=1`. Debug reads are serviced in the spare sub-cycles between `iq_valid` pulses and SHALL NOT delay or preempt circular capture writes. | T |
-| TRPR-PSR-019 | C | F | **Spreading factor is fixed per session.** SF SHALL be programmed at start-up before acquisition begins and SHALL NOT change during operation in the current revision. The SC delay distance (`M = 2^SF`) and the delay-line warm-up window depend on SF; changing SF live would otherwise present a stale delayed sample read from an address not yet written with `N = 2^SF` fresh samples at the new distance. To keep a future runtime SF-sweep mode safe, the controller SHALL re-arm the SC delay warm-up (suppress `del_valid` until `N` fresh samples are buffered at the new SF) whenever `sf` changes. | T |
+| TRPR-PSR-019 | C | F | **Spreading factor is fixed per session.** SF SHALL be programmed at start-up before acquisition begins and SHALL NOT change during operation in the current revision. The SC delay distance (`M = 1 << (SF + sample_shift)`) and the delay-line warm-up window depend on SF and BW; changing either live would otherwise present a stale delayed sample read from an address not yet written with `N = M` fresh samples at the new distance. The controller SHALL re-arm the SC delay warm-up (suppress `del_valid` until `N` fresh samples are buffered) whenever `sf` or `sample_shift` changes. | T |
 | TRPR-PSR-020 | C | F | **No-skip detection.** The controller SHALL latch a sticky `SAMPLE_SKIP` flag (`PSRAM_STATUS` 0x71[2], clearable via `PSRAM_CLR_ERR` 0x70[1]) if any `iq_valid` is asserted while a prior QPI transaction is still in progress — i.e. any decimated sample that cannot be captured. Under all supported bandwidths (125 kHz, 250 kHz) the timing budget of TRPR-PSR-014 guarantees this condition never occurs and `SAMPLE_SKIP` SHALL remain 0; the flag exists to make any out-of-budget condition observable rather than silent. Verified by a directed sustained-`iq_valid` test that asserts `SAMPLE_SKIP=0` across a full packet at 125 and 250 kHz. | T |
-| TRPR-PSR-018 | C | I | **QPI-only interface mandate:** The PSRAM interface SHALL use QPI (4-bit) mode exclusively; SPI (1-bit) mode is not a supported operating point. Rationale: at the 250 kHz `iq_valid` rate (128-cycle period at 32 MHz), one period must accommodate both a write (25 QPI cycles) and an SC delay read (19 QPI cycles) = 44 cycles total. SPI equivalents are ~96 cycles (write) + ~104 cycles (read) = 200 cycles — 1.56× over budget. Additionally, SIO[3:0] occupy four dedicated pads (TRPR-PHY-003), so QPI incurs zero additional pad cost versus SPI. | A |
+| TRPR-PSR-018 | C | I | **QPI-only interface mandate:** The PSRAM interface SHALL use QPI (4-bit) mode exclusively; SPI (1-bit) mode is not a supported operating point. Rationale: at the 500 kS/s `iq_valid` rate (64-cycle period at 32 MHz), one period must accommodate a write (25 QPI cycles) + SC delay read (19 QPI cycles) = 44 cycles (20 spare). SPI equivalents (~200 cycles) are >3× over the 64-cycle budget. Additionally, SIO[3:0] occupy four dedicated pads (TRPR-PHY-003), so QPI incurs zero additional pad cost versus SPI. | A |
 
 ---
 
@@ -440,7 +440,7 @@ Trouper has no on-chip SPI master. Grouper firmware owns SX1257 LNA gain control
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-AGC-001 | C | I | Per-antenna preamble power SHALL be measured via `Zdiag[k][31:16] / n_acc` after `training_done`. Controlling software reads Zdiag at 0x64–0x6B and the full 16-bit `N_ACC` at 0x21–0x22. | T |
+| TRPR-AGC-001 | C | I | Per-antenna preamble power SHALL be measured via `Zdiag[k][31:16] / n_acc` after `training_done`. Controlling software reads Zdiag at 0x64–0x6B and the full 18-bit `N_ACC` at 0x21–0x23. | T |
 | TRPR-AGC-002 | C | I | The AGC strategy SHALL be "maximum gain before saturation": Grouper firmware SHALL increase LNA gain unless Zdiag/n_acc exceeds `AGC_THR_HI` (0x2B–0x2C), and decrease gain if it exceeds `AGC_THR_SAT` (0x2D–0x2E). One SX1257 LNA gain step per packet. All four antennas are controlled independently. | T |
 | TRPR-AGC-003 | H | I | After programming each SX1257 (board-level SPI master), controlling software SHALL write the applied gain byte to `RX_GAIN_SHADOW_k` (0x10–0x13) and strobe `RX_GAIN_COMMIT` (0x18[0]=1). Trouper SHALL latch shadow→`RX_GAIN_ACTIVE_k` (0x14–0x17) on the commit pulse within one 32 MHz clock cycle. | T |
 
@@ -533,9 +533,9 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 |---|---|---|---|---|
 | TRPR-PHY-001 | C | HW | The design SHALL be submitted in GF180MCU (gf180mcuD), targeting `gf180mcu_fd_sc_mcu7t5v0` standard cells. AS cells (`gf180mcu_as_sc_mcu7t3v3`) are not the current plan and carry tapeout risk; new work SHALL NOT target AS cells without explicit team decision. | I |
 | TRPR-PHY-015 | C | HW | Supply voltages SHALL be: VDD_CORE = 3.3 V (±5%), VDD_IO = 5.0 V (±5%). The `gf180mcu_fd_sc_mcu7t5v0` standard-cell library is rated for 5 V IO and 3.3 V core operation. Board designs SHALL NOT apply 3.3 V to VDD_IO or 5 V to VDD_CORE. | I |
-| TRPR-PHY-002 | C | HW | The total number of IO pads SHALL NOT exceed 26 (Chipathon per-team allocation). | I |
-| TRPR-PHY-003 | C | HW | Pad allocation (26 total): IQ_DATA_I×4 + IQ_DATA_Q×4 + IQ_CLK + REMOD_A_I + REMOD_A_Q + PSRAM_SCK + PSRAM_CE_N + SPI_MOSI + SPI_MISO + SPI_SCK + HOST_CS + RESETB + IRQ_OUT + PSRAM_SIO[0] + PSRAM_SIO[1] + PSRAM_SIO[2] + PSRAM_SIO[3] + VDD_IO + VDD_CORE + GND = 26. `IRQ_OUT` has a dedicated pad; `PSRAM_SIO[3:0]` occupy four dedicated pads. JTAG/GPIO removed (TRPR-JTG) — no functional muxing remains on any pad. | I |
-| TRPR-PHY-004 | C | HW | No external companion-chip control interface SHALL consume package pads beyond the documented host SPI, IRQ, and PSRAM SIO pads. | I |
+| TRPR-PHY-002 | C | HW | The chip-level integration baseline SHALL use the Chipathon workshop padring: die `[0, 0, 2935, 2935]` um and user-core `[442, 442, 2493, 2493]` um. | I |
+| TRPR-PHY-003 | C | HW | The standalone Trouper hard macro SHALL fit within the Chipathon quarter-slot budget. The current Trouper target is **`1100 um × 1100 um`**. | I |
+| TRPR-PHY-004 | C | HW | Final package-pad allocation SHALL be validated at the later chip-top integration stage against the Chipathon padring. | I |
 | TRPR-PHY-005 | H | HW | Physical design SHALL use LibreLane inside the `hpretl/iic-osic-tools:chipathon26` Docker image. `:latest` and `:2026.04` tags are prohibited. | I |
 | TRPR-PHY-006 | H | HW | No on-chip SRAM macro instances are required. The frontend buffer SRAM (`gf180mcu_fd_ip_sram__sram512x8m8wm1`) has been removed; the SC correlator delay line is served by the off-chip APS6404L PSRAM (see TRPR-FBC-001). | I |
 | TRPR-PHY-007 | H | P | Post-PNR WNS at TT/25 °C/3.3 V (setup) SHALL be ≥ 0 ns. | A |
@@ -544,7 +544,7 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | TRPR-PHY-010 | H | HW | Magic DRC error count SHALL be 0 before tapeout submission. | A |
 | TRPR-PHY-011 | H | P | Estimated total power at TT/25 °C/3.3 V SHALL be ≤ 60 mW. | A |
 | TRPR-PHY-012 | M | HW | Core utilisation SHOULD be in the range 65–75%. | I |
-| TRPR-PHY-013 | M | HW | A single VDD_CORE pad and a single GND pad are allocated. IR drop SHALL be verified in floorplan with the GND pad placed at the highest switching-current region. | A |
+| TRPR-PHY-013 | M | HW | Power-pad count and placement are chip-top integration concerns under the Chipathon padring. Standalone Trouper floorplanning SHALL still document estimated current draw and any local PDN hotspots so the later padring/power-grid integration can assign sufficient DVDD/DVSS resources. | A |
 | TRPR-PHY-014 | C | P | The PNR and signoff SDC SHALL declare both clocks: `create_clock -period 31.25 [get_ports IQ_CLK]` and `create_generated_clock -divide_by 2 -source [get_ports IQ_CLK] [get_pins clk_div_reg/Q] -name CLK_16M`. No global `set_multicycle_path` override is required — each domain is analysed at its own period. IQ_CLK-tier blocks are analysed at 31.25 ns; CLK_16M-tier blocks at 62.5 ns. | I |
 
 ---

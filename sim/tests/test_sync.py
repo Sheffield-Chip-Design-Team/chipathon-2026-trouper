@@ -4,6 +4,7 @@ Run with: python3 -m sim.tests.test_sync
 """
 
 import numpy as np
+import pytest
 
 from sim.models.lora import upchirp
 from sim.models.sync import SchmidlCoxDetector
@@ -89,6 +90,78 @@ def test_short_input():
     assert result.timing_ref == 0
     assert result.lock_sample == 0
     assert result.metric.size == 0
+
+
+# ---------------------------------------------------------------------------
+# SF sweep — SF=7..12
+# ---------------------------------------------------------------------------
+
+def _make_rx_sf(sf: int, prefix_len: int, n_preamble: int, cfo: float = 0.0,
+                nr: int = 4, seed: int = 1) -> np.ndarray:
+    """Noiseless multi-antenna preamble for an arbitrary SF."""
+    M = 2 ** sf
+    suffix_len = M
+    tx = np.concatenate([
+        np.zeros(prefix_len, dtype=complex),
+        np.tile(upchirp(M), n_preamble),
+        np.zeros(suffix_len, dtype=complex),
+    ])
+    n = np.arange(tx.size)
+    cfo_rot = np.exp(1j * 2 * np.pi * cfo * n / M)
+    rng = np.random.default_rng(seed)
+    h = (rng.standard_normal(nr) + 1j * rng.standard_normal(nr)) / np.sqrt(2)
+    return h[:, None] * tx[None, :] * cfo_rot[None, :]
+
+
+@pytest.mark.parametrize("sf", [7, 8, 9, 10, 11, 12])
+def test_lock_all_sf(sf):
+    """SC detector locks and recovers correct timing_ref for SF=7..12."""
+    M = 2 ** sf
+    prefix_len = 3 * M + 17   # arbitrary non-M-aligned offset
+    # Use 4 preamble symbols with hits_req=2 — minimal window, still reliable
+    rx = _make_rx_sf(sf, prefix_len=prefix_len, n_preamble=4, nr=4)
+    det = SchmidlCoxDetector(M, threshold=0.9, hits_req=2)
+    result = det.detect(rx)
+    assert result.lock, f"SF={sf}: no lock"
+    assert result.timing_ref == prefix_len, (
+        f"SF={sf}: timing_ref={result.timing_ref}, expected {prefix_len}"
+    )
+    assert result.lock_sample == result.first_hit_candidate + 3 * M - 1, (
+        f"SF={sf}: lock_sample={result.lock_sample}"
+    )
+
+
+@pytest.mark.parametrize("sf", [7, 9, 12])
+def test_cfo_immunity_sf(sf):
+    """SC metric stays > 0.99 across ±0.35 bin CFO for SF=7, 9, 12."""
+    M = 2 ** sf
+    prefix_len = M
+    for cfo in [-0.35, 0.20, 0.49]:
+        rx = _make_rx_sf(sf, prefix_len=prefix_len, n_preamble=4, cfo=cfo)
+        det = SchmidlCoxDetector(M, threshold=0.9, hits_req=2)
+        result = det.detect(rx)
+        assert result.lock, f"SF={sf} CFO={cfo:+.2f}: no lock"
+        assert result.peak_metric > 0.99, (
+            f"SF={sf} CFO={cfo:+.2f}: peak_metric={result.peak_metric:.4f}"
+        )
+
+
+@pytest.mark.parametrize("sf", [7, 10, 12])
+def test_timing_ref_alignment_sf(sf):
+    """timing_ref lands on prefix_len for several non-M-aligned offsets.
+
+    prefix_len must be > 0.1*M so the SC metric at d=prefix_len-1 is clearly
+    below the 0.9 threshold (metric = (M-k)/M < 0.9 requires k > 0.1*M).
+    """
+    M = 2 ** sf
+    for prefix_len in [M // 2, M + 3, 2 * M + 7]:
+        rx = _make_rx_sf(sf, prefix_len=prefix_len, n_preamble=4)
+        det = SchmidlCoxDetector(M, threshold=0.9, hits_req=2)
+        result = det.detect(rx)
+        assert result.lock, f"SF={sf} prefix={prefix_len}: no lock"
+        assert result.timing_ref == prefix_len, (
+            f"SF={sf} prefix={prefix_len}: timing_ref={result.timing_ref}"
+        )
 
 
 def main():

@@ -33,7 +33,7 @@ into one cell and one wire.  Fewer cells → lower utilisation → less congesti
 
 The 8×8 multiplier operand registers and product register run **every clock
 cycle** but are only consumed when `tdm_active` is high — 32 cycles out of
-every ≥128 (25% duty cycle at CIC R=128):
+every 64 (50% duty cycle at R=64):
 
 ```verilog
 // Current — unconditional:
