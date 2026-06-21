@@ -1,8 +1,10 @@
 # CIC-only Decimator: Findings
 
-> **Status (2026-06-03):** CIC-only is the **deployed** solution.
-> `sd_decimator_cic_only.v` is the production decimator module for all supported modes.
-> 500 kHz BW is not supported and is outside the system specification.
+> **Status:** historical decimator note.
+>
+> The active RTL no longer uses four standalone `sd_decimator_cic_only.v` instances as the production top-level decimator arrangement.
+> The current hard macro uses the shared TDM path in `sd_decimator_cic_tdm8.v`.
+> The CIC-only findings here remain useful background for filter-quality tradeoffs, but the module/deployment wording below reflects the earlier pre-TDM integration.
 
 ## Background
 
@@ -70,25 +72,37 @@ which always produces a 32 MHz ΣΔ bitstream regardless of internal IQ rate.
 This changes the operating point. Both supported LoRa bandwidths use `decim_ratio=1`
 (R=128) in the deployed design:
 
-| Mode | R | decim_ratio | cic_only SQNR | Verdict |
-|---|---|---|---|---|
-| 125 kHz BW | 128 | 1 | 30.6 dB | **PASS** — 2 samples/chip; SX1302 re-filters |
-| 250 kHz BW | 128 | 1 | 30.6 dB | **PASS** — 1 sample/chip; same hardware setting |
-| 500 kHz BW | 64 | 2 | 9.6 dB | **NOT SUPPORTED** |
+| Mode | R | decim_ratio | Oversampling | Band-edge droop | Verdict |
+|---|---|---|---|---|---|
+| 125 kHz BW | 128 | 1 | 2× (natural R=256) | −2.74 dB → ~0 dB w/ EQ | **PASS** |
+| 250 kHz BW | 128 | 1 | 1× natural rate | −11.8 dB at Nyquist | **PASS w/ limitation** |
+| 500 kHz BW | 64 | 2 | 1× natural rate | −11.8 dB + alias noise | **TEST ONLY** |
 
-**Why R=128 works for 125 kHz BW:**
-1. Both BW modes use the same `decim_ratio=1` (R=128) setting in firmware.
-2. For 125 kHz BW, this gives 2 samples/chip at the CIC output — the sd_remod updates
-   at 250 kHz and the SX1302 sees a denser ΣΔ stream, which the SX1302 channel filter
-   integrates. The extra noise bandwidth (125–250 kHz) is rejected by the SX1302 filter.
-3. The SX1257 analog IF filter (`RegRxBw`, reg 0x0D) already bandlimits the signal to
-   the LoRa BW before the ΣΔ bitstream is generated — there is little out-of-band energy
-   to alias in the first place.
-4. The sd_remod→SX1302 path provides a third stage of filtering after the CIC.
+**125 kHz BW at R=128 (2× oversample):** chirp band edge lands at Nyquist/2 (62.5 kHz),
+−2.74 dB CIC droop, corrected to ~0 dB by the 2-tap EQ. The extra 62.5–125 kHz
+bandwidth above the chirp is rejected by the SX1302 channel filter downstream.
 
-**500 kHz BW not supported:** R=64 gives 9.6 dB SQNR — unusable. Lower R (R=32) is
-worse (1.8 dB). This is a fundamental CIC alias rejection limit, not fixable by
-oversampling. 500 kHz BW requires the FIR and is outside the system specification.
+**250 kHz BW at R=128 (natural rate — known limitation):** chirp band edge lands at
+Nyquist (125 kHz), −11.8 dB CIC droop. Ideally this BW would also run at 2× oversample
+(R=64), but R=64 has unacceptable sigma-delta alias noise (SQNR ≈ 9.6 dB) — the same
+problem that makes 500 kHz BW test-only. 250 kHz BW therefore runs at natural rate; the
+on-chip MRC chain (SC detector, training_acc, combiner) sees the full chirp-edge droop.
+The SX1302 downstream demodulator compensates partially, but this is a real sensitivity
+budget item for 250 kHz BW operation.
+
+**500 kHz BW — test mode only (not operational):** R=64 gives 9.6 dB SQNR due to
+sigma-delta alias noise folding into the 500 kHz passband at this decimation ratio.
+Lower R (R=32) is worse (1.8 dB). This is a fundamental CIC alias rejection limit, not
+fixable by the 2-tap droop EQ (EQ corrects passband droop, not alias noise). At natural
+rate (R=64) the chirp band edge also lands at Nyquist (−11.8 dB droop), compounding
+the problem.
+
+`decim_ratio=2` (R=64) is retained in hardware for factory test / RF characterisation
+only. The PSRAM QPI timing budget (44 cycles write+read per iq_valid) fits within the
+64-cycle iq_valid period at R=64 (20 cycles spare) so PSRAM capture works in test mode.
+
+**R=32 (1 MHz output) is explicitly out of scope:** the PSRAM timing budget (44 cycles)
+exceeds the 32-cycle iq_valid period, causing sample loss.
 
 **FIR status:** Dropped from the design. Area saving vs combchain: ~75 k µm² per
 instance (4 instances = ~300 k µm²).
@@ -99,6 +113,6 @@ instance (4 instances = ~300 k µm²).
 
 | File | Purpose |
 |---|---|
-| `rtl-test/sd_decimator_cic_only.v` | Production CIC-only decimator (deployed in `trouper_top`) |
+| `rtl-test/sd_decimator_cic_only.v` | Historical standalone CIC-only decimator used in earlier pre-TDM `trouper_top` integrations |
 | `rtl-test/syn_mimo_per_module/run_sqnr_cic_only.sh` | A/B SQNR test script |
 | `rtl-test/syn_mimo_per_module/out_sqnr_cic_only/` | RTL output files + log (NFS only) |
