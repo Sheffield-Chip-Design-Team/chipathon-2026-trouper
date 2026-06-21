@@ -126,7 +126,7 @@ def nonfft_combine_rtl_int8w(
     post_gain_shift: int = 0,
 ) -> np.ndarray:
     """
-    RTL-style int8 combiner with 8-bit weights (matches mrc_combiner.v, commit b8c8f0d).
+    RTL-style int8 combiner with 8-bit weights (matches mrc_combiner.v, commit cf65892).
 
     Weights are 8-bit signed [-128, 127]; multipliers are 8×8→16-bit;
     accumulator is 18-bit. Firmware writes the normalised weight (peak→±120)
@@ -155,9 +155,13 @@ def nonfft_combine_rtl_int8w(
     acc_i = np.sum(w_re[:, None] * x_i - w_im[:, None] * x_q, axis=0)
     acc_q = np.sum(w_re[:, None] * x_q + w_im[:, None] * x_i, axis=0)
 
-    # Guard divide-by-2 then post_gain_shift (matches RTL)
-    shifted_i = (acc_i >> 1) << int(post_gain_shift)
-    shifted_q = (acc_q >> 1) << int(post_gain_shift)
+    # Single combined output shift acc >>> (8 − pgs) — matches mrc_combiner.v.
+    # Replaces the old two-step (acc >>> 8) << pgs, which amplified the truncation
+    # error introduced by the >>> 8. Arithmetic (sign-extending) shift, as Python
+    # >> on signed int64 floors toward -inf, matching Verilog >>> on signed.
+    net_rshift = 8 - int(post_gain_shift)
+    shifted_i = acc_i >> net_rshift
+    shifted_q = acc_q >> net_rshift
     return _sat_int8(shifted_i).astype(float) + 1j * _sat_int8(shifted_q).astype(float)
 
 

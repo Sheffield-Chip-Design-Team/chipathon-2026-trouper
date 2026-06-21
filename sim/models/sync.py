@@ -40,6 +40,17 @@ class SchmidlCoxDetector:
     The chirp reference cancels exactly in the M-lag product, so the SC
     statistic on dechirped samples equals that on raw samples. See
     planning/blocks/Correlator Bank.md for the full derivation.
+
+    e_slice noise guard (matches sc_detector.v)
+    -------------------------------------------
+    The RTL suppresses a hit unless the energy-reference accumulator
+    eval_e_acc (= Σ_branches E0cur·E0del, the same quantity as `energy_ref`
+    here) clears a floor: `eval_e_acc[25:13] > 0`, i.e. energy² ≥ 8192 ADU.
+    Below that, the threshold comparison degenerates toward 0 and would fire
+    on noise. `e_slice_floor` models this floor: when > 0, a hit additionally
+    requires `energy_ref[d] >= e_slice_floor`. For int8-ADU-scaled input set
+    it to 8192.0 to mirror the RTL exactly; leave 0.0 (default) for idealized
+    normalized-float use, preserving the previous behavior.
     """
     def __init__(
         self,
@@ -48,6 +59,7 @@ class SchmidlCoxDetector:
         hits_req: int = 2,
         energy_gate: bool = False,
         energy_threshold: float = 0.0,
+        e_slice_floor: float = 0.0,
     ):
         if hits_req < 1:
             raise ValueError("hits_req must be >= 1")
@@ -57,6 +69,7 @@ class SchmidlCoxDetector:
         self.hits_req = hits_req
         self.energy_gate = energy_gate
         self.energy_threshold = energy_threshold
+        self.e_slice_floor = e_slice_floor
 
     def detect(self, rx_signal: np.ndarray) -> SchmidlCoxResult:
         """
@@ -123,6 +136,12 @@ class SchmidlCoxDetector:
             if self.energy_gate and energy_sum < self.energy_threshold:
                 continue
 
+            # e_slice noise guard — mirrors sc_detector.v eval_e_acc[25:13] > 0
+            # (energy² ≥ 8192 ADU). Suppress hits below the floor to avoid
+            # false alarms on noise.
+            if self.e_slice_floor > 0.0 and energy_ref[d] < self.e_slice_floor:
+                continue
+
             hit_mask[d] = mag_sc[d] >= threshold_sq * energy_ref[d]
 
         metric = np.divide(
@@ -153,7 +172,7 @@ class SchmidlCoxDetector:
             search_stop = min(first_hit_candidate + M, max_start)
             search_energy = energy_ref[first_hit_candidate:search_stop]
             full_energy = np.max(search_energy)
-            full_energy_idx = np.flatnonzero(search_energy >= 0.999 * full_energy)
+            full_energy_idx = np.flatnonzero(search_energy >= 0.9999 * full_energy)
             timing_ref = first_hit_candidate + int(full_energy_idx[0])
             lock_sample = first_hit_candidate + (self.hits_req + 1) * M - 1
             phase_diag = float(np.angle(phase_diag_sc[first_hit_candidate]))

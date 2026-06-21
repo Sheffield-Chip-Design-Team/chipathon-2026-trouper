@@ -7,12 +7,14 @@ Two implementations:
 
 DCRemoval (floating-point, configurable alpha_shift)
     Legacy model used by existing notebooks. Floating-point arithmetic,
-    alpha_shift is a free parameter. Note: alpha_shift=8 on 8-bit inputs is
-    BROKEN in the old RTL — >>> 8 on a max 9-bit difference always yields 0 for
-    positive errors, so the filter never tracked positive DC offsets.
+    alpha_shift is a free parameter; default 5 matches the shipped RTL
+    (α = 2^{-5}). Historical note: alpha_shift=8 on 8-bit inputs was BROKEN
+    in the old RTL — >>> 8 on a max 9-bit difference always yielded 0 for
+    positive errors, so the filter never tracked positive DC offsets. The
+    current RTL adds the full diff to a Q8.5 accumulator, avoiding this.
 
 DCRemovalRTL (bit-accurate, matches dc_removal.v)
-    Mirrors the simplified RTL: 12-bit Q8.4 accumulator, fixed α = 2^{-4}.
+    Mirrors the current RTL: 13-bit Q8.5 accumulator, fixed α = 2^{-5}.
     Input clamped to int8 [-128, 127], output is int8.
     The output uses the DC estimate from the PREVIOUS cycle (pre-update acc).
 """
@@ -27,13 +29,14 @@ class DCRemoval:
     Parameters
     ----------
     nr          : number of receive branches (default 4)
-    alpha_shift : time constant = 2^alpha_shift samples. Default 8.
-                  NOTE: alpha_shift=8 is BROKEN for 8-bit integer inputs
-                  (>>> 8 on a 9-bit difference = 0 for positive errors).
-                  Use DCRemovalRTL for the current bit-accurate model.
+    alpha_shift : time constant = 2^alpha_shift samples. Default 5, matching
+                  the shipped RTL (α = 2^{-5}, τ = 32 samples). Historical
+                  note: alpha_shift=8 was BROKEN in old integer RTL (>>> 8 on a
+                  9-bit difference = 0 for positive errors). Use DCRemovalRTL
+                  for the current bit-accurate model.
     """
 
-    def __init__(self, nr: int = 4, alpha_shift: int = 8):
+    def __init__(self, nr: int = 4, alpha_shift: int = 5):
         self.nr = nr
         self.alpha_shift = alpha_shift
         self._dc_est = np.zeros(nr, dtype=np.complex128)
@@ -67,22 +70,23 @@ class DCRemoval:
 
 class DCRemovalRTL:
     """
-    Bit-accurate model of dc_removal.v (simplified RTL, committed b8c8f0d).
+    Bit-accurate model of dc_removal.v (current RTL).
 
-    12-bit Q8.4 accumulators, fixed α = 2^{-4}, int8 I/O.
+    13-bit Q8.5 accumulators, fixed α = 2^{-5}, int8 I/O.
 
     Algorithm (per branch, per component):
-        diff    = clip(raw, -128, 127) - acc[11:4]   (9-bit signed)
-        err     = diff sign-extended to 12-bit         (full diff, no /16)
-        acc_new = clip(acc + err, -2048, 2047)         (12-bit)
-        out     = clip(raw - acc[11:4], -128, 127)     (uses PRE-update acc)
+        diff    = clip(raw, -128, 127) - acc[12:5]   (9-bit signed)
+        err     = diff sign-extended to 13-bit         (full diff, no /32)
+        acc_new = clip(acc + err, -4096, 4095)         (13-bit)
+        out     = clip(raw - acc[12:5], -128, 127)     (uses PRE-update acc)
 
-    The update is acc += diff (not diff>>4). This eliminates the +ve DC deadband:
-        Old diff>>4: floor(diff/16) = 0 for 0 < diff < 16 → stalls
-        New diff:    always non-zero for diff ≠ 0 → symmetric convergence
-    Time constant is unchanged: τ = 16 samples = 128 µs at 125 kHz.
+    The update is acc += diff (not diff>>5). This eliminates the +ve DC deadband:
+        diff>>5: floor(diff/32) = 0 for 0 < diff < 32 → stalls
+        full diff: always non-zero for diff ≠ 0 → symmetric convergence
+    Max steady-state acc = 127 × 32 = 4064, fits in 13-bit signed.
 
-    Time constant τ = 16 samples = 128 µs at 125 kHz (CIC R=128).
+    Time constant τ = 32 samples = 64 µs at 500 kS/s (HB decimator output);
+    same physical response as the R=128 design (τ = 16 samples × 4 µs/sample).
 
     Parameters
     ----------
@@ -91,7 +95,7 @@ class DCRemovalRTL:
 
     def __init__(self, nr: int = 4):
         self.nr = nr
-        # acc is 12-bit signed integer (Q8.4); stored as int32 for arithmetic
+        # acc is 13-bit signed integer (Q8.5); stored as int32 for arithmetic
         self._acc_i = np.zeros(nr, dtype=np.int32)
         self._acc_q = np.zeros(nr, dtype=np.int32)
 
@@ -101,13 +105,13 @@ class DCRemovalRTL:
 
     @staticmethod
     def _step(raw: np.ndarray, acc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Single sample update. raw: int8 array, acc: int32 (12-bit range)."""
+        """Single sample update. raw: int8 array, acc: int32 (13-bit range)."""
         raw_i8 = np.clip(np.round(raw), -128, 127).astype(np.int32)
-        dc_est = (acc >> 4).astype(np.int32)          # acc[11:4]
+        dc_est = (acc >> 5).astype(np.int32)          # acc[12:5]
         diff   = raw_i8 - dc_est                       # 9-bit signed, full value
-        # err = diff sign-extended to 12-bit (no /16) — eliminates +ve deadband
+        # err = diff sign-extended to 13-bit (no /32) — eliminates +ve deadband
         err    = np.clip(diff, -256, 255).astype(np.int32)
-        acc_new = np.clip(acc + err, -2048, 2047).astype(np.int32)
+        acc_new = np.clip(acc + err, -4096, 4095).astype(np.int32)
         out = np.clip(raw_i8 - dc_est, -128, 127).astype(np.int8)
         return out, acc_new
 

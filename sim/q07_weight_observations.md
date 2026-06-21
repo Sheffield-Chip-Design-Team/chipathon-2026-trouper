@@ -121,6 +121,52 @@ Based on the simulations above:
    - whether `COMB_POST_GAIN_SHIFT` is needed to recover output amplitude
    - whether the recovered amplitude remains comfortably above downstream quantisation noise concerns
 
+## Resolution (2026-06-13)
+
+Q0.7 with `>>> 8` guard shift and adaptive `COMB_POST_GAIN_SHIFT` (firmware
+Step 3) has been implemented in `rtl/mrc_combiner.v` and verified by the
+following test suite:
+
+| Test | Location | Result |
+|------|----------|--------|
+| 6 RTL unit cases (equal/complex/spread/clip/bypass) | `tb/tb_mrc_combiner.v` | 6/6 PASS |
+| 22 firmware Step-3 pytest cases | `sim/tests/test_pgs_fw.py` | 22/22 PASS |
+| End-to-end DSP chain with firmware weight emulation | `tb/tb_dsp_chain.v` | 6/6 PASS |
+| 5 parametric precision cases | `tb/tb_mrc_fw_precision.v` | 5/5 PASS, err=0 |
+| 1014 stratified random cases | `tb/tb_mrc_fw_rand.v` | 1014/1014 PASS |
+
+### Quantitative precision (from `tb_mrc_fw_rand.v`, seed=42)
+
+The dominant loss mechanism is `>>> 8` truncation amplified by `<< pgs`, not
+weight-ratio quantisation (which contributes < 0.05 dB independently).
+
+| pgs | A_max range | Max loss | Mean loss |
+|-----|-------------|----------|-----------|
+| 0 | 25–90 | 0.44 dB | 0.12 dB |
+| 1 | 13–24 | 1.29 dB | 0.32 dB |
+| 2 | 7–12 | 1.50 dB | 0.46 dB |
+| 3 | 4–6 | 2.36 dB | 0.84 dB |
+| 4 | 2–3 | 1.94 dB | 1.39 dB |
+
+In the operational range (pgs=0, A_max ≥ 25) worst-case loss is **< 0.5 dB**.
+pgs ≥ 3 cases (A_max ≤ 6) are below LoRa minimum sensitivity and not
+operationally significant.
+
+### Open questions from this document — resolved
+
+- *"how small the resulting mantissas become in weakly scaled cases"* —
+  For the worst-case 20 dB amplitude spread (A_max=90, A_min=3):
+  W_min = (W_max × 3) / 90 = 3.  Sufficient; negligible combining loss
+  from this branch.
+
+- *"whether COMB_POST_GAIN_SHIFT is needed"* — Yes; implemented as `pgs`
+  computed in firmware Step 3 (`planning/blocks/Eigenvector Weight
+  Computation.md`).  Example: A=4, pgs=3 boosts output from 7 → 56 counts.
+
+- *"whether the recovered amplitude remains above downstream quantisation
+  noise"* — Yes.  Step 3 targets y_pre ≈ 90 / 2^pgs at the pre-shift
+  stage, giving combined output ≈ 90 counts (−3 dBFS) after applying pgs.
+
 ## Files generated during this investigation
 
 - `sim/notebooks/08_mrc_output_headroom.ipynb`
