@@ -33,19 +33,20 @@ create_project $proj_name $proj_dir -part $part -force
 # Add FPGA emulation RTL sources
 # ============================================================================
 set emul_srcs [list \
-    "$rtl_dir/fpga_sram512x8.v"   \
     "$rtl_dir/sync_fifo.v"        \
+    "$rtl_dir/psram_model.v"      \
     "$rtl_dir/fpga_dsp_wrap.v"    \
     "$rtl_dir/axi_dsp_ctrl.v"     \
 ]
 
 # ASIC RTL (the modules under test — same files used by Verilator testbenches).
 # Topology kept in sync with trouper_top: TDM8 decimator, no weight_gen (firmware
-# weights), no noise_est (noise via training_acc Zdiag).
+# weights), no noise_est (noise via training_acc Zdiag), SC delay via PSRAM
+# (psram_buf_ctrl + on-chip BRAM psram_model in place of the APS6404L chip).
 set asic_srcs [list \
     "$asic_rtl/sd_decimator_cic_tdm8.v" \
     "$asic_rtl/dc_removal.v"         \
-    "$asic_rtl/frontend_buf_ctrl.v"  \
+    "$asic_rtl/psram_buf_ctrl.v"     \
     "$asic_rtl/sc_detector.v"        \
     "$asic_rtl/training_acc.v"       \
     "$asic_rtl/packet_ctrl_fsm.v"    \

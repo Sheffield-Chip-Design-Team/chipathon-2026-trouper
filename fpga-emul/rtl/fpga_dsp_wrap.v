@@ -1,12 +1,13 @@
 // fpga_dsp_wrap.v
 // FPGA emulation wrapper for the LoRa MIMO ASIC DSP chain.
-// Instantiates the ASIC RTL (sd_decimator_cic_tdm8, dc_removal,
-// frontend_buf_ctrl, sc_detector, packet_ctrl_fsm, training_acc, mrc_combiner,
-// sd_remod) and exposes a mode-selectable interface. Topology tracks
-// trouper_top: TDM8 decimator, firmware MRC weights via the fw_W_* registers
-// (no on-chip weight_gen), and noise power from training_acc Zdiag (no live
-// noise_est). The SC delay line still uses frontend_buf_ctrl + on-chip BRAM
-// here (trouper uses external PSRAM via psram_buf_ctrl).
+// Instantiates the ASIC RTL (sd_decimator_cic_tdm8, dc_removal, psram_buf_ctrl,
+// sc_detector, packet_ctrl_fsm, training_acc, mrc_combiner, sd_remod) and
+// exposes a mode-selectable interface. Topology tracks trouper_top: TDM8
+// decimator, firmware MRC weights via the fw_W_* registers (no on-chip
+// weight_gen), noise power from training_acc Zdiag (no live noise_est), and the
+// SC delay line / same-packet replay via external PSRAM (psram_buf_ctrl). The
+// Arty has no PSRAM chip yet, so psram_model emulates the APS6404L in on-chip
+// BRAM (validated by tb_psram_model).
 //
 // Mode register (mode[1:0]):
 //   2'b00  DECIM_ETH  — 4× SX1257 → TDM8 decimator → eth_fifo
@@ -19,9 +20,8 @@
 // The ASIC RTL drives both clk_32m and clk_16m ports from the same 32 MHz
 // clock, matching the strategy used in mimo_rx_top.v where "clk_16m = clk".
 //
-// SRAM substitution: fpga_sram512x8.v provides the module
-//   gf180mcu_ocd_ip_sram__sram512x8m8wm1 with a BRAM implementation,
-//   same interface as the ASIC macro blackbox.
+// PSRAM substitution: psram_model.v provides a BRAM-backed APS6404L QPI model
+//   driven by psram_buf_ctrl, used until the external PSRAM PMOD board is ready.
 //
 // Source RTL directory (relative to this file): ../../rtl-test/
 
@@ -209,86 +209,124 @@ module fpga_dsp_wrap (
     assign energy2 = energy_snap[2];
     assign energy3 = energy_snap[3];
 
+    // Forward declarations — these are produced by later stages (sc_detector,
+    // weight stage, packet_ctrl_fsm) but consumed by the PSRAM controller below.
+    // The SC delay loop is inherently feedback (psram needs sc_lock; sc_detector
+    // needs cur/del); default_nettype none requires explicit forward nets.
+    wire        sc_lock_int;
+    wire [31:0] timing_ref_int;
+    wire        W_commit_int;
+    wire        packet_active_int;
+
     // =========================================================================
-    // Stage 4: Frontend Buffer Controller
-    // Drives two 512×8 SRAMs (BRAM on FPGA, macro on ASIC).
+    // Stage 4: SC delay line via PSRAM (psram_buf_ctrl + BRAM-backed model).
+    // Matches trouper_top: the on-chip SRAM + frontend_buf_ctrl are replaced by
+    // an external-PSRAM controller that streams every sample to PSRAM and reads
+    // back the branch-0 N-sample-delayed pair for the SC detector, plus a
+    // same-packet replay path into the combiner. The Arty has no PSRAM chip yet,
+    // so psram_model emulates the APS6404L in on-chip BRAM (see tb_psram_model).
     // =========================================================================
-    wire [8:0]  sram0_A, sram1_A;
-    wire [7:0]  sram0_D, sram1_D;
-    wire [7:0]  sram0_Q, sram1_Q;
-    wire        sram0_CEN, sram1_CEN;
-    wire        sram0_GWEN, sram1_GWEN;
+    wire signed [7:0] cur_i0, cur_q0;   // branch-0 current sample
+    wire signed [7:0] del_i0, del_q0;   // branch-0 N-sample-delayed sample
+    wire              delayed_valid;
 
-    gf180mcu_ocd_ip_sram__sram512x8m8wm1 u_sram0 (
-        .CLK (clk), .CEN (sram0_CEN), .GWEN (sram0_GWEN),
-        .WEN (8'h00), .A (sram0_A), .D (sram0_D), .Q (sram0_Q)
+    // QPI pad nets between controller and the BRAM PSRAM model.
+    wire        psram_sck, psram_ce_n;
+    wire [3:0]  psram_sio_out, psram_sio_in, psram_sio_oe;
+
+    // Replay outputs (muxed into the combiner during same-packet replay).
+    wire signed [7:0] rpl_i [0:3];
+    wire signed [7:0] rpl_q [0:3];
+    wire              rpl_valid, psram_replay_active;
+
+    // Free-running 32-bit IQ sample counter (used by psram_buf_ctrl for buf_base
+    // and by packet_ctrl_fsm).
+    reg [31:0] sample_count;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)         sample_count <= 32'd0;
+        else if (dcr_valid) sample_count <= sample_count + 32'd1;
+    end
+
+    // packet_end pulse = falling edge of packet_active (drives PSRAM replay end).
+    reg packet_active_prev;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) packet_active_prev <= 1'b0;
+        else        packet_active_prev <= packet_active_int;
+    end
+    wire packet_end_pulse = packet_active_prev & ~packet_active_int;
+
+    psram_buf_ctrl u_psram (
+        .clk_32m      (clk),
+        .rst_n        (rst_n),
+        .psram_en     (1'b1),         // always capturing on the FPGA emulation
+        .init_start   (1'b1),         // run QE init at power-up
+        .qspi_owner   (1'b0),         // local controller always owns the pads
+        .sf           (sf),
+        .iq_i0 (dcr_i[0]), .iq_i1 (dcr_i[1]),
+        .iq_i2 (dcr_i[2]), .iq_i3 (dcr_i[3]),
+        .iq_q0 (dcr_q[0]), .iq_q1 (dcr_q[1]),
+        .iq_q2 (dcr_q[2]), .iq_q3 (dcr_q[3]),
+        .iq_valid     (dcr_valid),
+        .sc_lock      (sc_lock_int),
+        .timing_ref   (timing_ref_int),
+        .iq_sample_cnt(sample_count),
+        .W_commit     (W_commit_int),
+        .packet_end   (packet_end_pulse),
+        .packet_active(packet_active_int),
+        .clr_err      (1'b0),
+        .sck     (psram_sck),
+        .ce_n    (psram_ce_n),
+        .sio_out (psram_sio_out),
+        .sio_in  (psram_sio_in),
+        .sio_oe  (psram_sio_oe),
+        .cur_i0 (cur_i0), .cur_q0 (cur_q0),
+        .del_i0 (del_i0), .del_q0 (del_q0),
+        .del_valid (delayed_valid),
+        .rpl_i0 (rpl_i[0]), .rpl_i1 (rpl_i[1]),
+        .rpl_i2 (rpl_i[2]), .rpl_i3 (rpl_i[3]),
+        .rpl_q0 (rpl_q[0]), .rpl_q1 (rpl_q[1]),
+        .rpl_q2 (rpl_q[2]), .rpl_q3 (rpl_q[3]),
+        .rpl_valid (rpl_valid),
+        .buf_active    (),
+        .replay_active (psram_replay_active),
+        .qe_init_done  (),
+        .replay_missed (),
+        .overflow      (),
+        .sample_skip   (),
+        .state_dbg     (),
+        .dbg_addr      (23'd0),
+        .dbg_auto_inc  (1'b0),
+        .dbg_rd_trig   (1'b0),
+        .dbg_data_pop  (1'b0),
+        .dbg_busy      (),
+        .dbg_data      ()
     );
-    gf180mcu_ocd_ip_sram__sram512x8m8wm1 u_sram1 (
-        .CLK (clk), .CEN (sram1_CEN), .GWEN (sram1_GWEN),
-        .WEN (8'h00), .A (sram1_A), .D (sram1_D), .Q (sram1_Q)
-    );
 
-    wire signed [7:0] cur_i [0:3];
-    wire signed [7:0] cur_q [0:3];
-    wire signed [7:0] del_i [0:3];
-    wire signed [7:0] del_q [0:3];
-    wire              delayed_valid, buf_valid;
-    wire [1:0]        buf_mode;
-    wire [6:0]        buf_wr_ptr;
-    wire              buf_freeze;  // driven by packet_ctrl_fsm
-
-    frontend_buf_ctrl u_fbuf (
-        .clk        (clk),
-        .rst_n      (rst_n),
-        .iq_valid   (dcr_valid),
-        .in_i0 (dcr_i[0]), .in_i1 (dcr_i[1]),
-        .in_i2 (dcr_i[2]), .in_i3 (dcr_i[3]),
-        .in_q0 (dcr_q[0]), .in_q1 (dcr_q[1]),
-        .in_q2 (dcr_q[2]), .in_q3 (dcr_q[3]),
-        .sf         (sf),
-        .sc_lock    (sc_lock),
-        .buf_freeze (buf_freeze),
-        .sram0_A  (sram0_A),  .sram0_D (sram0_D),  .sram0_Q (sram0_Q),
-        .sram0_CEN(sram0_CEN),.sram0_GWEN(sram0_GWEN),
-        .sram1_A  (sram1_A),  .sram1_D (sram1_D),  .sram1_Q (sram1_Q),
-        .sram1_CEN(sram1_CEN),.sram1_GWEN(sram1_GWEN),
-        .cur_i0 (cur_i[0]), .cur_i1 (cur_i[1]),
-        .cur_i2 (cur_i[2]), .cur_i3 (cur_i[3]),
-        .cur_q0 (cur_q[0]), .cur_q1 (cur_q[1]),
-        .cur_q2 (cur_q[2]), .cur_q3 (cur_q[3]),
-        .del_i0 (del_i[0]), .del_i1 (del_i[1]),
-        .del_i2 (del_i[2]), .del_i3 (del_i[3]),
-        .del_q0 (del_q[0]), .del_q1 (del_q[1]),
-        .del_q2 (del_q[2]), .del_q3 (del_q[3]),
-        .delayed_valid (delayed_valid),
-        .buf_mode      (buf_mode),
-        .buf_valid     (buf_valid),
-        .wr_ptr        (buf_wr_ptr)
+    // BRAM-backed APS6404L model (replaces the real chip until the PSRAM board
+    // is ready). sck is unused in this same-domain model.
+    psram_model #(.ADDR_BITS(16)) u_psram_mem (
+        .clk_32m (clk),
+        .rst_n   (rst_n),
+        .ce_n    (psram_ce_n),
+        .sio_out (psram_sio_out),
+        .sio_oe  (psram_sio_oe),
+        .sio_in  (psram_sio_in)
     );
 
     // =========================================================================
     // Stage 5a: SC Preamble Detector
     // =========================================================================
-    wire [31:0] timing_ref_int;
-    wire        sc_lock_int;
     assign sc_lock    = sc_lock_int;
     assign timing_ref = timing_ref_int;
-
-    // Free-running 32-bit sample counter for packet_ctrl_fsm
-    reg [31:0] sample_count;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) sample_count <= 32'd0;
-        else if (dcr_valid) sample_count <= sample_count + 32'd1;
-    end
 
     sc_detector u_sc (
         .clk          (clk),
         .rst_n        (rst_n),
         .iq_valid     (dcr_valid),
-        .cur_i0 (cur_i[0]),
-        .cur_q0 (cur_q[0]),
-        .del_i0 (del_i[0]),
-        .del_q0 (del_q[0]),
+        .cur_i0 (cur_i0),
+        .cur_q0 (cur_q0),
+        .del_i0 (del_i0),
+        .del_q0 (del_q0),
         .delayed_valid  (delayed_valid),
         .sf             (sf),
         .sc_thr         (sc_thr),
@@ -348,7 +386,7 @@ module fpga_dsp_wrap (
     // a fresh set. We surface the committed weights on the W_* status outputs
     // for read-back/debug. wgt_mode/wgt_src/wgt_auto_commit are no longer used.
     // =========================================================================
-    wire W_commit_int = fw_W_commit;
+    assign W_commit_int = fw_W_commit;
     assign W_commit = W_commit_int;
 
     assign W_re0 = fw_W_re0; assign W_im0 = fw_W_im0;
@@ -361,7 +399,6 @@ module fpga_dsp_wrap (
     // =========================================================================
     wire        W_valid_set, W_missed_packet, combiner_source, safe_switch;
     wire [2:0]  packet_phase;
-    wire        packet_active_int;
     wire [1:0]  active_mode;
     wire [3:0]  active_antenna_en;
     assign packet_active = packet_active_int;
@@ -397,7 +434,7 @@ module fpga_dsp_wrap (
         .psram_replay_start (),
         .psram_abort        (),
         .payload_rd_base    (),
-        .buf_freeze         (buf_freeze),
+        .buf_freeze         (),   // unused: SC delay now via PSRAM, not frontend_buf
         .packet_phase       (packet_phase),
         .packet_active      (packet_active_int),
         .active_mode        (active_mode),
@@ -414,14 +451,25 @@ module fpga_dsp_wrap (
                             active_antenna_en[2] ? 2'd2 :
                             active_antenna_en[3] ? 2'd3 : 2'd0;
 
+    // Combiner input mux: live decimator IQ normally, PSRAM replay IQ during
+    // same-packet replay (matches trouper_top).
+    wire signed [7:0] comb_xi [0:3];
+    wire signed [7:0] comb_xq [0:3];
+    genvar gc;
+    generate for (gc = 0; gc < 4; gc = gc + 1) begin : g_comb_mux
+        assign comb_xi[gc] = psram_replay_active ? rpl_i[gc] : dcr_i[gc];
+        assign comb_xq[gc] = psram_replay_active ? rpl_q[gc] : dcr_q[gc];
+    end endgenerate
+    wire comb_xvalid = psram_replay_active ? rpl_valid : dcr_valid;
+
     mrc_combiner u_comb (
         .clk_16m (clk),
         .rst_n   (rst_n),
-        .x_i0 (dcr_i[0]), .x_q0 (dcr_q[0]),
-        .x_i1 (dcr_i[1]), .x_q1 (dcr_q[1]),
-        .x_i2 (dcr_i[2]), .x_q2 (dcr_q[2]),
-        .x_i3 (dcr_i[3]), .x_q3 (dcr_q[3]),
-        .x_valid  (dcr_valid),
+        .x_i0 (comb_xi[0]), .x_q0 (comb_xq[0]),
+        .x_i1 (comb_xi[1]), .x_q1 (comb_xq[1]),
+        .x_i2 (comb_xi[2]), .x_q2 (comb_xq[2]),
+        .x_i3 (comb_xi[3]), .x_q3 (comb_xq[3]),
+        .x_valid  (comb_xvalid),
         .W_re0 (fw_W_re0[15:8]), .W_im0 (fw_W_im0[15:8]),
         .W_re1 (fw_W_re1[15:8]), .W_im1 (fw_W_im1[15:8]),
         .W_re2 (fw_W_re2[15:8]), .W_im2 (fw_W_im2[15:8]),

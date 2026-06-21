@@ -29,14 +29,14 @@ ASIC_RTL    = ../rtl-test/rtl
 # All ASIC RTL modules needed by fpga_dsp_wrap
 ASIC_SRCS   = $(ASIC_RTL)/sd_decimator_cic_tdm8.v \
               $(ASIC_RTL)/dc_removal.v          \
-              $(ASIC_RTL)/frontend_buf_ctrl.v   \
+              $(ASIC_RTL)/psram_buf_ctrl.v      \
               $(ASIC_RTL)/sc_detector.v         \
               $(ASIC_RTL)/training_acc.v        \
               $(ASIC_RTL)/packet_ctrl_fsm.v     \
               $(ASIC_RTL)/mrc_combiner.v        \
               $(ASIC_RTL)/sd_remod.v
 
-FPGA_SRCS   = $(RTL)/fpga_sram512x8.v \
+FPGA_SRCS   = $(RTL)/psram_model.v  \
               $(RTL)/sync_fifo.v      \
               $(RTL)/fpga_dsp_wrap.v
 

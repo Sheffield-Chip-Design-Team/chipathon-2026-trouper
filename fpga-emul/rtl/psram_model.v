@@ -38,10 +38,11 @@ module psram_model #(
     input  wire [3:0]  sio_oe,      // 1 = controller driving, 0 = model drives
     output reg  [3:0]  sio_in       // model → controller (read data)
 );
-    localparam MEM_BYTES = (1 << ADDR_BITS);
-
-    // Byte-wide memory (BRAM-inferable).
-    reg [7:0] mem [0:MEM_BYTES-1];
+    // Nibble-addressed memory: every QPI access moves exactly one 4-bit nibble,
+    // so a single full-word read/write per cycle keeps this a clean, inferable
+    // simple-dual-port BRAM (byte-addressed sub-field reads do not infer).
+    localparam NADDR = ADDR_BITS + 1;          // nibble-address width
+    reg [3:0] mem [0:(1<<NADDR)-1];
 
     // Transaction tracking.
     reg        active;          // ce_n low (a transaction in progress)
@@ -53,9 +54,13 @@ module psram_model #(
     reg        oe_released;     // saw sio_oe go to 0 during a read
     reg [5:0]  rd_skip;         // countdown after bus release before driving data
     reg [3:0]  rd_started;      // read-data nibble index once launched (0 = not yet)
-    reg [3:0]  wr_hi;           // high-nibble stash for writes
 
     wire [ADDR_BITS-1:0] amask = addr[ADDR_BITS-1:0];
+
+    // Nibble addresses: byte address × 2 + nibble-within-transaction. Width
+    // NADDR so the carry-out gives the (power-of-two) circular wrap for free.
+    wire [NADDR-1:0] wr_naddr = ({amask, 1'b0}) + (nib - 6'd8);
+    wire [NADDR-1:0] rd_naddr = ({amask, 1'b0}) + rd_started;
 
     integer i;
     always @(posedge clk_32m or negedge rst_n) begin
@@ -69,7 +74,6 @@ module psram_model #(
             oe_released <= 1'b0;
             rd_skip     <= 6'd0;
             rd_started  <= 4'd0;
-            wr_hi       <= 4'h0;
             sio_in      <= 4'h0;
         end else begin
             if (ce_n) begin
@@ -96,19 +100,11 @@ module psram_model #(
                 if (nib >= 6'd2 && nib <= 6'd7)
                     addr <= {addr[18:0], sio_out};
 
-                // ---- WRITE: data nibbles from nib==8 onward ----
-                // Each byte = two nibbles; high nibble first. Write on the low
-                // nibble of each pair, incrementing the address per byte.
-                if (is_write && nib >= 6'd8) begin
-                    if (nib[0] == 1'b0) begin
-                        // high nibble cycle: stash
-                        wr_hi <= sio_out;
-                    end else begin
-                        mem[(amask + ((nib - 6'd9) >> 1)) % MEM_BYTES] <= {wr_hi, sio_out};
-                    end
-                end
+                // ---- WRITE: one nibble per cycle from nib==8 onward ----
+                if (is_write && nib >= 6'd8)
+                    mem[wr_naddr] <= sio_out;
 
-                // ---- READ: wait for bus release, then drive data ----
+                // ---- READ: wait for bus release, then drive one nibble/cycle ----
                 if (is_read) begin
                     if (sio_oe == 4'h0) begin
                         if (!oe_released) begin
@@ -117,10 +113,7 @@ module psram_model #(
                         end else if (rd_skip != 6'd0) begin
                             rd_skip <= rd_skip - 6'd1;
                         end else begin
-                            // Launch read data, high nibble then low nibble per byte.
-                            sio_in     <= rd_started[0] ?
-                                          mem[(amask + (rd_started >> 1)) % MEM_BYTES][3:0] :
-                                          mem[(amask + (rd_started >> 1)) % MEM_BYTES][7:4];
+                            sio_in     <= mem[rd_naddr];   // clean registered read
                             rd_started <= rd_started + 4'd1;
                         end
                     end
