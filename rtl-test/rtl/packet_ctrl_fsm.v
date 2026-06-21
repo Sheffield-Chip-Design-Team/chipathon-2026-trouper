@@ -8,6 +8,7 @@ module packet_ctrl_fsm (
     input  wire        iq_valid,
     input  wire [31:0] sample_count,
     input  wire [3:0]  sf,
+    input  wire [1:0]  sample_shift,
     input  wire        sc_lock,
     input  wire [31:0] timing_ref,
     input  wire        training_done,
@@ -47,20 +48,8 @@ module packet_ctrl_fsm (
     reg [31:0] pkt_end_q;
     reg [31:0] M_val;
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            M_val <= 32'd128;
-        end else begin
-            case (sf)
-                4'd6:  M_val <= 32'd64;
-                4'd7:  M_val <= 32'd128;
-                4'd8:  M_val <= 32'd256;
-                4'd9:  M_val <= 32'd512;
-                4'd10: M_val <= 32'd1024;
-                4'd11: M_val <= 32'd2048;
-                4'd12: M_val <= 32'd4096;
-                default: M_val <= 32'd128;
-            endcase
-        end
+        if (!rst_n) M_val <= 32'd256; // SF7 + shift=1 (250 kHz default)
+        else        M_val <= 32'd1 << ({1'b0, sf} + {3'b0, sample_shift});
     end
 
     // Timeout thresholds are registered at packet start to keep the FSM compare path short.
@@ -69,16 +58,7 @@ module packet_ctrl_fsm (
     reg  [31:0] pkt_span_next;
 
     always @(*) begin
-        case (sf)
-            4'd6:  pkt_span_next = {18'd0, pkt_timeout_syms, 6'd0};
-            4'd7:  pkt_span_next = {17'd0, pkt_timeout_syms, 7'd0};
-            4'd8:  pkt_span_next = {16'd0, pkt_timeout_syms, 8'd0};
-            4'd9:  pkt_span_next = {15'd0, pkt_timeout_syms, 9'd0};
-            4'd10: pkt_span_next = {14'd0, pkt_timeout_syms, 10'd0};
-            4'd11: pkt_span_next = {13'd0, pkt_timeout_syms, 11'd0};
-            4'd12: pkt_span_next = {12'd0, pkt_timeout_syms, 12'd0};
-            default: pkt_span_next = {17'd0, pkt_timeout_syms, 7'd0};
-        endcase
+        pkt_span_next = {24'd0, pkt_timeout_syms} << (sf + sample_shift);
     end
 
     // W commit pending (can arrive in any state, deferred to IDLE or applied in PAYLOAD)

@@ -23,21 +23,21 @@ DC bias arises from the SX1257 direct-conversion mixer. An unremoved DC componen
 ```
 Per branch k (k = 0..3), per sample n, updated on raw_valid only:
 
-  diff_k[n]  = raw_k[n] - acc_k[n-1][11:4]         // 9-bit signed: raw − dc_est_prev
-  acc_k[n]   = acc_k[n-1] + sign_extend(diff_k, 12) // full error, no right-shift
-  dc_est_k   = acc_k[n][11:4]                       // integer part of Q8.4 accumulator
-  out_k[n]   = raw_k[n] - acc_k[n-1][11:4]          // pre-update estimate (1-cycle lag)
+  diff_k[n]  = raw_k[n] - acc_k[n-1][12:5]         // raw − dc_est_prev
+  acc_k[n]   = acc_k[n-1] + sign_extend(diff_k, 13) // full error, no right-shift
+  dc_est_k   = acc_k[n][12:5]                       // integer part of Q8.5 accumulator
+  out_k[n]   = raw_k[n] - acc_k[n-1][12:5]          // pre-update estimate (1-cycle lag)
 ```
 
 I and Q channels are independent; each has its own accumulator. All four branches process in parallel within one module.
 
-**Why full error (not `diff>>4`):** Adding the shifted error `diff>>4` introduces a ±15 LSB convergence deadband — small positive DC values floor to zero and stall the accumulator. Adding the full `diff` eliminates this asymmetry while preserving the same effective time constant, because the DC estimate `acc[11:4]` absorbs only the integer part of the accumulated error on each cycle.
+**Why full error (not `diff>>5`):** Adding the shifted error `diff>>5` introduces a convergence deadband — small positive DC values floor to zero and stall the accumulator. Adding the full `diff` eliminates this asymmetry while preserving the same effective time constant, because the DC estimate `acc[12:5]` absorbs only the integer part of the accumulated error on each cycle.
 
-**Effective time constant:** Let `z = acc/16`. Then:
+**Effective time constant:** Let `z = acc/32`. Then:
 ```
-z[n] = (15/16)·z[n-1] + (1/16)·x[n]   →   α = 1/16 = 2⁻⁴,  τ = 16 samples
+z[n] = (31/32)·z[n-1] + (1/32)·x[n]   →   α = 1/32 = 2⁻⁵,  τ = 32 samples
 ```
-At 250 kS/s: **τ = 64 µs**. 90% settling in ≈ 37 samples (< ¼ of a SF7 symbol).
+At 500 kS/s: **τ = 64 µs**. 90% settling in ≈ 74 samples.
 
 ---
 
@@ -64,9 +64,9 @@ Ports removed from earlier planning: `dc_alpha_shift`, `dc_bypass`, `dc_est_i/q`
 |---|---|---|
 | NR | 4 | Branches (hardcoded; not a Verilog parameter) |
 | W_IN | 8 | int8 input (hardcoded; planning doc TBD resolved to 8) |
-| W_ACC | 12 | Q8.4 accumulator width |
-| α | 1/16 = 2⁻⁴ | Hardcoded; not runtime-configurable |
-| τ | 16 samples | 64 µs at 250 kS/s |
+| W_ACC | 13 | Q8.5 accumulator width |
+| α | 1/32 = 2⁻⁵ | Hardcoded; not runtime-configurable |
+| τ | 32 samples | 64 µs at 500 kS/s |
 
 ---
 
@@ -74,13 +74,13 @@ Ports removed from earlier planning: `dc_alpha_shift`, `dc_bypass`, `dc_est_i/q`
 
 **No output saturation.** `out = raw - dc_est`. Since `dc_est` is a leaky average of `raw`, it is bounded within the input dynamic range. The subtraction cannot overflow int8 by more than 1 LSB (at most during the first sample after reset), and that transient is harmless.
 
-**Accumulator bounds.** Maximum sustained input is +127. Maximum accumulator value = 127 × 16 = 2032 < 2047 = 2¹¹ − 1. No overflow possible for int8 inputs.
+**Accumulator bounds.** Maximum sustained input is +127. Maximum accumulator value = 127 × 32 = 4064 < 4095 = 2¹² − 1. No overflow possible for int8 inputs.
 
 **Pipeline depth.** Exactly one `clk_32m` register stage between `raw_valid` and `out_valid`. The Frontend Buffer Controller and SC detector use `out_valid` as their sample strobe.
 
-**Reset behaviour.** All 8 accumulators and all 8 output registers clear to zero on `rst_n` de-assertion. With a non-zero input already present before reset, the filter re-settles within ~37 samples (one 90% time constant).
+**Reset behaviour.** All 8 accumulators and all 8 output registers clear to zero on `rst_n` de-assertion. With a non-zero input already present before reset, the filter re-settles within ~74 samples (one 90% time constant).
 
-**No dc_alpha_shift port.** The time constant is fixed at α = 1/16. If a different time constant is needed for a future design iteration, the accumulator width and the `acc[11:4]` extract must both change.
+**No dc_alpha_shift port.** The time constant is fixed at α = 1/32. If a different time constant is needed for a future design iteration, the accumulator width and the `acc[12:5]` extract must both change.
 
 ---
 
@@ -102,7 +102,7 @@ Ports removed from earlier planning: `dc_alpha_shift`, `dc_bypass`, `dc_est_i/q`
 
 ## Related blocks
 
-- [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides int8 I+Q at 250 kS/s
+- [ΣΔ Decimator](ΣΔ%20Decimator.md) — provides int8 I+Q at 500 kS/s
 - [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives `out_valid` samples; applies 8-bit saturation for SRAM storage
 - [SC Preamble Detector](Correlator%20Bank.md) — receives DC-removed samples on the live path
 - [Training Accumulator](Training%20Accumulator.md) — receives DC-removed samples after `sc_lock`

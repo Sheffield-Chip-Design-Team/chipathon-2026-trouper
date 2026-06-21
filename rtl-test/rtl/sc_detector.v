@@ -53,6 +53,7 @@ module sc_detector (
     input  wire signed [7:0] del_q0,
     input  wire        delayed_valid,
     input  wire [3:0]  sf,
+    input  wire [1:0]  sample_shift,
     input  wire [15:0] sc_thr,
     input  wire [1:0]  sc_hits_req,
     output reg         sc_lock,
@@ -86,18 +87,18 @@ module sc_detector (
     end
 
     reg [31:0] sample_count;
-    reg [11:0] sym_cnt;  // up to 4095 (SF12 full-symbol window)
-    reg [11:0] M_val;    // full symbol period M = 2^SF
+    reg [14:0] sym_cnt;  // up to 16383 (SF12+shift=2)
+    reg [14:0] M_val;    // M = 2^(SF+sample_shift): 128..16384
     always @(*) begin
         case (sf)
-            4'd6:    M_val = 12'd64;
-            4'd7:    M_val = 12'd128;
-            4'd8:    M_val = 12'd256;
-            4'd9:    M_val = 12'd512;
-            4'd10:   M_val = 12'd1024;
-            4'd11:   M_val = 12'd2048;
-            4'd12:   M_val = 12'd4096;
-            default: M_val = 12'd128;
+            4'd6:    M_val = 15'd64   << sample_shift;
+            4'd7:    M_val = 15'd128  << sample_shift;
+            4'd8:    M_val = 15'd256  << sample_shift;
+            4'd9:    M_val = 15'd512  << sample_shift;
+            4'd10:   M_val = 15'd1024 << sample_shift;
+            4'd11:   M_val = 15'd2048 << sample_shift;
+            4'd12:   M_val = 15'd4096 << sample_shift;
+            default: M_val = 15'd128  << sample_shift;
         endcase
     end
 
@@ -183,7 +184,7 @@ module sc_detector (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             sample_count    <= 32'd0;
-            sym_cnt         <= 12'd0;
+            sym_cnt         <= 15'd0;
             acc_ci0  <= 24'sd0; acc_cq0  <= 24'sd0;
             acc_E0cur<= 24'sd0; acc_E0del<= 24'sd0;
             tlat_ci0 <= 8'sd0; tlat_qi0 <= 8'sd0;
@@ -271,8 +272,8 @@ module sc_detector (
                         tdm_busy     <= 1'b0;
                         sample_count <= sample_count + 32'd1;
 
-                        if (sym_cnt == M_val - 12'd1) begin
-                            sym_cnt <= 12'd0;
+                        if (sym_cnt == M_val - 15'd1) begin
+                            sym_cnt <= 15'd0;
                             sym_ci0 <= acc_ci0; sym_cq0 <= acc_cq0;
 
                             // Snapshot for eval: shift right by 10 → 13-bit signed
@@ -290,7 +291,7 @@ module sc_detector (
                             acc_ci0   <= 24'sd0; acc_cq0   <= 24'sd0;
                             acc_E0cur <= 24'sd0; acc_E0del <= 24'sd0;
                         end else begin
-                            sym_cnt <= sym_cnt + 8'd1;
+                            sym_cnt <= sym_cnt + 15'd1;
                         end
                     end
                     default: begin end
@@ -349,14 +350,14 @@ module sc_detector (
                     if (hit_count == sc_hits_req) begin
                         sc_lock            <= 1'b1;
                         sc_lock_sample_dbg <= eval_sample_mark;
-                        // (sc_hits_req+1)*M: M=2^sf, shift by sf — no multiplier.
-                        // n_hits_p1 ∈ 1..4 (3 bits); offset ≤ 4×4096=16384 (14 bits).
+                        // (sc_hits_req+1)*M: M=2^(sf+sample_shift), shift by sf+sample_shift.
+                        // n_hits_p1 ∈ 1..4 (3 bits); offset ≤ 4×16384=65536 (17 bits).
                         begin : blk_timing
                             reg [2:0]  n_hits_p1;
-                            reg [13:0] sc_off;
+                            reg [16:0] sc_off;
                             n_hits_p1 = {1'b0, sc_hits_req} + 2'd1;
-                            sc_off = {11'd0, n_hits_p1} << sf;
-                            timing_ref <= eval_sample_mark - {18'd0, sc_off} + 32'd1;
+                            sc_off = {14'd0, n_hits_p1} << (sf + sample_shift);
+                            timing_ref <= eval_sample_mark - {15'd0, sc_off} + 32'd1;
                         end
                         c_i0 <= {{8{sym_ci0[23]}}, sym_ci0};
                         c_q0 <= {{8{sym_cq0[23]}}, sym_cq0};

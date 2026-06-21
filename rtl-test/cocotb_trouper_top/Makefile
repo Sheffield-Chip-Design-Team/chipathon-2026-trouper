@@ -1,5 +1,6 @@
 # cocotb_trouper_top/Makefile
 # Runs all SF7-SF12 × BW250/125 integration tests via cocotb + Icarus Verilog.
+# Production trouper_top: HB decimator chain (sd_decimator_poly, R=64, 500 kS/s).
 #
 # Usage:
 #   make                        # run all 12 tests
@@ -12,7 +13,7 @@
 SIM           ?= icarus
 TOPLEVEL_LANG  = verilog
 TOPLEVEL            = tb_trouper_cocotb
-COCOTB_TEST_MODULES = test_trouper_top
+COCOTB_TEST_MODULES = test_trouper_top_hb
 
 DESIGN_ROOT   ?= /foss/designs/lora-mimo
 RTL            = $(DESIGN_ROOT)/rtl-test/rtl
@@ -21,7 +22,7 @@ TB             = $(DESIGN_ROOT)/rtl-test/tb
 
 VERILOG_SOURCES = \
     $(RTL)/trouper_top.v          \
-    $(RTL)/sd_decimator_cic_tdm8.v \
+    $(RTL)/sd_decimator_poly.v    \
     $(RTL)/dc_removal.v           \
     $(RTL)/sc_detector.v          \
     $(RTL)/training_acc.v         \

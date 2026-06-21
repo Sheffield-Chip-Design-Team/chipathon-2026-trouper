@@ -2,7 +2,7 @@
 
 > Architecture — NT=1 NR=4 MRC single-mode MIMO gateway ASIC.
 > GF180MCU. 3.3 V core and IO. SSCS PICO Chipathon 2026. Tapeout deadline: September 2026.
-> Supported LoRa BW: **125 kHz and 250 kHz only** (both use decim_ratio=1, R=128). 500 kHz BW not supported (CIC-only SQNR 9.6 dB at R=64).
+> Supported LoRa BW: **125 kHz and 250 kHz**, fixed R=64 half-band chain at 500 kS/s; `BW_CFG.bw_sel` sets `sample_shift` (not the decimation ratio). 1 MHz out of scope. See `decimator-hb-migration-impact-plan.md`.
 
 Related prototype hardware note: [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
 
@@ -97,8 +97,8 @@ RF Front-End"]
         subgraph rx_fe["Decimators ×4"]
             direction LR
             D1["ΣΔ Decimator 1
-CIC-only (R=128)
-1-bit → int8 · 250 kS/s
+Half-band (R=64)
+1-bit → int8 · 500 kS/s
 (125 & 250 kHz BW)"]
             D2["ΣΔ Decimator 2"]
             D3["ΣΔ Decimator 3"]
@@ -109,14 +109,14 @@ CIC-only (R=128)
             direction TB
             DCR["DC Removal ×4
 IIR running-mean
-DC_ALPHA_SHIFT=8"]
+α = 1/32 (Q8.5)"]
             SC["Schmidl-Cox / Correlator
 sliding magnitude autocorr
 sc_lock · timing_ref"]
             TACC["Training Accumulator
-all-pairs Z_kl + Z_kk diagonal
-Z_kk → FW noise statistics
-Z_kl → FW via REGBANK
+all-pairs cross-correlation (Z_kl)
+Z_kl → FW channel estimates
+Z_kk (auto) → FW energy/noise
 noise_mode · training_done"]
             PCFSM["Packet Control FSM
 packet phase · safe_switch
@@ -258,7 +258,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 
 | Pressure Point | Stage | Risk | Mitigation/Verification Requirement |
 | --- | --- | --- | --- |
-| **CIC Droop** | Stage 2 | −7.3 dB band-edge roll-off at 0.4×Nyquist | CIC-only (no FIR). At R=128, SQNR = 30.6 dB — adequate because (a) SX1257 analog IF filter limits alias energy, (b) sd_remod→SX1302 provides additional filtering, (c) LoRa CSS processing gain absorbs residual noise. 500 kHz BW excluded from spec. |
+| **CIC Droop** | Stage 2 | ≈ −0.17 dB passband (half-band chain) | Half-band R=64 chain (CIC-3 R=16 → HB1 → HB2) eliminates the legacy R=128 band-edge droop (was −11.8 dB at 250 kHz). See `decimator-hb-redesign.md`. |
 | **Combiner Truncation** | Stage 8 | Signal clipping or quantization noise | Combiner outputs int8 (MRC: int32 ÷2 → int8; bypass: direct int8). AGC must keep per-branch amplitude ≤ −3 dBFS (≤ 90 counts int8) so combined output stays within int8 range after ÷2. Int8 saturation is a safety net only. |
 | **Re-modulator Stability** | Stage 9 | Integrator latch-up / Instability | Input must be strictly `< -3 dBFS`. Saturating adders are mandatory; wrap-around will cause permanent instability. |
 
@@ -289,14 +289,14 @@ The design uses two internal clock domains derived from the single 32 MHz extern
 
 | Domain | Clock | Period | Blocks |
 |---|---|---|---|
-| 32 MHz tier | `IQ_CLK` | 31.25 ns | `sd_decimator_cic_only` ×4, `sd_remod`, `psram_buf_ctrl`, `sc_detector`, `trouper_top` glue |
+| 32 MHz tier | `IQ_CLK` | 31.25 ns | `sd_decimator_cic_tdm8`, `sd_remod`, `psram_buf_ctrl`, `sc_detector`, `trouper_top` glue |
 | 16 MHz tier | `CLK_16M` (IQ_CLK÷2) | 62.5 ns | `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `packet_ctrl_fsm`, `reg_bank` (incl. interrupt aggregation), `spi_slave` |
 
 `CLK_16M` is generated **once at top level** as a registered divide-by-2 of IQ_CLK and distributed as a normal clock tree. Per-block local clock dividers are not used. The divider FF is synchronously reset so phase is deterministic after RESETB de-assertion.
 
 Rationale for block placement:
 
-- `sd_decimator_cic_only`, `sd_remod`, and `psram_buf_ctrl` have true 32 MHz bit-level timing obligations.
+- `sd_decimator_cic_tdm8`, `sd_remod`, and `psram_buf_ctrl` have true 32 MHz bit-level timing obligations.
 - `sc_detector` has a TDM FSM with single-cycle path dependencies; moving it to 16 MHz does not eliminate the SS violation (the TDM chain still needs one full cycle, and at 62.5 ns it still exceeds the ~72 ns SS path). Fix requires pipelining the TDM accumulator into 2 cycles.
 - All remaining blocks update only on `iq_valid` or `raw_valid` and have no 32 MHz timing obligations; they run comfortably at 62.5 ns.
 
@@ -327,58 +327,31 @@ The following boundaries require explicit treatment:
 
 ## Gate count & area summary
 
-**Top-level figures — `RUN_2026-06-06_01-25-43`** (FD cells, flat LibreLane P&R). Note: predates removal of `weight_gen` and `noise_est`; logic area will be updated on next P&R run.
+**Top-level figures — Trouper Project (macro only)**
+*Note: Area for the companion Grouper project is documented separately.*
 
 | Metric | Value |
 | --- | --- |
-| Logic area (excl. SRAMs, flat optimised) | **~431,000 µm²** (stale — `weight_gen` + `noise_est` not yet removed from this run) |
-| Frontend buffer SRAM (1 × FD 512×8) | ~209,000 µm² (0.21 mm²) |
-| CPU SRAM (4 × OCD 1024×8) | ~838,000 µm² (0.84 mm²) |
-| **Total synthesis area (logic + SRAMs)** | **~1,478,000 µm² (1.48 mm²)** (weight_gen excluded from logic) |
+| Logic area (synthesis-only, active `trouper_top`, SGE 1965) | **748,043 µm²** hierarchical total on `gf180mcu_fd_sc_mcu7t5v0` TT; largest blocks are `sd_decimator_cic_tdm8` 207,754, `training_acc` 131,229, `sc_detector` 108,487 µm² |
+| On-chip SRAM | **None** (off-chip APS6404L PSRAM used for all DSP buffering) |
 | Core area (placed) | 1,822,012 µm² (1.82 mm²) at 69.3% utilisation |
 | Post-PNR WNS — TT 25°C 3.3 V (setup) | +24.70 ns ✓ |
 | Post-PNR WNS — SS 125°C 3.0 V (setup) | **−10.08 ns ✗** (expected — FD cells fail 32 MHz SS) |
 | Post-PNR WNS — FF −40°C 3.6 V (hold) | −0.98 ns ✗ (hold violations at FF corner) |
 | Power — TT 25°C 3.3 V | 50.9 mW (42.5 mW internal + 8.4 mW switching) |
 
-**Per-module breakdown — SGE job 1330** (FD cells, hierarchical Yosys synthesis, SRAMs blackboxed). Note: hierarchical synthesis does not optimise across module boundaries so individual areas are conservative estimates; the flat P&R total above is the authoritative number.
-
-| Component | FD-cell µm² | Notes |
-| --- | --- | --- |
-| ΣΔ Decimator CIC-only ×4 | 71,502 × 4 = **286,008** | per-instance × 4 |
-| ~~Weight Generation (`weight_gen.v`)~~ | ~~141,244~~ | **Removed** — weights are firmware-computed |
-| Training Accumulator | **132,706** | |
-| Schmidl-Cox Detector | **111,942** | incl. `signed_mul24_pipe` shared multiplier |
-| Register Bank | **81,703** | stale — 32 registers removed since this run |
-| MRC Combiner | **61,738** | |
-| PSRAM Buffer Controller | **44,071** | |
-| Packet Control FSM | **43,551** | |
-| DC Removal | **32,138** | |
-| ΣΔ Re-modulator | **28,250** | |
-| ~~Noise Estimation (`noise_est`)~~ | ~~22,929** | **Removed** — firmware EMA via ZDIAG readback |
-| Frontend Buffer Controller | **22,615** | |
-| SPI Slave | **16,420** | |
-| Top-level glue (`trouper_top`) | **11,116** | |
-| SPI Master | **9,483** | |
-| IRQ Controller | **2,402** | |
-| AHB-Lite Bus | **2,149** | |
-| **PicoRV32 (Grouper Project)** | **Part of Grouper** | Hardened macro in separate project |
-| **Logic subtotal (Trouper only)** | **~789,000 µm²** | hierarchical (conservative) |
-
-> CPU memory and PicoRV32 core are now part of the **Grouper** project. Trouper contains only the MIMO RX datapath and its control slaves. FFT engine and baseband SRAM are removed in the non-FFT architecture.
-
-Area-reduction options (SC simplification, NR=2 acquisition, PSRAM-assisted weight timing) are tracked in [area-cut-contingency.md](area-cut-contingency.md).
+> **Memory update:** The Trouper macro now contains zero internal SRAM instances. The frontend buffer SRAM and SC correlator delay line have been replaced by the **off-chip APS6404L PSRAM** via the `psram_buf_ctrl`. CPU memory remains part of the hardened **Grouper** project.
 
 ---
 
 ## Operating modes
 
-| Mode | Config | Combining | Output | Notes |
-| --- | --- | --- | --- | --- |
-| 1 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A | Default; works with any standard LoRaWAN node |
-| 2 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A | Stages 4–8 bypassed; single-antenna baseline for SNR/BER comparison |
+| Mode | `MIMO_CTRL.MODE` | Config | Combining | Output | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0 | NT=1, NR=4 | MRC | ΣΔ re-mod → SX1302 Radio A | Default; works with any standard LoRaWAN node |
+| 1 | 1 | NT=1, NR=1 | Passthrough (bypass) | ΣΔ re-mod → SX1302 Radio A | Stages 4–8 bypassed; single-antenna baseline for SNR/BER comparison |
 
-Mode 2 (passthrough) is selected by writing `MIMO_CTRL.MODE = 1`; antenna is chosen by the lowest set bit of `ANTENNA_EN`.
+Mode 1 (passthrough) is selected by writing `MIMO_CTRL.MODE = 1`; antenna is chosen by the lowest set bit of `ANTENNA_EN`.
 
 ---
 
@@ -388,19 +361,17 @@ See [Work Allocation Summary](Work%20Allocation.md) for a more detailed assignme
 
 | Block | Owner | Spec |
 | --- | --- | --- |
-| ΣΔ Decimator ×4 (CIC-only, R=128) | TBD | [ΣΔ Decimator](blocks/ΣΔ%20Decimator.md) |
+| ΣΔ Decimator ×4 (half-band, R=64) | Bowen | [ΣΔ Decimator](blocks/ΣΔ%20Decimator.md) |
 | DC Removal ×4 | TBD | [DC Removal](blocks/DC%20Removal.md) |
 | Schmidl-Cox Preamble Detector | TBD | [Correlator Bank](blocks/Correlator%20Bank.md) |
-| Frontend Buffer Controller (1 kB SRAM) | TBD | [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md) |
 | PSRAM Buffer Controller (APS6404L, QSPI) | TBD | [Memory Strategy](Memory%20Strategy.md) |
-| Training Accumulator | TBD | [Training Accumulator](blocks/Training%20Accumulator.md) |
+| Training Accumulator (incl. Energy Measurement) | TBD | [Training Accumulator](blocks/Training%20Accumulator.md) |
 | Packet Control FSM | TBD | [Packet Control FSM](blocks/Packet%20Control%20FSM.md) |
 | MRC Combiner | TBD | [MRC Combiner](blocks/MRC%20Combiner.md) |
-| ΣΔ Re-modulator | TBD | [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md) |
-| PicoRV32 RV32IM integration | TBD | [PicoRV32 Integration](blocks/PicoRV32%20Integration.md) |
-| PicoRV32 SRAM (4 KB unified, OCD macros) | TBD | [Memory Strategy](Memory%20Strategy.md) |
+| ΣΔ Re-modulator | Bowen | [ΣΔ Re-modulator](blocks/ΣΔ%20Re-modulator.md) |
+| PicoRV32 RV32IM integration (Grouper) | TBD | [PicoRV32 Integration](blocks/PicoRV32%20Integration.md) |
+| PicoRV32 SRAM (4 KB unified, Grouper) | TBD | [Memory Strategy](Memory%20Strategy.md) |
 | SPI Slave (host interface) | TBD | [SPI Slave](blocks/SPI%20Slave.md) |
-| SPI Master (→ SX1257) | TBD | [SPI Master](blocks/SPI%20Master.md) |
 | AHB-Lite Bus | TBD | — |
 | Register Bank (generated) | TBD | [Register Map](Register%20Map.md) |
 | Interrupt aggregation (in reg_bank) | TBD | [Interrupt Aggregation](blocks/Interrupt%20Aggregation.md) |
