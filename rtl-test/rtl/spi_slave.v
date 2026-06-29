@@ -150,6 +150,12 @@ module spi_slave (
     // -----------------------------------------------------------------------
     reg spi_we_sync0, spi_we_sync1, spi_we_sync2;
     reg spi_re_sync0, spi_re_sync1, spi_re_sync2;
+    // Edge pulse held one extra cycle → reg_we is 2 clocks wide so the CE-gated
+    // reg_bank (samples every other clock) always catches it.  addr/wdata are
+    // latched on the edge and held, so they stay valid across both.  reg_re is
+    // left 1-cycle: SPI reads use the combinational peek path (not a strobe into
+    // the bank), and reg_re also drives a single-shot PSRAM-debug pop at 32 MHz.
+    reg reg_we_p;
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
@@ -162,6 +168,7 @@ module spi_slave (
             reg_wr_addr  <= 8'd0;
             reg_wdata    <= 8'd0;
             reg_we       <= 1'b0;
+            reg_we_p     <= 1'b0;
             reg_re_addr  <= 8'd0;
             reg_re       <= 1'b0;
         end else begin
@@ -172,7 +179,9 @@ module spi_slave (
             spi_re_sync1 <= spi_re_sync0;
             spi_re_sync2 <= spi_re_sync1;
 
-            reg_we <= spi_we_sync1 && !spi_we_sync2;
+            // 2-cycle-wide write strobe (edge pulse OR its 1-cycle delay)
+            reg_we_p <= spi_we_sync1 && !spi_we_sync2;
+            reg_we <= (spi_we_sync1 && !spi_we_sync2) || reg_we_p;
             reg_re <= spi_re_sync1 && !spi_re_sync2;
 
             if (spi_we_sync1 && !spi_we_sync2) begin

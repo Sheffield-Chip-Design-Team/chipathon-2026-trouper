@@ -69,6 +69,17 @@ module trouper_top (
     wire clk   = IQ_CLK;
     wire rst_n = RESETB;
 
+    // ---- 16 MHz clock-enable (control-plane functional domain) --------------
+    // Single 32 MHz clock; CE-gated FFs update every OTHER cycle, so their
+    // reg→reg paths are genuinely 2 cycles → honest MCP=2 (62.5 ns) with NO
+    // second clock tree and NO async CDC.  Used to gate reg_bank: the deep
+    // register-write decode (~54 ns) then closes without restructuring the
+    // bank.  toggles 0,1,0,1,…
+    reg ce_16m;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) ce_16m <= 1'b0;
+        else        ce_16m <= ~ce_16m;
+
     // ---- Forward declarations (declared before first use; iverilog requires
     //      nets to be declared ahead of references) ----
     wire        dcr_valid;          // dc_removal output valid; driven below
@@ -520,8 +531,16 @@ module trouper_top (
 
     // irq_set for reg_bank: [0] CORR_LOCK, [1] TRAINING_DONE, [2] W_MISSED_PACKET,
     // [3] PACKET_DONE, [4] NOISE_READY (uncontaminated noise window complete)
-    wire [7:0] rb_irq_set = {3'b000, sigma2_valid,
+    wire [7:0] rb_irq_set_c = {3'b000, sigma2_valid,
                              packet_done_pulse, W_missed_packet, training_done, sc_lock};
+    // Stretch the 1-cycle status pulses to 2 cycles so the CE-gated reg_bank
+    // (samples every other clock) cannot miss them.  irq_status is sticky-OR so
+    // a 2-cycle-wide set is idempotent.
+    reg [7:0] rb_irq_set_d;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) rb_irq_set_d <= 8'd0;
+        else        rb_irq_set_d <= rb_irq_set_c;
+    wire [7:0] rb_irq_set = rb_irq_set_c | rb_irq_set_d;
 
     // =========================================================================
     // SPI slave instantiation
@@ -553,10 +572,31 @@ module trouper_top (
     // =========================================================================
     wire grp_active = GRP_WE | GRP_RE;
 
-    wire [7:0] rb_addr  = grp_active ? GRP_ADDR :
-                          (spi_reg_we ? spi_reg_wr_addr : spi_reg_rd_addr);
-    wire [7:0] rb_wdata = grp_active ? GRP_WDATA : spi_reg_wdata;
-    wire       rb_we    = grp_active ? GRP_WE    : spi_reg_we;
+    wire [7:0] rb_addr_c  = grp_active ? GRP_ADDR :
+                            (spi_reg_we ? spi_reg_wr_addr : spi_reg_rd_addr);
+    wire [7:0] rb_wdata_c = grp_active ? GRP_WDATA : spi_reg_wdata;
+    wire       rb_we_c    = grp_active ? GRP_WE    : spi_reg_we;
+
+    // CE-latched WRITE bus: addr/wdata/we are sampled TOGETHER on a CE edge and
+    // captured by the CE-gated reg_bank on the next CE edge, so the whole write
+    // decode is a consistent, genuine 2-cycle path (honest MCP=2).  spi_reg_we
+    // is 2 cycles wide → spans one CE edge → reg_bank writes ONCE (W1P safe).
+    reg [7:0] rb_addr, rb_wdata;
+    reg       rb_we;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rb_addr <= 8'd0; rb_wdata <= 8'd0; rb_we <= 1'b0;
+        end else if (ce_16m) begin
+            rb_addr  <= rb_addr_c;
+            rb_wdata <= rb_wdata_c;
+            rb_we    <= rb_we_c;
+        end
+    end
+
+    // READ address is COMBINATIONAL (separate port) so the peek read has no CE
+    // latency — reads always see the current address.  The host holds rd_addr
+    // stable for the whole transaction, so the peek decode is quasi-static.
+    wire [7:0] rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr;
     wire       rb_re    = GRP_RE;
 
     assign GRP_RDATA = cfg_rdata_w;
@@ -570,8 +610,10 @@ module trouper_top (
 
     reg_bank u_rb (
         .clk        (clk),
+        .clk_en     (ce_16m),
         .rst_n      (rst_n),
         .addr       (rb_addr),
+        .raddr      (rb_raddr),
         .wdata      (rb_wdata),
         .we         (rb_we),
         .re         (rb_re),

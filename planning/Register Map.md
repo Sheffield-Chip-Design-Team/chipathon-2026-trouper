@@ -35,8 +35,8 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12) |
 | `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); write ignored while `PACKET_ACTIVE` |
 | `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
-| `0x0C` | `SC_THR_HI` | R/W | `0x73` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [12:0] only — values ≥ `0x2000` are unsupported. |
-| `0x0D` | `SC_THR_LO` | R/W | `0x33` | Schmidl-Cox | Detection threshold [7:0] |
+| `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
+| `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
 | `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Consecutive SC hits required for `sc_lock`, valid range 1-3 |
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
 | **Gain / AGC / SX1257 Live RX Control** (`0x10`–`0x1B`) | | | | | |
@@ -209,7 +209,7 @@ Maximum packet duration in LoRa symbols before the Packet Control FSM forces a r
 
 ### `0x0C`–`0x0D` — SC_THR (read/write)
 
-Schmidl-Cox detection threshold, big-endian. The RTL consumes bits [12:0] only — programmed values ≥ `0x2000` are unsupported and must be avoided by software.
+Schmidl-Cox detection threshold, big-endian. Reset is `0x01CC`, the 12-bit-safe scaled equivalent of the legacy `0x7333` threshold (`0x7333 / 64`, rounded down). The RTL consumes bits [11:0] only; software must program a value in the range `0x0000`–`0x0FFF`. Bits [15:12] are stored and read back but do not affect detection.
 
 ### `0x0E` — SC_HITS_REQ (read/write)
 

@@ -39,6 +39,13 @@ module mrc_combiner (
 
     reg [3:0] state;
 
+    // 3-cycle pacing (honest MCP=3): each computing state holds MAC_WAIT+1 = 3
+    // clocks so the 8x8 multiply (+ subtract) soaks the full multicycle budget.
+    // State 0 is NOT paced — it must catch the 1-clock x_valid immediately.
+    // Burst: state0 (1) + states 1..10 x3 = 31 clocks, fits the 64-clock window.
+    localparam [1:0] MAC_WAIT = 2'd2;
+    reg [1:0] mac_wait;
+
     // Latched inputs
     reg signed [7:0]  xr_i [0:3];
     reg signed [7:0]  xr_q [0:3];
@@ -80,6 +87,7 @@ module mrc_combiner (
     always @(posedge clk_16m or negedge rst_n) begin
         if (!rst_n) begin
             state <= 4'd0;
+            mac_wait <= 2'd0;
             w_r <= 8'sd0; xi_r <= 8'sd0; xq_r <= 8'sd0;
             a_r <= 16'sd0; c_r <= 16'sd0;
             prod_i_r <= 16'sd0; prod_q_r <= 16'sd0;
@@ -94,6 +102,12 @@ module mrc_combiner (
         end else begin
             y_valid <= 1'b0;
 
+            // Pace states 1..10: hold each MAC_WAIT+1 clocks. State 0 runs every
+            // clock so x_valid is never missed.
+            if (state != 4'd0 && mac_wait != MAC_WAIT) begin
+                mac_wait <= mac_wait + 2'd1;
+            end else begin
+            mac_wait <= 2'd0;
             case (state)
 
             // ── IDLE: latch inputs, prime ant0 sub1 ─────────────────────────
@@ -205,6 +219,7 @@ module mrc_combiner (
 
             default: state <= 4'd0;
             endcase
+            end
         end
     end
 

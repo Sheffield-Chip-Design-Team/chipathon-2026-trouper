@@ -350,12 +350,11 @@ module tb_trouper_top;
 
         // -------------------------------------------------------------------
         // 4. Wait for IRQ_OUT (sc_lock) — poll IRQ_STATUS (0x02) bit 0
-        //    Default sc_thr=0x7333, sc_hits_req=2 are sufficient for a
+        //    Default sc_thr=0x01CC, sc_hits_req=2 are sufficient for a
         //    perfect sinusoidal preamble (math verified in tb comments).
         // -------------------------------------------------------------------
-        // sc_thr: must use sc_thr[12:0] < 4096 (bit12=0) to stay positive as 13-bit signed.
-        // Default 0x7333 has sc_thr[12:0]=0x1333=4915 (bit12=1→negative→broken).
-        // Use 0x0100 = sc_thr[12:0]=256, well within positive 13-bit range.
+        // sc_thr: detector consumes the unsigned low 12 bits only.
+        // Use 0x0100 = sc_thr[11:0]=256 to give this directed test extra margin.
         spi_write(7'h0C, 8'h01);   // sc_thr[15:8] = 0x01
         spi_write(7'h0D, 8'h00);   // sc_thr[7:0]  = 0x00  → sc_thr = 0x0100 = 256
         spi_write(7'h0E, 8'h01);   // sc_hits_req  = 1 (need 2 consecutive hits)

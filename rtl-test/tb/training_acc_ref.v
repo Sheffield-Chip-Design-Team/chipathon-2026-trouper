@@ -38,7 +38,7 @@
 // Accumulators: 32-bit signed.
 // GF180MCU, 3.3V, 16 MHz clock domain.
 
-module training_acc (
+module training_acc_ref (
     input  wire        clk,
     input  wire        rst_n,
     input  wire        iq_valid,
@@ -73,28 +73,15 @@ module training_acc (
 
     wire noise_trig_rise = noise_trig && !noise_trig_r;
 
-    // TDM counters: pair (0–9) and sub-step.
-    // DUAL-MULTIPLIER: two products per step halves the walk to 16 steps
-    //   cross-pairs (0–5): 2 sub-steps  (sub0→Zpair_i, sub1→Zpair_q)
-    //   diagonal   (6–9): 1 sub-step    (sub0→Zdiag)
-    // 6×2 + 4×1 = 16 steps.  At 3-cycle pacing that is 48 (+drain) < 64-clock
-    // window, so the ~73 ns MAC gets an honest MCP=3 budget (the original 32-step
-    // walk could not fit any pace once the HB migration shrank R=128→R=64).
+    // TDM counters: pair (0–9) and sub-step (0–3 for cross, 0–1 for diagonal)
     reg [3:0] tdm_pair;
     reg [1:0] tdm_sub;
     reg       tdm_active;
 
-    // SS-timing pacing (active-cycle freeze model, same as decimator/sc_detector).
-    localparam [1:0] TDM_WAIT = 2'd2;     // run the pipeline 1 cycle in 3
-    reg [1:0] tdm_wait;
-
-    // 1-cycle delayed tags (synchronised with the registered products)
+    // 1-cycle delayed tags (synchronised with mul_out)
     reg [3:0] acc_pair;
     reg [1:0] acc_sub;
     reg       acc_active;
-
-    wire pipe_active  = tdm_active || acc_active;
-    wire active_cycle = pipe_active && (tdm_wait == TDM_WAIT);
 
     // Diagonal branch index k: valid when (tdm|acc)_pair ∈ {6,7,8,9}
     // pair 6→k=0, 7→k=1, 8→k=2, 9→k=3  (pair[1:0] XOR 2'b10)
@@ -146,30 +133,23 @@ module training_acc (
             default: begin diag_i_r = raw_i3_r; diag_q_r = raw_q3_r; end
         endcase
     end
-    // Dual-multiplier operand selection.
-    //   cross sub0: mulA = I_a·I_b,  mulB = Q_a·Q_b   → Zpair_i += A + B
-    //   cross sub1: mulA = Q_a·I_b,  mulB = I_a·Q_b   → Zpair_q += A − B
-    //   diagonal  : mulA = I_k·I_k,  mulB = Q_k·Q_k   → Zdiag  += A + B (real)
-    wire signed [7:0] opA_a = (tdm_pair >= 4'd6) ? diag_i_r
-                            : (tdm_sub[0] ? tdm_q_a_r : tdm_i_a_r);
-    wire signed [7:0] opA_b = (tdm_pair >= 4'd6) ? diag_i_r : tdm_i_b_r;
-    wire signed [7:0] opB_a = (tdm_pair >= 4'd6) ? diag_q_r
-                            : (tdm_sub[0] ? tdm_i_a_r : tdm_q_a_r);
-    wire signed [7:0] opB_b = (tdm_pair >= 4'd6) ? diag_q_r : tdm_q_b_r;
-    reg signed [15:0] mulB_out;   // mul_out (declared above) is mulA_out
+    wire signed [7:0] op_a = (tdm_pair >= 4'd6)
+        ? (tdm_sub[0] ? diag_q_r : diag_i_r)
+        : ((tdm_sub[0]^tdm_sub[1]) ? tdm_q_a_r : tdm_i_a_r);
+    wire signed [7:0] op_b = (tdm_pair >= 4'd6)
+        ? (tdm_sub[0] ? diag_q_r : diag_i_r)
+        : (tdm_sub[0] ? tdm_q_b_r : tdm_i_b_r);
     always @(posedge clk) begin
-        if (active_cycle) begin
-            mul_out  <= opA_a * opA_b;   // mulA
-            mulB_out <= opB_a * opB_b;   // mulB
-        end
+        mul_out <= op_a * op_b;
     end
 
-    // Addends: cross-pairs sign-extend; diagonal (squares, ≥0) zero-extend.
-    wire signed [31:0] mulA_ext = {{16{mul_out[15]}},  mul_out};
-    wire signed [31:0] mulB_ext = {{16{mulB_out[15]}}, mulB_out};
-    wire signed [31:0] zi_add   = mulA_ext + mulB_ext;   // Zpair_i addend
-    wire signed [31:0] zq_add   = mulA_ext - mulB_ext;   // Zpair_q addend
-    wire        [31:0] zd_add   = {16'h0, mul_out[15:0]} + {16'h0, mulB_out[15:0]}; // Zdiag
+    // Intermediate product latch (holds even-sub result for odd-sub combine)
+    reg signed [15:0] p_latch;
+
+    // Sign-extended addends (32-bit) for cross-pair accumulation
+    wire signed [31:0] pl_ext  = {{16{p_latch[15]}}, p_latch};
+    wire signed [31:0] mul_ext = {{16{mul_out[15]}}, mul_out};
+    wire signed [31:0] zq_cur  = pl_ext - mul_ext;
 
     // Read mux for current cross-pair output register (read-modify-write)
     reg signed [31:0] zpair_ia_r, zpair_qa_r;
@@ -185,7 +165,7 @@ module training_acc (
     end
 
     // Forward-combine final Zdiag_3 value at the last accumulation step
-    wire [31:0] zdiag3_final = Zdiag_3 + zd_add;
+    wire [31:0] zdiag3_final = Zdiag_3 + {16'h0, p_latch[15:0]} + {16'h0, mul_out[15:0]};
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -200,7 +180,6 @@ module training_acc (
             tdm_pair      <= 4'd0;
             tdm_sub       <= 2'd0;
             tdm_active    <= 1'b0;
-            tdm_wait      <= 2'd0;
             acc_pair      <= 4'd0;
             acc_sub       <= 2'd0;
             acc_active    <= 1'b0;
@@ -209,6 +188,7 @@ module training_acc (
             raw_i2_r <= 8'sd0; raw_i3_r <= 8'sd0;
             raw_q0_r <= 8'sd0; raw_q1_r <= 8'sd0;
             raw_q2_r <= 8'sd0; raw_q3_r <= 8'sd0;
+            p_latch <= 16'sd0;
             Zpair_i0 <= 32'sd0; Zpair_q0 <= 32'sd0;
             Zpair_i1 <= 32'sd0; Zpair_q1 <= 32'sd0;
             Zpair_i2 <= 32'sd0; Zpair_q2 <= 32'sd0;
@@ -253,13 +233,6 @@ module training_acc (
                 n_acc <= 18'd0;
             end
 
-            // Pacing counter: advance the pipeline once per TDM_WAIT+1 clocks
-            // while it has work; reset when idle (and on (re)trigger).
-            if (pipe_active && tdm_wait != TDM_WAIT)
-                tdm_wait <= tdm_wait + 2'd1;
-            else
-                tdm_wait <= 2'd0;
-
             // Trigger TDM on iq_valid within window when idle.
             if (armed && (sc_lock || noise_mode_r) && iq_valid && !tdm_active &&
                     sample_count >= acc_start && sample_count <= acc_end &&
@@ -273,16 +246,20 @@ module training_acc (
                 tdm_pair   <= 4'd0;
                 tdm_sub    <= 2'd0;
                 tdm_active <= 1'b1;
-            end else if (active_cycle && tdm_active) begin
+            end else if (tdm_active) begin
                 if (tdm_pair >= 4'd6) begin
-                    // Diagonal pairs: 1 sub-step (dual-mult does I²+Q² at once)
-                    if (tdm_pair == 4'd9)
-                        tdm_active <= 1'b0;
-                    else
-                        tdm_pair <= tdm_pair + 4'd1;
-                end else begin
-                    // Cross-pairs: 2 sub-steps (sub0→Zpair_i, sub1→Zpair_q)
+                    // Diagonal pairs: 2 sub-steps (0 and 1)
                     if (tdm_sub == 2'd1) begin
+                        tdm_sub <= 2'd0;
+                        if (tdm_pair == 4'd9)
+                            tdm_active <= 1'b0;
+                        else
+                            tdm_pair <= tdm_pair + 4'd1;
+                    end else
+                        tdm_sub <= tdm_sub + 2'd1;
+                end else begin
+                    // Cross-pairs: 4 sub-steps (0–3); pair 5 sub 3 → pair 6 (diagonal start)
+                    if (tdm_sub == 2'd3) begin
                         tdm_sub <= 2'd0;
                         tdm_pair <= tdm_pair + 4'd1;
                     end else
@@ -290,56 +267,62 @@ module training_acc (
                 end
             end
 
-            // Delayed tags — advance only on active cycle (stay synced with products)
-            if (active_cycle) begin
-                acc_pair   <= tdm_pair;
-                acc_sub    <= tdm_sub;
-                acc_active <= tdm_active;
-            end
+            // Delayed tags — synchronised with mul_out
+            acc_pair   <= tdm_pair;
+            acc_sub    <= tdm_sub;
+            acc_active <= tdm_active;
 
-            // Accumulate directly into output registers when products are ready
-            // (dual-mult: both products available each step → no p_latch interleave).
-            if (acc_active && active_cycle) begin
+            // Accumulate directly into output registers when product is ready
+            if (acc_active) begin
                 if (acc_pair <= 4'd5) begin
                     // --- Cross-pair accumulation ---
-                    if (acc_sub == 2'd0) begin
-                        // sub=0: Z_i = I_a×I_b + Q_a×Q_b
+                    if (acc_sub[0] == 1'b0) begin
+                        // Even sub (0 or 2): latch product
+                        p_latch <= mul_out;
+                    end else if (acc_sub[1] == 1'b0) begin
+                        // sub=1: Z_i = I_a×I_b + Q_a×Q_b
                         case (acc_pair)
-                            4'd0: Zpair_i0 <= zpair_ia_r + zi_add;
-                            4'd1: Zpair_i1 <= zpair_ia_r + zi_add;
-                            4'd2: Zpair_i2 <= zpair_ia_r + zi_add;
-                            4'd3: Zpair_i3 <= zpair_ia_r + zi_add;
-                            4'd4: Zpair_i4 <= zpair_ia_r + zi_add;
-                            default: Zpair_i5 <= zpair_ia_r + zi_add;
+                            4'd0: Zpair_i0 <= zpair_ia_r + pl_ext + mul_ext;
+                            4'd1: Zpair_i1 <= zpair_ia_r + pl_ext + mul_ext;
+                            4'd2: Zpair_i2 <= zpair_ia_r + pl_ext + mul_ext;
+                            4'd3: Zpair_i3 <= zpair_ia_r + pl_ext + mul_ext;
+                            4'd4: Zpair_i4 <= zpair_ia_r + pl_ext + mul_ext;
+                            default: Zpair_i5 <= zpair_ia_r + pl_ext + mul_ext;
                         endcase
                     end else begin
-                        // sub=1: Z_q = Q_a×I_b − I_a×Q_b (pair_a sign convention)
+                        // sub=3: Z_q = Q_a×I_b − I_a×Q_b (pair_a sign convention)
                         case (acc_pair)
-                            4'd0: Zpair_q0 <= zpair_qa_r + zq_add;
-                            4'd1: Zpair_q1 <= zpair_qa_r + zq_add;
-                            4'd2: Zpair_q2 <= zpair_qa_r + zq_add;
-                            4'd3: Zpair_q3 <= zpair_qa_r + zq_add;
-                            4'd4: Zpair_q4 <= zpair_qa_r + zq_add;
-                            default: Zpair_q5 <= zpair_qa_r + zq_add;
+                            4'd0: Zpair_q0 <= zpair_qa_r + zq_cur;
+                            4'd1: Zpair_q1 <= zpair_qa_r + zq_cur;
+                            4'd2: Zpair_q2 <= zpair_qa_r + zq_cur;
+                            4'd3: Zpair_q3 <= zpair_qa_r + zq_cur;
+                            4'd4: Zpair_q4 <= zpair_qa_r + zq_cur;
+                            default: Zpair_q5 <= zpair_qa_r + zq_cur;
                         endcase
                     end
                 end else begin
-                    // --- Diagonal pair accumulation (1 step): Zdiag[k] += I_k² + Q_k² ---
-                    if (acc_pair == 4'd9 && last_samp) begin
-                        // Last diagonal, last sample: write final value and signal done
-                        Zdiag_3 <= zdiag3_final;
-                        training_done <= 1'b1;
-                        if (noise_mode_r) begin
-                            noise_mode_r <= 1'b0;
-                            armed        <= 1'b0;
-                        end
+                    // --- Diagonal pair accumulation (acc_pair ∈ {6,7,8,9}) ---
+                    if (acc_sub == 2'd0) begin
+                        // sub=0: latch I_k²
+                        p_latch <= mul_out;
                     end else begin
-                        case (acc_diag_k)
-                            2'd0: Zdiag_0 <= Zdiag_0 + zd_add;
-                            2'd1: Zdiag_1 <= Zdiag_1 + zd_add;
-                            2'd2: Zdiag_2 <= Zdiag_2 + zd_add;
-                            default: Zdiag_3 <= Zdiag_3 + zd_add;
-                        endcase
+                        // sub=1: Zdiag[k] += p_latch (I_k²) + mul_out (Q_k²)
+                        if (acc_pair == 4'd9 && last_samp) begin
+                            // Last diagonal, last sample: write final value and signal done
+                            Zdiag_3 <= zdiag3_final;
+                            training_done <= 1'b1;
+                            if (noise_mode_r) begin
+                                noise_mode_r <= 1'b0;
+                                armed        <= 1'b0;
+                            end
+                        end else begin
+                            case (acc_diag_k)
+                                2'd0: Zdiag_0 <= Zdiag_0 + {16'h0, p_latch[15:0]} + {16'h0, mul_out[15:0]};
+                                2'd1: Zdiag_1 <= Zdiag_1 + {16'h0, p_latch[15:0]} + {16'h0, mul_out[15:0]};
+                                2'd2: Zdiag_2 <= Zdiag_2 + {16'h0, p_latch[15:0]} + {16'h0, mul_out[15:0]};
+                                default: Zdiag_3 <= Zdiag_3 + {16'h0, p_latch[15:0]} + {16'h0, mul_out[15:0]};
+                            endcase
+                        end
                     end
                 end
             end

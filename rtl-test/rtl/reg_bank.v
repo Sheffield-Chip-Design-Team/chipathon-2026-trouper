@@ -8,10 +8,15 @@
 
 module reg_bank (
     input  wire        clk,
+    input  wire        clk_en,    // 16 MHz clock-enable: bank updates every other
+                                  // 32 MHz cycle → write decode is a 2-cycle path
+                                  // (honest MCP=2).  Bus inputs are CE-aligned and
+                                  // we is 2 cycles wide → exactly one write/CE edge.
     input  wire        rst_n,
 
     // Register-bus slave byte interface (Grouper bus / SPI slave via arbiter)
-    input  wire [7:0]  addr,
+    input  wire [7:0]  addr,    // WRITE address (CE-latched with we/wdata)
+    input  wire [7:0]  raddr,   // READ address (combinational — peek has no CE latency)
     input  wire [7:0]  wdata,
     input  wire        we,
     input  wire        re,
@@ -129,8 +134,9 @@ module reg_bank (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             irq_status <= 8'h00;
-        else begin
-            // Set bits from hardware
+        else if (clk_en) begin
+            // Set bits from hardware (irq_set pulses are 2-cycle-stretched so
+            // this every-other-cycle sample never misses them)
             irq_status <= (irq_status | irq_set);
             // Clear bits when host writes 1 to 0x03 (IRQ_CLEAR)
             if (we && addr == 8'h03)
@@ -166,8 +172,10 @@ module reg_bank (
             psram_dbg_rd_trig <= 1'b0;
             noise_trig       <= 1'b0;
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
-        end else begin
-            // Auto-clear write-1-pulse outputs
+        end else if (clk_en) begin
+            // Auto-clear write-1-pulse outputs (held one CE period = 2 clocks,
+            // safely caught by 32 MHz consumers; we is 2 cycles wide so each
+            // write/W1P fires exactly once per CE edge)
             rx_gain_commit  <= 1'b0;
             w_commit_pulse  <= 1'b0;
             psram_ctrl[1]   <= 1'b0;
@@ -244,17 +252,19 @@ module reg_bank (
         if (!rst_n) begin
             rdata <= 8'h00;
             read_valid <= 1'b0;
-        end else if (re && !read_valid) begin
-            rdata <= rdata_next;
-            read_valid <= 1'b1;
-        end else begin
-            read_valid <= 1'b0;
+        end else if (clk_en) begin
+            if (re && !read_valid) begin
+                rdata <= rdata_next;
+                read_valid <= 1'b1;
+            end else begin
+                read_valid <= 1'b0;
+            end
         end
     end
 
     always @(*) begin
         rdata_next = 8'h00;
-        case (addr)
+        case (raddr)
             // --- Global / IRQ / pad-mux debug ---
             8'h00: rdata_next = 8'hA7;                              // CHIP_ID
             8'h01: rdata_next = 8'h01;                              // CHIP_REV

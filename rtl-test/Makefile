@@ -222,7 +222,7 @@ tb_compare_decimators.vvp: $(TB)/tb_compare_decimators.v \
 # -----------------------------------------------------------------------
 TROUPER_TOP_SRCS = \
     $(RTL)/trouper_top.v \
-    $(RTL)/sd_decimator_cic_tdm8.v \
+    $(RTL)/sd_decimator_poly.v \
     $(RTL)/dc_removal.v \
     $(RTL)/sc_detector.v \
     $(RTL)/training_acc.v \

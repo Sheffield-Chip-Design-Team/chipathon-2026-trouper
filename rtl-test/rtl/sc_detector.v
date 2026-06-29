@@ -130,6 +130,15 @@ module sc_detector (
     reg signed [7:0]  tdm_a_r, tdm_b_r;
     wire signed [15:0] tdm_mul = tdm_a_r * tdm_b_r;
     reg  signed [15:0] tdm_mul_r;
+    // SS-timing pacing: the 8x8 tdm multiply is ~76 ns at the FD SS corner and
+    // cannot settle in one 31.25 ns cycle.  The TDM burst is ~8 steps once per
+    // 500 kS/s sample (64 clocks), so we hold each step TDM_WAIT+1 = 3 cycles
+    // (burst grows 8->24 clocks, still << 64) — every tdm multiply then has a
+    // genuine 3-cycle (MCP=3) budget.  Operands (tlat_* + the step pre-select)
+    // are stable across the hold, so the arithmetic is unchanged.
+    localparam [1:0] TDM_WAIT = 2'd2;
+    reg [1:0]  tdm_wait;
+    reg        iq_inc_pending;   // defer a sample_count++ that lands mid-burst
 
     reg signed [23:0] sym_ci0, sym_cq0;
     reg signed [27:0] sym_mag_sc;   // max |C|² = 2×4095² < 2^25; 28-bit sufficient
@@ -191,6 +200,8 @@ module sc_detector (
             tlat_di0 <= 8'sd0; tlat_dq0 <= 8'sd0;
             tdm_busy    <= 1'b0;
             tdm_step    <= 4'd0;
+            tdm_wait    <= 2'd0;
+            iq_inc_pending <= 1'b0;
             tdm_a_r     <= 8'sd0; tdm_b_r <= 8'sd0;
             tdm_mul_r   <= 16'sd0;
             sym_ci0  <= 24'sd0; sym_cq0  <= 24'sd0;
@@ -229,15 +240,28 @@ module sc_detector (
                 tdm_a_r  <= cur_i0_r;
                 tdm_b_r  <= del_i0_r;
                 tdm_step <= 4'd0;
+                tdm_wait <= 2'd0;
                 tdm_busy <= 1'b1;
             end else if (iq_valid_r && !delayed_valid_r && !tdm_busy) begin
                 sample_count <= sample_count + 32'd1;
+            end else if (iq_valid_r && !delayed_valid_r && tdm_busy) begin
+                // The paced (24-clock) burst can overlap the next current-sample
+                // valid; remember it and apply the sample_count++ on the first
+                // idle cycle after the burst (after eval reads sample_count, so
+                // eval_sample_mark timing is preserved exactly).
+                iq_inc_pending <= 1'b1;
+            end else if (iq_inc_pending && !tdm_busy) begin
+                sample_count   <= sample_count + 32'd1;
+                iq_inc_pending <= 1'b0;
             end
 
             // -----------------------------------------------------------------
             // TDM engine: one 8×8 multiply per cycle, 8 cycles per sample
             // -----------------------------------------------------------------
             if (tdm_busy) begin
+              if (tdm_wait != TDM_WAIT) tdm_wait <= tdm_wait + 2'd1;  // hold: let tdm_mul settle
+              else begin
+                tdm_wait  <= 2'd0;
                 tdm_mul_r <= tdm_mul;
                 tdm_step  <= tdm_step + 4'd1;
 
@@ -296,6 +320,7 @@ module sc_detector (
                     end
                     default: begin end
                 endcase
+              end
             end
 
             // -----------------------------------------------------------------

@@ -131,8 +131,17 @@ module psram_buf_ctrl (
 
     // del address = wr_ptr − N×8, latched at iq_valid trigger
     // del_offset = 8 << (sf+sample_shift)  (= N × 8 = 2^(SF+sample_shift) × 8)
+    //
+    // del_offset and del_n are REGISTERED (del_offset_r/del_n_r below), not live
+    // combinational wires.  sf/sample_shift are write-locked during a packet
+    // (quasi-static), so the variable shift '8 << (sf+sample_shift)' — a ~50-gate
+    // barrel-shifter cone that was the SS-corner worst path (rb_sf_cfg →
+    // del_addr/del_cnt, WNS -16.4 ns) — is computed once per config change into a
+    // register instead of on every per-cycle del_addr/del_cnt path.  Honest
+    // retiming: the shift settles long before the first iq_valid del-read uses it.
     reg [ABITS-1:0] del_addr;
-    wire [ABITS-1:0] del_offset = ({{(ABITS-4){1'b0}}, 4'd8} << (sf[3:0] + sample_shift));
+    reg [ABITS-1:0] del_offset_r;
+    wire [ABITS-1:0] del_offset_c = ({{(ABITS-4){1'b0}}, 4'd8} << (sf[3:0] + sample_shift));
 
     // del_rdy: true once N iq_valid pulses have accumulated since qe_init_done.
     // Re-armed whenever sf or sample_shift changes so a BW/SF change cannot present
@@ -141,7 +150,8 @@ module psram_buf_ctrl (
     reg [14:0]      del_cnt;
     reg [3:0]       sf_prev;
     reg [1:0]       sample_shift_prev;
-    wire [14:0]     del_n = (15'd1 << (sf[3:0] + sample_shift));  // 2^(SF+shift), 128..16384
+    reg [14:0]      del_n_r;                                       // registered (see del_offset_r)
+    wire [14:0]     del_n_c = (15'd1 << (sf[3:0] + sample_shift)); // 2^(SF+shift), 128..16384
 
     // -----------------------------------------------------------------------
     // QPI transaction sub-cycle FSM
@@ -198,6 +208,8 @@ module psram_buf_ctrl (
             buf_base_valid <= 1'b0;
             sc_lock_prev   <= 1'b0;
             del_addr       <= {ABITS{1'b0}};
+            del_offset_r   <= {ABITS{1'b0}};
+            del_n_r        <= 15'd1;
             del_rdy        <= 1'b0;
             del_cnt        <= 15'd0;
             sf_prev        <= 4'd0;
@@ -237,6 +249,17 @@ module psram_buf_ctrl (
             sc_lock_prev      <= sc_lock;
             sf_prev           <= sf;
             sample_shift_prev <= sample_shift;
+            // Registered barrel-shift outputs (quasi-static; off the per-cycle
+            // path).  Loaded ONLY when sf/sample_shift have been stable for a
+            // cycle (sf==sf_prev), so the '<<' cone has a guaranteed >=2-cycle
+            // settle window before capture — this makes the SDC MCP=2 on
+            // del_offset_c/del_n_c honest (the dest FF never latches a half-
+            // settled barrel-shift result on the config-change boundary).  Any
+            // residual transient is further masked by the del_rdy warm-up gate.
+            if (sf == sf_prev && sample_shift == sample_shift_prev) begin
+                del_offset_r <= del_offset_c;
+                del_n_r      <= del_n_c;
+            end
             rpl_valid    <= 1'b0;
             del_valid    <= 1'b0;
             state_dbg    <= state;
@@ -271,7 +294,7 @@ module psram_buf_ctrl (
                 del_rdy <= 1'b0;
                 del_cnt <= 15'd0;
             end else if (!del_rdy && iq_valid) begin
-                if (del_cnt + 15'd1 >= del_n)
+                if (del_cnt + 15'd1 >= del_n_r)
                     del_rdy <= 1'b1;
                 else
                     del_cnt <= del_cnt + 15'd1;
@@ -397,7 +420,7 @@ module psram_buf_ctrl (
                         if (iq_valid && psram_en && qe_init_done && !qspi_owner) begin
                             wr_data  <= {iq_i0, iq_q0, iq_i1, iq_q1,
                                          iq_i2, iq_q2, iq_i3, iq_q3};
-                            del_addr <= (wr_ptr - del_offset) & AMASK;
+                            del_addr <= (wr_ptr - del_offset_r) & AMASK;
                             dbg_mode <= 1'b0;
                             qpi_busy <= 1'b1;
                             sub      <= 6'd0;
