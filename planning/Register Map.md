@@ -63,7 +63,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x24` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `\|C[s]\|^2` telemetry [15:8] |
 | `0x25` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `\|C[s]\|^2` telemetry [7:0] |
 | `0x26` | `SC_DBG_FLAGS` | R | `0x00` | Schmidl-Cox | [0] `SC_HIT`; [2:1] hit counter; [3] `SC_LOCK`; [7:4] reserved |
-| `0x27` | — | — | — | — | Reserved |
+| `0x27` | `TACC_WINDOW_SYMS` | R/W | `0x08` | Training Accumulator | [3:0] accumulation endpoint in symbols from `timing_ref`; writes below 8 clamp to 8; [7:4] read 0 |
 | `0x28`–`0x2B` | `SC_FIRST_HIT` | R | `0x00` | Schmidl-Cox | First-hit sample-count snapshot [31:0], big-endian ([31:24] at `0x28`) |
 | `0x2C`–`0x2F` | `SC_LOCK_SNAP` | R | `0x00` | Schmidl-Cox | Lock sample-count snapshot [31:0], big-endian ([31:24] at `0x2C`) |
 | **W Shadow Bank** (`0x30`–`0x3F`) | | | | | |
@@ -290,7 +290,7 @@ Weight-path commit control and status. Firmware is the sole weight source (there
 
 ### `0x1F` — TACC_NOISE_TRIG (write-only, W1P)
 
-Firmware-triggered noise measurement. Writing bit 0 = 1 arms the training accumulator without waiting for `sc_lock`. The accumulator resets all internal state and immediately begins accumulating the next `8 × 2^SF` samples. `TRAINING_DONE` fires on completion.
+Firmware-triggered noise measurement. Writing bit 0 = 1 arms the training accumulator without waiting for `sc_lock`. The accumulator resets all internal state and immediately begins accumulating the next `TACC_WINDOW_SYMS × M` samples. `TRAINING_DONE` fires on completion.
 
 In noise mode (no signal): off-diagonal `Z_kl ≈ 0` (uncorrelated noise); diagonal `ZDIAG_k ≈ σ²_k · n_acc`.
 
@@ -304,9 +304,8 @@ Software EMA flow:
 
 Training-window bookkeeping: arm/done flags and the accumulated sample count `n_acc`
 (full **18-bit** unsigned, big-endian across `0x21`–`0x23`: `0x21`[1:0] = `[17:16]`,
-`0x22` = `[15:8]`, `0x23` = `[7:0]`). The training window is `8 × M` samples, so at
-500 kS/s the maximum is `8 × 2^(12+2) = 131072` samples (SF12 / 125 kHz), which needs
-18 bits.
+`0x22` = `[15:8]`, `0x23` = `[7:0]`). The training window is controlled by
+`TACC_WINDOW_SYMS` (`0x27`) and spans from `sc_lock` until `timing_ref + TACC_WINDOW_SYMS × M - 1` in live mode. With the 4-bit maximum of 15 symbols, the SF12/BW125 maximum is `15 × 2^(12+2) = 245760` samples, which still fits in 18 bits.
 
 ---
 
@@ -314,7 +313,11 @@ Training-window bookkeeping: arm/done flags and the accumulated sample count `n_
 
 Current Schmidl-Cox metric numerator telemetry from the detector. This is the exposed `|C[s]|^2` snapshot (`sym_mag_sc[27:13]` plus a zero LSB), not a normalised `Lambda^2[s]` value.
 
-### `0x26`–`0x2F` — SC Bring-Up Debug (read-only)
+### `0x27` — TACC_WINDOW_SYMS (read/write)
+
+Controls the training accumulator endpoint in whole LoRa symbols from `timing_ref`. Reset is 8. Writes below 8 store 8 to avoid too-short/empty post-lock training windows. Values above the actual transmitted preamble length can include non-preamble symbols and degrade the channel estimate; firmware should set this consistently with the packet preamble profile. The packet-control FSM derives acquisition and W-pending timeouts from the same value.
+
+### `0x26`, `0x28`–`0x2F` — SC Bring-Up Debug (read-only)
 
 Optional Schmidl-Cox debug visibility intended primarily for FPGA and first-silicon bring-up.
 
@@ -445,7 +448,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed; no TAP in RTL, GPIO never wired out of macro. Addresses now reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x23`, `0x27`, `0x6C`–`0x6F`, `0x77`–`0x7E`).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x6C`–`0x6F`, `0x77`–`0x7E`).
 
 ---
 
@@ -456,8 +459,8 @@ If a future revision reinstates any of these features, allocate addresses from t
 | `0x00`–`0x07` | Global / IRQ (`0x04`–`0x07` reserved; former JTAG/GPIO) |
 | `0x08`–`0x0F` | RX / modem configuration |
 | `0x10`–`0x1B` | Gain / AGC / SX1257 live RX control (`0x19`–`0x1B` reserved) |
-| `0x1C`–`0x23` | Packet / weight-path / training control (`0x23` reserved) |
-| `0x24`–`0x2F` | SC status and bring-up debug (`0x27` reserved) |
+| `0x1C`–`0x23` | Packet / weight-path / training control |
+| `0x24`–`0x2F` | SC status, `TACC_WINDOW_SYMS`, and bring-up debug |
 | `0x30`–`0x3F` | W shadow bank |
 | `0x40`–`0x63` | Z_kl pair readback (24-bit) |
 | `0x64`–`0x6B` | Z_kk diagonal |

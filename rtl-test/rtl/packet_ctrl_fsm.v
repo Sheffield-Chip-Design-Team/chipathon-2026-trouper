@@ -18,6 +18,7 @@ module packet_ctrl_fsm (
     input  wire        psram_en,
     input  wire        psram_replay_active,
     input  wire [7:0]  pkt_timeout_syms,
+    input  wire [3:0]  tacc_window_syms,
     output reg         safe_switch,
     output reg         W_valid_set,
     output reg         W_missed_packet,
@@ -52,9 +53,12 @@ module packet_ctrl_fsm (
         else        M_val <= 32'd1 << ({1'b0, sf} + {3'b0, sample_shift});
     end
 
+    wire [3:0] tacc_window_eff = (tacc_window_syms == 4'd0) ? 4'd1 : tacc_window_syms;
+    wire [31:0] tacc_window_span = {28'd0, tacc_window_eff} << (sf + sample_shift);
+
     // Timeout thresholds are registered at packet start to keep the FSM compare path short.
-    wire [31:0] acq_timeout_next  = timing_ref + (M_val << 3) + (M_val << 1);
-    wire [31:0] wpend_timeout_next = timing_ref + (M_val << 3) + (M_val << 2) + M_val;
+    wire [31:0] acq_timeout_next  = timing_ref + tacc_window_span + (M_val << 1);
+    wire [31:0] wpend_timeout_next = timing_ref + tacc_window_span + (M_val << 2) + M_val;
     reg  [31:0] pkt_span_next;
 
     always @(*) begin

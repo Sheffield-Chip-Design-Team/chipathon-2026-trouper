@@ -119,6 +119,7 @@ module trouper_top (
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
+    wire [3:0]  rb_tacc_window_syms;
     wire [7:0]  rb_rx_gain_shadow_0, rb_rx_gain_shadow_1,
                 rb_rx_gain_shadow_2, rb_rx_gain_shadow_3;
     wire        rb_rx_gain_commit;
@@ -282,6 +283,7 @@ module trouper_top (
         .timing_ref   (timing_ref),
         .sf           (rb_sf_cfg),
         .sample_shift (rb_sample_shift),
+        .tacc_window_syms (rb_tacc_window_syms),
         .noise_trig   (rb_noise_trig),
         .Zpair_i0 (Zpair_i[0]), .Zpair_q0 (Zpair_q[0]),
         .Zpair_i1 (Zpair_i[1]), .Zpair_q1 (Zpair_q[1]),
@@ -377,6 +379,7 @@ module trouper_top (
         .psram_en        (rb_psram_ctrl[0]),
         .psram_replay_active (psram_replay_active_w),
         .pkt_timeout_syms (rb_pkt_timeout_syms),
+        .tacc_window_syms (rb_tacc_window_syms),
         .safe_switch     (safe_switch),
         .W_valid_set     (W_valid_set),
         .W_missed_packet (W_missed_packet),
@@ -679,7 +682,8 @@ module trouper_top (
         .psram_dbg_addr  (rb_psram_dbg_addr),
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
-        .noise_trig      (rb_noise_trig)
+        .noise_trig      (rb_noise_trig),
+        .tacc_window_syms (rb_tacc_window_syms)
     );
 
 endmodule

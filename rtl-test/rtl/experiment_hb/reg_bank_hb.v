@@ -94,6 +94,7 @@ module reg_bank_hb (
     output reg         psram_dbg_rd_trig, // W1P
     // Training accumulator
     output reg         noise_trig,     // 0x1F[0]: W1P — firmware-triggered noise measurement
+    output reg [3:0]   tacc_window_syms, // 0x27[3:0]: accumulation endpoint in symbols from timing_ref
     // Aggregated sticky interrupt output (mirrors IRQ_STATUS OR)
     output wire        irq_out
 );
@@ -165,6 +166,7 @@ module reg_bank_hb (
             psram_dbg_auto_inc <= 1'b0;
             psram_dbg_rd_trig <= 1'b0;
             noise_trig       <= 1'b0;
+            tacc_window_syms <= 4'd8;
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
         end else begin
             // Auto-clear write-1-pulse outputs
@@ -200,6 +202,7 @@ module reg_bank_hb (
                     // --- Packet / weight / training control ---
                     8'h1E: w_commit_pulse   <= wdata[0];
                     8'h1F: noise_trig       <= wdata[0];
+                    8'h27: tacc_window_syms <= (wdata[3:0] < 4'd8) ? 4'd8 : wdata[3:0];
                     // --- W shadow bank 0x30–0x3F ---
                     8'h30: w_shadow_r[0]  <= wdata;
                     8'h31: w_shadow_r[1]  <= wdata;
@@ -293,6 +296,7 @@ module reg_bank_hb (
             8'h24: rdata_next = sc_stat[15:8];
             8'h25: rdata_next = sc_stat[7:0];
             8'h26: rdata_next = {4'h0, sc_lock_dbg, sc_hit_count_dbg, sc_hit_dbg};
+            8'h27: rdata_next = {4'h0, tacc_window_syms};
             8'h28: rdata_next = sc_first_hit_dbg[31:24];
             8'h29: rdata_next = sc_first_hit_dbg[23:16];
             8'h2A: rdata_next = sc_first_hit_dbg[15:8];

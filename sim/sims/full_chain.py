@@ -4,28 +4,28 @@ Full DSP chain BER simulation.
 
 End-to-end signal path at the hardware sample rates:
 
-    TX (LoRa modulate, M samples/symbol at BW)
-      └─> upsample R× to 32 MS/s
+    TX (LoRa modulate, M = 1 << (SF + sample_shift) at 500 kS/s)
+      └─> upsample fixed R=64 to 32 MS/s
           └─> NR-antenna Rayleigh channel + AWGN at 32 MS/s
               └─> 1st-order ΣΔ ADC per antenna (I & Q independent)
-                  └─> CIC^3 + 9-tap FIR compensation decimator → 8-bit
+                  └─> CIC-3 R=16 + HB1/HB2 fixed R=64 decimator → int8
                       └─> Training accumulator (all-pairs cross-correlation)
                           └─> Weight generator (Q1.15 shadow weights)
                               └─> MRC combine (8-bit live weights)
                                   └─> LoRa demodulate
 
-The 1st-order ΣΔ ADC models a real noise-shaping converter so that CIC^3 + FIR
-actually recovers the input signal (a sign() comparator would not — it has no
-noise shaping). This produces the correct front-end behaviour for OSR=R.
+The 1st-order ΣΔ ADC models a real noise-shaping converter so that the fixed
+R=64 half-band decimator recovers the input signal (a sign() comparator would
+not — it has no noise shaping).
 
 The "BB reference" curve runs the same all-pairs training accumulator and
 weight generation on float baseband samples, so the gap between the two curves
-quantifies what the 1-bit ΣΔ → CIC+FIR → 8-bit path costs in dB.
+quantifies what the 1-bit ΣΔ → half-band decimator → int8 path costs in dB.
 
 Run:
     cd /path/to/chipathon-2026/lora-mimo
     python3 -m sim.sims.full_chain                  # default sweep
-    python3 -m sim.sims.full_chain -n 100 --ratio 64
+    python3 -m sim.sims.full_chain -n 100 --bw 250e3
     python3 -m sim.sims.full_chain --snr -10,-6,-2,2
 """
 
@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from sim.models.lora                 import modulate, demodulate
 from sim.models.channel              import rayleigh_coefficients
-from sim.models.decimator            import SigmaDeltaDecimator
+from sim.models.decimator            import DECIMATION_RATIO, SigmaDeltaDecimator
 from sim.models.training_accumulator import training_accumulate_allpairs
 from sim.models.eigvec_fw            import compute_eigvec_fw
 from sim.models.receiver             import (nonfft_combine,
@@ -66,7 +66,8 @@ def sigma_delta_adc(x: np.ndarray, e_re_init: float = 0.0,
         e[n] = u[n] - q[n]
 
     Noise transfer function NTF = 1 - z^-1 (1st-order high-pass).
-    With OSR = R = 256 and CIC^3 lowpass, in-band SQNR ≈ 70 dB at full scale.
+    The downstream fixed R=64 half-band chain relies on this shaped quantisation
+    noise; a memoryless sign comparator is not a valid ADC model here.
     """
     n = x.size
     out = np.empty(n, dtype=np.complex128)
@@ -90,30 +91,31 @@ def sigma_delta_adc(x: np.ndarray, e_re_init: float = 0.0,
 # Full chain — one packet
 # ---------------------------------------------------------------------------
 
-def simulate_full_chain(SF: int, NR: int, snr_db_bb: float, ratio: int,
+def simulate_full_chain(SF: int, NR: int, snr_db_bb: float, bw_hz: float = 250e3,
                         preamble_len: int = 8,
                         agc_target: float = 0.4,
                         use_rtl_int8: bool = False) -> tuple[int, int]:
     """
-    One packet through ΣΔ ADC → CIC+FIR decimator → MRC.
+    One packet through ΣΔ ADC → fixed R=64 half-band decimator → MRC.
 
     SNR convention
     --------------
     snr_db_bb is per-antenna SNR at the baseband rate (signal power = 1,
     noise variance = N0_bb). AWGN at the 32 MS/s ADC input has variance
-    R·N0_bb/2 per real dimension, so CIC averaging by R recovers N0_bb
-    at the baseband output rate.
+    R·N0_bb/2 per real dimension, so decimation by R recovers N0_bb
+    at the 500 kS/s internal output rate.
 
     Shared-gain AGC (oracle) sets a common pre-ADC scale factor g_agc so the
     worst-case antenna stays at amplitude ≈ agc_target, well below the
     1st-order ΣΔ stability limit (|x|<1). The same g_agc applies to signal
     and noise per antenna, so per-antenna SNR is preserved.
     """
-    M    = 2 ** SF
-    R    = ratio
+    dec0 = SigmaDeltaDecimator(bw_hz=bw_hz)
+    M    = dec0.samples_per_symbol(SF)
+    R    = DECIMATION_RATIO
     h    = rayleigh_coefficients(NR)
 
-    # ---- TX: baseband-rate chirps -----------------------------------------
+    # ---- TX: internal-500 kS/s chirps -------------------------------------
     chirp0    = modulate(0, M)                       # (M,)
     preamble  = np.tile(chirp0, preamble_len)        # (preamble_len*M,)
     b_tx      = np.random.randint(0, M)
@@ -121,7 +123,7 @@ def simulate_full_chain(SF: int, NR: int, snr_db_bb: float, ratio: int,
     s_bb      = np.concatenate([preamble, payload])  # ((preamble_len+1)*M,)
 
     # ---- Upsample R× to 32 MS/s by repetition (SX1257 baseband sampling) --
-    # Trailing pad absorbs CIC+FIR group delay so the payload window is intact.
+    # Trailing pad absorbs half-band startup latency so the payload window is intact.
     TAIL_PAD_BB = 16
     s_adc = np.concatenate([
         np.repeat(s_bb, R),
@@ -145,13 +147,13 @@ def simulate_full_chain(SF: int, NR: int, snr_db_bb: float, ratio: int,
     # ---- 1st-order ΣΔ ADC per antenna -------------------------------------
     rx_1bit  = np.stack([sigma_delta_adc(rx_adc[j]) for j in range(NR)])
 
-    # ---- CIC^3 + 9-tap FIR decimator per antenna --------------------------
-    decims   = [SigmaDeltaDecimator(ratio=R, output_bits=8) for _ in range(NR)]
+    # ---- Fixed R=64 half-band decimator per antenna -----------------------
+    decims   = [SigmaDeltaDecimator(bw_hz=bw_hz) for _ in range(NR)]
     rx_bb    = np.stack([decims[j].process(rx_1bit[j]) for j in range(NR)])
     # rx_bb shape: (NR, (preamble_len+1)*M)
 
-    # CIC^3 group delay ≈ 1.5 output samples; symmetric 9-tap FIR adds 4 samples.
-    # Empirical: GD=5 aligns preamble/payload boundaries with s_bb.
+    # Effective integer HB/CIC latency in output samples for symbol slicing.
+    # Swept against high-SNR LoRa demodulation for both supported BW settings.
     GD = 5
     # Scale to int8 integer range so WeightGenerator shift-normalisation and
     # _as_int8_pair both see the same integer-valued sample domain as the RTL.
@@ -183,10 +185,10 @@ def simulate_full_chain(SF: int, NR: int, snr_db_bb: float, ratio: int,
 # Baseband-equivalent reference (matches mimo_sweep "training" mode)
 # ---------------------------------------------------------------------------
 
-def simulate_bb_reference(SF: int, NR: int, snr_db: float,
+def simulate_bb_reference(SF: int, NR: int, snr_db: float, bw_hz: float = 250e3,
                           preamble_len: int = 8) -> tuple[int, int]:
     """Float baseband reference — no ADC, no decimator, no Q1.15 saturation."""
-    M  = 2 ** SF
+    M  = SigmaDeltaDecimator(bw_hz=bw_hz).samples_per_symbol(SF)
     h  = rayleigh_coefficients(NR)
     N0 = 10 ** (-snr_db / 10)
 
@@ -210,27 +212,27 @@ def simulate_bb_reference(SF: int, NR: int, snr_db: float,
 # Monte Carlo runner
 # ---------------------------------------------------------------------------
 
-def ser_full(SF, NR, snr_db, ratio, N_packets, preamble_len=8) -> float:
+def ser_full(SF, NR, snr_db, bw_hz, N_packets, preamble_len=8) -> float:
     errs = 0
     for _ in range(N_packets):
-        b_tx, b_rx = simulate_full_chain(SF, NR, snr_db, ratio, preamble_len)
+        b_tx, b_rx = simulate_full_chain(SF, NR, snr_db, bw_hz, preamble_len)
         errs += (b_tx != b_rx)
     return errs / N_packets
 
 
-def ser_rtl(SF, NR, snr_db, ratio, N_packets, preamble_len=8) -> float:
+def ser_rtl(SF, NR, snr_db, bw_hz, N_packets, preamble_len=8) -> float:
     errs = 0
     for _ in range(N_packets):
-        b_tx, b_rx = simulate_full_chain(SF, NR, snr_db, ratio, preamble_len,
+        b_tx, b_rx = simulate_full_chain(SF, NR, snr_db, bw_hz, preamble_len,
                                          use_rtl_int8=True)
         errs += (b_tx != b_rx)
     return errs / N_packets
 
 
-def ser_bb(SF, NR, snr_db, N_packets, preamble_len=8) -> float:
+def ser_bb(SF, NR, snr_db, bw_hz, N_packets, preamble_len=8) -> float:
     errs = 0
     for _ in range(N_packets):
-        b_tx, b_rx = simulate_bb_reference(SF, NR, snr_db, preamble_len)
+        b_tx, b_rx = simulate_bb_reference(SF, NR, snr_db, bw_hz, preamble_len)
         errs += (b_tx != b_rx)
     return errs / N_packets
 
@@ -243,12 +245,18 @@ def main():
     p = argparse.ArgumentParser(description="Full DSP chain BER simulation")
     p.add_argument("--sf",     type=int,   default=7,    help="Spreading factor (default 7)")
     p.add_argument("--nr",     type=int,   default=4,    help="RX branches (default 4)")
-    p.add_argument("--ratio",  type=int,   default=64,   help="CIC decimation ratio (default 64 = 500 kHz BW)")
+    p.add_argument("--bw", type=float, default=250e3, choices=[125e3, 250e3],
+                   help="LoRa bandwidth in Hz; selects sample_shift, not R (default 250e3)")
+    p.add_argument("--ratio", type=int, default=64,
+                   help="Deprecated compatibility option; must remain 64")
     p.add_argument("--snr",    type=str,   default="",   help="Comma-separated SNR list in dB")
     p.add_argument("-n", "--n-packets", type=int, default=80,
                    help="Monte Carlo trials per SNR point (default 80)")
     p.add_argument("--out", type=str, default="sim/plots/full_chain_ber.png")
     args = p.parse_args()
+
+    if args.ratio != DECIMATION_RATIO:
+        raise SystemExit("current Trouper RTL uses fixed decimation ratio R=64")
 
     if args.snr:
         snr_list = [float(s) for s in args.snr.split(",")]
@@ -256,7 +264,8 @@ def main():
         snr_list = [-10.0, -6.0, -2.0, 2.0, 6.0]
 
     print(f"Full DSP chain BER simulation")
-    print(f"  SF={args.sf}  NR={args.nr}  R={args.ratio}  N_packets={args.n_packets}")
+    sample_shift = SigmaDeltaDecimator(bw_hz=args.bw).sample_shift
+    print(f"  SF={args.sf}  NR={args.nr}  BW={args.bw/1e3:.0f} kHz  R=64  sample_shift={sample_shift}  N_packets={args.n_packets}")
     print(f"  SNR points: {snr_list} dB")
     print()
 
@@ -268,9 +277,9 @@ def main():
     t0 = time.time()
     for snr_db in snr_list:
         ts = time.time()
-        b = ser_bb  (args.sf, args.nr, snr_db, args.n_packets)
-        f = ser_full(args.sf, args.nr, snr_db, args.ratio, args.n_packets)
-        r = ser_rtl (args.sf, args.nr, snr_db, args.ratio, args.n_packets)
+        b = ser_bb  (args.sf, args.nr, snr_db, args.bw, args.n_packets)
+        f = ser_full(args.sf, args.nr, snr_db, args.bw, args.n_packets)
+        r = ser_rtl (args.sf, args.nr, snr_db, args.bw, args.n_packets)
         bb_ser.append(b)
         full_ser.append(f)
         rtl_ser.append(r)
@@ -288,13 +297,13 @@ def main():
                 color="tab:green", label="Baseband reference (float MRC)")
     ax.semilogy(snr_arr, np.clip(full_ser, 1e-4, 1), "s-",
                 color="tab:blue",
-                label=f"Full chain  (ΣΔ → CIC+FIR R={args.ratio} → 8-bit → Q1.15 MRC)")
+                label=f"Full chain  (ΣΔ → HB R=64 → int8 → Q1.15 MRC)")
     ax.semilogy(snr_arr, np.clip(rtl_ser,  1e-4, 1), "^--",
                 color="tab:orange",
                 label=f"RTL int8 combiner  (+ COMB_POST_GAIN tuning)")
     ax.set_xlabel("Per-antenna baseband SNR (dB)")
     ax.set_ylabel("Symbol Error Rate")
-    ax.set_title(f"Full DSP Chain vs Baseband Reference  SF={args.sf}  NR={args.nr}")
+    ax.set_title(f"Full DSP Chain vs Baseband Reference  SF={args.sf}  NR={args.nr}  BW={args.bw/1e3:.0f}k")
     ax.grid(True, which="both", ls="--", alpha=0.4)
     ax.set_ylim(5e-4, 1.05)
     ax.legend(fontsize=9)

@@ -6,7 +6,7 @@
 //   Zpair_kl (6 complex int32 pairs)         → firmware eigenvector path
 //   Zdiag_k  = Σ|raw_k[n]|²  (int32, real)   → firmware noise estimation
 //
-// Noise mode: firmware writes TACC_NOISE_TRIG (reg_bank 0x6C[0]) to arm the
+// Noise mode: firmware writes TACC_NOISE_TRIG (reg_bank 0x1F[0]) to arm the
 // accumulator without waiting for sc_lock. In noise mode Zpair_kl ≈ 0 (uncorrelated
 // noise) and Zdiag_k ≈ σ²_k · n_acc (pure noise power). Use with noise_mode_r
 // gating so normal sc_lock disarm is suppressed.

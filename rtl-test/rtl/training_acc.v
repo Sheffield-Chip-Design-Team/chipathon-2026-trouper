@@ -6,7 +6,7 @@
 //   Zpair_kl (6 complex int32 pairs)         → firmware eigenvector path
 //   Zdiag_k  = Σ|raw_k[n]|²  (int32, real)   → firmware noise estimation
 //
-// Noise mode: firmware writes TACC_NOISE_TRIG (reg_bank 0x6C[0]) to arm the
+// Noise mode: firmware writes TACC_NOISE_TRIG (reg_bank 0x1F[0]) to arm the
 // accumulator without waiting for sc_lock. In noise mode Zpair_kl ≈ 0 (uncorrelated
 // noise) and Zdiag_k ≈ σ²_k · n_acc (pure noise power). Use with noise_mode_r
 // gating so normal sc_lock disarm is suppressed.
@@ -48,6 +48,7 @@ module training_acc (
     input  wire [31:0] timing_ref,
     input  wire [3:0]  sf,
     input  wire [1:0]  sample_shift,
+    input  wire [3:0]  tacc_window_syms,
     input  wire        noise_trig,           // W1P from reg_bank: start noise-mode measurement
     // Individual Z_kl pairs (for firmware eigenvector path)
     output reg  signed [31:0] Zpair_i0, Zpair_q0,   // Z_01
@@ -72,6 +73,7 @@ module training_acc (
     reg        noise_trig_r;    // previous-cycle noise_trig for edge detect
 
     wire noise_trig_rise = noise_trig && !noise_trig_r;
+    wire [3:0] tacc_window_eff = (tacc_window_syms == 4'd0) ? 4'd1 : tacc_window_syms;
 
     // TDM counters: pair (0–9) and sub-step.
     // DUAL-MULTIPLIER: two products per step halves the walk to 16 steps
@@ -240,8 +242,8 @@ module training_acc (
                 noise_mode_r  <= ~sc_lock;
                 training_done <= 1'b0;
                 acc_start     <= sc_lock ? timing_ref : sample_count;
-                acc_end       <= sc_lock ? timing_ref + (32'd1 << (sf + sample_shift + 5'd3)) - 32'd1
-                                         : sample_count + (32'd1 << (sf + sample_shift + 5'd3)) - 32'd1;
+                acc_end       <= sc_lock ? timing_ref + ({28'd0, tacc_window_eff} << (sf + sample_shift)) - 32'd1
+                                         : sample_count + ({28'd0, tacc_window_eff} << (sf + sample_shift)) - 32'd1;
                 Zpair_i0 <= 32'sd0; Zpair_q0 <= 32'sd0;
                 Zpair_i1 <= 32'sd0; Zpair_q1 <= 32'sd0;
                 Zpair_i2 <= 32'sd0; Zpair_q2 <= 32'sd0;

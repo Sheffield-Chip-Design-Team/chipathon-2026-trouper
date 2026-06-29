@@ -183,9 +183,14 @@ module tb_trouper_spi;
         spi_byte(8'h00, rd); check("wrap -> CHIP_ID", rd, 8'hA7);
         spi_stop;
 
-        // 6. Removed/reserved addresses read as 0x00; 0x7F write discarded
+        // 6. Training window config; 0x7F write discarded
         spi_read (7'h02, rd); check("IRQ_STATUS idle", rd, 8'h00);
-        spi_read (7'h27, rd); check("rsvd 0x27",       rd, 8'h00);
+        spi_read (7'h27, rd); check("TACC_WINDOW reset", rd, 8'h08);
+        spi_write(7'h27, 8'h0C);
+        spi_read (7'h27, rd); check("TACC_WINDOW wr", rd, 8'h0C);
+        spi_write(7'h27, 8'h00);
+        spi_read (7'h27, rd); check("TACC_WINDOW clamp", rd, 8'h08);
+        spi_write(7'h27, 8'h08);                    // restore
         spi_write(7'h7F, 8'hFF);                    // must be ignored
         spi_read (7'h7F, rd); check("0x7F after wr",   rd, 8'h00);
 

@@ -108,6 +108,7 @@ module trouper_top_hb (
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
+    wire [3:0]  rb_tacc_window_syms;
     wire [7:0]  rb_rx_gain_shadow_0, rb_rx_gain_shadow_1,
                 rb_rx_gain_shadow_2, rb_rx_gain_shadow_3;
     wire        rb_rx_gain_commit;
@@ -135,9 +136,9 @@ module trouper_top_hb (
     wire        rb_psram_dbg_rd_trig;
 
     // =========================================================================
-    // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128, no FIR.
-    // Boxcar-4 front end + shared CIC back end reduces area versus 4×
-    // sd_decimator_cic_only.  This is the experimental TDM path.
+    // Stage 1: ΣΔ Decimator — fixed R=64 half-band chain.
+    // CIC-3 R=16 front end + two /2 half-band stages produce 500 kS/s
+    // int8 IQ for both supported LoRa bandwidths; BW selects sample_shift only.
     // Folded area-reduction: sd_decimator_hb_poly = polyphase HB delay lines
     // (#2) + 14-bit CIC (#3), bit-exact vs sd_decimator_hb_tdm (SGE 2099,
     // -13.8% decimator area). See planning/decimator-hb-area-reduction.md.
@@ -271,6 +272,7 @@ module trouper_top_hb (
         .timing_ref   (timing_ref),
         .sf           (rb_sf_cfg),
         .sample_shift (rb_sample_shift),
+        .tacc_window_syms (rb_tacc_window_syms),
         .noise_trig   (rb_noise_trig),
         .Zpair_i0 (Zpair_i[0]), .Zpair_q0 (Zpair_q[0]),
         .Zpair_i1 (Zpair_i[1]), .Zpair_q1 (Zpair_q[1]),
@@ -366,6 +368,7 @@ module trouper_top_hb (
         .psram_en        (rb_psram_ctrl[0]),
         .psram_replay_active (psram_replay_active_w),
         .pkt_timeout_syms (rb_pkt_timeout_syms),
+        .tacc_window_syms (rb_tacc_window_syms),
         .safe_switch     (safe_switch),
         .W_valid_set     (W_valid_set),
         .W_missed_packet (W_missed_packet),
@@ -637,7 +640,8 @@ module trouper_top_hb (
         .psram_dbg_addr  (rb_psram_dbg_addr),
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
-        .noise_trig      (rb_noise_trig)
+        .noise_trig      (rb_noise_trig),
+        .tacc_window_syms (rb_tacc_window_syms)
     );
 
 endmodule

@@ -299,7 +299,10 @@ def noise_est_rtl(
     sample_rate: float = 125e3,
 ) -> np.ndarray:
     """
-    Bit-accurate model of noise_est.v (commit b8c8f0d).
+    Legacy bit-accurate model of the removed standalone noise_est.v block.
+
+    Active Trouper RTL uses firmware-triggered training_acc noise windows and
+    Zdiag readback instead; keep this helper only for old notebooks/comparisons.
 
     Accumulates Manhattan norm Σ(|I_k|+|Q_k|) per branch for all samples
     before sc_lock, using a 24-bit unsigned accumulator. Returns the 8-bit

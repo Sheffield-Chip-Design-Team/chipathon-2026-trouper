@@ -199,10 +199,10 @@ Interpret these as regression baselines, not as final product claims. Packet cou
   - **Stage-Specific Precision:** Components enforce hardware-appropriate bit-widths and handle intermediate bit-growth and truncation. The current RTL decimator saturates to 8-bit output samples; some model internals remain higher-precision or floating-point for convenience unless a dedicated RTL model is used.
 - **Non-FFT DSP Chain (current ASIC architecture):**
   1. ADC (Stage 1)
-  2. ΣΔ Decimator (Stage 2) — CIC+FIR front-end, final output saturated to int8
-  3. Schmidl-Cox trigger + energy measurement (Stage 3) — `sync.py`, `stages.py`
-  4. Training accumulator — `training_accumulator.py`: current RTL path is all-pairs cross-correlation via `training_accumulate_allpairs()`
-  5. Weight computation from the accumulator output (MRC/EGC/SC/Bypass) — `training_accumulator.compute_weights()`
+  2. ΣΔ Decimator (Stage 2) — fixed R=64 half-band chain (`CIC-3 R=16 -> HB1 /2 -> HB2 /2`) at 500 kS/s; BW only selects `sample_shift`
+  3. Schmidl-Cox trigger — current RTL uses PSRAM-delayed branch-0 samples; standalone energy/noise-estimator helpers are legacy diagnostics
+  4. Training accumulator — `training_accumulator.py`: current RTL path is all-pairs cross-correlation via `training_accumulate_allpairs()` plus Zdiag noise-window support
+  5. Firmware/host weight computation from Zpair/Zdiag (row-sum MRC or eigenvector) — `eigvec_fw.py` models the fixed-point power-iteration path
   6. Complex combining: `y[n] = Σ_j w_j·x_j[n]` — `receiver.nonfft_combine()` for float studies, or `receiver.nonfft_combine_rtl_int8w()` to include RTL 8-bit live weights, fixed ÷2 guard shift, `COMB_POST_GAIN`, and int8 saturation; MRC weights are already conjugated by weight generation
   7. Re-modulator (Stage 8) — `converter.py`
 - **FFT path** (`receiver.estimate_channel`, `receiver.compute_weights`) is retained for reference and comparison but is not the current ASIC architecture. See `planning/DSP Flow.md` for why it was replaced.
