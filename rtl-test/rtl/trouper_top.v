@@ -151,7 +151,7 @@ module trouper_top (
     // Boxcar-4 front end + shared CIC back end reduces area versus 4×
     // sd_decimator_cic_only.  This is the experimental TDM path.
     // Folded area-reduction: sd_decimator_poly = polyphase HB delay lines
-    // (#2) + 14-bit CIC (#3), bit-exact vs sd_decimator_hb_tdm (SGE 2099,
+    // (#2) + 14-bit CIC (#3), bit-exact vs the shared HB reference prototype (SGE 2099,
     // -13.8% decimator area). See planning/decimator-hb-area-reduction.md.
     // =========================================================================
     wire signed [7:0] dec_i [0:3];

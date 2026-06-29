@@ -8,7 +8,7 @@
 //   phase B : the single centre tap              (HB1 lag 5 ; HB2 lag 7)
 // Each branch shifts only on its own input sample, so it holds ~N/2 registers
 // instead of N. The MAC reads exactly the same sample values as the direct form,
-// so packed outputs are bit-exact with sd_decimator_hb_tdm.
+// so packed outputs are bit-exact with the shared HB reference prototype.
 //
 // HB1 store: A[0:5]=lags{0,2,4,6,8,10}, B[0:2]=lags{1,3,5}; centre = B[2].
 // HB2 store: A[0:7]=lags{0,2,..,14}, B[0:3]=lags{1,3,5,7}; centre = B[3].

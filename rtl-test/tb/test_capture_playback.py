@@ -1,11 +1,11 @@
 """
 test_capture_playback.py — drive trouper_top with a *measured* IQ capture.
 
-Instead of the synthetic CW source in test_trouper_top_hb.py, this reads a
+Instead of the synthetic CW source in test_trouper_top.py, this reads a
 real baseband capture (lora-capture/captures/*.npy), resamples it to 32 MS/s,
 fans it out to NR=4 branches with independent AWGN, ΣΔ-modulates to 1-bit, and
 plays the bitstream onto IQ_DATA_I/Q one bit per IQ_CLK. SF/BW are set over the
-same SPI register interface (helpers imported from test_trouper_top_hb).
+same SPI register interface (helpers imported from test_trouper_top).
 
 Run on Verilator for speed (cocotb_trouper_capture/Makefile sets SIM=verilator).
 Driving millions of clocks bit-by-bit under Icarus is impractical, so clip the
@@ -37,7 +37,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top_hb import (
+from test_trouper_top import (
     CLK_NS, spi_read, spi_write, spi_burst_write,
 )
 import iq_capture

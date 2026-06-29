@@ -9,7 +9,7 @@ Pipeline (all numpy, scipy optional):
       -> per-branch fan-out: y = x + AWGN  (NR=4 from a single-antenna capture)
       -> 1st-order ΣΔ modulate I and Q independently -> 0/1 bitstreams
 
-The ΣΔ loop mirrors sdm_driver() in test_trouper_top_hb.py exactly (acc += x∓1
+The ΣΔ loop mirrors sdm_driver() in test_trouper_top.py exactly (acc += x∓1
 with x scaled to [-1, 1)), so the decimator sees the same kind of 1-bit input
 it gets from the synthetic CW driver — just modulating real captured signal.
 
@@ -192,7 +192,7 @@ def fan_out_branches(x, n_branches=4, snr_db=None, channels=None,
 
 
 # ---------------------------------------------------------------------------
-# 1st-order ΣΔ modulation (matches sdm_driver in test_trouper_top_hb.py)
+# 1st-order ΣΔ modulation (matches sdm_driver in test_trouper_top.py)
 # ---------------------------------------------------------------------------
 
 def sigma_delta_1bit(x_complex, scale):

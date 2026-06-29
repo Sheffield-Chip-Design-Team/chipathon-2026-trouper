@@ -13,7 +13,7 @@
 SIM           ?= icarus
 TOPLEVEL_LANG  = verilog
 TOPLEVEL            = tb_trouper_cocotb
-COCOTB_TEST_MODULES = test_trouper_top_hb
+COCOTB_TEST_MODULES = test_trouper_top
 
 DESIGN_ROOT   ?= /foss/designs/lora-mimo
 RTL            = $(DESIGN_ROOT)/rtl-test/rtl

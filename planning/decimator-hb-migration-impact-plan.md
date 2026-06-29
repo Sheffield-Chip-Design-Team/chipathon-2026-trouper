@@ -1,14 +1,15 @@
 # Half-Band Decimator Migration Impact Plan
 
-**Status:** Proposed change under staged verification
+**Status:** Accepted and production migration complete
 **Date:** 2026-06-20
 **Related:** `planning/decimator-hb-redesign.md`, `planning/decimator-hb-area-reduction.md`, `planning/Trouper Chip Specification.md`
 
 ## Change-control rule
 
-The active `trouper_top` RTL and normative Trouper specification remain on the
-R=128 CIC architecture until the applicable gate below is accepted. The
-`sd_decimator_hb*` modules are experimental prototypes, not production changes.
+This document is the historical gate record for the R=64 half-band migration.
+The active `trouper_top` RTL and normative Trouper specification now use the
+production `sd_decimator_poly` half-band chain; the old `*_hb` sandbox and
+prototype modules have been removed after promotion.
 
 For each gate: reproduce the baseline, model or prototype the isolated change,
 run the impact tests, record measurements, and explicitly accept or reject it.
@@ -226,9 +227,10 @@ production names (`_hb` suffix dropped): `experiment_hb/*_hb.v` → `rtl/dc_remo
 `ol_trouper_top/config_current.json` updated: decimator → `sd_decimator_poly.v`,
 DIE 1100×1100 → 1500×1100, density 55%. Post-migration synth (job 2112) =
 **956,734 µm², identical to `trouper_top_hb`** — confirms the rename is design-exact.
-The pre-migration CIC-only RTL is preserved in git history. Sandbox (`experiment_hb/`,
-`sd_decimator_hb_*.v`, their TBs/cocotb) retained until the in-flight sweep + cocotb
-re-point to canonical names; cleanup is a follow-up.
+The pre-migration CIC-only RTL is preserved in git history. The temporary
+`experiment_hb/` sandbox, `sd_decimator_hb_*.v` prototypes, and `_hb` cocotb/P&R
+wrappers were removed on 2026-06-30 after the canonical production paths were
+re-pointed to `trouper_top`, `sd_decimator_poly`, and `test_trouper_top.py`.
 
 **AS cell experiment (jobs 2096–2097):** Attempted `gf180mcu_as_sc_mcu7t3v3` at single-cycle 32 MHz on the same 1650×1100 die at 55% and 65% density. Both failed DPL-0036 at post-CTS timing optimization (stage 37). Root cause: without MCP the resizer must fix every path to <31.25 ns; the 5517-fanout IQ_CLK net requires far more inserted buffers than the die can absorb at this size. FD+MCP=3 only repairs paths >93.75 ns — a much smaller buffer budget. AS cells would need a larger die (≥9 blocks) to accommodate the resizer overhead. Decision: FD+MCP=3 at 6 blocks is the chosen implementation; AS cells not pursued further for this block.
 
@@ -248,7 +250,7 @@ contradictory legacy rates or symbol definitions.
 - `Register Map.md` — 0x0A `DECIM_CFG`→`BW_CFG` (bw_sel), N_ACC 3-byte 18-bit at 0x21–0x23.
 - `System Architecture.md`, `DSP Flow.md`, block docs (`DC Removal`, `ΣΔ Re-modulator`, `PSRAM Buffer Controller`), `Memory Strategy.md`, `congestion-reduction-techniques.md`. The `ΣΔ Decimator.md` block doc carries a "production = half-band; body superseded" banner pointing to `decimator-hb-redesign.md`.
 
-**Still open (not blocking Gate 12 doc closure):** Python `sim/models/` and firmware constants not yet migrated to the HB rates (tracked separately); these are bit-true/model code, not normative docs. Sandbox cleanup (`experiment_hb/`, `sd_decimator_hb_*.v`) is a follow-up once no jobs reference them.
+**Cleanup status:** COMPLETE 2026-06-30. Python `sim/models/` uses the production HB rates, canonical cocotb is `test_trouper_top.py`, and the temporary `_hb` sandbox/prototype tree has been removed from tracked source.
 
 ## Decision log
 

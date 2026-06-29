@@ -13,14 +13,6 @@ IFLAGS    = -g2012
 RTL = rtl
 TB  = tb
 
-.PHONY: sim_decimator_hb
-sim_decimator_hb: obj_dir_decimator_hb/Vtb_decimator_hb
-	$<
-
-obj_dir_decimator_hb/Vtb_decimator_hb: $(TB)/tb_decimator_hb.v $(RTL)/sd_decimator_hb.v
-	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_decimator_hb \
-	    --top-module tb_decimator_hb $^
-
 DSP_SRCS  = $(RTL)/dc_removal.v $(RTL)/frontend_buf_ctrl.v \
             $(RTL)/sc_detector.v $(RTL)/training_acc.v \
             $(RTL)/mrc_combiner.v $(RTL)/sd_remod.v
@@ -250,13 +242,6 @@ tb_trouper_top.vvp: $(TB)/tb_trouper_top.v $(TROUPER_TOP_SRCS)
 sim_trouper_cocotb:
 	$(MAKE) -C cocotb_trouper_top
 
-# cocotb HB integration tests (SF7–SF12 × BW250/125, trouper_top_hb)
-# -----------------------------------------------------------------------
-.PHONY: sim_trouper_hb_cocotb
-
-sim_trouper_hb_cocotb:
-	$(MAKE) -C cocotb_trouper_top_hb
-
 # Measured-IQ playback (Verilator): drive trouper_top with a real capture.
 # Pass a capture and (optionally) SF/BW/window, e.g.:
 #   make sim_trouper_capture \
@@ -274,5 +259,4 @@ clean:
 		obj_dir_const obj_dir_mrc_combiner obj_dir_mrc_fw_precision \
 		obj_dir_mrc_fw_rand obj_dir_dsp_chain_rand *.vvp *.vcd
 	$(MAKE) -C cocotb_trouper_top clean 2>/dev/null || true
-	$(MAKE) -C cocotb_trouper_top_hb clean 2>/dev/null || true
 	$(MAKE) -C cocotb_trouper_capture clean 2>/dev/null || true

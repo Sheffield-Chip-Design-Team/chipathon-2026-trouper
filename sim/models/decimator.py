@@ -33,7 +33,7 @@ def sample_shift_for_bw(bw_hz: float) -> int:
 
 def _cic_r16_int8(bits: np.ndarray) -> np.ndarray:
     """
-    CIC-3 R=16 front end from `sd_decimator_hb_poly.v`.
+    CIC-3 R=16 front end from `sd_decimator_poly.v`.
 
     The RTL maps input bit 1 -> +1 and bit 0 -> -1, then computes a CIC-3
     output `(comb3 + 16) >>> 5`, saturated to int8.
@@ -69,7 +69,7 @@ def _hb1(x: np.ndarray) -> np.ndarray:
     """
     Integer direct-form equivalent of the first RTL half-band stage.
 
-    Coefficients match `sd_decimator_hb_poly.v`:
+    Coefficients match `sd_decimator_poly.v`:
       [19, 0, -73, 0, 312, 512, 312, 0, -73, 0, 19] / 1024
     evaluated every other CIC output sample.
     """
@@ -89,7 +89,7 @@ def _hb2(x: np.ndarray) -> np.ndarray:
     """
     Integer direct-form equivalent of the second RTL half-band stage.
 
-    Coefficients match `sd_decimator_hb_poly.v`:
+    Coefficients match `sd_decimator_poly.v`:
       [-27, 0, 45, 0, -96, 0, 321, 512, 321, 0, -96, 0, 45, 0, -27] / 1024
     evaluated every other HB1 output sample.
     """
