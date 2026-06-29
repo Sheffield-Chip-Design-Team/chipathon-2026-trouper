@@ -24,9 +24,11 @@ Increase separation or add an RF attenuator to reduce SNR further.
 lora-capture/
 ├── capture.py                # RTL-SDR one-shot capture script
 ├── monitor_and_capture.py    # serial monitor → auto-trigger capture per config
+├── emulate_path_loss.py      # clean capture → calibrated weak-signal SNR sweep
 ├── firmware/
 │   └── lora_tx.ino           # Heltec V3 transmitter sketch (RadioLib)
 ├── captures/                 # output directory (git-ignored except README)
+│   ├── pathloss/             # synthetic SNR-sweep outputs (see §4)
 │   └── README.md             # file format reference
 └── README.md                 # this file
 ```
@@ -243,7 +245,81 @@ samples = iq[0::2] + 1j * iq[1::2]
 
 ---
 
-## 4. Post-processing hints
+## 4. Emulating path loss (synthetic SNR sweep)
+
+`emulate_path_loss.py` turns one **clean, high-SNR** capture into calibrated
+weak-signal versions — the right way to make low-SNR data when you have no RF
+attenuator.
+
+### Why not just lower the gain or scale the file?
+
+- **Scaling a capture down does nothing** — it scales the already-captured
+  noise by the same factor, so the SNR is unchanged.
+- **Lowering RX gain** is only a crude proxy: it moves the receiver's whole
+  operating point (the R828D noise figure varies with gain, and at low gain
+  the floor becomes ADC-quantisation-limited), so it is *not* a calibrated
+  dB-for-dB path-loss knob.
+
+### What the tool does
+
+Real path loss drops the **signal** while the thermal **noise floor stays
+fixed**, so the signal sinks toward the floor and SNR falls. The tool
+reproduces exactly that:
+
+```
+y = g · x + w
+```
+
+where `x` is the clean capture, `g` attenuates the signal, and `w` is fresh
+complex AWGN at a fixed reference floor (the capture's measured receiver
+noise). Lowering the target SNR shrinks `g`.
+
+```sh
+# Drive by target output SNR (dB):
+python emulate_path_loss.py captures/lora_..._SF7-BW125-Pre8.npy \
+    --snr 15 10 6 3 0 -3 -6 -10 --seed 42
+
+# Or drive by extra path loss (dB) relative to the input:
+python emulate_path_loss.py captures/lora_..._SF7-BW125-Pre8.npy \
+    --path-loss 10 20 30 40
+```
+
+Each target writes `.iq` + `.npy` + `.json`, with the filename label suffixed
+by the target (e.g. `..._SF7-BW125-Pre8_snr-6dB.npy`). The JSON records
+`derived_from`, `signal_gain_g`, `path_loss_db`, `input_snr_db`,
+`achieved_snr_db`, and `seed` for full reproducibility (`--seed` makes the
+noise deterministic).
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--snr dB …` | — | Target output SNR(s); mutually exclusive with `--path-loss` |
+| `--path-loss dB …` | — | Extra attenuation(s) vs the input signal |
+| `--seed N` | random | Deterministic AWGN |
+| `--outdir DIR` | input's dir | Where to write outputs |
+| `--no-iq` | off | Skip the uint8 `.iq`, write `.npy` + `.json` only |
+| `--noise-pct` / `--sig-frac` | 20 / 0.5 | Envelope thresholds for the signal/noise classifier |
+
+### Caveats
+
+- **Feed it only genuinely clean source** (the bench captures are ≈ 41 dB
+  SNR — ideal). You cannot synthesise *more* signal than is present, so
+  re-attenuating an already-weak file is invalid.
+- The **`.npy` (float) is authoritative.** Below ≈ 0 dB SNR the signal falls
+  under 1 LSB of the uint8 `.iq`, so the `.iq` of deep-SNR sets is
+  noise-dominated — use the `.npy` for sub-0 dB work.
+- The script self-checks each output's *achieved* SNR using the burst
+  time-positions detected on the clean source, so the readout stays valid
+  even when the signal is buried.
+
+### Reference dataset
+
+A full sweep of all 9 captured configs × {15, 10, 6, 3, 0, −3, −6, −10} dB
+(seed 42) lives under `captures/pathloss/`. Achieved SNR matches target to
+within 0.1 dB across all 72 sets, with no clipping.
+
+---
+
+## 5. Post-processing hints
 
 ### Spectrogram
 
