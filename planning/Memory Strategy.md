@@ -2,6 +2,8 @@
 
 Covers all on-chip SRAM in the **Grouper** project and the off-chip PSRAM strategy for the **Trouper** project.
 
+> **⚠️ SUPERSEDED for Trouper (2026-07-04): Trouper uses NO on-chip SRAM.** All Trouper sample storage, SC delay-line buffering, and same-packet replay use the **off-chip APS6404L PSRAM** (see Macro Allocation below). The sections here describing an **on-chip Trouper "frontend buffer" SRAM** (`gf180mcu_fd_ip_sram__sram512x8m8wm1` — §"SRAM macro source", §"Rationale for the split — DSP SRAMs", and the SRAM-rail-sharing argument in §"Core voltage decision — 3.3 V") reflect an earlier plan and **no longer apply**; retained for history only. Still valid: **Grouper's** CPU unified SRAM (`gf180mcu_ocd_ip_sram`, separate project) and the off-chip PSRAM strategy. The 3.3 V Trouper core target stands, but for timing/board reasons — see `planning/Pinout.md` and `planning/Open Risks.md` #27 — not the SRAM-rail-sharing rationale below.
+
 ---
 
 ## Macro allocation

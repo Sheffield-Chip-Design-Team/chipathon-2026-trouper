@@ -90,12 +90,11 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x52`–`0x57` | `Z_12` | R | `0x00` | Training Accumulator | Pair (1,2): I[31:8] at `0x52`–`0x54`, Q[31:8] at `0x55`–`0x57` |
 | `0x58`–`0x5D` | `Z_13` | R | `0x00` | Training Accumulator | Pair (1,3): I[31:8] at `0x58`–`0x5A`, Q[31:8] at `0x5B`–`0x5D` |
 | `0x5E`–`0x63` | `Z_23` | R | `0x00` | Training Accumulator | Pair (2,3): I[31:8] at `0x5E`–`0x60`, Q[31:8] at `0x61`–`0x63` |
-| **Z_kk Diagonal** (`0x64`–`0x6B`) | | | | | |
-| `0x64`–`0x65` | `ZDIAG_0` | R | `0x00` | Training Accumulator | Branch 0 diagonal Σ\|raw_0\|² top 16 bits [31:16]. In noise mode: ≈ σ²_0 · n_acc. |
-| `0x66`–`0x67` | `ZDIAG_1` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:16] |
-| `0x68`–`0x69` | `ZDIAG_2` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:16] |
-| `0x6A`–`0x6B` | `ZDIAG_3` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:16] |
-| `0x6C`–`0x6F` | — | — | — | — | Reserved for training-derived metrics |
+| **Z_kk Diagonal — 24-bit** (`0x64`–`0x6F`) | | | | | |
+| `0x64`–`0x66` | `ZDIAG_0` | R | `0x00` | Training Accumulator | Branch 0 diagonal Σ\|raw_0\|² top 24 bits [31:8]. In noise mode: ≈ σ²_0 · n_acc. Same scale as the Z_kl pairs above. |
+| `0x67`–`0x69` | `ZDIAG_1` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:8] |
+| `0x6A`–`0x6C` | `ZDIAG_2` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:8] |
+| `0x6D`–`0x6F` | `ZDIAG_3` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:8] |
 | **External Memory (PSRAM)** (`0x70`–`0x76`) | | | | | |
 | `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] `SAMPLE_WIDTH`; [3] `QSPI_OWNER`; [7:4] reserved |
 | `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [1:0] state; [2] `SAMPLE_SKIP`; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
@@ -249,7 +248,7 @@ Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
 | [0] | `RX_GAIN_COMMIT` | W1P: latches all four `RX_GAIN_SHADOW_n → RX_GAIN_ACTIVE_n`; auto-clears. Reads back the commit-pending pulse. |
 | [7:1] | — | Reserved |
 
-**AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6B`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
+**AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
 
 **Noise EMA (separate from AGC):** Between packets (`PACKET_ACTIVE=0`), software arms a noise accumulation window via `TACC_NOISE_TRIG` (`0x1F`[0]=1). After `IRQ_TRAINING_DONE` fires in noise mode, `ZDIAG_k ≈ σ²_k × n_acc`. Software maintains σ²_ema[k] ← (1−α)·σ²_ema[k] + α·(ZDIAG_k/n_acc); this feeds ALMMSE weight computation (w_k ∝ h_k/σ²_k).
 
@@ -297,8 +296,8 @@ In noise mode (no signal): off-diagonal `Z_kl ≈ 0` (uncorrelated noise); diago
 Software EMA flow:
 1. Write `0x1F ← 0x01` during idle (no packet in progress)
 2. Poll `TRAINING_STATUS.TRAINING_DONE` (or wait for `IRQ_STATUS.NOISE_READY`)
-3. Read `ZDIAG_k` at `0x64`–`0x6B` (top 16 bits) for all branches
-4. Update per-branch EMA: `sigma2_k ← (1-α)·sigma2_k + α · ZDIAG_k[31:16] / n_acc`
+3. Read `ZDIAG_k` at `0x64`–`0x6F` (top 24 bits) for all branches
+4. Update per-branch EMA: `sigma2_k ← (1-α)·sigma2_k + α · ZDIAG_k[31:8] / n_acc`
 
 ### `0x20`–`0x23` — TRAINING_STATUS / N_ACC (read-only)
 
@@ -365,20 +364,20 @@ All C(4,2)=6 branch-pair cross-correlations from the training accumulator. Each 
 
 Firmware eigenvector path: read all 6 Z_kl pairs, build the 4×4 Hermitian matrix `Z` (the conjugate `Z_lk = conj(Z_kl)` is implied by Hermitian symmetry; diagonals from `ZDIAG_k`), take the principal eigenvector `eigh(Z)[:,-1]` as the MRC weight direction. This achieves near-ideal diversity gain.
 
-A single 45-byte SPI burst (command byte + 44 data bytes starting at `0x40`) reads all pairs plus diagonals (`0x40`–`0x6B`) in one transaction.
+A single 49-byte SPI burst (command byte + 48 data bytes starting at `0x40`) reads all pairs plus diagonals (`0x40`–`0x6F`) in one transaction.
 
 ---
 
-### `0x64`–`0x6B` — Z_kk diagonal autocorrelation (read-only)
+### `0x64`–`0x6F` — Z_kk diagonal autocorrelation, 24-bit (read-only)
 
-Per-branch `ZDIAG_k = Σ|raw_k[n]|²` over the training window. Top 16 bits of the 32-bit accumulator, sufficient for firmware noise EMA.
+Per-branch `ZDIAG_k = Σ|raw_k[n]|²` over the training window. Top 24 bits `[31:8]` of the 32-bit accumulator — the same scale as the Z_kl off-diagonal pairs above (widened from an earlier 16-bit `[31:16]` readback; see `planning/blocks/Training Accumulator.md`). Matching the off-diagonal scale removes a separate scale-alignment step in the firmware eigenvector solve, and closes a measured ≈0.9 dB combining-gain loss that the 16-bit truncation introduced (see `sim/notebooks/11_training_accumulator.ipynb`).
 
 | Addresses | Field | Description |
 | --- | --- | --- |
-| `0x64`–`0x65` | `ZDIAG_0` | Branch 0 Σ\|raw_0\|² [31:16] |
-| `0x66`–`0x67` | `ZDIAG_1` | Branch 1 Σ\|raw_1\|² [31:16] |
-| `0x68`–`0x69` | `ZDIAG_2` | Branch 2 Σ\|raw_2\|² [31:16] |
-| `0x6A`–`0x6B` | `ZDIAG_3` | Branch 3 Σ\|raw_3\|² [31:16] |
+| `0x64`–`0x66` | `ZDIAG_0` | Branch 0 Σ\|raw_0\|² [31:8] |
+| `0x67`–`0x69` | `ZDIAG_1` | Branch 1 Σ\|raw_1\|² [31:8] |
+| `0x6A`–`0x6C` | `ZDIAG_2` | Branch 2 Σ\|raw_2\|² [31:8] |
+| `0x6D`–`0x6F` | `ZDIAG_3` | Branch 3 Σ\|raw_3\|² [31:8] |
 
 In normal signal mode: `ZDIAG_k ≈ (|h_k|² + σ²_k) · n_acc`.
 In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
@@ -448,7 +447,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed; no TAP in RTL, GPIO never wired out of macro. Addresses now reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x6C`–`0x6F`, `0x77`–`0x7E`).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x77`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -463,8 +462,7 @@ If a future revision reinstates any of these features, allocate addresses from t
 | `0x24`–`0x2F` | SC status, `TACC_WINDOW_SYMS`, and bring-up debug |
 | `0x30`–`0x3F` | W shadow bank |
 | `0x40`–`0x63` | Z_kl pair readback (24-bit) |
-| `0x64`–`0x6B` | Z_kk diagonal |
-| `0x6C`–`0x6F` | Reserved (training-derived metrics) |
+| `0x64`–`0x6F` | Z_kk diagonal (24-bit) |
 | `0x70`–`0x76` | External memory (PSRAM) control and debug |
 | `0x77`–`0x7E` | Reserved (future growth) |
 | `0x7F` | Permanently reserved (SPI protocol escape) |

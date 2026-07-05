@@ -10,7 +10,7 @@ This pinout is within the Chipathon 2026 per-team allocation limit of **<=26 pad
 
 ## Signal pads (23)
 
-All signal pads use **GF180 5 V-capable IO cells**. The pad-ring supply is **`VDD_IO = 5.0 V`** and the digital core supply is **`VDD_CORE = 3.3 V`**.
+All signal pads use **GF180 5 V-capable IO cells**, run at **3.3 V**. `VDD_CORE` and `VDD_IO` are **separate, independently-tunable rails** (NOT tied on-die), both **3.3 V at baseline** and matching all external parts (APS6404L PSRAM, SX1257 ×4, Raspberry Pi host). Keeping them independent is deliberate: if 32 MHz SS timing cannot be closed at 3.3 V, the **contingency** split-rail **5 V core / 3.6 V IO** (SS proven to close at the 4.5 V worst-case corner) can be applied **without a silicon respin**. That path's gating unknown is the GF180 core>pad IO down-shift — see [Open Risks](Open%20Risks.md) #27.
 
 ### RX data from SX1257 (8 pads, input)
 
@@ -80,9 +80,11 @@ Dedicated PSRAM QPI data nibble. JTAG and GPIO have been removed (no TAP in RTL;
 
 | Pad name | Voltage | Count | Description |
 |---|---|---|---|
-| `VDD_IO` | 5.0 V | 1 | IO ring supply |
-| `VDD_CORE` | 3.3 V | 1 | Digital core supply |
+| `VDD_IO` | 3.3 V (baseline) | 1 | Pad-ring supply — separate, independently-tunable rail (3.3 V-class externals) |
+| `VDD_CORE` | 3.3 V (baseline) | 1 | Digital core supply — separate, independently-tunable rail |
 | `GND` | 0 V | 1 | Shared ground |
+
+> **Voltage plan:** `VDD_CORE` and `VDD_IO` are **separate rails**, both **3.3 V at baseline** (all external parts native 3.3 V). The open item is that 32 MHz SS timing does not close at the 3.0 V slow corner (Open Risks item 1). Because the rails are **independently tunable**, the **contingency** — split-rail **5 V core / 3.6 V IO** — can be applied without a respin: SS proven to close at the 4.5 V worst-case corner (SS = +1.40 ns, DRC/LVS clean), external parts safe at 3.6 V (PSRAM 4.0 V / SX1257 3.9 V / RPi clamp ~3.9 V), gated only on GF180 core>pad IO-cell characterization ([Open Risks](Open%20Risks.md) #27).
 
 ---
 

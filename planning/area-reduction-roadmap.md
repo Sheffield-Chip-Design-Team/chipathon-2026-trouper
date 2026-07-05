@@ -1,6 +1,6 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-06-23. Branch `ss-mcp-pacing`. Owner: timothyjabez.
+Status: 2026-07-04 (§7 per-block re-measure + ranked Lever-B candidates added). Owner: timothyjabez.
 
 Goal: shrink `trouper_top` from the current **1550 × 1150 µm** SS-closure
 floorplan toward the long-stated **1100 × 1100 µm** target, *without* losing the
@@ -76,6 +76,10 @@ question. Area must come from elsewhere (below).
   −33 was the pad=3 buffer-bloat artifact. At pad=1, 1380 is **−15.31 ns, ~2 ns BETTER**
   than the 1550 die (−17). Shrink and SS timing do NOT fight. SS stays voltage-bound
   (both pad=1 and pad=0 land on the identical −15.30669, same critical cone).
+
+> **See also [die-shrink-routability-floor.md](die-shrink-routability-floor.md)** (2026-07-04):
+> extends this sweep downward — 1100×1100 is a hard GRT-0116 congestion wall (94% util, local
+> M1/M2 pin-access; padding, RT_MIN_LAYER=Metal1, and metal-width knobs all fail to rescue it).
 
 **Sub-1380 sweep DONE (2026-06-24, pad=1, one-variable = die only):**
 
@@ -189,7 +193,19 @@ STA_CORNERS). Two measurements on that same netlist:
 
 So the SS setup buffering buys **~35ns** of SS slack (−51 → −16) for **~1.6 util pts** — it is
 extremely cheap *and* effective at what it does. Yet **~16ns of SS gap remains that buffering
-cannot close** → that residual is the **voltage-bound** part: STA already spent the cheap
+cannot close** → that residual is the **voltage-bound** part
+
+**REFRESHED on current B1 RTL 2026-07-04 (jobs 3226 TT+FF-only PnR + 3227/3230 OpenSTA reload):**
+Same experiment on the post-B1 netlist. Dropping SS from STA_CORNERS: util 74.47%→**73.36%
+(−1.11 pts)**, repeaters 2197→**1877 (−320)**, ~−16K µm², DRC/LVS still 0. Post-hoc SS read
+(ss_125C_3v00 lib + max SPEF on the TT+FF-only routed netlist via standalone `sta`): worst
+setup slack **−50.26 ns** vs the SS-in netlist's −16.08. So the 320 SS-buffers buy **+34 ns**
+(−50→−16), ceiling −16 (voltage-bound). Tax is now 1.1 pts (was 1.6) because B1 already removed
+the sc_detector multiply cone from the SS-critical set. Worst path: an IQ_CLK dffrnq endpoint
+with **85 ns data-arrival vs a 31.25 ns period** — a path 2.7× the clock at 3.0V; unbufferable
+by construction. Recipe for the reload: `sta -no_init` (NOT openroad — needs no LEF),
+read_liberty ss + read_verilog final/nl + read_spef final/spef/max + read_sdc (stage-53) +
+set_propagated_clock + report_worst_slack -max.: STA already spent the cheap
 buffers, the rest is physics at 3.0V, not buffer bloat and not a missing knob. (v40 then
 aborted on deferred non-blocking warnings — Yosys synth checks + KLayout-DRC-not-reported —
 *after* Magic DRC and LVS passed clean, so the util/area numbers and the routed netlist used
@@ -225,6 +241,48 @@ padding-3/density-50 of the v15g combo is NOT required. See [[project_drt1231_cl
 but DRT-1231 (`clkbuf_*_IQ_CLK/I no access point`) RETURNS at 1380 (v24 job 2211,
 v25 job 2213 both failed at detailed routing). So the clkbuf pin-access fix is tied
 to the 1550 floorplan slack; tightening to 1380 re-crowds the clock buffers.
+
+**"RAISE SS ONLY" VOLTAGE PROBE — SS closes at 4.5 V, but the flow must be told to
+try (2026-07-04, B1 RTL).** Experiment: keep DEFAULT_CORNER = nom_tt_025C_3v30
+(placement/CTS/routing stay on the known-routable 3.3 V behaviour) and change ONLY the
+setup corner ss_125C_3v00 → **ss_125C_4v50** (4.5 V). Needs a `LIB` dict override in the
+config to register the 4.5 V corner — LibreLane's gf180mcuD auto-derives only the 3.3 V
+corner names; without it STA fails "No SCL lib files found for max_ss_125C_4v50".
+- **Post-hoc STA reload of the 3219 (B1, SS-3.0V-optimised) netlist at 4.5 V (jobs
+  3231): worst setup slack = +1.17 ns → MEETS**, TNS 0. The full 16 ns SS gap is erased
+  by voltage alone. (Recipe: `sta -no_init`, read_liberty ss_125C_4v50 + read_verilog
+  final/nl + read_spef final/spef/max + read_sdc stage-53 + set_propagated_clock.)
+- **BUT a full re-PnR *targeting* SS-4.5 V (job 3235) lands SS = −8.31 ns** despite
+  routing 100 % clean (DRT 0), TT +0.82, hold 0, DRC/LVS 0. Same corner, ~9 ns worse
+  than the reload — the only difference is buffering (2,006 repeaters vs 3219's 2,197).
+- **ROOT CAUSE — the setup resizer under-drives a milder target corner.** `repair_timing
+  -setup -setup_margin 0.05 -max_buffer_percent 50` works a path only as hard as the
+  target corner makes it *look* critical. At SS-3.0 V paths look −16 → the resizer upsizes
+  + buffers aggressively (→ over-margined, reads +1.17 at 4.5 V). At SS-4.5 V the same
+  paths look only −8 → less urgency → lighter repair → converges at −8.31. Buffers fix
+  *wire* delay; this residual is *cell*-delay-dominated deep logic that needs aggressive
+  upsizing, and the resizer only upsizes as hard as the corner pessimism pushes it. So
+  naively swapping to the true operating corner tells the tool to try LESS. **4.5 V is
+  provably closeable (the reload proves it); the corner-swap just under-optimises.**
+- **Fixes:** (a) sign off at 4.5 V using the 3.0 V-targeted netlist (already +1.17, zero
+  work, keeps 3.0 V buffering); or (b) re-PnR targeting 4.5 V with a ~9 ns
+  `PL/GRT_RESIZER_SETUP_SLACK_MARGIN` to force the resizer to close −8.31.
+- **RUN #2 DONE (job 3237, SS-4.5 V + 9 ns setup margin): SS@4.5 V = +1.40 ns → MEETS**,
+  TT +8.32, hold 0, **Magic DRC 0 / LVS 0 / route 0**, util 74.53%, 2,110 repeaters. A
+  genuine self-consistent signoff-quality closure at 4.5 V (optimised for AND meeting the
+  corner), not just a reload. **Confirms the voltage lever in a real flow.**
+- **Area nuance:** util 74.53% ≈ the 3.0 V baseline 74.47% → closing 4.5 V did NOT reclaim
+  buffering here, because (i) closing the deep cell-delay paths needs real repair
+  regardless, and (ii) the 9 ns margin overshoots (forces +9 ns on every path →
+  over-buffers the easy ones). A surgical ~2–3 ns margin would likely land lower (between
+  the −8.31 run's 73.6% and this 74.5%).
+- **SCOPE CAVEAT (do not over-conclude):** this is an *SS-only-4.5 V hybrid* —
+  DEFAULT_CORNER stayed tt_3v30, so synth/placement/CTS were all done for **3.3 V** cells;
+  only the SS setup check/repair used 4.5 V. Proves the core TIMES at 4.5 V; does NOT test
+  the "5 V sheds the ~190 K buffering" area hypothesis. That needs a **full 5 V-rail**
+  synth+place+route (tt_5v00 / ss_4v50 / ff_5v50 as DEFAULT+corners) — the next experiment.
+- **General trap for the 5 V-rail signoff: always give the resizer a setup-slack margin
+  matched to how much you need the milder corner to close — a bare corner swap under-drives.**
 
 **Corrected-MCP is a DEAD END at 3.0 V (confirmed 2026-06-24, v18 job 2197).** With
 the MCP scope *actually hitting the registered barrel-shift endpoints* (v18 SDC fixes
@@ -330,3 +388,164 @@ Candidate fixes (try in order):
 - SGE has two nodes: gaming-pc (22 cores) + nas-server (5 cores). Two full
   signoffs (`DRT_THREADS=10` each) run concurrently on gaming-pc — PnR
   experiments can be parallelised, not serialised.
+
+---
+
+## 7. 2026-07-04 per-block re-measure + concrete Lever-B candidates
+
+Fresh hierarchical Yosys stat against `gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30`
+on the current RTL (post SS-pacing, post training-window control), SGE job
+**3214**. Output: `rtl-test/syn_mimo_per_module/out_trouper_top_202607/stat_hier.txt`;
+re-run via `rtl-test/syn_mimo_per_module/run_synth_top_breakdown_202607.sh`.
+
+**Synth stdcell total = 939.9K µm²** (today's signoff run 06-yosys stat: 984.5K
+after synthesis-time buffering; placed will be ~1.16M per §2).
+
+| Block | µm² (incl. subs) | % | Notes |
+|---|---:|---:|---|
+| sd_decimator_poly | 342K | 36.4% | 2,219 dffrnq (166K) + 1,874 enable-mux2 (53K). CLOSED (§1) |
+| training_acc | 137K | 14.6% | 743 flops; 16×32-bit accumulators, dual 8×8 mult |
+| sc_detector | 135K | 14.4% | 670 flops + `signed_mul24_pipe` **24.4K** |
+| psram_buf_ctrl | 69K | 7.4% | 476 flops (3× 64-bit shift buffers + ptrs) |
+| mrc_combiner | 62K | 6.6% | 318 flops (x/W latches) |
+| sd_remod | 59K | 6.3% | ~117 flops; six 16×9 const mults + 27-bit summers |
+| reg_bank | 41K | 4.4% | register file — leave |
+| dc_removal | 38K | 4.0% | 8× dc_removal_chan @4.7K each |
+| packet_ctrl_fsm | 34K | 3.6% | five 32-bit absolute-time regs + comparators |
+| glue + spi_slave | 24K | 2.5% | — |
+
+Design-wide cell facts: **5,177 `dffrnq_1` = 386K µm² (41%)**; 3,465 `mux2_1`
+(enable recirculation) = 99K; `dffq_1` (no reset) is 63.7 vs `dffrnq_1` 74.6
+µm² → −10.9 µm²/flop where reset is droppable.
+
+### Ranked candidates (~50–60K realistic, ≈5–6% of stdcell)
+
+Every cut on the 32 MHz IQ_CLK domain must be re-verified at SS post-PnR — §1
+precedent: decimator reset-removal and AREA-0 both *regressed SS 9–16 ns for
+≤6% area* and were rejected on that basis, not on synth area.
+
+**B1. sc_detector eval multiplier → bit-serial. −17K. ✅ IMPLEMENTED + functionally
+verified 2026-07-04 (SS PnR gate pending).**
+`signed_mul24_pipe` cost 24.4K µm² (1,163 cells) to perform **four multiplies
+per symbol** (ci0², cq0², E0cur×E0del, thr×e_slice). Eval budget ≥ 4,096 clocks
+(SF6·shift0). Replaced with `serial_mul13`, a 13-bit LSB-first shift-add serial
+multiplier (~14 clocks/product; critical path = one 26-bit add, no 13×13 array),
+and rewrote the eval FSM from a throughput-1 pipeline (eval_valid_pipe /
+eval_step_0..2 / eval_issue_done) to a sequential launch→wait(`mul_done`)→
+accumulate handshake (`mul_start`). ~4×15-clock serial latency sits inside the
+≥1,500-clock symbol period, so every latched output (timing_ref, sc_stat,
+c_i0/q0, eval_hit) is unchanged. The serial product is the *exact* two's-
+complement integer a·b, so bit-exactness is structural, not empirical.
+
+Results (all on SGE, current RTL synced to NFS):
+- **Area:** `sc_detector` standalone synth **135K → 118.0K µm² (−17K)** (job 3216;
+  the ~−20K estimate assumed the full 24.4K was recoverable — a few K folds into
+  shared logic).
+- **Function:** cocotb full-chip `test_trouper_top` **12/12 PASS** across SF7–SF12
+  × BW250/125 — sc_lock + training + weights + remod (job 3218). SF7 sanity 2/2
+  (job 3217). This is the maintained gate; the old verilator `tb_dsp_chain*`
+  benches are dead (don't compile vs current RTL — missing sample_shift /
+  tacc_window_syms pins, true at HEAD too — cleanup TODO).
+- **SS gate: ✅ BANKED.** Full signoff PnR of the 1380×1100 baseline
+  (config_current_signoff, NDR=none/pad=1/SDC v20), only sc_detector.v changed
+  (job 3219, run RUN_2026-07-04_14-53-01): **SS setup WNS −16.08 ns** vs the
+  −16.33 baseline → **+0.25 ns BETTER**, plus **Magic DRC 0 / LVS 0 / route DRC 0**,
+  util 74.5%. Confirms the hypothesis: pulling the 13×13 combinational cone off
+  the IQ_CLK domain is SS-positive, the opposite of the §1 decimator cuts.
+- **CAVEAT for parallel PnR:** both PnR jobs share `ol_trouper_top/runs/`, so a
+  `ls -dt runs/RUN_* | head -1` in the job script races (3219 mis-printed 3222's
+  dir). Read WNS from the run whose `06-yosys-synthesis` timestamp matches the job
+  start, not the newest dir.
+
+**B2. Reset-free data flops — ❌ PnR-REJECTED at 3.0 V 2026-07-04 (revisit at 5 V).**
+training_acc beachhead built + functionally proven, but the SS PnR gate killed it:
+combined B1+B2 (job 3222, RUN_2026-07-04_15-05-34) = **SS −17.02 ns vs B1-only
+−16.08 → −0.94 ns WORSE**, with **util 74.56% ≈ B1's 74.47% (flat/up)** — i.e. the
+−3.6K synth flop saving was entirely reabsorbed by SS timing-repair buffering and
+never reached placed area, *and* it cost ~1 ns of SS. Same mechanism as the §1
+decimator reset-removal, milder. DRC/LVS still 0. **Reverted training_acc.v to HEAD;
+kept `tb/tb_tacc_resetless_equiv.v` as a reusable verification asset.**
+VOLTAGE-COUPLED, like everything else here: at ~5 V the ~190K timing-repair
+buffering (§2) largely disappears, so the flop saving WOULD survive to placed area
+AND the −0.94 ns is absorbed by SS slack → B2 (and the mrc/psram/sc_detector operand
+regs) become worth taking *only on the 5 V path*. Do not re-run B2 at 3.0 V.
+Lesson: at 3.0 V, a pure-area cut on any timing-adjacent domain is net-zero-area +
+SS-negative (buffering refills it) — only cuts that *remove a wide combinational
+cone* (B1) pay, because they shrink the critical path instead of feeding the buffer
+pump. Original notes retained below for the 5 V revisit:
+Decimator scope was REJECTED (§1, SS regression on IQ_CLK). Remaining
+candidates sit mostly in the 16 MHz CE-gated / paced domains where that SS
+mechanism is weaker: training_acc Zpair/Zdiag, mrc_combiner x/W latches (~190),
+psram wr/rd/dbg shift buffers (~150), sc_detector tlat/tdm/eval operand regs
+(~100). ~950–1,000 flops → ~−11K. Keep async reset on all FSM/control state.
+
+training_acc done (`rtl-test/rtl/training_acc.v`): the 20 Zpair_*/Zdiag_* (640
+flops) are provably reset-redundant — unconditionally zeroed at arm (sc_lock or
+noise_trig rising edge) and never read until training_done (reg_bank IRQ gate).
+Moved them out of the `posedge clk or negedge rst_n` block into a dedicated
+`always @(posedge clk)` (arm-zero priority over accumulate; single driver). Synth
+maps **544 flops → dffq_1** (199 control flops keep dffrnq_1); module **137K →
+133.4K (−3.6K)** (job 3220) — below the 5.9K raw flop-cell delta because
+recirculation muxing offsets part of it. cocotb SF7 ×2 PASS incl. training_done
+(job 3221) — no X-prop failure.
+
+Resetless-init safety PROVEN, not just tested: `tb/tb_tacc_resetless_equiv.v`
+runs two identical instances, force-loading DUT's Z flops with garbage
+(0xA5A5A5A5) and REF's with 0, then asserts every output bit-identical from the
+first arm across two arm windows — **PASS** (job 3223). Garbage (not X) is
+deliberate: it defeats the X-optimism trap where a 4-state X gets "lucky"
+through an operator. This is the definitive check that the removed reset can
+never leak into a consumed output. Remaining tapeout-confidence step: gate-level
+sim on the post-synth netlist with flops left X (no setundef -zero).
+
+**SS probe: combined B1+B2 PnR job 3222** (vs B1-only 3219, so B2's marginal SS =
+3222 − 3219). Risk still open per §1: confirm no SS echo of the decimator
+reset-removal regression before banking.
+
+**B3. sd_remod 3rd→2nd order. −15–18K. BLOCKED on the pending OSR=64 sweep.**
+§1 table says "SQNR-locked, do not touch", but the DSP Chain SNR Loss Budget §9
+records that remod SQNR at OSR=64 is **not yet quantified** (Gate 9/10 sweep
+pending) — the lock is a placeholder, not a measurement. Physics argument: the
+remod input is int8 (≈50 dB floor); 2nd-order OSR=64 in-band SQNR ≈ 77 dB still
+clears it by >25 dB. Dropping order 3→2 removes two integrators + two constant-
+mult chains and shortens the 27-bit summer cone (32 MHz single-cycle — also an
+SS pressure point). Decision path: run the pending stability/SQNR sweep with
+both orders in `sim/notebooks/06_sd_decimator.ipynb` tooling; if 2nd-order
+passes the loss budget, take the cut; either way the sweep debt (§9) gets paid.
+
+**B4. mrc_combiner: delete local W latches. −6K.**
+`wr_re/wr_im[0:3]` (64 flops + enable muxes) re-latch reg_bank W-shadow values
+that are static during a burst (firmware commit protocol + safe_switch already
+guarantee stability). Mux the W ports directly. Do NOT fold the two multipliers
+into one: the 16 MHz burst is 31 of 32 available clocks — no headroom.
+
+**B5. Debug register trim. −6K. Tapeout decision.**
+`sc_first_hit_dbg` + `sc_lock_sample_dbg` (64 flops) + reg_bank 0x28–0x2B
+decode are bringup observability. Decide whether they survive to tapeout.
+psram `dbg_buf` path is NOT in scope — it is the firmware diagnostic-read path
+(software energy measurement plan).
+
+**B6. packet_ctrl_fsm relative timeouts. −5K.**
+`acq_timeout_q`/`wpend_timeout_q`/`pkt_end_q` are 32-bit absolute sample counts
+each with a 32-bit comparator; as ≤18-bit down-counters the comparators become
+zero-checks. `M_val` needs only 15 bits (M ≤ 16,384).
+
+### Considered and rejected (do not re-explore without new data)
+
+- **Clock gating to kill the 99K of enable-mux2**: FD lib has no ICG cell;
+  hand-built latch-AND gating through OpenLane CTS is a routability/verification
+  gamble that fights the honest-MCP work. (Same conclusion as [[project_ce16_partition]]
+  reached via CE muxing instead.)
+- **training_acc 24-bit accumulators**: reg map exposes Z[31:8], but the low
+  8 bits carry real weight across ~10⁵ accumulations — truncating the addend
+  biases Z. Rejected on precision.
+- **Shared global sample_count** (sc/tacc/pcfsm each hold 32-bit): saves ~5K but
+  the counters have deliberately different increment timing after the pacing
+  deferred-increment fix — exactly where the timing_ref class of bug lives.
+- **Decimator anything** (width, storage, reset style): CLOSED per §1.
+
+Stack estimate: B1+B2+B4+B5+B6 ≈ **−48K** with no algorithmic change; +B3 if
+the sweep clears it ≈ **−65K** → synth ~875–890K. Per §2 that does not by
+itself unlock a die step below the 1260–1380 signoff window (binding limit
+below 1380 is SS timing, and placed area is buffering-inflated), but it buys
+util headroom at 1380/1340 and shrinks the SS repair burden.

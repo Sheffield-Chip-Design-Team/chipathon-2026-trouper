@@ -4,6 +4,17 @@
 weights from the training accumulator output using the principal-eigenvector
 method. It is a focused handoff for one software engineer.
 
+Most of this document (Algorithm — Power Iteration, Platform Constraints, the
+fixed-point flowchart) describes the **on-chip PicoRV32-constrained**
+implementation: no FPU, 32-bit integer only, 8-iteration power method, int12
+matrix normalisation. If PicoRV32 is not used on-chip, the same task can run
+**unconstrained** on an external host (e.g. a Raspberry Pi over SPI) with
+exact double-precision eigendecomposition instead of fixed-point power
+iteration — see [Alternative: Unconstrained Host
+Implementation](#alternative-unconstrained-host-implementation-eg-raspberry-pi)
+below. The two implementations are drop-in equivalent from the ASIC's point of
+view: both are just something writing the same registers.
+
 ---
 
 ## Background
@@ -88,12 +99,12 @@ flowchart TD
     B --> C{N_ACC == 0?}
     C -- Yes --> Z([Exit — no weights committed])
     C -- No --> D[Read 6 off-diagonal Z_kl pairs\n int24 bits 31:8 I+Q from 0x40–0x63]
-    D --> E[Read 4 diagonal ZDIAG_k\n uint16 bits 31:16 from 0x64–0x6B]
-    E --> F[Find max_abs across all entries\n diagonal compared at ZDIAG_k × 2^8 scale\n to match the int24 off-diagonals]
+    D --> E[Read 4 diagonal ZDIAG_k\n int24 bits 31:8 from 0x64–0x6F]
+    E --> F[Find max_abs across all entries\n diagonal already at the same [31:8] scale\n as the off-diagonals — no alignment shift needed]
     F --> G{max_abs == 0?}
     G -- Yes --> Z
     G -- No --> H[Compute normalisation shift sh\n max_abs >> sh ≤ 4095]
-    H --> I[Build normalised int16 matrix M\n off-diagonal: Z_kl >> sh\n diagonal: ZDIAG_k shifted to same scale]
+    H --> I[Build normalised int16 matrix M\n off-diagonal: Z_kl >> sh\n diagonal: ZDIAG_k >> sh]
     I --> J[Initialise eigenvector estimate\n v = 1, 0, 0, 0 + j·0, 0, 0, 0]
     J --> K{iter < 8?}
     K -- Yes --> L[Matrix-vector multiply\n w = M · v\n 4 complex dot products\n using Hermitian symmetry]
@@ -147,26 +158,30 @@ Z_{kl} = \sum_n \text{raw}_k[n] \cdot \overline{\text{raw}_l[n]} = Z_{kl,I} + j 
 
 Each component is 3 bytes, MSB-first, holding bits [31:8] of the int32 accumulator (i.e. `Z_kl >> 8`). See `asic_regs.h` for byte-level defines.
 
-### Diagonal Z_kk — 4 × uint16
+### Diagonal Z_kk — 4 × uint24
 
-Bits [31:16] of the 32-bit per-branch energy accumulator:
+Bits [31:8] of the 32-bit per-branch energy accumulator — **the same scale as
+the off-diagonal Z_kl registers above** (widened from an earlier 16-bit
+`[31:16]` readback; see `planning/blocks/Training Accumulator.md`, "ZDIAG
+widening" note):
 
 ```math
 Z_{kk} = \sum_n |\text{raw}_k[n]|^2 \in \mathbb{R}_{\geq 0}
 ```
 
-The register holds $\lfloor Z_{kk} / 2^{16} \rfloor$. These are real and non-negative.
+The register holds $\lfloor Z_{kk} / 2^{8} \rfloor$. These are real and non-negative.
 
 | Branch | Register (MSB) |
 |---|---|
 | 0 | `0x64` |
-| 1 | `0x66` |
-| 2 | `0x68` |
-| 3 | `0x6A` |
+| 1 | `0x67` |
+| 2 | `0x6A` |
+| 3 | `0x6D` |
 
-The off-diagonal readbacks hold bits [31:8] (scale 2^8) while the diagonals hold
-bits [31:16] (scale 2^16). Left-shift `ZDIAG_k` by 8 to align scales when
-comparing magnitude with the off-diagonal int24 values.
+Because the off-diagonal and diagonal registers now share the same `[31:8]`
+scale, no scale-alignment shift is needed before comparing or combining them
+— unlike the earlier 16-bit ZDIAG revision, which required left-shifting
+`ZDIAG_k` by 8 before use.
 
 ### Accumulation count
 
@@ -187,9 +202,9 @@ which is found iteratively without a full eigendecomposition.
 
 ### Step 1 — Normalise matrix entries to int12
 
-Find the maximum absolute value across all matrix entries. Off-diagonal
-readbacks are at scale 2^8 (bits [31:8]) and diagonals at scale 2^16
-(bits [31:16]); left-shift `ZDIAG_k` by 8 so all entries share the 2^8 scale:
+Find the maximum absolute value across all matrix entries. Off-diagonal and
+diagonal readbacks are both at scale 2^8 (bits [31:8]), so no scale-alignment
+shift is needed before comparing them:
 
 ```math
 M = \max\!\left(\max_{k<l}\bigl(|Z_{kl,I}|,\,|Z_{kl,Q}|\bigr),\; \max_k\, Z_{kk}\right)
@@ -261,15 +276,18 @@ where `A_est` is the RMS input amplitude on the strongest branch and `NR = 4`.
 **Estimate signal amplitude from Zdiag:**
 
 ```
-// ZDIAG_k is the uint16 hardware register (= Z_kk >> 16).
-// Left-shift by 16 to recover the Z_kk scale before dividing by N_ACC.
-E_max    = (max(ZDIAG_k) << 16) / N_ACC   // ≈ A^2 (mean squared amplitude)
+// ZDIAG_k is the uint24 hardware register (= Z_kk >> 8).
+// Left-shift by 8 to recover the Z_kk scale before dividing by N_ACC.
+E_max    = (max(ZDIAG_k) << 8) / N_ACC    // ≈ A^2 (mean squared amplitude)
 A_est    = isqrt(E_max)                    // integer square root; 0 if E_max == 0
 ```
 
-Note: `A_est` is only useful when `ZDIAG_reg × N_ACC >= 65536`. For very short
+Note: `A_est` is only useful when `ZDIAG_reg × N_ACC >= 256`. For very short
 training windows or very weak signals the register may read zero; in that case
 `A_est = 0` and the fallback defaults (pgs=0, W_max_byte=120) are applied.
+(This threshold scales with the register's shift amount — it was `>= 65536`
+under the earlier 16-bit ZDIAG readback; the 24-bit widening makes `A_est`
+usable at much smaller signal levels / shorter windows than before.)
 
 **Choose pgs to target ~90 counts output:**
 
@@ -355,17 +373,176 @@ the next safe-switch boundary.
 
 ## Timing Budget
 
+> **Correction (superseded the previous version of this table):** the figures
+> below were revised after discovering none of this project's PicoRV32
+> wrapper configs (`picorv32_wrap_rvi.v`, `picorv32_wrap_im_sp*.v`,
+> `picorv32_wrap_fdsram.v`) enable `ENABLE_FAST_MUL` — only `ENABLE_MUL(1)`,
+> PicoRV32's slow shift-add multiplier. Per `ip/picorv32/picorv32.v`
+> (`mul_counter <= 31 - STEPS_AT_ONCE`, `STEPS_AT_ONCE=1` here), a 32×32 MUL
+> costs **~31–32 cycles**, not ~1. The original "~3,000–5,000 cycles /
+> ~200–300 µs" estimate implicitly assumed near-single-cycle multiply and was
+> wrong by roughly 4–5×. The numbers below are a corrected back-of-envelope
+> estimate, **not yet cycle-accurate** (no compiled/disassembled/simulated
+> measurement has been done) — treat as directional, not final.
+
+**Multiply-dominated cost, independent of SF.** `compute_eigvec_weights_fw()`
+does 7 multiply terms × 2 (re/im) × 4 rows = **56 MUL instructions per power
+iteration**, regardless of SF (the matrix is always 4×4 — `M`/SF never enters
+the eigenvector computation itself):
+
 | Parameter | Value |
 |---|---|
 | CPU clock | 16 MHz |
-| Estimated cycles (8 iterations, 4×4) | ~3,000–5,000 |
-| Estimated wall time | ~200–300 µs |
-| SF5 symbol period (worst case) | ~1 ms |
+| MUL cost (`ENABLE_MUL`, no `ENABLE_FAST_MUL`) | ~31–32 cycles/instruction |
+| MULs per iteration | 56 → ~1,800 cycles/iteration |
+| 8 iterations (current default) | ~14,400 cycles (muls alone) + register reads/isqrt/Q1.15 division/writes ≈ **~16,000–17,500 cycles total ≈ 1.0–1.1 ms** |
+| 16 iterations | ≈ **~2.0 ms** (roughly double) |
 
-The computation should complete well within the training-done to safe-switch
-window for all supported SFs (5–12). If `W_COMMIT` does not arrive in time,
-`W_MISSED_PACKET` asserts and the packet stays in bypass — see the fallback
-policy in `Firmware Spec.md`.
+**The deadline scales with SF; the compute cost does not.** In the baseline
+live path, `training_done` fires at `timing_ref + PREAMBLE_LEN·M` and the
+payload deadline is `payload_start_estimate = timing_ref + 12·M`
+(`planning/blocks/Packet Control FSM.md`), so the compute window is
+`(12 − PREAMBLE_LEN)·M` samples = `4·M` samples at `PREAMBLE_LEN=8`, i.e.
+`4·M / 500 kHz` seconds of real time:
+
+| SF | M = 2^SF | Compute window (`4·M / 500 kHz`) | 8 iterations (~1.0–1.1 ms) | 16 iterations (~2.0 ms) |
+|---|---|---|---|---|
+| SF6 | 64 | ~512 µs | **Does not fit** | Does not fit |
+| SF7 | 128 | ~1.02 ms | Roughly break-even | Does not fit |
+| SF8 | 256 | ~2.05 ms | Comfortable margin | Roughly break-even |
+| SF9+ | 512+ | ≥4.1 ms | Comfortable margin | Comfortable margin |
+
+This directly contradicts the previous claim that the computation "should
+complete well within the training-done to safe-switch window for all
+supported SFs (5–12)" — on this corrected estimate, **even the current
+8-iteration firmware may not fit at SF6, and is roughly break-even at SF7**.
+If `W_COMMIT` does not arrive in time, `W_MISSED_PACKET` asserts and the
+packet stays in bypass (see the fallback policy in `Firmware Spec.md`) — so
+a miss degrades to single-antenna reception rather than breaking the
+receiver, but this is a real coverage gap at low SF, not just a missed
+optimisation opportunity.
+
+**PSRAM replay mode sidesteps this entirely.** The deadline relaxes from
+`payload_start_estimate` to `packet_end_estimate − TACC_GUARD` (the SX1302
+sees zeros until `W_commit`, so there is no live-payload race) — a
+packet-length-scaled window (tens of symbols), not a single-symbol one. This
+gives ample margin for 16+ iterations at any SF, and is the safe path if the
+baseline live-mode numbers above hold up under real measurement.
+
+**Next step before acting on any of this:** get a real cycle count — compile
+`compute_eigvec_weights_fw()` for RV32IM, disassemble, and either count
+instructions by hand or run it through PicoRV32's cycle-accurate testbench.
+The back-of-envelope numbers above already revised the original estimate by
+~4-5×; they should not be treated as final either.
+
+---
+
+## Alternative: Unconstrained Host Implementation (e.g. Raspberry Pi)
+
+If PicoRV32 is dropped from the chip (or simply not used for this task), the
+same weight-commit job can run on any external host wired to the ASIC's SPI
+slave — `trouper_top` has no on-chip-CPU assumption baked in; the weight path
+is purely register writes to `0x30–0x3F` gated by `WGT_CTRL.W_COMMIT`
+(`0x1E`). Everything in **Inputs — Register Reads** and **Outputs — Register
+Writes** above is unchanged. What changes is Step 2 (**Algorithm — Power
+Iteration**): the host is not integer-only, so use exact math instead of the
+8-iteration fixed-point approximation.
+
+### Interface — same registers, over SPI instead of AHB-Lite
+
+| Step | Registers | Notes |
+|---|---|---|
+| Trigger | `IRQ_STATUS` bit[1] (`0x02`), or the dedicated `IRQ_OUT` pad | Poll bit[1] over SPI, or take a GPIO edge interrupt on `IRQ_OUT` to avoid poll latency. Clear via `IRQ_CLEAR` (`0x03`). |
+| Read Z | `0x40–0x63` (6 pairs × I/Q int24, 36 bytes) + `0x64–0x6F` (4 × ZDIAG int24, 12 bytes) | One 49-byte SPI burst read (auto-increment while CS held low). |
+| Read N_ACC | `0x21–0x22` | Same as constrained path; skip if zero. |
+| Write weights | `0x30–0x3F` (8 × int16, Q1.15, top byte effective) | Same 8-byte-pair layout as the constrained path — top byte convention unchanged. |
+| Write gain shift | `0x0F` bits [2:0] (`COMB_CFG.post_gain_shift`) | Must be written before `W_COMMIT`, same ordering requirement. |
+| Commit | `0x1E` bit 0 (`WGT_CTRL.W_COMMIT`) | Self-clears in hardware. |
+
+SPI is Mode 0, MSB-first, up to 10 MHz — the full read+write+commit sequence
+is ~60 bytes of raw SPI traffic (well under 100 µs of bus time at 10 MHz).
+The bottleneck is host-side latency (see Timing below), not the transfer
+itself.
+
+### Algorithm — exact eigendecomposition instead of power iteration
+
+Reconstruct the 4×4 Hermitian `Z` matrix from the register readback exactly
+as in Step 1 of the constrained path (off-diagonal and diagonal both already
+at the `[31:8]` scale — no scale-alignment shift, and no int12 normalisation
+shift is required off-chip since there's no int12 ceiling to respect), then
+call the float reference directly instead of reimplementing power iteration:
+
+```python
+from sim.models.training_accumulator import compute_eigvec_weights
+w = compute_eigvec_weights(Z_matrix)   # np.linalg.eigh, exact, Q1.15-quantized output
+```
+
+This is `compute_eigvec_weights()` (exact `eigh`), not `compute_eigvec_fw()`
+(the fixed-point power-iteration model of the constrained firmware). The
+Step 3 signal-amplitude / `pgs` / `W_max_byte` logic (combiner gain scaling)
+is unchanged in principle — it exists to size the Q1.15 output for the
+combiner's 8-bit multiplier, not to work around PicoRV32's lack of an FPU —
+but can be computed directly in floating point on the host and only
+quantized at the final register-write step, rather than via the integer
+`isqrt`/shift approximations in the constrained path.
+
+**Historical note (partially superseded):** `sim/notebooks/11_training_accumulator.ipynb`
+§3–4 originally quantified the constrained firmware's fixed-point path as
+≈0.9 dB worse in mean combining gain than exact `eigh` (49% vs 31% SER at
+−16 dB per-antenna SNR, SF7/NR4), and traced the *dominant* part of the gap
+to the (then 16-bit) ZDIAG register truncation. **That part is now closed
+on-chip** by the ZDIAG 16-bit→24-bit widening (see "ZDIAG widening" note in
+`planning/blocks/Training Accumulator.md`). A smaller residual gap remains
+at low SNR — re-testing after the ZDIAG fix found this residual *is*
+iteration-count-limited after all (16 iterations roughly halves it), which
+reverses the notebook's earlier claim that more iterations don't help: that
+earlier test was run before the ZDIAG fix, when the 16-bit-truncation bias
+dominated and completely masked this smaller, genuine convergence-rate
+effect. So an unconstrained host is no longer required to close the
+*dominant* accuracy gap, but still has a real (if smaller) accuracy edge at
+low SNR unless the on-chip iteration count is also increased — which the
+corrected Timing Budget above shows is not free at low-to-mid SF. Its other
+advantage remains architectural (no on-chip CPU/SRAM area or verification
+burden).
+
+### Timing — the actual constraint
+
+The PicoRV32 path is deterministic but, per the corrected Timing Budget
+above, is itself ~1.0–1.1 ms at 8 iterations (SF-independent) against an
+SF-dependent deadline — comfortable only from roughly SF8 upward in baseline
+live mode. A general-purpose Linux host's `IRQ_OUT` interrupt-to-userspace
+latency is a different, non-deterministic problem on top of that: not
+guaranteed, and can run into the low milliseconds under load on a non-RT
+kernel.
+
+- **Baseline live mode**: deadline is `payload_start_estimate = timing_ref +
+  12·M` samples from lock. At low SF (short `M`) this window is under 1.5 ms
+  total from lock, of which `training_done` itself doesn't fire until ~5
+  symbols in — likely too tight for a stock Raspberry Pi OS round trip at low
+  SF, though it loosens proportionally as SF increases (`M = 2^SF`).
+- **PSRAM replay mode**: deadline relaxes to `packet_end_estimate −
+  TACC_GUARD` instead of the live-payload boundary, since the SX1302 sees
+  zeros until `W_commit`. This gives millisecond-scale slack — comfortable
+  for a non-RT host — and is the recommended mode for a host-computed weight
+  path. It also extends the accumulation window itself (more samples, better
+  Z estimate), so PSRAM mode is a strict win for this architecture, not just
+  a timing workaround.
+
+If the host misses the deadline, the existing fallback applies unchanged:
+`W_MISSED_PACKET` sets, the combiner stays in bypass, and weights apply at
+the next `safe_switch` — no new failure mode needs to be designed for a host
+implementation.
+
+### What's unchanged from the constrained spec
+
+- Register map, addresses, byte ordering (Inputs / Outputs sections above)
+- Step 3's gain-scaling *purpose* (avoid combiner clipping / target ~90
+  counts output) — only its *implementation* (float vs integer arithmetic)
+  differs
+- The `W_MISSED_PACKET` / bypass fallback policy
+- Acceptance criterion 2 (match `compute_eigvec_weights()` within ±1 LSB in
+  Q1.15) — trivially satisfied by construction, since the host implementation
+  *is* `compute_eigvec_weights()`, not an approximation of it
 
 ---
 
@@ -386,7 +563,15 @@ These are follow-on tasks.
 1. On `IRQ_TRAINING_DONE` with non-zero `N_ACC`, firmware writes `COMB_CFG`,
    all 8 weight bytes, and pulses `W_COMMIT` within the SF5 timing budget.
 2. With a known synthetic Z matrix (from the Python model), the firmware output
-   matches `compute_eigvec_weights()` within ±1 LSB in Q1.15.
+   direction matches `compute_eigvec_weights()` closely. In practice this is
+   checked as an angular tolerance, not a literal ±1 LSB Q1.15 bound — see
+   `sim/tests/test_eigvec_fw.py` (`test_weight_direction_vs_float_reference`,
+   5° tolerance at typical SNR; `test_weight_direction_low_snr`, 15° at high
+   noise). A literal ±1 LSB match is not achievable by an 8-iteration
+   fixed-point power method against an exact `eigh` reference in general,
+   even with the ZDIAG widening — see "ZDIAG widening" note in
+   `planning/blocks/Training Accumulator.md` for what that fix did and did
+   not close.
 3. `COMB_POST_GAIN_SHIFT` is written before `W_COMMIT` for every packet.
 4. For a strong-signal Z (A_est > 64), `pgs = 0` and `W_max_byte < 120`; the
    combiner output does not saturate.
@@ -402,7 +587,7 @@ These are follow-on tasks.
 
 | File | Purpose |
 |---|---|
-| `firmware/picorv32/asic_regs.h` | Register address definitions |
+| `firmware/picorv32/asic_regs.h` | Register address definitions — **stale**: uses an old memory-mapped AHB-Lite address scheme (`ASIC_REG_BASE + 0x00`–`0xEF`) that predates the current 7-bit SPI register map (`0x00`–`0x7F`). Do not use for new work; treat `planning/Register Map.md` as authoritative until this header is resynced. |
 | `firmware/picorv32/main.c` | Existing firmware structure to extend |
 | `sim/models/training_accumulator.py::compute_eigvec_weights()` | Float reference |
 | `planning/Register Map.md` | Authoritative register layout |

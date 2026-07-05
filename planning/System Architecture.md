@@ -276,8 +276,8 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | PSRAM SCK / CE_N | 2 | APS6404L serial clock and active-low chip enable |
 | IRQ_OUT | 1 | Dedicated level-high interrupt to host RPi |
 | PSRAM SIO[3:0] | 4 | PSRAM QPI data bus (dedicated; JTAG/GPIO removed — see [Pinout](Pinout.md)) |
-| VDD IO 5.0V | 1 | |
-| VDD core 3.3V | 1 | Single pad — IR drop must be verified in floorplan |
+| VDD_IO | 1 | Pad-ring supply; separate independently-tunable rail, 3.3 V baseline (see [Pinout](Pinout.md)) |
+| VDD_CORE | 1 | Digital core supply; separate independently-tunable rail, 3.3 V baseline — IR drop must be verified in floorplan |
 | GND | 1 | Single pad — place at highest switching-current region |
 | **Total** | **26** | Within the ≤26 per-team allocation limit |
 
@@ -309,7 +309,9 @@ create_generated_clock -divide_by 2 -source [get_ports IQ_CLK] \
   [get_pins clk_div_reg/Q] -name CLK_16M
 ```
 
-> **CFO is a transmitter-only property.** Because all four SX1257 AFEs and the ASIC itself derive their clocks from one TCXO, there is no sampling-rate offset (SRO) between antennas or between the ADC outputs and ASIC processing. Any observed carrier frequency offset `df` is entirely due to the remote transmitter's TCXO offset. The digital CFO correction `exp(−j2π·df_est·n/Fs)` applied in firmware operates with cycle-accurate sample indexing — no accumulated phase error from clock-domain mismatch. The residuals quantified in `sim/notebooks/02_cfo_estimation.ipynb` are therefore the complete error budget.
+> **CFO is a transmitter-only property.** Because all four SX1257 AFEs and the ASIC itself derive their clocks from one TCXO, there is no sampling-rate offset (SRO) between antennas or between the ADC outputs and ASIC processing. Any observed carrier frequency offset `df` is entirely due to the remote transmitter's TCXO offset. The digital CFO correction `exp(−j2π·df_est·n/Fs)` applied in firmware operates with cycle-accurate sample indexing — no accumulated phase error from clock-domain mismatch.
+>
+> **Reference gap:** this section previously cited `sim/notebooks/02_cfo_estimation.ipynb` as the source of the quantified residuals — that file does not exist in the repo (no such notebook, no git history). The closest existing coverage is the pytest regression `sim/tests/test_cfo_droop.py` (CFO sensitivity of the current R=64 half-band decimator's dechirp peak amplitude, both BWs), which has not been distilled into a headline error-budget number. See `planning/DSP Chain SNR Loss Budget.md` §10 for the full consolidated SNR/quality-loss ledger across the RX chain, including this gap.
 
 The following boundaries require explicit treatment:
 

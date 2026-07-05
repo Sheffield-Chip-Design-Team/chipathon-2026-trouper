@@ -177,7 +177,7 @@ Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on
 | TRPR-SCD-011 | H | F | `CORR_MAG_n` (0x48–0x4F) are reserved for future per-branch SC autocorrelation magnitude readback. In the current top-level integration these registers are tied to zero. Closing this telemetry gap requires wiring real latch outputs into `reg_bank`. | I |
 | TRPR-SCD-012 | H | F | `C_POOL_I/Q` (0x64–0x67) are reserved for future SC correlator phasor readback. In the current top-level integration these registers are tied to zero, so firmware SHALL NOT rely on them for CFO estimation. | I |
 | TRPR-SCD-013 | H | P | `sc_lock` SHALL assert within ±1 symbol of the Python block-model prediction on a clean branch-0 SF7 125 kHz preamble at 0 dB SNR. | T |
-| TRPR-SCD-014 | M | F | `sc_lock` SHALL de-assert when the Packet Control FSM returns to IDLE. | T |
+| TRPR-SCD-014 | C | F | `sc_lock` SHALL de-assert and the detector SHALL re-arm (hit counter, symbol accumulators, and metric-engine state cleared) when the Packet Control FSM returns to IDLE, so every subsequent packet is acquired. | T |
 | TRPR-SCD-015 | L | F | `ENERGY_GATE_EN` (SC_CFG bit 0) is reserved; energy gating prior to SC lock is not implemented in the current RTL and SHALL be left at 0. | I |
 | TRPR-SCD-016 | H | F | The hit decision SHALL include an e_slice guard: `eval_e_acc[25:13] > 0` (energy² ≥ 8192 ADU). When this condition is false the energy is too low for a meaningful threshold comparison; the hit is suppressed to prevent false alarms on noise. This guard is SF-adaptive because minimum detectable amplitude `A_min ∝ 1/√M`. | I |
 
@@ -429,6 +429,7 @@ Interrupt aggregation is implemented **inside `reg_bank.v`**, not as a standalon
 | TRPR-IRQ-003 | C | F | When any `IRQ_STATUS` bit is set, Trouper SHALL assert both `IRQ_OUT` and `IRQ_GROUPER`. `IRQ_OUT` routes to a dedicated package pad. `IRQ_GROUPER` is an inter-project wire to Grouper. Both are driven by the same `\|irq_status` signal from reg_bank. | T |
 | TRPR-IRQ-004 | H | F | Both IRQ outputs SHALL remain asserted until all `IRQ_STATUS` bits are cleared (level-high, not a pulse). | T |
 | TRPR-IRQ-005 | — | — | **DELETED.** JTAG removed; the IRQ pad is dedicated (no pad muxing), so the former `JTAG_EN`/`TCK` mode-switch and PSRAM-pad-sharing caveats no longer apply. | I |
+| TRPR-IRQ-006 | C | F | Each `IRQ_STATUS` bit SHALL be set on the rising edge of its source event, not by a held level, so a bit cleared via `IRQ_CLEAR` is not immediately re-asserted while the source condition persists (required for TRPR-IRQ-002 on the level-driven `CORR_LOCK`/`TRAINING_DONE` sources). | T |
 
 ---
 
@@ -532,7 +533,7 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-PHY-001 | C | HW | The design SHALL be submitted in GF180MCU (gf180mcuD), targeting `gf180mcu_fd_sc_mcu7t5v0` standard cells. AS cells (`gf180mcu_as_sc_mcu7t3v3`) are not the current plan and carry tapeout risk; new work SHALL NOT target AS cells without explicit team decision. | I |
-| TRPR-PHY-015 | C | HW | Supply voltages SHALL be: VDD_CORE = 3.3 V (±5%), VDD_IO = 5.0 V (±5%). The `gf180mcu_fd_sc_mcu7t5v0` standard-cell library is rated for 5 V IO and 3.3 V core operation. Board designs SHALL NOT apply 3.3 V to VDD_IO or 5 V to VDD_CORE. | I |
+| TRPR-PHY-015 | C | HW | VDD_CORE and VDD_IO SHALL be separate, independently-tunable supply rails (NOT tied on-die), each 3.3 V (±5%) at baseline; the separation SHALL permit the contingency split-rail — 5 V core / 3.6 V IO — to be applied without a silicon respin if 32 MHz SS cannot close at 3.3 V (see planning/Open Risks.md #27). | I |
 | TRPR-PHY-002 | C | HW | The chip-level integration baseline SHALL use the Chipathon workshop padring: die `[0, 0, 2935, 2935]` um and user-core `[442, 442, 2493, 2493]` um. | I |
 | TRPR-PHY-003 | C | HW | The standalone Trouper hard macro SHALL fit within the Chipathon quarter-slot budget. The current Trouper target is **`1100 um × 1100 um`**. | I |
 | TRPR-PHY-004 | C | HW | Final package-pad allocation SHALL be validated at the later chip-top integration stage against the Chipathon padring. | I |

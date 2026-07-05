@@ -11,6 +11,9 @@ RX path stage 2. See [DSP Flow](../DSP%20Flow.md) for pipeline context.
 > 14-bit CIC area work) and [`decimator-hb-migration-impact-plan.md`](../decimator-hb-migration-impact-plan.md)
 > (Gates 0–12). Bandwidth is selected by `BW_CFG.bw_sel` (sets `sample_shift`, not the
 > decimation ratio); the chain eliminates the legacy 250 kHz droop (−11.8 dB → ≈ −0.17 dB).
+> The 2×/4× oversampling margins are a hard architectural floor, not a safety
+> margin — see [`decimator-hb-redesign.md#why-2-is-a-floor-not-a-conservative-margin-for-250-khz-bw`](../decimator-hb-redesign.md#why-2-is-a-floor-not-a-conservative-margin-for-250-khz-bw)
+> for why 1× oversampling is infeasible for any finite-order filter in this cascade.
 >
 > **Everything below this banner describes the SUPERSEDED CIC-only R=128 design**
 > (`sd_decimator_cic_only`, 250 kS/s) and is retained only as historical context.

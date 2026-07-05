@@ -1,0 +1,422 @@
+# Open Risks
+
+Project-wide register of known open risks — design, verification, and
+signoff gaps — ranked low to critical. This is an index: each entry is one
+or two lines plus a pointer to the document that has the real detail.
+Update in place as items close (move to a "Closed" section with the closing
+evidence, don't delete) or as new ones are found.
+
+**Priority key**
+
+| Priority | Meaning |
+|---|---|
+| Critical | Blocks tapeout signoff as currently scoped |
+| High | Does not block tapeout mechanically, but a real functional/yield/deployment failure mode if not addressed |
+| Moderate | Affects a non-critical feature, a margin, or a documented-vs-verified mismatch; tapeout can proceed without it |
+| Low | Tooling, documentation, or future-feature gap |
+
+---
+
+## Critical
+
+### 1. Chip-wide SS-corner (32 MHz, `max_ss_125C_3v00`) closure is not on production RTL
+
+The `gf180mcu_fd_sc_mcu7t5v0` FD cells fail 32 MHz timing at the slow corner —
+worst-case blanket-`MCP=3` SS setup WNS was **−11.95 ns**. The decimator's
+share of that has been honestly closed (pure 3-cycle pacing + fanout fix, SS
+WNS **+8.0 ns MET**, SGE job 2149), and sc_detector/training_acc have paced
+fixes too, but **all of this lives on branch `ss-mcp-pacing`, not merged**.
+The one remaining genuine (non-paceable) residual, the `u_psram` QSPI control
+decode (≈ −10 to −13 ns, throughput-bound — needs a 1-cycle-ahead pipeline of
+the `state`/`sub` → `sio_out`/address cone), is analyzed but not implemented.
+The config-relaxed netlist needed to carry this fix currently **fails
+detailed routing** (DRT-1231 / DRT-0073) on every floorplan tried — the
+current floorplan has no routability headroom to absorb the SDC change.
+
+**Blocks:** any honest chip-wide SS signoff; die-shrink work (blocked on the
+same routability issue).
+**See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items).
+
+(Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
+were fixed and verified; see Closed.)
+
+---
+
+## High
+
+### 4. Bypass-antenna mux skips antenna 0
+
+`trouper_top.v:480-482`: `bypass_ant = en[1] ? 1 : en[2] ? 2 : en[3] ? 3 : 0`
+never tests `en[0]` first, so with the reset default `antenna_en=0xF` bypass
+mode outputs **antenna 1**, not the lowest-enabled antenna (TRPR-SYS-005,
+TRPR-MRC-005). One-term fix; breaks Mode-1 bring-up expectations as-is.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 5. "Silence during PSRAM buffering" actually emits a ΣΔ-modulated DC tone
+
+`trouper_top.v:511-518` zeroes `remod_in_*` but also forces `in_valid=0`;
+`sd_remod.v:85` then *holds the last pre-lock sample* in `in_i_lat/in_q_lat`,
+so the SX1302 receives a constant DC tone for the whole BUFFERING phase
+instead of silence. Fix: keep `in_valid` asserted and feed zeros.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 6. DRT-1231 clkbuf CTS pin-access failure is recurring, not proven robust
+
+A minimal fix is confirmed clean at 1380×1100 (v15c), but the same DRT-1231
+violation (`clkbuf_*_IQ_CLK_regs/I` pin access) **returns** under the
+honest-MCP/scoped-SDC config (v24, job 2211) and at every relaxed-SDC
+floorplan tried since (jobs 2165–2168). Described in the source doc as
+"timing-SDC-sensitive" — the fix does not generalize across SDC edits.
+
+**Blocks:** further die-shrink; the honest-MCP signoff configuration (item 1).
+**See:** `planning/area-reduction-roadmap.md` §4 (Gate 0 blocker);
+`planning/ss-corner-decimator-pacing-closure.md`.
+
+### 7. Eigenvector power-iteration firmware timing may not fit at low SF (live mode)
+
+PicoRV32 in this project uses the slow non-`FAST_MUL` multiplier
+(~31 cycles/MUL, not the ~1 cycle originally assumed in the doc). The
+8-iteration default now costs an estimated ~1.0–1.1 ms — SF-independent —
+against a deadline that scales with SF (`4·M/500 kHz`): **does not fit at
+SF6, roughly break-even at SF7**, comfortable from SF8 up. Bumping to 16
+iterations (needed to meaningfully shrink a real ~0.5 dB residual combining-
+gain loss) costs ~2 ms and likely needs SF8+. This is a **back-of-envelope
+estimate, not yet cycle-accurately verified** (no compile/disassemble/
+simulate pass has been run). PSRAM replay mode sidesteps the deadline
+entirely; the baseline live-mode path does not.
+
+**Risk:** silently missing the weight-computation deadline at low SF in live
+mode, producing stale/garbage MRC weights with no error indication.
+**See:** `planning/blocks/Eigenvector Weight Computation.md` (Timing
+Budget); `planning/DSP Chain SNR Loss Budget.md` §6.
+
+### 8. AGC calibration and edge-case behavior are unverified on silicon
+
+`AGC_TARGET_LO/HI` and `AGC_SAT_GUARD` require real-PCB calibration; the
+branch-masking policy for a persistently saturated/dead/noisy antenna is
+undefined; behavior under strong blockers / near-far interference is
+untested; there is no mid-packet AGC recovery path (by design, but never
+exercised against a real scenario).
+
+**Risk:** deployment-time AGC misbehavior with no bench coverage.
+**See:** `planning/blocks/AGC.md` (Open calibration items).
+
+### 27. GF180 split-rail IO cell (core > pad) down-level-shift is uncharacterized
+
+The baseline supply is **uniform 3.3 V** (core + IO). If the 32 MHz SS gap (item 1)
+cannot be closed at 3.3 V, the **contingency** is a **split-rail supply**: run the
+digital core at ~5 V nominal (4.5 V slow-corner worst-case, where SS closes — proven
+SS@`ss_125C_4v50` = **+1.40 ns**, DRC/LVS/route 0, jobs 3231/3237) while the pad ring
+signals at **3.6 V** so the 3.3 V-class external parts survive. This risk applies only
+if that contingency is taken. All three externals are
+safe at 3.6 V (APS6404L PSRAM abs max 4.0 V / SX1257 3.9 V / RPi GPIO ESD clamp ~3.9 V).
+**The single unproven link is the IO cell itself:** GF180 `bi_*` cells must down-level-
+shift core (5 V) → pad (3.6 V), but the PDK only characterizes single-voltage IO
+(`VDD = DVDD`) and ships no IO databook — the core > pad down-shift is **outside the
+characterized envelope**. If GF180 IO cannot safely do this split, the whole 5 V-core
+strategy collapses; the fallback (uniform 5 V chip + external PCB level translators) is
+hard for the **high-speed bidirectional QSPI** (PSRAM `SIO[3:0]`, up to 133 MHz, direction
+reverses mid-transaction — auto-direction translators do not cope).
+
+**Action (bench/SPICE/foundry, not PnR):** confirm GF180 `bi_*` split-rail level-shift
+(5 V core / 3.6 V pad) via IO-cell SPICE + foundry/databook before committing the voltage
+path.
+**Blocks:** committing the split-rail 5 V-core SS-closure strategy (item 1); the die-shrink
+and honest-MCP work that the voltage path would otherwise unblock.
+**See:** `planning/area-reduction-roadmap.md` §2 (voltage analysis); `planning/Pinout.md`
+(split-rail supply note); `planning/5v-core-voltage-strategy.md`.
+**Found:** 2026-07-04 (voltage-corner + external-part datasheet review).
+
+### 28. No signoff run uses the fixed / PCB pin order — DRT-0073 hazard
+
+`config_current_signoff.json` sets **no `FP_PIN_ORDER_CFG`**, so every signoff and
+experiment to date (B1 −16.08 ns, the buffering study, the 5 V-rail runs) places the
+block port pins **automatically** — the router puts them wherever is convenient. A
+tapeout-ready macro must instead pin the ports where the padring/PCB expects them, using
+the PCB-friendly **`io_placement_v2.cfg`** (59 ports, Q-then-I; variants exist:
+`io_placement_v3_loose.cfg`, `io_placement_v5_iqwest.cfg`). That is the **harder** routing
+case: forcing the fixed order previously **tripped DRT-0073 (`IQ_CLK` clkbuf pin-access)**
+on the tighter baselines — one of the reasons `CTS_APPLY_NDR: none` was adopted. So the
+current "signoff" is **not pin-realistic**, and making it so reintroduces a routability
+risk the present numbers do not exercise.
+
+**Action:** run a signoff with `FP_PIN_ORDER_CFG = io_placement_v2.cfg` (on the committed
+die and on whichever voltage rail is chosen) and confirm DRC/route-clean with the real pins
+before tapeout; treat DRT-0073 as the expected failure mode and reuse the NDR/CTS levers.
+**Blocks:** integration-ready signoff; final die/floorplan lock (pin order interacts with
+the clkbuf pin-access fragility, item 6).
+**See:** memory `project_io_placement`; `planning/area-reduction-roadmap.md` §4 / §6 (CTS
+pin-access levers); `rtl-test/ol_trouper_top/io_placement_v2.cfg`.
+**Found:** 2026-07-04.
+
+---
+
+## Moderate
+
+### 9. SC Detector acquisition is hardcoded to antenna 0 (no diversity at lock time)
+
+`sc_detector.v` wires only branch-0 `cur_i0/q0` / `del_i0/q0`
+(`trouper_top.v:228-236`); the `Sum_j` incoherent 4-branch combine that
+`planning/DSP Flow.md` Stage 5 specifies is not implemented. If antenna 0 is
+in a deep Rayleigh fade, the gateway fails to acquire the packet even when
+antennas 1–3 have strong signal — the 4-antenna array provides no diversity
+gain for detection, only for post-lock MRC combining. Confirmed both via
+measured-IQ playback (Rayleigh seed 7 vs 10) and a Monte-Carlo sweep
+(`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/branch SNR, P(lock) with
+antenna 0 in deep fade is 0% ant0-only vs 52% for the spec-intended combine).
+A spec-faithful fix (serial 4-channel TDM correlator, ~+20 k µm², no clock-
+period cost) is designed but not implemented, pending an area-headroom
+check against the floorplan.
+
+**Does not block tapeout** — silicon works correctly whenever antenna 0 is
+not the faded branch; this is a robustness/diversity gap, not a functional
+bug.
+**See:** `planning/sc-detector-ant0-fading-risk.md`.
+
+### 10. DC Removal: documented spec figures contradicted by verified sim results
+
+Measured AC passband droop at 1 kHz is −8.5 dB vs. the block doc's stated
+"<0.1 dB" pass criterion; measured reset-recovery settling is 119 samples vs.
+the documented "37 samples." Flagged as a doc-vs-sim mismatch requiring
+review, not (yet) confirmed as an RTL defect — but unreconciled.
+
+**See:** `planning/DSP Chain SNR Loss Budget.md` §2.
+
+### 11. Clock-net signal-integrity tradeoff below the 1380 µm die floor
+
+At the current 1380×1100 baseline, `root_only` NDR preserves clock SI at no
+timing cost. Shrinking below 1380 forces `CTS_APPLY_NDR:"none"` — full
+clock-SI loss plus ~1 ns of additional SS penalty. Post-route clock
+skew/jitter/coupling-cap signoff against baseline is still an outstanding
+step regardless of the die size ultimately chosen.
+
+**Contingent** — only bites if the die is shrunk further; not a risk at the
+current baseline.
+**See:** `planning/area-reduction-roadmap.md` §6.
+
+### 12. 1100×1100 target die may be physically unreachable
+
+1380×1100 is the measured routing-congestion floor for the current
+(un-paced) design on 7-track/5LM GF180; the honest-MCP SDC needed for item 1
+can't even reach 1550×1150 without routing failures. The original
+1100×1100 target may not be achievable on this stack without further RTL
+area cuts.
+
+**Area/cost risk, not functional.**
+**See:** `planning/area-reduction-roadmap.md` §6.
+
+### 13. No shadow→active weight promotion (TRPR-MRC-004 not implemented)
+
+`mrc_combiner` consumes `rb_w_shadow` live (`trouper_top.v:492-495`) and
+re-latches weights every sample — there is no active bank latched on
+`W_COMMIT` at a safe-switch boundary. A 16-byte SPI weight burst is not
+atomic, so a write landing mid-replay applies a half-updated W to samples.
+Mitigated by firmware discipline (write only in W_PENDING); a proper fix
+latches an active bank on `W_valid_set`.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 14. PSRAM replay is truncated at packet timeout
+
+In `S_REPLAY` the read pointer trails the write pointer by the
+training+commit latency and never catches up (one read per `iq_valid`);
+`packet_end` — a live-time timeout — kills replay immediately
+(`psram_buf_ctrl.v:563`), dropping the packet tail unless `PKT_TIMEOUT_SYMS`
+always exceeds actual packet length **plus** replay lag. Needs a directed
+test and either a documented timeout-margin rule or a replay-drain-then-exit
+condition (`rd_ptr` reaching the `wr_ptr` snapshot).
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 15. Final SPI write lost if host raises CS too soon after last SCK edge
+
+`spi_reg_we_req` (`spi_slave.v:70-118`) is cleared asynchronously by
+`HOST_CS` rising; the 2-FF synchronizer needs ~3 × 31.25 ns of request
+persistence, but at 10 MHz SCK the natural gap is only ~50 ns. Either make
+the request survive CS de-assertion or document "hold CS low ≥ 100 ns after
+the final SCK edge" as a hard host requirement (and add it to the RPi driver).
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 16. Grouper/SPI register-bus arbitration silently drops SPI writes
+
+`trouper_top.v:578-581`: if `GRP_RE`/`GRP_WE` is asserted during the 2-cycle
+SPI write window, the mux steers away and the SPI write vanishes — no
+stall/queue as TRPR-SPS-007/TRPR-INT-003 require. Additionally the implicit
+Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
+`GRP_READY` handshake) is undocumented.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+---
+
+## Low
+
+### 17. Noise Estimation Manhattan-norm bias/variance not quantified
+
+`noise_est.v` uses an L1 (Manhattan) approximation instead of an ideal L2
+norm for `energy_snap`; the resulting bias/variance has never been measured
+against an ideal estimator.
+
+**See:** `planning/DSP Chain SNR Loss Budget.md` §5.
+
+### 18. Frontend Buffer Controller PSRAM-replay sample staleness unquantified
+
+**See:** `planning/DSP Chain SNR Loss Budget.md` §4.
+
+### 19. `tb_mrc_fw_precision.v` testbench has a pre-existing DUT/testbench mismatch
+
+4 of 5 cases fail with `y_valid` timeout / large output error, confirmed
+identical on unmodified git-HEAD RTL (SGE jobs 3194/3195) — i.e. not caused
+by the ZDIAG register-widening change made alongside it. Root cause not
+investigated; out of scope when found.
+
+**Verification-coverage gap, not a silicon risk** — the testbench doesn't
+currently exercise this path correctly, so a real regression there could go
+undetected.
+
+### 20. `firmware/picorv32/asic_regs.h` is stale
+
+Uses an old memory-mapped AHB-Lite address scheme (`ASIC_REG_BASE + 0x00`–
+`0xEF`) that predates the current 7-bit SPI register map.
+`planning/Register Map.md` is authoritative; this header has not been
+resynced.
+
+**Tooling/doc gap** — a risk only if someone builds firmware against the
+stale header without noticing.
+
+### 21. NW-MRC / `energy_meas_coarse`-removal contingency stack not implemented
+
+If `energy_meas_coarse` (a ~70 k µm² area-cut candidate) is ever removed,
+none of its three proposed AGC/noise-estimate replacements
+(`live-iq-agc-calibration.md`, `per-branch-rssi-via-sx1302.md`,
+`psram-software-energy-meas.md`) are implemented yet. Currently a
+contingency, not triggered.
+
+**Escalates to Moderate/High only if the area cut is taken.**
+
+### 22. NR=2/3-chip cascade risks unsimulated
+
+Re-modulator SQNR accumulation across cascade stages, hierarchical-MRC
+suboptimality vs. true NR=4 MRC, and inter-chip reset skew (undetectable at
+runtime — no symptom besides corrupted MRC weights, mitigated only by
+matched-trace-length reset routing, unverified) are all open for the
+multi-ASIC cascade topology.
+
+**Low for the current NR=1 tapeout** — becomes High if/when an NR=2 cascade
+product ships.
+**See:** `planning/NR2-multi-ASIC-cascade.md`, `planning/cascade-beamsteering.md`.
+
+### 23. Weight Generation: noise-whitening (NW-MRC) not implemented
+
+Feature gap in both firmware and the Python reference model.
+**See:** `planning/blocks/Weight Generation.md`.
+
+### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)
+
+`Register Map.md` and `reg_bank.v` agree; the spec body does not. Spec §3.1 /
+TRPR-SYS-003/015/016 / TRPR-INT-006 / TRPR-PHY-014 still mandate a real
+`CLK_16M` generated-clock tree (RTL is single-clock + `ce_16m` CE on reg_bank
+only). Stale spec addresses: SC_HITS_REQ 0x1B→0x0E, PKT_TIMEOUT_SYMS
+0x16→0x0B, WGT_CTRL 0x35→0x1E, PACKET_STATUS 0x34→0x1C, TRAINING_STATUS
+0x60→0x20; TRPR-TAC-005 ZDIAG 16-bit@0x64–0x6B vs actual 24-bit@0x64–0x6F;
+TRPR-TAC-006 `Z_SHIFT` (0x63) does not exist; TRPR-SCD-012 C_POOL double-books
+0x64–0x67; TRPR-MRC-001/006 say int16 Q1.15 weights but hardware consumes the
+high byte only (8-bit, per TRPR-MRC-002). Stale R=128 comments remain in
+`trouper_top.v:150`, `psram_buf_ctrl.v:11`, `mrc_combiner.v:19`,
+`training_acc.v:15` (budgets still fit the 64-cycle window).
+
+**Doc gap — risk is firmware/bring-up written against the spec, not the map.**
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 25. trouper_top dead logic + minor RTL hygiene
+
+`packet_ctrl_fsm` outputs `psram_packet_arm`/`psram_replay_start`/
+`psram_abort`/`payload_rd_base` are unconnected (`trouper_top.v:387-390`) and
+`safe_switch`/`combiner_source` are unused — notably `psram_abort` is *not*
+wired into `psram_buf_ctrl`, so a re-lock during replay relies solely on
+`packet_end` (verify that path or wire/delete). Also: `mimo_mode[1]` never
+writable (`reg_bank.v:191`) yet read back and forwarded; a `noise_trig`
+written while a live training is armed is silently swallowed (top opens
+`noise_window_active`, `training_acc` ignores the arm — TODO at
+`trouper_top.v:257`); `mrc_combiner.v:126` assigns `26'sd0` to an 18-bit reg;
+`mrc_combiner` port `clk_16m` is actually driven at 32 MHz.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+---
+
+## Closed
+
+### 2. `sc_lock` never de-asserts — receiver is one-shot — CLOSED 2026-07-02
+
+`sc_detector.v` set `sc_lock` on lock with nothing clearing it except RESETB
+(no clear input existed, contra TRPR-SCD-014), so after the **first** packet
+no further packets were ever acquired, trained, or noise-measured
+(`packet_ctrl_fsm` needs a rising edge to restart; `training_acc` and the
+noise-window accept re-arm only on `!sc_lock`).
+
+**Fix:** added an `sc_clr` input to `sc_detector` wired to `packet_done_pulse`
+(falling edge of `packet_active` = packet FSM returned to IDLE). It clears
+`sc_lock`, `hit_count`, `first_hit_sample`, the per-symbol accumulators,
+`sym_cnt`, and the TDM/eval engine state; `sample_count` is left free-running
+to keep the `timing_ref` domain aligned across packets. All single-packet TB
+instantiations tie `sc_clr` low.
+
+**Verified:** `rtl-test/tb/tb_trouper_two_packet.v` (SGE job 3203, TB PASS,
+10/10 checks) — `ARM-1` confirms `sc_lock` de-asserts at IDLE and `PK2-1`
+confirms a second packet re-acquires. Baseline single-packet `tb_trouper_top`
+still passes (job 3202). Spec TRPR-SCD-014 strengthened to mandate re-arm.
+
+### 3. Level-driven `IRQ_STATUS` bits are un-clearable (IRQ_OUT sticks high) — CLOSED 2026-07-02
+
+`rb_irq_set` fed `training_done` and `sc_lock` in as *levels*; `reg_bank.v`
+re-ORs `irq_set` every CE, so an `IRQ_CLEAR` write to CORR_LOCK/TRAINING_DONE
+was undone two cycles later (violated TRPR-IRQ-002), and combined with item 2
+`IRQ_OUT` stuck high permanently after the first lock.
+
+**Fix:** `trouper_top` now edge-detects `sc_lock`/`training_done`
+(`sc_lock_r`/`training_done_r` → `sc_lock_pulse`/`training_done_pulse`) and
+feeds the 1-cycle rising-edge pulses into `rb_irq_set_c` bits 0/1, matching
+the `packet_done_pulse` pattern on bits 2–4; the 2-cycle `rb_irq_set_d`
+stretch still bridges the CE domain. After a pulse `irq_set` returns low, so
+an `IRQ_CLEAR` write sticks.
+
+**Verified:** `tb_trouper_two_packet.v` (SGE job 3203) — `IRQ-1c` clears
+IRQ[0] while `sc_lock` is still asserted and confirms it stays clear (the
+discriminating check vs the old level behavior); `IRQ-2` confirms re-clearable
+on packet 2. New spec requirement TRPR-IRQ-006 documents the edge-set
+semantics.
+
+### 26. First SPI transaction after power-on corrupted (no POR on SPI-domain frame flops) — CLOSED 2026-07-02
+
+The SPI-clock-domain frame flops in `spi_slave.v` (`spi_shreg`, `spi_bit_cnt`,
+`have_cmd`, `fp_rw`, `cur_addr`, `spi_reg_we_req`, …) were reset **only** on
+`posedge HOST_CS`. `HOST_CS` idles high from power-on with no rising edge until
+the *end* of the first transaction, so the flops came up in an unknown state
+and the **first** CS-low transaction was parsed against garbage — the first
+register access was silently dropped/misdirected (self-healing on the first CS
+rising edge). Distinct from items 15/16. Found while bringing up
+`tb_trouper_two_packet` (job 3201 dropped the first PSRAM-enable write; a
+throwaway CHIP_ID read masked it — job 3203).
+
+**Fix:** folded chip reset into a single OR'd async-clear term
+`spi_frame_arst = HOST_CS | ~rst_n` (one edge-sensitive reset, not two — a
+dual `posedge HOST_CS or negedge rst_n` form is rejected by yosys with
+"Multiple edge sensitive events", job 3207). The reset pin is level-sensitive
+in silicon, so the frame flops are held cleared for the whole `rst_n=0` window
+regardless of `HOST_CS` — no host/bring-up mandate needed.
+
+**Verified:** yosys `synth` clean, exit 0 (job 3209, vs the dual-form's hard
+error). `tb_trouper_two_packet` now passes with the PSRAM-enable write as the
+**first** transaction — no warm-up read (job 3208, PSRAM INIT_DONE at cycle
+384, 10/10 checks). (TB models the power-on reset by holding CS low across the
+reset pulse purely so iverilog's edge-triggered async-reset fires; silicon does
+not require this.)
+
+---
+
+(Move items here as they're resolved, with the closing evidence — job ID,
+commit, or doc reference.)

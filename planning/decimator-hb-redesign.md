@@ -113,6 +113,44 @@ Combined alias noise is well below the int8 quantisation floor.
 Both BWs are oversampled. The SX1302 downstream rejects out-of-chirp content
 via its own channel filter.
 
+### Why 2× is a floor, not a conservative margin, for 250 kHz BW
+
+250 kHz BW already runs at the low end of what this architecture can
+support — dropping to 1× oversampling (`fs_out = BW = 250 kS/s`, chirp edge
+at ±125 kHz landing exactly on the new output Nyquist) is not a smaller
+version of the same design, it is structurally infeasible.
+
+The Nyquist *sampling* criterion for a complex (IQ) signal only requires
+`fs ≥ BW` — 1× is not a sampling-theorem violation. The problem is the
+*realizable filter*, not the sample rate: any linear-phase FIR decimation
+stage needs a nonzero transition band between its passband edge and its
+stopband edge (where the decimation image would otherwise fold back in). At
+1× oversampling that transition band has zero width, since the passband
+must extend flat all the way to Nyquist while the stopband must already
+have started by Nyquist to reject the image. No finite-order FIR can do
+both.
+
+Quantifying this with the standard Harris/fred-harris equiripple order
+estimate for a generic decimate-by-2 final stage (`N ≈ (A_dB − 7.95) /
+(14.36 · Δf/fs_in)`, target `A_dB = 40 dB` matching the Gate 1 SQNR
+threshold) and cross-checking with `scipy.signal.remez`:
+
+| Oversampling | `Δf` (transition width) | Estimated taps | Verified droop @ edge | Verified stopband |
+|---|---|---|---|---|
+| 1.10× | 25 kHz | ~49 | −0.02 dB (65 taps) | −53.7 dB |
+| 1.25× | 62.5 kHz | ~22 | −0.05 dB (25 taps) | −45.1 dB |
+| 1.50× | 125 kHz | ~13 | −0.03 dB (15 taps) | −49.0 dB |
+| 2.00× (deployed) | 250 kHz | ~9 | −0.10 dB (9 taps) | −39.1 dB |
+| 1.00× | 0 kHz | ∞ | — | — |
+
+Required order rises hyperbolically as oversampling approaches 1× and
+diverges to infinity exactly at 1×. The deployed 2× point (HB2, 15 taps)
+sits at the cheap end of that curve; there is no finite-tap design that
+closes the gap to 1×, so the ≥2×/4× oversampling margins in the table above
+are a hard architectural floor for this cascade, not a safety margin that
+could be traded away for area. See `sim/notebooks/06_sd_decimator.ipynb`
+Section 9 for the full derivation, sweep, and `remez` verification.
+
 ---
 
 ## Halfband FIR design parameters
