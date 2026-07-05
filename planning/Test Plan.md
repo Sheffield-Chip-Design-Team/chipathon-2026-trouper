@@ -138,6 +138,8 @@
 | DC input | Output bitstream average matches DC value |
 | Re-mod B idle (Mode 1) | REMOD_B_I/Q pads driven to defined idle level |
 
+**RTL regression — `REMOD_BACKOFF_SHIFT` (register `0x0F`):** `rtl-test/tb/test_remod_backoff.py` verifies the register end-to-end through `trouper_top` (not just the Python model): (1) `remod_in_i/q == comb_y_i/q >>> shift` bit-exact for shift 0–3; (2) at a forced near-full-scale (~0 dBFS) MRC combiner output, the reset-default `shift=1` keeps `sd_remod`'s 1-bit output dithering (healthy) while `shift=0` measurably degrades it (longer runs of the output frozen at a constant value). Note: `sd_remod`'s integrator states (`s1/s2/s3`) are *not* a usable instability signal on their own — `sat16` clips them near the rail during essentially all normal healthy operation, not just fault conditions; the output's dither/freeze behavior is the real signature. Passing (SGE job 3294).
+
 ---
 
 ### Block 7 — SPI Slave (host interface)
