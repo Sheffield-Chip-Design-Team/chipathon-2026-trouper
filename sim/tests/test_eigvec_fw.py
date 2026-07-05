@@ -32,8 +32,8 @@ def _make_rank1_Z(
 
     signal_amp scales h to simulate int8-range inputs.  The default 64.0
     gives Z_kk ~ n_acc * 64² * |h_k|² ≈ n_acc * 4096, which places the
-    diagonal well above 2^16 for any n_acc >= 32, ensuring the ZDIAG
-    hardware register truncation (upper 16 bits) retains meaningful values.
+    diagonal well above 2^8 for any n_acc >= 1, ensuring the ZDIAG
+    hardware register truncation (upper 24 bits) retains meaningful values.
     """
     h = np.asarray(h, dtype=complex)
     h = h / np.linalg.norm(h) * signal_amp   # normalise then scale
@@ -155,7 +155,7 @@ def test_weight_direction_vs_float_reference(seed):
     The tolerance accounts for:
       - 8 power iterations (not exact eigh)
       - int12 matrix normalisation quantisation
-      - ZDIAG upper-16-bit truncation
+      - ZDIAG upper-24-bit truncation
     """
     rng = np.random.default_rng(seed)
     h = rng.standard_normal(4) + 1j * rng.standard_normal(4)
@@ -215,9 +215,9 @@ def test_weight_direction_single_strong_antenna():
 
 def test_zdiag_truncation_applied():
     """
-    The model must truncate the diagonal to upper 16 bits.
+    The model must truncate the diagonal to upper 24 bits.
 
-    Z and Z_floored differ only in the lower 16 bits of their diagonals
+    Z and Z_floored differ only in the lower 8 bits of their diagonals
     (Z_floored has those bits zeroed), so both produce the same ZDIAG register
     value and must produce identical weights.
     """
@@ -226,20 +226,20 @@ def test_zdiag_truncation_applied():
     n_acc = 512
     Z = _make_rank1_Z(h, n_acc=n_acc, sigma2=0.1)
 
-    # Floor each diagonal entry to the nearest multiple of 2^16.
-    # This zeroes the lower 16 bits, leaving the ZDIAG register value unchanged.
+    # Floor each diagonal entry to the nearest multiple of 2^8.
+    # This zeroes the lower 8 bits, leaving the ZDIAG register value unchanged.
     Z_floored = Z.copy()
     for k in range(4):
         d = int(round(Z[k, k].real))
-        Z_floored[k, k] = float(d & ~0xFFFF)   # clear lower 16 bits
+        Z_floored[k, k] = float(d & ~0xFF)   # clear lower 8 bits
 
     w1 = compute_eigvec_fw(Z, n_acc=n_acc)
     w2 = compute_eigvec_fw(Z_floored, n_acc=n_acc)
     assert np.allclose(w1, w2), (
-        "Matrices differing only in the lower 16 bits of the diagonal must "
+        "Matrices differing only in the lower 8 bits of the diagonal must "
         "produce identical weights after ZDIAG truncation"
     )
-    print("PASS  ZDIAG truncation: lower-16-bit diagonal difference invisible")
+    print("PASS  ZDIAG truncation: lower-8-bit diagonal difference invisible")
 
 
 def test_int32_accumulator_does_not_overflow():

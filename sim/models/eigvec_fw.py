@@ -10,8 +10,11 @@ All arithmetic mirrors the RV32IM int32 constraints:
   - final Q1.15 output via int32 truncating division
 
 The model also reproduces the ZDIAG hardware register truncation: the diagonal
-of Z is stored as bits [31:16] of the 32-bit accumulator, so the lower 16 bits
-are discarded before the normalisation step.
+of Z is stored as bits [31:8] of the 32-bit accumulator (widened from the
+original [31:16] — see `planning/blocks/Training Accumulator.md`), so the
+lower 8 bits are discarded before the normalisation step. This matches the
+scale of the off-diagonal Zpair registers exactly, so no separate
+scale-alignment shift between diagonal and off-diagonal is needed.
 
 Reference spec: planning/blocks/Eigenvector Weight Computation.md
 Float reference: sim/models/training_accumulator.py::compute_eigvec_weights()
@@ -64,9 +67,10 @@ def compute_eigvec_fw(
     matrix Z via fixed-point power iteration, then returns conj(v) as Q1.15
     MRC combining weights — bit-accurate to the RV32IM firmware implementation.
 
-    The diagonal of Z_matrix is truncated to its upper 16 bits before processing
-    to match the ZDIAG hardware register representation (bits [31:16] of the
-    32-bit energy accumulator).
+    The diagonal of Z_matrix is truncated to its upper 24 bits before processing
+    to match the ZDIAG hardware register representation (bits [31:8] of the
+    32-bit energy accumulator — the same scale as the off-diagonal Zpair
+    registers).
 
     Parameters
     ----------
@@ -92,10 +96,11 @@ def compute_eigvec_fw(
 
     # ------------------------------------------------------------------
     # Step 0 — Reproduce ZDIAG register truncation.
-    # The diagonal is stored as bits [31:16] of the 32-bit accumulator.
+    # The diagonal is stored as bits [31:8] of the 32-bit accumulator —
+    # the same scale as the off-diagonal Zpair registers.
     # ------------------------------------------------------------------
     diag_full = np.array([int(round(Z_matrix[k, k].real)) for k in range(NR)])
-    zdiag_reg = np.array([v >> 16 for v in diag_full], dtype=np.int64)   # upper 16 bits only
+    zdiag_reg = np.array([v >> 8 for v in diag_full], dtype=np.int64)   # upper 24 bits only
 
     # ------------------------------------------------------------------
     # Step 1 — Find common normalisation shift.
@@ -108,7 +113,7 @@ def compute_eigvec_fw(
                           abs(int(round(Z_matrix[k, l].real))),
                           abs(int(round(Z_matrix[k, l].imag))))
     for k in range(NR):
-        max_abs = max(max_abs, int(zdiag_reg[k] << 16))   # compare at int32 scale
+        max_abs = max(max_abs, int(zdiag_reg[k] << 8))   # compare at int32 scale
 
     sh = _norm_shift(max_abs, scale_bits)
 
@@ -123,8 +128,10 @@ def compute_eigvec_fw(
             m_re[k][l] =  ri;  m_re[l][k] =  ri
             m_im[k][l] =  ii;  m_im[l][k] = -ii   # Hermitian conjugate
 
-    # Diagonal: (zdiag_reg[k] << 16) >> sh
-    net = sh - 16
+    # Diagonal: (zdiag_reg[k] << 8) >> sh -- same scale as off-diagonal, so no
+    # separate scale-alignment case is needed (net is always >= 0 in practice
+    # since sh grows with matrix magnitude, but keep the >=0 guard for safety).
+    net = sh - 8
     diag = []
     for k in range(NR):
         zd = int(zdiag_reg[k])

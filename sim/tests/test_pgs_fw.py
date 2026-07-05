@@ -3,8 +3,8 @@ Firmware integration test: COMB_POST_GAIN_SHIFT computation rule (Step 3).
 
 Spec: planning/blocks/Eigenvector Weight Computation.md, Step 3.
 
-The firmware reads ZDIAG_reg (uint16, = Z_kk >> 16) and N_ACC, then:
-  1. Reconstructs E_max = (ZDIAG_reg << 16) / N_ACC  ≈ A^2
+The firmware reads ZDIAG_reg (uint24, = Z_kk >> 8) and N_ACC, then:
+  1. Reconstructs E_max = (ZDIAG_reg << 8) / N_ACC  ≈ A^2
   2. A_est = isqrt(E_max)
   3. Selects pgs to target ~90 counts combined output
   4. Caps W_max_byte to prevent clipping after the pgs left-shift
@@ -25,7 +25,7 @@ def _compute_pgs_and_wmax(zdiag_reg, n_acc: int):
 
     Parameters
     ----------
-    zdiag_reg : iterable of 4 uint16 ZDIAG register values (= Z_kk >> 16)
+    zdiag_reg : iterable of 4 uint24 ZDIAG register values (= Z_kk >> 8)
     n_acc     : int, N_ACC accumulation count
 
     Returns
@@ -37,8 +37,8 @@ def _compute_pgs_and_wmax(zdiag_reg, n_acc: int):
     if n_acc == 0 or max(zdiag_reg) == 0:
         return 0, 120
 
-    # Reconstruct mean squared amplitude (registers hold Z_kk >> 16)
-    e_max = (max(zdiag_reg) << 16) // n_acc
+    # Reconstruct mean squared amplitude (registers hold Z_kk >> 8)
+    e_max = (max(zdiag_reg) << 8) // n_acc
     a_est = math.isqrt(e_max)
 
     if a_est == 0:
@@ -65,7 +65,7 @@ def _compute_pgs_and_wmax(zdiag_reg, n_acc: int):
 def _zdiag_reg_from_amp(a: int, n_acc: int):
     """Build a synthetic 4-element ZDIAG_reg list for 4 equal-amplitude branches."""
     z_kk = n_acc * a * a
-    return [z_kk >> 16] * 4
+    return [z_kk >> 8] * 4
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +84,9 @@ def test_zero_zdiag():
 
 def test_mixed_branch_strengths_uses_max():
     """Only the strongest branch governs pgs; weaker branches are ignored."""
-    # Strongest branch: A≈90 (n_acc=512, ZDIAG_reg=63) → pgs=0
-    # Weak branches: ZDIAG_reg=0 → would give pgs=7 if max() were wrong
-    zdiag_reg = [63, 0, 0, 0]
+    # Strongest branch: A≈90 (n_acc=512) → pgs=0. Weak branches: ZDIAG_reg=0
+    # → would give pgs=7 if max() were wrong.
+    zdiag_reg = [_zdiag_reg_from_amp(90, n_acc=512)[0], 0, 0, 0]
     pgs, _ = _compute_pgs_and_wmax(zdiag_reg, n_acc=512)
     assert pgs == 0, f"max branch should dominate; expected pgs=0, got pgs={pgs}"
 
@@ -106,7 +106,7 @@ def test_pgs_scenario(label, a_target, n_acc, expected_pgs):
     """Parametric table of (A_target, N_ACC) → expected pgs."""
     zdiag_reg = _zdiag_reg_from_amp(a_target, n_acc)
     pgs, _ = _compute_pgs_and_wmax(zdiag_reg, n_acc)
-    a_est = math.isqrt((max(zdiag_reg) << 16) // n_acc)
+    a_est = math.isqrt((max(zdiag_reg) << 8) // n_acc)
     assert pgs == expected_pgs, (
         f"{label}: a_est={a_est}, expected pgs={expected_pgs}, got pgs={pgs}"
     )
@@ -143,7 +143,7 @@ def test_no_clipping_invariant(a_target, n_acc):
     """Combined output with returned pgs and W_max_byte must not exceed int8 max."""
     zdiag_reg = _zdiag_reg_from_amp(a_target, n_acc)
     pgs, w_max = _compute_pgs_and_wmax(zdiag_reg, n_acc)
-    e_max = (max(zdiag_reg) << 16) // n_acc
+    e_max = (max(zdiag_reg) << 8) // n_acc
     a_est = math.isqrt(e_max)
     if a_est == 0:
         return   # degenerate — no signal
