@@ -11,8 +11,11 @@ Production timing assumptions:
   - Register 0x0A = BW_CFG: bit[0] bw_sel (0=250kHz, 1=125kHz); write-gated during packet
   - n_acc readback: 3 bytes at 0x21[1:0]/0x22/0x23 (18-bit)
 
-Full scenario (sc_lock + training_done + remod + registers) runs for SF7 only;
-SF8-SF12 assert sc_lock only to keep sim time bounded.
+Full scenario (sc_lock + training_done + n_acc + remod + registers) runs for
+every SF7-SF12 x BW250/125 combination. Run under Verilator (SIM=verilator,
+cocotb_trouper_top/Makefile) -- ~7.7x faster than Icarus (job 3218 vs 3268),
+which is what makes full-depth coverage at every SF affordable; under Icarus
+this previously ran sc_lock-only for SF8-12 to keep sim time bounded.
 """
 
 import math
@@ -272,6 +275,17 @@ async def run_scenario(dut, sf, bw_khz, *, full):
         f"{tag}: BW_CFG changed during packet (was 0x{orig_bw:02X}, now 0x{locked_bw:02X})"
     dut._log.info(f"{tag}: BW_CFG write-lock during packet OK")
 
+    # -- SF_CFG write-gated during packet: verify register stays locked -------
+    # Regression for Open Risks #30: SF_CFG (0x09) had no packet_active gate
+    # (unlike BW_CFG), so a mid-packet SF write would desynchronize sc_detector
+    # and training_acc symbol-length arithmetic with no re-arm to recover.
+    orig_sf = await spi_read(dut, 0x09)
+    await spi_write(dut, 0x09, (orig_sf & 0xF0) | ((orig_sf & 0x0F) ^ 0x0F))
+    locked_sf = await spi_read(dut, 0x09)
+    assert (locked_sf & 0x0F) == (orig_sf & 0x0F), \
+        f"{tag}: SF_CFG changed during packet (was 0x{orig_sf:02X}, now 0x{locked_sf:02X})"
+    dut._log.info(f"{tag}: SF_CFG write-lock during packet OK")
+
     # -- register spot-checks -------------------------------------------------
     chip_id = await spi_read(dut, 0x00)
     assert chip_id == 0xA7, f"{tag}: CHIP_ID=0x{chip_id:02X} (expected 0xA7)"
@@ -281,7 +295,12 @@ async def run_scenario(dut, sf, bw_khz, *, full):
 
 
 # ---------------------------------------------------------------------------
-# Test declarations -- SF7 full, SF8-SF12 sc_lock only
+# Test declarations -- full chain (sc_lock + training + n_acc + remod +
+# registers) for all SF7-SF12 x BW250/125. Previously SF8-12 ran sc_lock-only
+# to keep sim time bounded under Icarus; now run under Verilator (~7.7x
+# faster, confirmed job 3268/3269), full-depth coverage at every SF is
+# affordable -- see run_scenario, which is fully SF-generic (expected_n=8*M
+# scales automatically, nothing hardcoded to SF7).
 # ---------------------------------------------------------------------------
 
 @cocotb.test()
@@ -296,50 +315,50 @@ async def test_sf7_bw125(dut):
 
 @cocotb.test()
 async def test_sf8_bw250(dut):
-    """SF8 / 250 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=8, bw_khz=250, full=False)
+    """SF8 / 250 kHz -- full chain."""
+    await run_scenario(dut, sf=8, bw_khz=250, full=True)
 
 @cocotb.test()
 async def test_sf8_bw125(dut):
-    """SF8 / 125 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=8, bw_khz=125, full=False)
+    """SF8 / 125 kHz -- full chain."""
+    await run_scenario(dut, sf=8, bw_khz=125, full=True)
 
 @cocotb.test()
 async def test_sf9_bw250(dut):
-    """SF9 / 250 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=9, bw_khz=250, full=False)
+    """SF9 / 250 kHz -- full chain."""
+    await run_scenario(dut, sf=9, bw_khz=250, full=True)
 
 @cocotb.test()
 async def test_sf9_bw125(dut):
-    """SF9 / 125 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=9, bw_khz=125, full=False)
+    """SF9 / 125 kHz -- full chain."""
+    await run_scenario(dut, sf=9, bw_khz=125, full=True)
 
 @cocotb.test()
 async def test_sf10_bw250(dut):
-    """SF10 / 250 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=10, bw_khz=250, full=False)
+    """SF10 / 250 kHz -- full chain."""
+    await run_scenario(dut, sf=10, bw_khz=250, full=True)
 
 @cocotb.test()
 async def test_sf10_bw125(dut):
-    """SF10 / 125 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=10, bw_khz=125, full=False)
+    """SF10 / 125 kHz -- full chain."""
+    await run_scenario(dut, sf=10, bw_khz=125, full=True)
 
 @cocotb.test()
 async def test_sf11_bw250(dut):
-    """SF11 / 250 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=11, bw_khz=250, full=False)
+    """SF11 / 250 kHz -- full chain."""
+    await run_scenario(dut, sf=11, bw_khz=250, full=True)
 
 @cocotb.test()
 async def test_sf11_bw125(dut):
-    """SF11 / 125 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=11, bw_khz=125, full=False)
+    """SF11 / 125 kHz -- full chain."""
+    await run_scenario(dut, sf=11, bw_khz=125, full=True)
 
 @cocotb.test()
 async def test_sf12_bw250(dut):
-    """SF12 / 250 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=12, bw_khz=250, full=False)
+    """SF12 / 250 kHz -- full chain."""
+    await run_scenario(dut, sf=12, bw_khz=250, full=True)
 
 @cocotb.test()
 async def test_sf12_bw125(dut):
-    """SF12 / 125 kHz -- sc_lock only."""
-    await run_scenario(dut, sf=12, bw_khz=125, full=False)
+    """SF12 / 125 kHz -- full chain."""
+    await run_scenario(dut, sf=12, bw_khz=125, full=True)

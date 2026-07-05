@@ -1,0 +1,14 @@
+[options]
+mode prove
+depth 90
+
+[engines]
+smtbmc
+
+[script]
+read_verilog -sv -formal psram_buf_ctrl.v psram_buf_ctrl_formal.sv
+prep -top psram_buf_ctrl
+
+[files]
+../rtl-test/rtl/psram_buf_ctrl.v
+psram_buf_ctrl_formal.sv

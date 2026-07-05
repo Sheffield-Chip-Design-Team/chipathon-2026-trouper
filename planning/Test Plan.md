@@ -83,6 +83,8 @@
 
 **Pass criterion (Firmware Weight Generation):** Firmware-computed weights match the Python reference for the selected algorithm (row-sum MRC or eigenvector power iteration) to within the expected Q1.15 rounding error. `W_COMMIT` is issued within the SF5/SF6 timing budget after `training_done`. Full same-packet delivery is proven with PSRAM replay tests, not by a standalone hardware weight FSM latency check.
 
+**End-to-end SPI weight flow:** `rtl-test/tb/test_weight_gen_spi_flow.py` drives the full off-chip-MCU loop against real captured IQ data (4 antennas at distinct gains) — `sc_lock` → `training_done` IRQ → SPI-read `Z_kl`/`Zdiag` (`0x40`–`0x6F`) → firmware-accurate eigenvector computation → SPI-write `W_SHADOW` (`0x30`–`0x3F`) → `W_COMMIT` → combiner output, compared bit-exact against an independent oracle model (`sim/models/receiver.py`). Passing (SGE job 3286, `max_err=0.00`); see `planning/Open Risks.md` #33 for findings surfaced while building it (undocumented Q0.7 combiner weight precision, now in the Register Map's `0x30`–`0x3F` section).
+
 **Test matrix:**
 
 | Test | Pass criterion |

@@ -676,4 +676,55 @@ module psram_buf_ctrl (
         end
     end
 
+`ifdef FORMAL
+    // Formal-only checker instantiation (see formal/psram_buf_ctrl_formal.sv).
+    // Dead code in every real build: read_verilog defines FORMAL only when
+    // passed `-formal` (yosys's sby-driven proof flow); LibreLane synthesis
+    // and cocotb (Icarus/Verilator) never pass that flag and get SYNTHESIS
+    // instead, so this instantiation never exists outside `sby`. Deliberately
+    // NOT a `bind` -- this yosys version silently drops `bind` statements
+    // (confirmed empirically, see the .sv file's header comment) -- so the
+    // checker is wired in directly, as an ordinary same-scope instantiation.
+    psram_buf_ctrl_formal u_formal (
+        .clk_32m        (clk_32m),
+        .rst_n          (rst_n),
+        .psram_en       (psram_en),
+        .qspi_owner     (qspi_owner),
+        .packet_active  (packet_active),
+        .sf             (sf),
+        .sample_shift   (sample_shift),
+        .iq_valid       (iq_valid),
+        .clr_err        (clr_err),
+        .W_commit       (W_commit),
+        .packet_end     (packet_end),
+        .sc_lock        (sc_lock),
+        .sc_lock_prev   (sc_lock_prev),
+        .iq_sample_cnt  (iq_sample_cnt),
+        .timing_ref     (timing_ref),
+        .state          (state),
+        .wr_ptr         (wr_ptr),
+        .rd_ptr         (rd_ptr),
+        .buf_base       (buf_base),
+        .buf_base_valid (buf_base_valid),
+        .buf_active     (buf_active),
+        .replay_active  (replay_active),
+        .qe_init_done   (qe_init_done),
+        .replay_missed  (replay_missed),
+        .overflow       (overflow),
+        .sample_skip    (sample_skip),
+        .dbg_busy       (dbg_busy),
+        .dbg_fetch_busy (dbg_fetch_busy),
+        .dbg_pend       (dbg_pend),
+        .dbg_rd_trig    (dbg_rd_trig),
+        .qpi_busy       (qpi_busy),
+        .del_rdy        (del_rdy),
+        .del_valid      (del_valid),
+        .del_cnt        (del_cnt),
+        .del_n_r        (del_n_r),
+        .sio_oe         (sio_oe),
+        .sub            (sub),
+        .ce_n           (ce_n)
+    );
+`endif
+
 endmodule

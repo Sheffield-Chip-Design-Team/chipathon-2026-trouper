@@ -191,7 +191,7 @@ module reg_bank (
                                mimo_mode[0] <= wdata[0];
                                antenna_en   <= wdata[7:4];
                            end
-                    8'h09: sf_cfg           <= wdata[3:0];
+                    8'h09: if (!packet_active) sf_cfg <= wdata[3:0]; // blocked during active packet
                     8'h0A: if (!packet_active) bw_sel <= wdata[0]; // blocked during active packet
                     8'h0B: pkt_timeout_syms <= wdata;
                     8'h0C: sc_thr[15:8]     <= wdata;
@@ -230,7 +230,7 @@ module reg_bank (
                     8'h3F: w_shadow_r[15] <= wdata;
                     // --- PSRAM / debug window ---
                     8'h70: begin
-                               psram_ctrl[0] <= wdata[0];
+                               if (!packet_active) psram_ctrl[0] <= wdata[0]; // PSRAM_EN: blocked during active packet
                                psram_ctrl[1] <= wdata[1];
                                psram_ctrl[2] <= wdata[2];
                                psram_ctrl[3] <= wdata[3];

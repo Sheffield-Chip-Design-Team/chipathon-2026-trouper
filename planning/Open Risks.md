@@ -56,15 +56,6 @@ were fixed and verified; see Closed.)
 
 ## High
 
-### 4. Bypass-antenna mux skips antenna 0
-
-`trouper_top.v:480-482`: `bypass_ant = en[1] ? 1 : en[2] ? 2 : en[3] ? 3 : 0`
-never tests `en[0]` first, so with the reset default `antenna_en=0xF` bypass
-mode outputs **antenna 1**, not the lowest-enabled antenna (TRPR-SYS-005,
-TRPR-MRC-005). One-term fix; breaks Mode-1 bring-up expectations as-is.
-
-**Found:** 2026-07-02 trouper_top RTL review.
-
 ### 5. "Silence during PSRAM buffering" actually emits a ΣΔ-modulated DC tone
 
 `trouper_top.v:511-518` zeroes `remod_in_*` but also forces `in_valid=0`;
@@ -297,6 +288,34 @@ Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
+### 30. PSRAM debug-read timing budget is stale (assumes R=128, chip is R=64) — causes `sample_skip`
+
+`psram_buf_ctrl.v`'s header comment (lines 11-13) budgets the debug-readback
+path (`PSRAM_DBG_CTRL`/`PSRAM_DBG_DATA`, TRPR-PSR-017) against "CIC R=128 →
+iq_valid every 128 cycles" (25 write + 19 del-read = 44 sub-cycles, 84 spare
+per period). The decimator is now the fixed R=64 half-band chain (`iq_valid`
+every 64 cycles, per `test_trouper_top.py`), leaving only ~20 idle sub-cycles
+per period. A debug fetch takes a fixed 31 sub-cycles once launched and runs
+to completion regardless of an arriving `iq_valid` (`psram_buf_ctrl.v:434-478`)
+— it does not abort or restart — so any debug read in flight when the next
+capture write is due collides with it, and the RTL's own `sample_skip` logic
+(line 283) correctly flags the dropped sample. Debug reads are only issuable
+when `packet_active=0` (bring-up/idle use, e.g. `PSRAM_DBG_CTRL.RD_TRIG`
+during pre-lock SC acquisition), so the exposure is confined to host
+debug-read usage rather than the primary same-packet capture/replay path —
+but the header's implicit "no timing tradeoff" framing no longer holds, and
+neither TRPR-PSR-017 nor the register map document the hazard.
+
+Found while deriving the exact worst-case bound for a k-induction proof of
+the debug-fetch bounded-response property (`formal/psram_buf_ctrl_formal.sv`):
+K = 44 (worst-case wait for an in-flight write to finish) + 31 (fixed fetch
+execution) = 75 cycles total service latency, which is fine for *when the
+fetch finishes*, but the 31-cycle fetch itself does not fit inside the
+~20-cycle idle margin left by a 64-cycle period, so it collides with the very
+next write regardless of latency budget.
+
+**Found:** 2026-07-05, deriving formal bounds for `formal/psram_buf_ctrl_formal.sv`.
+
 ---
 
 ## Low
@@ -481,6 +500,14 @@ instantiations tie `sc_clr` low.
 confirms a second packet re-acquires. Baseline single-packet `tb_trouper_top`
 still passes (job 3202). Spec TRPR-SCD-014 strengthened to mandate re-arm.
 
+**Re-verified against real captured IQ data 2026-07-05:** the above was
+synthetic-only. `rtl-test/tb/test_capture_two_packet.py` re-runs the same
+PK1-1/ARM-1/PK2-1 sequence against a real 2-packet capture
+(`lora_20260619_144822_SF7-BW250-gain30.npy`) via the cocotb capture-playback
+harness. PASS (SGE job 3273, ~52 min Verilator run): PK1-1 first lock at
+~35.3 ms, ARM-1 de-assert/re-arm ~75 ms later, PK2-1 second lock ~1.93 s
+after re-arm.
+
 ### 3. Level-driven `IRQ_STATUS` bits are un-clearable (IRQ_OUT sticks high) — CLOSED 2026-07-02
 
 `rb_irq_set` fed `training_done` and `sc_lock` in as *levels*; `reg_bank.v`
@@ -526,6 +553,178 @@ error). `tb_trouper_two_packet` now passes with the PSRAM-enable write as the
 384, 10/10 checks). (TB models the power-on reset by holding CS low across the
 reset pulse purely so iverilog's edge-triggered async-reset fires; silicon does
 not require this.)
+
+### 31. `SF_CFG` (0x09) had no `PACKET_ACTIVE` write-gate — mid-packet SF change would desync sc_detector/training_acc — CLOSED 2026-07-05
+
+`reg_bank.v:194` wrote `sf_cfg` unconditionally on any SPI write to `0x09`,
+unlike `BW_CFG` (`0x0A`), which is explicitly blocked while
+`packet_active=1`. Since `sf` feeds `psram_buf_ctrl`, `sc_detector`,
+`training_acc`, and `sd_decimator_poly` (`trouper_top.v:237/285/372/417),
+a mid-packet `SF_CFG` write would change the symbol length `M =
+2^(SF+sample_shift)` those blocks use, live. `psram_buf_ctrl`'s SC delay-line
+is defensively re-armed for exactly this case (`del_rdy`/`del_cnt` reset on
+any `sf`/`sample_shift` change, `psram_buf_ctrl.v:286-301`), but
+`sc_detector.v` and `training_acc.v` have no equivalent guard (grepped both —
+no re-arm logic keyed on `sf` at all), so a mid-packet SF write would
+silently desynchronize their symbol-boundary arithmetic rather than fail
+safely. Found while deriving the k-induction bound for
+`formal/psram_buf_ctrl_formal.sv`'s debug-fetch property, which required
+establishing that `sf`/`sample_shift` are actually quasi-static during a
+packet — they turned out not to be, for `SF_CFG` specifically.
+
+**Fix:** gated `sf_cfg` the same way as `bw_sel`:
+`8'h09: if (!packet_active) sf_cfg <= wdata[3:0];` (`reg_bank.v:194`).
+`planning/Register Map.md` updated (`0x09` summary row + detail section) to
+document the gate and the asymmetric risk if it were ever removed.
+
+**Verified:** added a direct regression to `rtl-test/tb/test_trouper_top.py`
+mirroring the existing `BW_CFG` write-lock check — attempts to flip all four
+`SF` bits mid-packet and asserts the readback is unchanged. Ran via SGE
+(`hqsub`, job 3267) on the full SF7/BW250 and SF7/BW125 scenarios in
+`cocotb_trouper_top` (the only scenarios that reach `PACKET_ACTIVE` with the
+full chain): `SF_CFG write-lock during packet OK` on both, 2/2 tests PASS.
+
+### 32. `PSRAM_CTRL.PSRAM_EN` (0x70[0]) had no `PACKET_ACTIVE` write-gate — same class of bug as #31, found by formal k-induction — CLOSED 2026-07-05
+
+`reg_bank.v:233` wrote `psram_ctrl[0]` (`PSRAM_EN`) unconditionally on any SPI
+write to `0x70`, with no `packet_active` gate — the same bug class as #31's
+`SF_CFG`, but this one was found by a **formal proof**, not a manual RTL
+review: a k-induction counterexample against `psram_buf_ctrl.v`'s
+`buf_active` invariant showed that if `psram_en` drops mid-packet (after
+`buf_active` was already set on `sc_lock`), `buf_active` stays stuck at 1
+with `psram_en` now 0 — an inconsistent state the RTL's own logic assumes
+can't happen (`buf_active` only ever gets set guarded by `psram_en`, but
+nothing re-checks or clears it if `psram_en` later changes).
+
+**Fix:** gated `psram_ctrl[0]` the same way as `sf_cfg`/`bw_sel`:
+`8'h70: if (!packet_active) psram_ctrl[0] <= wdata[0];` (`reg_bank.v:233`;
+`psram_ctrl[1:3]` — `CLR_ERR`/`SAMPLE_WIDTH`/`QSPI_OWNER` — left ungated,
+matching their own documented semantics). `planning/Register Map.md` `0x70`
+detail section updated with the same gate note as `SF_CFG`/`BW_CFG`.
+
+**Verified:** full SF7-SF12 x BW250/125 cocotb sweep under Verilator (SGE job
+3269, then re-confirmed job 3270 with full-depth `full=True` coverage at
+every SF — see item below), 12/12 PASS both times, no regression from the
+gate. Not a direct regression test of the gate itself (unlike #31's
+`SF_CFG` write-lock check) — the formal proof is the actual verification
+here; a matching cocotb write-lock regression for `PSRAM_EN` would be a
+reasonable follow-up but wasn't added this session.
+
+**Formal-verification effort, scope and status (2026-07-05):** this bug, and
+#31, both came out of a broader session-long push to get real k-induction
+proofs working against `psram_buf_ctrl.v` — worth recording here since
+nothing else in `planning/` points at it. Key facts for anyone picking this
+up:
+
+- **Toolchain gotcha:** this project's yosys version (0.64, in the
+  `chipathon26` container) silently drops SystemVerilog `bind` statements —
+  no error, no warning. Every earlier attempt at binding a formal checker in
+  via `bind` was checking zero properties (confirmed empirically: an
+  unconditionally-false assertion still reported "PASS"). The working
+  pattern is a direct `` `ifdef FORMAL `` instantiation of the checker module
+  inside `psram_buf_ctrl.v` itself, right before its `endmodule` — dead code
+  in every real build (`read_verilog` only defines `FORMAL` when passed
+  `-formal`; LibreLane/cocotb never do), verified with a deliberate
+  trivially-false assertion that it's actually caught (`FAIL`) when using
+  this mechanism.
+- **Location:** `formal/psram_buf_ctrl_formal.sv` (checker + properties) and
+  `formal/psram_buf_ctrl.sby` (SymbiYosys run config, `mode prove`, depth 90).
+  Run via `sby -f psram_buf_ctrl.sby` inside the `chipathon26` container.
+- **Proven** (k-induction, both basecase and induction, current state):
+  pointer/overflow-bound reasoning for the same-packet replay gap, sticky-
+  flag causality (`replay_missed`, `sample_skip`), FSM state legality,
+  `buf_active`/`replay_active` state-correlation invariants, QPI bus-driving
+  safety (no contention during dummy cycles), SC delay-line warm-up
+  correctness, and the `back_bytes` truncation-safety property (a genuine
+  32-to-23-bit silent-truncation risk in `psram_buf_ctrl.v:397`, found via a
+  Verilator `WIDTHTRUNC` lint warning, not previously guarded by any
+  assertion).
+- **Parked, NOT proven, NOT confirmed as bugs** (disabled in the file with
+  full explanation, not deleted): (1) the PSRAM debug-fetch bounded-response
+  property — needs an explicit launch-phase latch to separate the "waiting
+  on packet_active" phase from the fixed 31-cycle execution phase, which a
+  flat or relational counter bound can't cleanly express; (2) the overflow-
+  unreachability property, which regressed after later environment
+  assumptions were added and was not root-caused. Both are corroborated as
+  likely proof-modeling gaps rather than real hardware defects by the full
+  functional cocotb sweep (job 3270, 12/12 PASS at full depth) never
+  triggering either condition, plus (for overflow specifically) the original
+  analytical derivation — the replay backlog would need to land within 8
+  bytes of a 2^23 wraparound, while real backlogs are bounded to <=262144
+  bytes (TRPR-PSR-015, >=32x headroom) — still holding unchanged.
+- Two environment-modeling gaps had to be fixed along the way that are worth
+  knowing about if extending this file: `sf`/`sample_shift` and `iq_valid`
+  are free primary inputs to `psram_buf_ctrl.v` in isolation, so this proof
+  had to explicitly assume the real chip's actual constraints on them
+  (`sf` in 7-12, `sample_shift` in {1,2}, `iq_valid` periodic every 64
+  cycles) — without those, the solver finds "valid" counterexamples using
+  input combinations the real chip can never produce.
+
+### 4. Bypass-antenna mux skips antenna 0 — CLOSED 2026-07-05
+
+`trouper_top.v`'s `bypass_ant` mux tested `active_antenna_en[1..3]` and fell
+back to 0, never actually testing bit 0 first — so with the reset default
+`antenna_en=0xF` bypass mode selected **antenna 1**, not the lowest-enabled
+antenna (TRPR-SYS-005, TRPR-MRC-005).
+
+**Fix:** rewrote as an explicit lowest-bit priority mux:
+```verilog
+wire [1:0] bypass_ant = active_antenna_en[0] ? 2'd0 :
+                        active_antenna_en[1] ? 2'd1 :
+                        active_antenna_en[2] ? 2'd2 : 2'd3;
+```
+
+**Verified:** new regression `rtl-test/tb/test_bypass_antenna.py`, 4 cases
+(all-enabled, skip-0, skip-0/1, only-3), each driving a full reset + SF7/
+BW250 lock cycle with PSRAM enabled (required — `psram_buf_ctrl.v` is the SC
+detector's delay line, so `sc_lock` can't fire without it) and reading
+`active_antenna_en`/`bypass_ant` off the internal wires post-lock. 4/4 PASS
+(SGE job 3276).
+
+### 33. Weight-gen SPI flow verified end-to-end; two real findings along the way — CLOSED 2026-07-05
+
+Built `rtl-test/tb/test_weight_gen_spi_flow.py`, a full closed-loop test of
+the weight-generation path an off-chip MCU actually exercises: `sc_lock` →
+`training_done` (IRQ) → SPI-read `Z_kl`/`Zdiag` (`0x40`–`0x6F`) →
+firmware-accurate eigenvector computation (`sim/models/eigvec_fw.py`,
+`compute_eigvec_fw`) → SPI-write `W_SHADOW` (`0x30`–`0x3F`) → `W_COMMIT` →
+`W_VALID` → combiner output compared bit-exact against an independent
+oracle (`sim/models/receiver.py`, `nonfft_combine_rtl_int8w`). Uses a real
+4-antenna capture with distinct per-antenna gains
+(`lora_20260619_144822_SF7-BW250-gain30.npy`, `gains_db=[0,-3,-6,-9]`) so the
+computed weights are non-trivial. **Final result (SGE job 3286): PASS,
+`best_lag=0`, `max_err=0.00`** — bit-exact match.
+
+Getting there took ~10 SGE job iterations and surfaced three real findings,
+not just test bugs:
+
+- **Undocumented precision cliff:** `mrc_combiner.v` takes `signed [7:0]`
+  weight inputs — only the HI byte of each `W_SHADOW` Q1.15 pair
+  (`0x30`/`0x32`/… ) actually reaches the combiner; the LO byte is write-only
+  and silently discarded. Nothing in `planning/Register Map.md` said this.
+  Documented in the `0x30`–`0x3F` section.
+- **Z-matrix reconstruction bug (test-side, not RTL):** the test's readback
+  helper was left-shifting the `Zdiag` readback by 8 bits before handing it
+  to `compute_eigvec_fw`, an artifact of an older 16-bit `Zdiag` truncation
+  scheme that no longer applies (current scheme is already 8-bit-scaled).
+  Produced plausible-looking but wrong weights (`[0.9999, 0.0038, ...]`
+  instead of `[1, 0.71, ...]`) until caught by comparing against the
+  firmware model directly.
+- **Stale NFS staging copy of `sim/` (process gap, not RTL):** SGE jobs run
+  against `/srv/eda/designs/timothyjabez/lora-mimo/`, a copy separate from
+  the local repo. All session-long syncing had only ever `rsync`'d
+  `rtl-test/`, never `sim/` — so the container's `sim/models/receiver.py`
+  and `sim/models/eigvec_fw.py` were months-stale, still using a deprecated
+  combiner shift formula (`(acc_i >> 1) << post_gain_shift` instead of
+  `acc_i >> (8 - post_gain_shift)`). With `post_gain_shift=0` this divides by
+  2 instead of 256 — massive overflow that saturates to exactly the `-128`
+  symptom seen in the failing runs. Cost the most debugging time of the
+  three: identical inputs reproduced correctly when run manually on the host
+  but failed inside the SGE container, which only made sense once the NFS
+  copy was diffed against the local one. **Lesson for any future SGE job
+  whose test imports from `sim/`: sync `sim/` too, not just `rtl-test/`** —
+  there is no automatic sync of the whole repo, only whatever directories
+  each run script's `rsync` invocation names.
 
 ---
 

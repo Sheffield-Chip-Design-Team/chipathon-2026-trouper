@@ -41,6 +41,9 @@ rtl-test/tmp_*.tcl
 # Synthesis output netlists (regenerable; keep .log/.txt reports)
 rtl-test/syn_*/out_*/netlist.v
 
+# SymbiYosys formal-proof run output (source .sby/.sv tracked; run dirs regenerable)
+formal/*/
+
 # Session continuation transcripts
 2026-*.txt
 

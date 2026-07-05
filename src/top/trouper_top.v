@@ -477,10 +477,14 @@ module trouper_top (
     wire signed [7:0] comb_y_i, comb_y_q;
     wire              comb_y_valid;
 
-    // bypass_ant: lowest set bit of active_antenna_en
-    wire [1:0] bypass_ant = active_antenna_en[1] ? 2'd1 :
-                            active_antenna_en[2] ? 2'd2 :
-                            active_antenna_en[3] ? 2'd3 : 2'd0;
+    // bypass_ant: lowest set bit of active_antenna_en. Fixed 2026-07-05 (Open
+    // Risks #4): the original mux tested en[1]/en[2]/en[3] and fell back to
+    // 0, never actually testing en[0] first -- so the reset default
+    // active_antenna_en=0xF (all enabled) selected antenna 1, not the
+    // lowest-enabled antenna TRPR-SYS-005/TRPR-MRC-005 require.
+    wire [1:0] bypass_ant = active_antenna_en[0] ? 2'd0 :
+                            active_antenna_en[1] ? 2'd1 :
+                            active_antenna_en[2] ? 2'd2 : 2'd3;
 
     mrc_combiner u_comb (
         .clk_16m (clk),
