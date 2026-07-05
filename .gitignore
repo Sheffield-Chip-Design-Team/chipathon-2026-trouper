@@ -82,3 +82,7 @@ fpga-emul/sw/vivado*.jou
 fpga-emul/sw/vivado*.log
 fpga-emul/uart_pin_test/uart_pin_test.bit
 fpga-emul/uart_pin_test/vivado_proj/
+
+# Loose backup snapshots of IP submodules (e.g. OCD SRAM restore copies) -
+# large, regenerable, and duplicate a tracked submodule
+*.loose_backup.*/
