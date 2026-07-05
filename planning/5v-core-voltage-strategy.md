@@ -62,3 +62,35 @@ Treat as the leading *alternative* to grinding honest-MCP closure at 3.0 V. Don'
 commit until §4 items (esp. IO crossing path a-vs-b and the v20 PnR) resolve.
 Relevant memory: [[project_vdd_closes_ss_timing]]. Related: planning/
 area-reduction-roadmap.md, sge-pnr-scheduling-lessons.md.
+
+## 2026-07-05 re-confirmation on the current 1200×1100 signoff netlist
+
+Re-ran the same OpenSTA liberty-swap check (netlist/SPEF/SDC unchanged, only
+the cell `.lib` swapped) against `RUN_2026-07-05_00-56-34`
+(`ol_trouper_top`, 1200×1100, the current signoff run — DRC=0, LVS=0). Also
+checked the corners GF180 actually ships for "less pessimistic than
+`ss_125C_3v00`", since the PDK has **no SS corner at 25 °C** (only 125 °C and
+−40 °C are characterized for SS):
+
+| Corner | Setup WNS | Hold WS | TNS |
+|---|---|---|---|
+| ss_125C_3v00 (official signoff) | **−25.39 ns** | +0.25 ns | (large −) |
+| ss_125C_4v50 | −7.10 ns | +1.13 ns | −640.01 ns |
+| ss_n40C_4v50 | **+3.28 ns MET** | +0.63 ns | 0.00 |
+| tt_025C_5v00 | **+9.10 ns MET** | +0.37 ns | 0.00 |
+
+Confirms the 2026-06-24 finding still holds on the current 1200×1100 die: the
+32 MHz SS wall is dominated by the 125 °C/3.0 V corner's pessimism, not a
+structural timing problem. Both a realistic-silicon corner (TT 25 °C/5.0 V)
+and a less-pessimistic SS point (−40 °C/4.5 V) close outright on the
+as-routed 3.0 V-optimized netlist, with zero re-optimization. Bare
+`ss_125C_4v50` (hot, 4.5 V) still doesn't fully close for the same reason as
+the earlier B1 finding — the resizer under-drove paths that only look
+critical at the corner it was targeting (3.0 V); a full re-PnR targeting
+4.5 V, or the `-setup_margin ~9` resizer trick, previously recovered this to
++1.4 ns (job 3237) and is expected to do so again here.
+
+**This does not close the risk** — it's still an open sign-off-corner policy
+question (how much margin to require between "guaranteed worst-case" and
+"realistic operating window"), not something OpenSTA resolves on its own.
+See `planning/Open Risks.md` item 1.

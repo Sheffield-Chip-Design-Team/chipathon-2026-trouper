@@ -234,6 +234,15 @@ sim_trouper_top: tb_trouper_top.vvp
 tb_trouper_top.vvp: $(TB)/tb_trouper_top.v $(TROUPER_TOP_SRCS)
 	$(IVERILOG) $(IFLAGS) -o $@ $^
 
+# Directed two-packet test: sc_lock re-arm + IRQ edge-set (Open Risks #2/#3).
+.PHONY: sim_trouper_two_packet
+
+sim_trouper_two_packet: tb_trouper_two_packet.vvp
+	$(VVP) $<
+
+tb_trouper_two_packet.vvp: $(TB)/tb_trouper_two_packet.v $(TROUPER_TOP_SRCS)
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
 # -----------------------------------------------------------------------
 # cocotb integration tests (SF7–SF12 × BW250/125) — requires chipathon26 container
 # -----------------------------------------------------------------------

@@ -56,7 +56,7 @@ module reg_bank (
     input  wire [31:0] zpair_i3, zpair_q3,   // Z_12  @ 0x52-0x57
     input  wire [31:0] zpair_i4, zpair_q4,   // Z_13  @ 0x58-0x5D
     input  wire [31:0] zpair_i5, zpair_q5,   // Z_23  @ 0x5E-0x63
-    // Z_kk diagonal autocorrelation (Σ|raw_k|², real int32) @ 0x64-0x6B top 16-bit
+    // Z_kk diagonal autocorrelation (Σ|raw_k|², real int32) @ 0x64-0x6F top 24-bit
     input  wire [31:0] zdiag_0, zdiag_1, zdiag_2, zdiag_3,
     // SC debug
     input  wire        sc_hit_dbg,
@@ -375,16 +375,22 @@ module reg_bank (
             8'h61: rdata_next = zpair_q5[31:24];
             8'h62: rdata_next = zpair_q5[23:16];
             8'h63: rdata_next = zpair_q5[15:8];
-            // --- Z_kk diagonal autocorrelation: top 16 bits per branch ---
+            // --- Z_kk diagonal autocorrelation: top 24 bits per branch ---
             // In noise mode (no signal) Zdiag_k ≈ σ²_k · n_acc — firmware noise EMA.
+            // Same [31:8] scale as the Zpair off-diagonals above (no separate
+            // scale-alignment shift needed when combining diag + off-diag).
             8'h64: rdata_next = zdiag_0[31:24];
             8'h65: rdata_next = zdiag_0[23:16];
-            8'h66: rdata_next = zdiag_1[31:24];
-            8'h67: rdata_next = zdiag_1[23:16];
-            8'h68: rdata_next = zdiag_2[31:24];
-            8'h69: rdata_next = zdiag_2[23:16];
-            8'h6A: rdata_next = zdiag_3[31:24];
-            8'h6B: rdata_next = zdiag_3[23:16];
+            8'h66: rdata_next = zdiag_0[15:8];
+            8'h67: rdata_next = zdiag_1[31:24];
+            8'h68: rdata_next = zdiag_1[23:16];
+            8'h69: rdata_next = zdiag_1[15:8];
+            8'h6A: rdata_next = zdiag_2[31:24];
+            8'h6B: rdata_next = zdiag_2[23:16];
+            8'h6C: rdata_next = zdiag_2[15:8];
+            8'h6D: rdata_next = zdiag_3[31:24];
+            8'h6E: rdata_next = zdiag_3[23:16];
+            8'h6F: rdata_next = zdiag_3[15:8];
             // --- PSRAM control / status / debug readback ---
             8'h70: rdata_next = {4'h0, psram_ctrl};
             8'h71: rdata_next = psram_status_rb;

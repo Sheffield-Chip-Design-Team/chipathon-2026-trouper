@@ -166,6 +166,8 @@ module packet_ctrl_fsm (
                         packet_phase     <= 3'd3;
                     end else if (sample_count > wpend_timeout_q) begin
                         // Timeout: use whatever W_valid we have
+                        if (!W_valid)
+                            W_missed_packet <= 1'b1;
                         if (W_valid) combiner_source <= 1'b1;
                         state        <= ST_PAYLOAD_ACTIVE;
                         packet_phase <= 3'd3;

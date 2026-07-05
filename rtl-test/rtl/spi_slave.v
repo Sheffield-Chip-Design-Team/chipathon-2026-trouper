@@ -67,8 +67,19 @@ module spi_slave (
     // Byte assembled combinationally at the 8th rising edge
     wire [7:0] byte_now = {spi_shreg[6:0], SPI_MOSI};
 
-    always @(posedge SPI_SCK or posedge HOST_CS) begin
-        if (HOST_CS) begin
+    // Async reset for the SPI-clock-domain frame flops.  HOST_CS idles high and
+    // sees no rising edge until the FIRST transaction ends, so gating the reset
+    // on HOST_CS alone leaves these flops uninitialised at power-on — the first
+    // post-reset transaction would then parse against random state and be lost
+    // (Open Risks #26).  Fold the chip reset into the async-clear term so the
+    // frame comes up cleared without relying on a HOST_CS edge.  A single OR'd
+    // reset signal (not two edge events) keeps this a one-async-reset flop that
+    // synthesis accepts; the reset pin is level-sensitive in silicon, so it is
+    // held asserted for the whole rst_n=0 window regardless of HOST_CS.
+    wire spi_frame_arst = HOST_CS | ~rst_n;
+
+    always @(posedge SPI_SCK or posedge spi_frame_arst) begin
+        if (spi_frame_arst) begin
             spi_shreg       <= 8'd0;
             spi_bit_cnt     <= 3'd0;
             have_cmd        <= 1'b0;

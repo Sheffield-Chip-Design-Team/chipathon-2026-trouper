@@ -35,7 +35,19 @@ current floorplan has no routability headroom to absorb the SDC change.
 
 **Blocks:** any honest chip-wide SS signoff; die-shrink work (blocked on the
 same routability issue).
-**See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items).
+
+Re-confirmed 2026-07-05 on the current 1200×1100 signoff run
+(`RUN_2026-07-05_00-56-34`, DRC=0/LVS=0): the same as-routed netlist meets
+timing outright at both a realistic-silicon corner (`tt_025C_5v00`: +9.10 ns)
+and a less-pessimistic SS point (`ss_n40C_4v50`: +3.28 ns), with zero
+re-optimization — no SS corner at 25 °C is characterized in this PDK to check
+directly. This is a corner-*policy* question (how much margin above
+"realistic operating window" tapeout should require), not a fix — the
+official `ss_125C_3v00` signoff number (−25.39 ns at this die size) still
+stands as the blocking metric until that policy is decided.
+
+**See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items),
+`planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation).
 
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
@@ -150,6 +162,41 @@ the clkbuf pin-access fragility, item 6).
 **See:** memory `project_io_placement`; `planning/area-reduction-roadmap.md` §4 / §6 (CTS
 pin-access levers); `rtl-test/ol_trouper_top/io_placement_v2.cfg`.
 **Found:** 2026-07-04.
+
+### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption
+
+Grouper and Trouper are two **separately hardened MPW macros** joined by
+inter-project wires (`planning/Pinout.md:93,97`), not a submodule inside
+`trouper_top`. `trouper_top.v` has a single clock port (`wire clk = IQ_CLK;`,
+line 69); `GRP_ADDR/GRP_WDATA/GRP_WE/GRP_RE/GRP_RDATA/GRP_READY` are plain
+ports fed straight into a combinational mux and captured by one
+`posedge clk` flop (`trouper_top.v:593-616`) — **no 2-flop synchronizer, no
+async FIFO, no handshake**. `planning/System Architecture.md:189` lists the
+link as nominally "32 MHz," but a shared nominal frequency does not mean a
+shared clock tree — two independently hardened macros typically have
+different PLLs/insertion delay/skew even at the same target frequency. By
+contrast, the genuinely external SPI interface *does* get proper CDC:
+`spi_slave.v:159-202` implements a 3-stage pulse synchronizer, explicitly
+commented "Register writes cross into `clk_32m` via a pulse synchroniser."
+No equivalent exists for `GRP_*`. Open Risk #16 already documents the
+downstream *symptom* (SPI writes silently dropped if `GRP_WE`/`GRP_RE`
+overlaps the SPI write window, plus an undocumented "hold `GRP_WE` ≥ 2
+clocks" contract); this entry is the underlying root cause — if Grouper's
+clock is not provably phase-aligned to Trouper's `IQ_CLK`, register writes/
+reads across this bus are exposed to metastability, not just arbitration
+drops.
+
+**Risk:** silent register corruption or lost transactions on silicon if
+Grouper's macro ends up on an independent clock tree (the normal case for
+separately hardened blocks), with no bench-visible symptom besides
+occasional bad register values.
+**Action:** confirm with the Grouper team whether `IQ_CLK` and Grouper's bus
+clock are the same physical net/phase-aligned, or add a proper CDC
+synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
+`GRP_RE`/`GRP_ADDR`/`GRP_WDATA`/`GRP_RDATA`/`GRP_READY`.
+**See:** Open Risk #16 (arbitration symptom); `trouper_top.v:69,593-616`;
+`spi_slave.v:159-202`; `planning/Pinout.md` (inter-project wire note).
+**Found:** 2026-07-05 (Grouper bus clocking review).
 
 ---
 
@@ -345,6 +392,70 @@ written while a live training is armed is silently swallowed (top opens
 `mrc_combiner` port `clk_16m` is actually driven at 32 MHz.
 
 **Found:** 2026-07-02 trouper_top RTL review.
+
+---
+
+### 27. Power-on / startup sequencing has no on-chip enforcement — unverified in silicon
+
+Four related gaps surfaced while checking whether the PSRAM QSPI clock could
+be run below 32 MHz:
+
+1. **No hardware tPU wait for PSRAM init.** `trouper_top.v:414` wires
+   `init_start = PSRAM_CTRL[0] & ~QSPI_OWNER` — a register-bit *level*, not a
+   firmware-pulsed strobe as `planning/blocks/PSRAM Buffer Controller.md`
+   describes ("firmware pulses `init_start` after tPU"). The APS6404L needs
+   tPU ≥ 150 µs after its own power-up before RSTEN is safe; nothing in RTL
+   times this. It is entirely a host/firmware discipline requirement (RPi
+   must wait before writing `PSRAM_CTRL[0]=1`), unverified against real
+   silicon + a real PSRAM part. `cocotb/tests/test_startup.py::
+   test_psram_init_has_no_tpu_wait` measures ~2.9 µs from `RESETB` release
+   to the first PSRAM CE# pulse when firmware issues the write immediately
+   — confirms the gap is real and quantifies it, but only host-side
+   discipline (or a real on-chip timer) prevents hitting it.
+2. **tRST margin inside QE_INIT: re-measured, not thin.** Originally
+   estimated by hand-counting FSM states as ~62.5 ns (12.5 ns margin over
+   the APS6404L's tRST ≥ 50 ns) — that hand count was wrong.
+   `cocotb/tests/test_startup.py::test_qe_init_trst_margin` measures the
+   actual RST(`0x99`)→Enter-QPI(`0x35`) CE# gap in simulation at **750 ns**
+   (700 ns margin) — comfortable. Left in as a regression test rather than
+   a live risk; downgrading this sub-item accordingly.
+3. **`rst_n` is the raw `RESETB` pin, unsynchronized, no on-chip POR or
+   deglitch** (`trouper_top.v:70`: `wire rst_n = RESETB;`). Reset-ordering
+   bugs have already hit this design once — see item 26 below (closed): SPI
+   frame flops reset only on `posedge HOST_CS`, so the very first CS-low
+   transaction after power-on parsed garbage, caught only because someone
+   specifically tested first-transaction ordering rather than the normal
+   packet-loop sweeps.
+4. **SC-detector correlator is fully idle until `del_rdy` fires.** This is
+   intentional (Gate 9 hold-off in
+   `planning/decimator-hb-migration-impact-plan.md`, min 256 samples at
+   SF7/BW250), but worst case (SF12/125 kHz, N=16384 samples ÷ 500 kS/s) is
+   **≈32.8 ms** after `qe_init_done` before the receiver can register any
+   lock. Reasonable by design, but it is a real "deaf window" on every PSRAM
+   init or SF/BW change, and no spec states an explicit worst-case
+   time-to-first-lock figure. `test_sc_correlator_idle_until_del_rdy`
+   (SF9/BW125, ~4.1 ms case) confirms `tdm_busy` never activates before
+   `del_rdy` and measures warm-up at 4.092 ms vs a 4.096 ms prediction —
+   behaves exactly as designed; worst case scales linearly to SF12/125 kHz.
+
+None of this surfaced in the existing cocotb SF/BW sweeps or
+`tb_trouper_two_packet` because those testbenches start from an
+already-initialized state or use idealized/instant power-up — they don't
+exercise power-on ordering itself.
+
+**Found:** 2026-07-05, while investigating PSRAM QSPI clocking margin.
+
+**Testbench added:** `cocotb/tests/test_startup.py` (6 tests, all PASS,
+SGE job 3257) — first-transaction-after-reset at 3 clock phases (regression
+for item 26), the tPU-race and tRST-margin characterizations above, and the
+SC hold-off check. Items 1 and 3 remain open (no on-chip fix, by design
+pending firmware/board discipline); item 2 is downgraded from risk to
+regression coverage; item 4 is confirmed working as intended.
+
+**Next steps:** first hardware bring-up on the test PCB (a few weeks out)
+will validate items 1 and 3 against a real PSRAM part and real RESETB
+behavior — sim can characterize the digital logic's assumptions but not the
+analog reset/power-rail behavior itself.
 
 ---
 

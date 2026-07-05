@@ -68,17 +68,19 @@ def _env_int(name, default):
     return int(v) if v.strip() else default
 
 
-# ZDIAG_k = Σ|raw_k|² top 16 bits [31:16], big-endian (HI,LO) per branch.
-ZDIAG_ADDR = {0: (0x64, 0x65), 1: (0x66, 0x67), 2: (0x68, 0x69), 3: (0x6A, 0x6B)}
+# ZDIAG_k = Σ|raw_k|² top 24 bits [31:8], big-endian (MSB..LSB) per branch.
+ZDIAG_ADDR = {0: (0x64, 0x65, 0x66), 1: (0x67, 0x68, 0x69),
+              2: (0x6A, 0x6B, 0x6C), 3: (0x6D, 0x6E, 0x6F)}
 
 
 async def read_zdiag(dut):
-    """Read the four per-branch diagonal energies as 16-bit ints."""
+    """Read the four per-branch diagonal energies as 24-bit ints."""
     z = []
     for b in range(4):
-        hi = await spi_read(dut, ZDIAG_ADDR[b][0])
-        lo = await spi_read(dut, ZDIAG_ADDR[b][1])
-        z.append((hi << 8) | lo)
+        b2 = await spi_read(dut, ZDIAG_ADDR[b][0])
+        b1 = await spi_read(dut, ZDIAG_ADDR[b][1])
+        b0 = await spi_read(dut, ZDIAG_ADDR[b][2])
+        z.append((b2 << 16) | (b1 << 8) | b0)
     return z
 
 

@@ -1,0 +1,73 @@
+{
+    "DESIGN_NAME": "trouper_top",
+    "VERILOG_FILES": [
+        "dir::../rtl/dc_removal.v",
+        "dir::../rtl/trouper_top.v",
+        "dir::../rtl/mrc_combiner.v",
+        "dir::../rtl/packet_ctrl_fsm.v",
+        "dir::../rtl/psram_buf_ctrl.v",
+        "dir::../rtl/reg_bank.v",
+        "dir::../rtl/sc_detector.v",
+        "dir::../rtl/sd_decimator_poly.v",
+        "dir::../rtl/sd_remod.v",
+        "dir::../rtl/spi_slave.v",
+        "dir::../rtl/training_acc.v"
+    ],
+    "CLOCK_PORT": "IQ_CLK",
+    "CLOCK_PERIOD": 31.25,
+    "FP_SIZING": "absolute",
+    "DIE_AREA": "0 0 1450 1100",
+    "PL_TARGET_DENSITY_PCT": 50,
+    "DPL_CELL_PADDING": 3,
+    "PL_MAX_DISPLACEMENT_X": 500,
+    "PL_MAX_DISPLACEMENT_Y": 200,
+    "PL_ROUTABILITY_DRIVEN": true,
+    "RUN_POST_GPL_DESIGN_REPAIR": true,
+    "MAX_FANOUT_CONSTRAINT": 8,
+    "ERROR_ON_SYNTH_CHECKS": false,
+    "SYNTH_CHECKS_ALLOW_TRISTATE": true,
+    "SYNTH_STRATEGY": "DELAY 0",
+    "SYNTH_ABC_BUFFERING": false,
+    "DRT_THREADS": 10,
+    "ROUTING_OPT_ITERS": 64,
+    "DEFAULT_CORNER": "nom_tt_025C_5v00",
+    "STA_CORNERS": [
+        "nom_tt_025C_5v00",
+        "max_ss_125C_4v50",
+        "max_ff_n40C_5v50"
+    ],
+    "CTS_ROOT_BUFFER": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_16",
+    "CTS_CLK_BUFFERS": [
+        "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8",
+        "gf180mcu_fd_sc_mcu7t5v0__clkbuf_12",
+        "gf180mcu_fd_sc_mcu7t5v0__clkbuf_16"
+    ],
+    "LIB": {
+        "*_tt_025C_5v00": [
+            "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib"
+        ],
+        "*_ss_125C_4v50": [
+            "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ss_125C_4v50.lib"
+        ],
+        "*_ff_n40C_5v50": [
+            "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ff_n40C_5v50.lib"
+        ]
+    },
+    "RUN_MAGIC_DRC": true,
+    "RUN_LVS": true,
+    "RUN_IRDROP_REPORT": true,
+    "PNR_SDC_FILE": "dir::pnr_32m_scoped_v18.sdc",
+    "SIGNOFF_SDC_FILE": "dir::pnr_32m_scoped_v18.sdc",
+    "RUN_POST_GRT_DESIGN_REPAIR": true,
+    "GRT_DESIGN_REPAIR_RUN_GRT": true,
+    "GRT_RESIZER_SETUP_MAX_BUFFER_PCT": 40,
+    "GRT_ANTENNA_REPAIR_MARGIN": 90,
+    "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+    "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+    "HOLD_VIOLATION_CORNERS": [
+        ""
+    ],
+    "ERROR_ON_ILLEGAL_OVERLAPS": false,
+    "ERROR_ON_PDN_VIOLATIONS": false,
+    "PDN_CFG": "dir::pdn_cfg.tcl"
+}

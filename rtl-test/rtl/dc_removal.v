@@ -18,76 +18,96 @@
 // Removed from current design: dc_alpha_shift port (always was 8, broken for
 // 8-bit inputs), dc_bypass port (always 1'b0), dc_est output ports (floating).
 
-module dc_removal (
-    input  wire        clk_32m,
-    input  wire        rst_n,
-    input  wire signed [7:0]  raw_i0, raw_i1, raw_i2, raw_i3,
-    input  wire signed [7:0]  raw_q0, raw_q1, raw_q2, raw_q3,
-    input  wire        raw_valid,
-    output reg  signed [7:0]  out_i0, out_i1, out_i2, out_i3,
-    output reg  signed [7:0]  out_q0, out_q1, out_q2, out_q3,
-    output reg         out_valid
+module dc_removal_chan (
+    input  wire              clk_32m,
+    input  wire              rst_n,
+    input  wire signed [7:0] sample_in,
+    input  wire              sample_valid,
+    output reg  signed [7:0] sample_out
 );
 
-    // 13-bit Q8.5 accumulators — integer DC estimate is acc[12:5]
-    reg signed [12:0] acc_i [0:3];
-    reg signed [12:0] acc_q [0:3];
+    // 13-bit Q8.5 accumulator; integer DC estimate is dc_est_acc[12:5]
+    reg signed [12:0] dc_est_acc;
 
-    // diff = raw − dc_est, where dc_est = acc[12:5]
-    // Both raw and dc_est are 8-bit signed; difference fits in 9-bit signed.
-    wire signed [8:0] diff_i [0:3];
-    wire signed [8:0] diff_q [0:3];
-    assign diff_i[0] = {raw_i0[7], raw_i0} - {acc_i[0][12], acc_i[0][12:5]};
-    assign diff_i[1] = {raw_i1[7], raw_i1} - {acc_i[1][12], acc_i[1][12:5]};
-    assign diff_i[2] = {raw_i2[7], raw_i2} - {acc_i[2][12], acc_i[2][12:5]};
-    assign diff_i[3] = {raw_i3[7], raw_i3} - {acc_i[3][12], acc_i[3][12:5]};
-    assign diff_q[0] = {raw_q0[7], raw_q0} - {acc_q[0][12], acc_q[0][12:5]};
-    assign diff_q[1] = {raw_q1[7], raw_q1} - {acc_q[1][12], acc_q[1][12:5]};
-    assign diff_q[2] = {raw_q2[7], raw_q2} - {acc_q[2][12], acc_q[2][12:5]};
-    assign diff_q[3] = {raw_q3[7], raw_q3} - {acc_q[3][12], acc_q[3][12:5]};
-
-    // err = diff sign-extended to 13-bit (full diff, no /32 wiring)
-    wire signed [12:0] err_i [0:3];
-    wire signed [12:0] err_q [0:3];
-    assign err_i[0] = {{4{diff_i[0][8]}}, diff_i[0]};
-    assign err_i[1] = {{4{diff_i[1][8]}}, diff_i[1]};
-    assign err_i[2] = {{4{diff_i[2][8]}}, diff_i[2]};
-    assign err_i[3] = {{4{diff_i[3][8]}}, diff_i[3]};
-    assign err_q[0] = {{4{diff_q[0][8]}}, diff_q[0]};
-    assign err_q[1] = {{4{diff_q[1][8]}}, diff_q[1]};
-    assign err_q[2] = {{4{diff_q[2][8]}}, diff_q[2]};
-    assign err_q[3] = {{4{diff_q[3][8]}}, diff_q[3]};
+    wire signed [7:0] dc_est = dc_est_acc[12:5];
+    wire signed [8:0] diff = {sample_in[7], sample_in} - {dc_est[7], dc_est};
+    wire signed [12:0] dc_est_step = {{4{diff[8]}}, diff};
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
-            acc_i[0] <= 13'sd0; acc_i[1] <= 13'sd0;
-            acc_i[2] <= 13'sd0; acc_i[3] <= 13'sd0;
-            acc_q[0] <= 13'sd0; acc_q[1] <= 13'sd0;
-            acc_q[2] <= 13'sd0; acc_q[3] <= 13'sd0;
-            out_i0 <= 8'sd0; out_i1 <= 8'sd0; out_i2 <= 8'sd0; out_i3 <= 8'sd0;
-            out_q0 <= 8'sd0; out_q1 <= 8'sd0; out_q2 <= 8'sd0; out_q3 <= 8'sd0;
-            out_valid <= 1'b0;
+            dc_est_acc <= 13'sd0;
+            sample_out <= 8'sd0;
+        end else if (sample_valid) begin
+            dc_est_acc <= dc_est_acc + dc_est_step;
+            // Output uses DC estimate from previous cycle (acc before update).
+            sample_out <= sample_in - dc_est;
+        end
+    end
+
+endmodule
+
+module dc_removal (
+    input  wire        clk_32m,
+    input  wire        rst_n,
+    input  wire signed [7:0]  sample_i0, sample_i1, sample_i2, sample_i3,
+    input  wire signed [7:0]  sample_q0, sample_q1, sample_q2, sample_q3,
+    input  wire        sample_valid,
+    output wire signed [7:0]  sample_out_i0, sample_out_i1, sample_out_i2, sample_out_i3,
+    output wire signed [7:0]  sample_out_q0, sample_out_q1, sample_out_q2, sample_out_q3,
+    output reg         sample_out_valid
+);
+
+    wire signed [7:0] sample_i [0:3];
+    wire signed [7:0] sample_q [0:3];
+    wire signed [7:0] sample_out_i [0:3];
+    wire signed [7:0] sample_out_q [0:3];
+
+    assign sample_i[0] = sample_i0;
+    assign sample_i[1] = sample_i1;
+    assign sample_i[2] = sample_i2;
+    assign sample_i[3] = sample_i3;
+    assign sample_q[0] = sample_q0;
+    assign sample_q[1] = sample_q1;
+    assign sample_q[2] = sample_q2;
+    assign sample_q[3] = sample_q3;
+
+    assign sample_out_i0 = sample_out_i[0];
+    assign sample_out_i1 = sample_out_i[1];
+    assign sample_out_i2 = sample_out_i[2];
+    assign sample_out_i3 = sample_out_i[3];
+    assign sample_out_q0 = sample_out_q[0];
+    assign sample_out_q1 = sample_out_q[1];
+    assign sample_out_q2 = sample_out_q[2];
+    assign sample_out_q3 = sample_out_q[3];
+
+    genvar ch;
+    generate
+        for (ch = 0; ch < 4; ch = ch + 1) begin : g_i
+            dc_removal_chan u_chan (
+                .clk_32m      (clk_32m),
+                .rst_n        (rst_n),
+                .sample_in    (sample_i[ch]),
+                .sample_valid (sample_valid),
+                .sample_out   (sample_out_i[ch])
+            );
+        end
+
+        for (ch = 0; ch < 4; ch = ch + 1) begin : g_q
+            dc_removal_chan u_chan (
+                .clk_32m      (clk_32m),
+                .rst_n        (rst_n),
+                .sample_in    (sample_q[ch]),
+                .sample_valid (sample_valid),
+                .sample_out   (sample_out_q[ch])
+            );
+        end
+    endgenerate
+
+    always @(posedge clk_32m or negedge rst_n) begin
+        if (!rst_n) begin
+            sample_out_valid <= 1'b0;
         end else begin
-            out_valid <= raw_valid;
-            if (raw_valid) begin
-                acc_i[0] <= acc_i[0] + err_i[0];
-                acc_i[1] <= acc_i[1] + err_i[1];
-                acc_i[2] <= acc_i[2] + err_i[2];
-                acc_i[3] <= acc_i[3] + err_i[3];
-                acc_q[0] <= acc_q[0] + err_q[0];
-                acc_q[1] <= acc_q[1] + err_q[1];
-                acc_q[2] <= acc_q[2] + err_q[2];
-                acc_q[3] <= acc_q[3] + err_q[3];
-                // Output uses DC estimate from previous cycle (acc before update)
-                out_i0 <= raw_i0 - acc_i[0][12:5];
-                out_i1 <= raw_i1 - acc_i[1][12:5];
-                out_i2 <= raw_i2 - acc_i[2][12:5];
-                out_i3 <= raw_i3 - acc_i[3][12:5];
-                out_q0 <= raw_q0 - acc_q[0][12:5];
-                out_q1 <= raw_q1 - acc_q[1][12:5];
-                out_q2 <= raw_q2 - acc_q[2][12:5];
-                out_q3 <= raw_q3 - acc_q[3][12:5];
-            end
+            sample_out_valid <= sample_valid;
         end
     end
 

@@ -102,7 +102,7 @@ module tb_mrc_fw_precision;
     // Precision case runner
     //
     // Algorithm:
-    //   1. Reconstruct per-branch A_k = isqrt((Zdiag_k << 16) / n_acc)
+    //   1. Reconstruct per-branch A_k = isqrt((Zdiag_k << 8) / n_acc)
     //   2. Derive global pgs and W_max from strongest branch
     //   3. Per-branch weights: W_k = (W_max * A_k) / A_max  (matched filter)
     //   4. Drive combiner with x_i_k = A_k, x_q_k = 0
@@ -111,7 +111,7 @@ module tb_mrc_fw_precision;
     // -----------------------------------------------------------------------
     task run_case;
         input int    case_num;
-        input longint zd0, zd1, zd2, zd3;   // ZDIAG_reg values (= Z_kk >> 16)
+        input longint zd0, zd1, zd2, zd3;   // ZDIAG_reg values (= Z_kk >> 8)
         input longint n_acc;
         input int    tol;
 
@@ -123,17 +123,17 @@ module tb_mrc_fw_precision;
         int expected_y_i, single_y_i, err;
         begin
             // Reconstruct per-branch amplitudes
-            e0 = (zd0 << 16) / n_acc; a0 = isqrt_fn(e0);
-            e1 = (zd1 << 16) / n_acc; a1 = isqrt_fn(e1);
-            e2 = (zd2 << 16) / n_acc; a2 = isqrt_fn(e2);
-            e3 = (zd3 << 16) / n_acc; a3 = isqrt_fn(e3);
+            e0 = (zd0 << 8) / n_acc; a0 = isqrt_fn(e0);
+            e1 = (zd1 << 8) / n_acc; a1 = isqrt_fn(e1);
+            e2 = (zd2 << 8) / n_acc; a2 = isqrt_fn(e2);
+            e3 = (zd3 << 8) / n_acc; a3 = isqrt_fn(e3);
 
             // Global pgs / W_max from strongest branch
             zd_max = zd0;
             if (zd1 > zd_max) zd_max = zd1;
             if (zd2 > zd_max) zd_max = zd2;
             if (zd3 > zd_max) zd_max = zd3;
-            e_max  = (zd_max << 16) / n_acc;
+            e_max  = (zd_max << 8) / n_acc;
             a_est  = isqrt_fn(e_max);
 
             y_pre_max = (120 * 4 * a_est) / 256;
@@ -220,29 +220,29 @@ module tb_mrc_fw_precision;
         repeat(2) @(posedge clk);
 
         // Case 1: Equal branches A=[40,40,40,40], n_acc=1024
-        //   Zdiag_k = (1024 * 1600) >> 16 = 25
+        //   Zdiag_k = (1024 * 1600) >> 8 = 6400
         //   Expected: pgs=0 w_max=120 w_k=120 y_i=75
-        run_case(1, 25, 25, 25, 25, 1024, 4);
+        run_case(1, 6400, 6400, 6400, 6400, 1024, 4);
 
         // Case 2: 6 dB spread A=[64,32,32,32], n_acc=4096
-        //   Zdiag_0=(4096*4096)>>16=256, Zdiag_1..3=(4096*1024)>>16=64
+        //   Zdiag_0=(4096*4096)>>8=65536, Zdiag_1..3=(4096*1024)>>8=16384
         //   Expected: pgs=0 w_max=120 w=[120,60,60,60] y_i=52
-        run_case(2, 256, 64, 64, 64, 4096, 4);
+        run_case(2, 65536, 16384, 16384, 16384, 4096, 4);
 
         // Case 3: 20 dB spread A=[90,28,9,3], n_acc=65536
-        //   Zdiag_k = A^2  (since 65536 >> 16 = 1)
+        //   Zdiag_k = (65536 * A^2) >> 8 = 256 * A^2
         //   Expected: pgs=0 w_max=90 w=[90,28,9,3] y_i=35
-        run_case(3, 8100, 784, 81, 9, 65536, 4);
+        run_case(3, 2073600, 200704, 20736, 2304, 65536, 4);
 
         // Case 4: Weak signal with pgs boost A=[4,4,4,4], n_acc=8192
-        //   Zdiag_k = (8192 * 16) >> 16 = 2
+        //   Zdiag_k = (8192 * 16) >> 8 = 512
         //   Expected: pgs=3 w_max=120 w_k=120 y_i=56
-        run_case(4, 2, 2, 2, 2, 8192, 4);
+        run_case(4, 512, 512, 512, 512, 8192, 4);
 
         // Case 5: Strong signal, W_max capped A=[90,90,90,90], n_acc=512
-        //   Zdiag_k = (512 * 8100) >> 16 = 63
+        //   Zdiag_k = (512 * 8100) >> 8 = 16200
         //   Expected: pgs=0 w_max=91 w_k=91 y_i=126
-        run_case(5, 63, 63, 63, 63, 512, 4);
+        run_case(5, 16200, 16200, 16200, 16200, 512, 4);
 
         // -----------------------------------------------------------------------
         repeat(4) @(posedge clk);

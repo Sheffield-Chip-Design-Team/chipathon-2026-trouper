@@ -191,16 +191,16 @@ module trouper_top (
     dc_removal u_dcr (
         .clk_32m  (clk),
         .rst_n    (rst_n),
-        .raw_i0 (dec_i[0]), .raw_i1 (dec_i[1]),
-        .raw_i2 (dec_i[2]), .raw_i3 (dec_i[3]),
-        .raw_q0 (dec_q[0]), .raw_q1 (dec_q[1]),
-        .raw_q2 (dec_q[2]), .raw_q3 (dec_q[3]),
-        .raw_valid  (iq_valid),
-        .out_i0 (dcr_i[0]), .out_i1 (dcr_i[1]),
-        .out_i2 (dcr_i[2]), .out_i3 (dcr_i[3]),
-        .out_q0 (dcr_q[0]), .out_q1 (dcr_q[1]),
-        .out_q2 (dcr_q[2]), .out_q3 (dcr_q[3]),
-        .out_valid  (dcr_valid)
+        .sample_i0 (dec_i[0]), .sample_i1 (dec_i[1]),
+        .sample_i2 (dec_i[2]), .sample_i3 (dec_i[3]),
+        .sample_q0 (dec_q[0]), .sample_q1 (dec_q[1]),
+        .sample_q2 (dec_q[2]), .sample_q3 (dec_q[3]),
+        .sample_valid     (iq_valid),
+        .sample_out_i0 (dcr_i[0]), .sample_out_i1 (dcr_i[1]),
+        .sample_out_i2 (dcr_i[2]), .sample_out_i3 (dcr_i[3]),
+        .sample_out_q0 (dcr_q[0]), .sample_out_q1 (dcr_q[1]),
+        .sample_out_q2 (dcr_q[2]), .sample_out_q3 (dcr_q[3]),
+        .sample_out_valid (dcr_valid)
     );
 
     // =========================================================================
@@ -238,6 +238,7 @@ module trouper_top (
         .sample_shift   (rb_sample_shift),
         .sc_thr         (rb_sc_thr),
         .sc_hits_req    (rb_sc_hits_req),
+        .sc_clr         (packet_done_pulse),  // re-arm detector when packet FSM returns to IDLE
         .sc_lock        (sc_lock),
         .timing_ref     (timing_ref),
         .c_i0 (), .c_q0 (),
@@ -532,10 +533,28 @@ module trouper_top (
         else        packet_active_r <= packet_active;
     assign packet_done_pulse = packet_active_r && !packet_active;
 
+    // Edge-detect the level-driven IRQ sources.  reg_bank re-ORs irq_set into
+    // IRQ_STATUS every CE (reg_bank.v:141), so a held level would immediately
+    // undo an IRQ_CLEAR write (TRPR-IRQ-002).  sc_lock and training_done are
+    // levels held for the rest of the packet; convert them to 1-cycle
+    // rising-edge pulses.  (W_missed_packet, packet_done and sigma2_valid are
+    // already 1-cycle pulses.)
+    reg sc_lock_r, training_done_r;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) begin
+            sc_lock_r       <= 1'b0;
+            training_done_r <= 1'b0;
+        end else begin
+            sc_lock_r       <= sc_lock;
+            training_done_r <= training_done;
+        end
+    wire sc_lock_pulse       = sc_lock       && !sc_lock_r;
+    wire training_done_pulse = training_done && !training_done_r;
+
     // irq_set for reg_bank: [0] CORR_LOCK, [1] TRAINING_DONE, [2] W_MISSED_PACKET,
     // [3] PACKET_DONE, [4] NOISE_READY (uncontaminated noise window complete)
     wire [7:0] rb_irq_set_c = {3'b000, sigma2_valid,
-                             packet_done_pulse, W_missed_packet, training_done, sc_lock};
+                             packet_done_pulse, W_missed_packet, training_done_pulse, sc_lock_pulse};
     // Stretch the 1-cycle status pulses to 2 cycles so the CE-gated reg_bank
     // (samples every other clock) cannot miss them.  irq_status is sticky-OR so
     // a 2-cycle-wide set is idempotent.

@@ -13,7 +13,10 @@
 //     32-bit was 8 bits of wasted headroom.
 //   Eval multiplier: 17 → 13 bit (shift snapshot from [22:6] to [22:10]).
 //     13-bit gives ~78 dB SNR on the metric; channel noise dominates well before
-//     that.  signed_mul24_pipe output narrowed from 34 to 26 bits accordingly.
+//     that.  Product width is 26 bits accordingly.
+//   Eval multiplier is bit-serial (serial_mul13): only 4 products/symbol inside a
+//     ≥4,096-clock budget, so a wide combinational multiply was pure area waste.
+//     The serial product is the exact integer a*b, so all metrics stay bit-exact.
 //   sc_thr firmware value must be divided by 64 vs the original to preserve
 //     the same detection threshold (both LHS and RHS of the comparison scale
 //     as k² with k = 1/64, so the ratio is invariant).
@@ -26,19 +29,56 @@
 //     (sc_hits_req+1)*M where M = 2^SF — pure wiring, no multiplier.
 
 /* verilator lint_off DECLFILENAME */
-module signed_mul24_pipe (
+// Bit-serial signed 13×13 → 26-bit multiplier (shift-add, LSB-first).
+// Replaces the wide combinational signed_mul24_pipe: the eval engine performs
+// only 4 products per symbol inside a budget of ≥4,096 clocks, so a ~14-cycle
+// serial multiply is far cheaper in area (no 13×13 combinational array, ~−20K)
+// and removes a wide combinational cone from the 32 MHz IQ_CLK domain (the
+// critical path becomes a single 26-bit add, not a 13×13 multiply → SS-friendly).
+// The product is the EXACT two's-complement integer a*b, so every downstream
+// accumulation is bit-identical to the pipelined multiplier it replaces.
+module serial_mul13 (
     input  wire               clk,
+    input  wire               rst_n,
+    input  wire               start,   // 1-cycle pulse: latch a,b and begin
     input  wire signed [12:0] a,
     input  wire signed [12:0] b,
+    output reg                done,    // 1-cycle pulse when p is final
     output reg  signed [25:0] p
 );
-    // 2-stage pipeline: stage 1 registers inputs, stage 2 registers product.
-    reg signed [12:0] a_q, b_q;
+    reg               running;
+    reg  [3:0]        cnt;      // bit index 0..12
+    reg  signed [25:0] a_sh;    // a sign-extended, shifted left one place per bit
+    reg  [12:0]       b_sh;     // remaining multiplier bits, LSB first
 
-    always @(posedge clk) begin
-        a_q <= a;
-        b_q <= b;
-        p   <= a_q * b_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            running <= 1'b0; cnt <= 4'd0;
+            a_sh <= 26'sd0; b_sh <= 13'd0;
+            p <= 26'sd0; done <= 1'b0;
+        end else begin
+            done <= 1'b0;
+            if (start) begin
+                running <= 1'b1;
+                cnt     <= 4'd0;
+                p       <= 26'sd0;
+                a_sh    <= {{13{a[12]}}, a};  // sign-extend 13 → 26
+                b_sh    <= b;
+            end else if (running) begin
+                if (b_sh[0]) begin
+                    if (cnt == 4'd12) p <= p - a_sh;  // MSB has negative weight
+                    else              p <= p + a_sh;
+                end
+                a_sh <= a_sh <<< 1;
+                b_sh <= b_sh >> 1;
+                if (cnt == 4'd12) begin
+                    running <= 1'b0;
+                    done    <= 1'b1;
+                end else begin
+                    cnt <= cnt + 4'd1;
+                end
+            end
+        end
     end
 endmodule
 /* verilator lint_on DECLFILENAME */
@@ -56,6 +96,7 @@ module sc_detector (
     input  wire [1:0]  sample_shift,
     input  wire [15:0] sc_thr,
     input  wire [1:0]  sc_hits_req,
+    input  wire        sc_clr,     // re-arm: clear lock + detection state (packet done)
     output reg         sc_lock,
     output reg  [31:0] timing_ref,
     output reg  signed [31:0] c_i0, c_q0,
@@ -148,44 +189,43 @@ module sc_detector (
     reg        metric_valid_pulse;
 
     // =========================================================
-    // Serialised metric engine — 4 multiplications (steps 0..3),
-    // single shared signed_mul24_pipe (13-bit, 2-stage, 3-cycle latency).
+    // Serialised metric engine — 4 multiplications (steps 0..3), one shared
+    // bit-serial serial_mul13.  Sequential launch/wait handshake: issue a
+    // product, wait ~14 cycles for `mul_done`, accumulate, launch the next.
     // =========================================================
-    reg        eval_busy, eval_issue_done;
+    reg        eval_busy;
     reg [3:0]  eval_step;
+    reg        mul_start;
     reg signed [27:0] eval_mag_acc, eval_e_acc;  // 28-bit: 3-bit headroom over max 2^25
 
     reg signed [12:0] eval_ci0, eval_cq0;
     reg signed [12:0] eval_E0cur, eval_E0del;
 
+    // Combinational operand select (serial_mul13 latches on `mul_start`).
     reg signed [12:0] eval_mul_a_sel, eval_mul_b_sel;
-    wire signed [25:0] eval_prod;
-    signed_mul24_pipe u_eval_mul (
-        .clk(clk), .a(eval_mul_a_sel), .b(eval_mul_b_sel), .p(eval_prod));
-
-    reg [2:0]  eval_valid_pipe;
-    reg [3:0]  eval_step_0, eval_step_1, eval_step_2;
-    reg        eval_hit;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            eval_mul_a_sel <= 13'sd0;
-            eval_mul_b_sel <= 13'sd0;
-        end else begin
-            case (eval_step)
-                4'd0: begin eval_mul_a_sel <= eval_ci0;   eval_mul_b_sel <= eval_ci0;   end
-                4'd1: begin eval_mul_a_sel <= eval_cq0;   eval_mul_b_sel <= eval_cq0;   end
-                4'd2: begin eval_mul_a_sel <= eval_E0cur; eval_mul_b_sel <= eval_E0del;  end
-                default: begin
-                    // sc_thr[11:0] caps the threshold at 12 bits (0..4095) so bit 12
-                    // of the 13-bit signed register is always 0 (always positive).
-                    // Firmware must write sc_thr ÷ 64 of the legacy value (see header).
-                    eval_mul_a_sel <= {1'b0, sc_thr[11:0]};
-                    eval_mul_b_sel <= $signed(eval_e_acc[25:13]);
-                end
-            endcase
-        end
+    always @(*) begin
+        case (eval_step)
+            4'd0: begin eval_mul_a_sel = eval_ci0;   eval_mul_b_sel = eval_ci0;   end
+            4'd1: begin eval_mul_a_sel = eval_cq0;   eval_mul_b_sel = eval_cq0;   end
+            4'd2: begin eval_mul_a_sel = eval_E0cur; eval_mul_b_sel = eval_E0del;  end
+            default: begin
+                // sc_thr[11:0] caps the threshold at 12 bits (0..4095) so bit 12
+                // of the 13-bit signed operand is always 0 (always positive).
+                // Firmware must write sc_thr ÷ 64 of the legacy value (see header).
+                eval_mul_a_sel = {1'b0, sc_thr[11:0]};
+                eval_mul_b_sel = $signed(eval_e_acc[25:13]);
+            end
+        endcase
     end
+
+    wire        mul_done;
+    wire signed [25:0] eval_prod;
+    serial_mul13 u_eval_mul (
+        .clk(clk), .rst_n(rst_n), .start(mul_start),
+        .a(eval_mul_a_sel), .b(eval_mul_b_sel),
+        .done(mul_done), .p(eval_prod));
+
+    reg        eval_hit;
 
     // =========================================================
     // Main sequential block
@@ -212,9 +252,7 @@ module sc_detector (
             metric_valid_pulse <= 1'b0;
             eval_busy       <= 1'b0;
             eval_step       <= 4'd0;
-            eval_issue_done <= 1'b0;
-            eval_valid_pipe <= 3'd0;
-            eval_step_0 <= 4'd0; eval_step_1 <= 4'd0; eval_step_2 <= 4'd0;
+            mul_start       <= 1'b0;
             eval_mag_acc <= 28'sd0; eval_e_acc <= 28'sd0;
             eval_hit     <= 1'b0;
             eval_ci0  <= 13'sd0; eval_cq0  <= 13'sd0;
@@ -230,6 +268,7 @@ module sc_detector (
         end else begin
             metric_valid_pulse <= 1'b0;
             sc_hit_dbg         <= 1'b0;
+            mul_start          <= 1'b0;  // default; pulsed to launch a product
 
             // -----------------------------------------------------------------
             // Sample arrives: latch inputs, start TDM
@@ -307,9 +346,8 @@ module sc_detector (
                             eval_mag_acc    <= 28'sd0;
                             eval_e_acc      <= 28'sd0;
                             eval_step       <= 4'd0;
-                            eval_issue_done <= 1'b0;
-                            eval_valid_pipe <= 3'd0;
                             eval_busy       <= 1'b1;
+                            mul_start       <= 1'b1;  // launch product 0 (ci0²)
                             eval_sample_mark <= sample_count + 32'd1;
 
                             acc_ci0   <= 24'sd0; acc_cq0   <= 24'sd0;
@@ -326,41 +364,36 @@ module sc_detector (
             // -----------------------------------------------------------------
             // Metric evaluation engine (4 steps: ci0², cq0², E0cur×E0del, thr)
             // -----------------------------------------------------------------
-            if (eval_busy) begin
-                eval_valid_pipe <= {eval_valid_pipe[1:0], !eval_issue_done};
+            if (eval_busy && mul_done) begin
+                // A product just completed (serial_mul13 == exact integer a*b);
+                // accumulate it, then launch the next step (or finish at step 3).
+                case (eval_step)
+                    4'd0: eval_mag_acc <= eval_mag_acc + {{2{eval_prod[25]}}, eval_prod};
+                    4'd1: eval_mag_acc <= eval_mag_acc + {{2{eval_prod[25]}}, eval_prod};
+                    4'd2: begin
+                        eval_e_acc <= eval_e_acc + {{2{eval_prod[25]}}, eval_prod};
+                        sym_mag_sc <= eval_mag_acc;
+                    end
+                    default: begin
+                        // e_slice==0 means energy² < 8192 ADU — threshold
+                        // comparison degenerates to 0; suppress hit to avoid
+                        // false alarms on noise. Threshold is implicitly
+                        // SF-adaptive: A_min ∝ 1/√M, matching LoRa sensitivity.
+                        eval_hit           <= (eval_e_acc > 28'sd0) &&
+                                              (eval_e_acc[25:13] > 13'sd0) &&
+                                              ({1'b0, eval_mag_acc[27:1]} >=
+                                               {{2{eval_prod[25]}}, eval_prod});
+                        eval_busy          <= 1'b0;
+                        metric_valid_pulse <= 1'b1;
+                    end
+                endcase
 
-                eval_step_0 <= eval_step;
-                eval_step_1 <= eval_step_0;
-                eval_step_2 <= eval_step_1;
-
-                if (!eval_issue_done) begin
-                    if (eval_step == 4'd3)
-                        eval_issue_done <= 1'b1;
-                    else
-                        eval_step <= eval_step + 4'd1;
-                end
-
-                if (eval_valid_pipe[2]) begin
-                    case (eval_step_2)
-                        4'd0: eval_mag_acc <= eval_mag_acc + {{2{eval_prod[25]}}, eval_prod};
-                        4'd1: eval_mag_acc <= eval_mag_acc + {{2{eval_prod[25]}}, eval_prod};
-                        4'd2: begin
-                            eval_e_acc <= eval_e_acc + {{2{eval_prod[25]}}, eval_prod};
-                            sym_mag_sc <= eval_mag_acc;
-                        end
-                        default: begin
-                            // e_slice==0 means energy² < 8192 ADU — threshold
-                            // comparison degenerates to 0; suppress hit to avoid
-                            // false alarms on noise. Threshold is implicitly
-                            // SF-adaptive: A_min ∝ 1/√M, matching LoRa sensitivity.
-                            eval_hit           <= (eval_e_acc > 28'sd0) &&
-                                                  (eval_e_acc[25:13] > 13'sd0) &&
-                                                  ({1'b0, eval_mag_acc[27:1]} >=
-                                                   {{2{eval_prod[25]}}, eval_prod});
-                            eval_busy          <= 1'b0;
-                            metric_valid_pulse <= 1'b1;
-                        end
-                    endcase
+                // Step 2's product updates eval_e_acc this cycle; the step-3
+                // operand (thr × e_slice) reads it combinationally next cycle,
+                // when mul_start relaunches, so the ordering is preserved.
+                if (eval_step != 4'd3) begin
+                    eval_step <= eval_step + 4'd1;
+                    mul_start <= 1'b1;
                 end
             end
 
@@ -398,6 +431,29 @@ module sc_detector (
             end
 
             sc_stat <= {sym_mag_sc[27:13], 1'b0}; // top 15 useful bits, zero-padded LSB
+
+            // -----------------------------------------------------------------
+            // Packet-done re-arm (TRPR-SCD-014): clear lock + detection state so
+            // the next packet can be acquired. Overrides the logic above via
+            // last-assignment-wins. sample_count is deliberately NOT reset — it
+            // must stay free-running to keep the timing_ref domain aligned with
+            // the top-level iq sample counter across packets.
+            // -----------------------------------------------------------------
+            if (sc_clr) begin
+                sc_lock            <= 1'b0;
+                hit_count          <= 2'd0;
+                first_hit_sample   <= 32'd0;
+                acc_ci0   <= 24'sd0; acc_cq0   <= 24'sd0;
+                acc_E0cur <= 24'sd0; acc_E0del <= 24'sd0;
+                sym_cnt            <= 15'd0;
+                tdm_busy           <= 1'b0;
+                tdm_wait           <= 2'd0;
+                iq_inc_pending     <= 1'b0;
+                eval_busy          <= 1'b0;
+                mul_start          <= 1'b0;
+                metric_valid_pulse <= 1'b0;
+                sc_hit_dbg         <= 1'b0;
+            end
         end
     end
 

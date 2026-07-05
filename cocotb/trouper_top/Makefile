@@ -1,10 +1,12 @@
 # cocotb/trouper_top/Makefile
 # All SF7-SF12 × BW250/125 integration tests via cocotb + Icarus Verilog.
 # Production trouper_top: HB decimator chain (sd_decimator_poly, R=64, 500 kS/s).
+# test_startup.py adds power-on/reset-ordering coverage (Open Risks item 27).
 #
 # Usage:
-#   make                                          # run all 12 tests
+#   make                                          # run all tests (sweep + startup)
 #   make TESTCASE=test_sf7_bw250,test_sf7_bw125   # subset
+#   make TESTCASE=test_psram_init_has_no_tpu_wait,test_qe_init_trst_margin
 #   make clean
 #
 # Inside the chipathon26 Docker container the repo root is mounted at
@@ -13,7 +15,7 @@
 SIM           ?= icarus
 TOPLEVEL_LANG  = verilog
 TOPLEVEL            = tb_trouper_cocotb
-COCOTB_TEST_MODULES = test_trouper_top
+COCOTB_TEST_MODULES = test_trouper_top,test_startup
 
 DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src

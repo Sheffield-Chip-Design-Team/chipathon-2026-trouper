@@ -262,7 +262,7 @@ In 16-bit mode the decimator output is right-shifted by `(W_IN − 8)` before se
 
 ### Power-up initialisation
 
-The device powers on in SPI mode. Firmware pulses `init_start` after tPU (≥150 µs). The controller then issues:
+The device powers on in SPI mode. `init_start` is `PSRAM_CTRL.PSRAM_EN & ~QSPI_OWNER` — a register **level**, not a firmware-pulsed strobe: RTL enforces no on-chip tPU wait, so firmware itself must not write `PSRAM_CTRL.PSRAM_EN=1` until ≥150 µs after PSRAM power-up (see Open Risks #27.1; `cocotb/tests/test_startup.py::test_psram_init_has_no_tpu_wait` measures ~2.9 µs from reset release to the first RSTEN if firmware doesn't wait). Once triggered, the controller issues:
 
 1. **RSTEN** `0x66` — SPI, serial on SIO[0], 8 clock cycles
 2. **RST** `0x99` — SPI, serial on SIO[0], 8 clock cycles; wait tRST ≥ 50 ns
@@ -306,6 +306,7 @@ Command `0xEB`, 6 wait cycles, max 133 MHz:
 | tCPH — CE# high between bursts | ≥ 18 ns | 31.25 ns (1 cycle) ✓ |
 | tCLK — min clock period | ≥ 7.5 ns | 31.25 ns ✓ |
 | tACLK — CLK to output delay | ≤ 5.5 ns | Sample on falling edge ✓ |
+| tRST — RST(0x99) → next command | ≥ 50 ns | 750 ns, 700 ns margin ✓ (measured, `cocotb/tests/test_startup.py::test_qe_init_trst_margin`, job 3257) |
 
 At 32 MHz the device is running at 24% of its rated speed. No special signal integrity precautions beyond the datasheet-recommended 1 µF + 100 nF decoupling on VDD.
 
@@ -430,7 +431,7 @@ SX1302 input ◄────┬─ IDLE or PSRAM_EN=0 ───────► l
 | `psram_en` | in | 1 | Enable PSRAM path; from `PSRAM_CTRL[0]` (`0x70`) |
 | `sample_width` | in | 1 | 0=16-bit I/Q, 1=32-bit I/Q; from `PSRAM_CTRL[2]` (`0x70`) |
 | `jtag_en` | in | 1 | JTAG active; from `DEBUG_CTRL[0]` (`0x04`); forces SIO[0–3] tristate and sets `PAD_CONFLICT` when asserted with `psram_en` |
-| `init_start` | in | 1 | Firmware strobe: begin QE init after tPU |
+| `init_start` | in | 1 | `PSRAM_CTRL.PSRAM_EN & ~QSPI_OWNER` level; begin QE init. No on-chip tPU wait — firmware must not set PSRAM_EN until tPU has elapsed (Open Risks #27.1) |
 | `iq_in[3:0]` | in | 4×32 | Live IQ samples from decimator |
 | `iq_valid` | in | 1 | Sample strobe |
 | `sc_lock` | in | 1 | Preamble detection event |
@@ -497,7 +498,7 @@ The former `PSRAM_PKT_BYTES_HI/LO` and `PSRAM_RD_OFFSET` diagnostic registers ar
 | Test | Method | Pass criterion |
 |---|---|---|
 | PSRAM_EN=0 | Inject packet with PSRAM_EN=0 | SIO[0–3] tristated; combiner sees live stream; next-packet behaviour unchanged |
-| QE init | Pulse `init_start`; monitor SIO[0] | RSTEN→RST→Enter QPI sequence correct; `qe_init_done` asserts |
+| QE init | Set `PSRAM_CTRL.PSRAM_EN=1`; monitor SIO[0] | RSTEN→RST→Enter QPI sequence correct; `qe_init_done` asserts |
 | tCEM | Measure CE# low duration | ≤ 938 ns (< 4 µs extended, < 8 µs standard grade) |
 | tCPH | Measure CE# high between transactions | ≥ 31.25 ns > 18 ns minimum |
 | BUFFERING | `sc_lock` with PSRAM_EN=1 | `buf_active` asserts; zeros to SX1302; writes begin at buf_base; wr_ptr increments per `iq_valid` |
@@ -519,4 +520,4 @@ The former `PSRAM_PKT_BYTES_HI/LO` and `PSRAM_RD_OFFSET` diagnostic registers ar
 - [ΣΔ Decimator](ΣΔ%20Decimator.md) — live `iq_in`
 - [MRC Combiner](MRC%20Combiner.md) — applies weights to PSRAM replay stream during REPLAY
 - [JTAG TAP](JTAG%20TAP.md) — shares SIO[0–3] pads; mutually exclusive with PSRAM_EN=1
-- [Register Map](../Register%20Map.md) — `PSRAM_CTRL` (0x16), `PSRAM_STATUS` (0xBA), `PSRAM_PKT_BYTES` (0xBB–0xBC), `PSRAM_RD_OFFSET` (0xBD)
+- [Register Map](../Register%20Map.md) — `PSRAM_CTRL` (0x70), `PSRAM_STATUS` (0x71); `PSRAM_PKT_BYTES`/`PSRAM_RD_OFFSET` were removed under the 7-bit register map repack (never wired in RTL)

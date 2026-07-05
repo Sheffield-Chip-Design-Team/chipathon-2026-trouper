@@ -115,6 +115,13 @@ module fpga_dsp_wrap (
     output wire        remod_q
 );
 
+    // The FPGA AXI wrapper still exposes the legacy decim_ratio field. The
+    // ASIC datapath now runs a fixed-rate decimator and uses sample_shift as
+    // the BW selector: 1 = 250 kHz, 2 = 125 kHz. Preserve the old reset default
+    // by treating decim_ratio[0]==0 as 250 kHz.
+    wire [1:0] sample_shift = decim_ratio[0] ? 2'd2 : 2'd1;
+    wire [3:0] tacc_window_syms = 4'd8;
+
     // =========================================================================
     // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128 (matches
     // trouper_top). Replaces the 4× per-branch sd_decimator with the area-shared
@@ -178,16 +185,16 @@ module fpga_dsp_wrap (
     dc_removal u_dcr (
         .clk_32m   (clk),
         .rst_n     (rst_n),
-        .raw_i0 (src_i[0]), .raw_i1 (src_i[1]),
-        .raw_i2 (src_i[2]), .raw_i3 (src_i[3]),
-        .raw_q0 (src_q[0]), .raw_q1 (src_q[1]),
-        .raw_q2 (src_q[2]), .raw_q3 (src_q[3]),
-        .raw_valid (src_valid),
-        .out_i0 (dcr_i[0]), .out_i1 (dcr_i[1]),
-        .out_i2 (dcr_i[2]), .out_i3 (dcr_i[3]),
-        .out_q0 (dcr_q[0]), .out_q1 (dcr_q[1]),
-        .out_q2 (dcr_q[2]), .out_q3 (dcr_q[3]),
-        .out_valid (dcr_valid)
+        .sample_i0 (src_i[0]), .sample_i1 (src_i[1]),
+        .sample_i2 (src_i[2]), .sample_i3 (src_i[3]),
+        .sample_q0 (src_q[0]), .sample_q1 (src_q[1]),
+        .sample_q2 (src_q[2]), .sample_q3 (src_q[3]),
+        .sample_valid     (src_valid),
+        .sample_out_i0 (dcr_i[0]), .sample_out_i1 (dcr_i[1]),
+        .sample_out_i2 (dcr_i[2]), .sample_out_i3 (dcr_i[3]),
+        .sample_out_q0 (dcr_q[0]), .sample_out_q1 (dcr_q[1]),
+        .sample_out_q2 (dcr_q[2]), .sample_out_q3 (dcr_q[3]),
+        .sample_out_valid (dcr_valid)
     );
 
     // =========================================================================
@@ -262,6 +269,7 @@ module fpga_dsp_wrap (
         .init_start   (1'b1),         // run QE init at power-up
         .qspi_owner   (1'b0),         // local controller always owns the pads
         .sf           (sf),
+        .sample_shift (sample_shift),
         .iq_i0 (dcr_i[0]), .iq_i1 (dcr_i[1]),
         .iq_i2 (dcr_i[2]), .iq_i3 (dcr_i[3]),
         .iq_q0 (dcr_q[0]), .iq_q1 (dcr_q[1]),
@@ -329,8 +337,10 @@ module fpga_dsp_wrap (
         .del_q0 (del_q0),
         .delayed_valid  (delayed_valid),
         .sf             (sf),
+        .sample_shift   (sample_shift),
         .sc_thr         (sc_thr),
         .sc_hits_req    (sc_hits_req),
+        .sc_clr         (1'b0),
         .sc_lock        (sc_lock_int),
         .timing_ref     (timing_ref_int),
         .c_i0 (), .c_q0 (),
@@ -364,6 +374,8 @@ module fpga_dsp_wrap (
         .sc_lock    (sc_lock_int),
         .timing_ref (timing_ref_int),
         .sf         (sf),
+        .sample_shift (sample_shift),
+        .tacc_window_syms (tacc_window_syms),
         .noise_trig (1'b0),
         .Zpair_i0 (), .Zpair_q0 (),
         .Zpair_i1 (), .Zpair_q1 (),
@@ -417,6 +429,7 @@ module fpga_dsp_wrap (
         .iq_valid          (dcr_valid),
         .sample_count      (sample_count),
         .sf                (sf),
+        .sample_shift      (sample_shift),
         .sc_lock           (sc_lock_int),
         .timing_ref        (timing_ref_int),
         .training_done     (training_done_int),
@@ -426,6 +439,7 @@ module fpga_dsp_wrap (
         .psram_en          (1'b0),
         .psram_replay_active (1'b0),
         .pkt_timeout_syms  (pkt_timeout_syms),
+        .tacc_window_syms  (tacc_window_syms),
         .safe_switch        (safe_switch),
         .W_valid_set        (W_valid_set),
         .W_missed_packet    (W_missed_packet),

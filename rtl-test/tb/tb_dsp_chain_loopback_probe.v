@@ -147,16 +147,16 @@ module tb_dsp_chain_real;
 
     dc_removal u_dcr (
         .clk_32m       (clk),       .rst_n         (rst_n),
-        .raw_i0        (raw_i0),    .raw_i1        (raw_i1),
-        .raw_i2        (raw_i2),    .raw_i3        (raw_i3),
-        .raw_q0        (raw_q0),    .raw_q1        (raw_q1),
-        .raw_q2        (raw_q2),    .raw_q3        (raw_q3),
-        .raw_valid     (iq_valid),
-        .out_i0        (dcr_i0),    .out_i1        (dcr_i1),
-        .out_i2        (dcr_i2),    .out_i3        (dcr_i3),
-        .out_q0        (dcr_q0),    .out_q1        (dcr_q1),
-        .out_q2        (dcr_q2),    .out_q3        (dcr_q3),
-        .out_valid     (dcr_valid)
+        .sample_i0     (raw_i0),    .sample_i1     (raw_i1),
+        .sample_i2     (raw_i2),    .sample_i3     (raw_i3),
+        .sample_q0     (raw_q0),    .sample_q1     (raw_q1),
+        .sample_q2     (raw_q2),    .sample_q3     (raw_q3),
+        .sample_valid  (iq_valid),
+        .sample_out_i0 (dcr_i0),    .sample_out_i1 (dcr_i1),
+        .sample_out_i2 (dcr_i2),    .sample_out_i3 (dcr_i3),
+        .sample_out_q0 (dcr_q0),    .sample_out_q1 (dcr_q1),
+        .sample_out_q2 (dcr_q2),    .sample_out_q3 (dcr_q3),
+        .sample_out_valid (dcr_valid)
     );
 
     // -----------------------------------------------------------------------
@@ -262,6 +262,7 @@ module tb_dsp_chain_real;
         .sf(4'd7),
         .sc_thr(16'd32),    // realistic threshold for real capture
         .sc_hits_req(2'd1),
+        .sc_clr(1'b0),
         .sc_lock(sc_lock),
         .timing_ref(timing_ref),
         .c_i0(c_i0), .c_q0(c_q0),
