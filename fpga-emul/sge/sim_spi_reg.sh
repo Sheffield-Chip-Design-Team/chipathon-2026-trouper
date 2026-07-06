@@ -1,4 +1,4 @@
 #!/bin/bash
 set -euo pipefail
 cd /foss/designs/lora-mimo/fpga-emul
-make sim_inject
+make sim_spi_reg

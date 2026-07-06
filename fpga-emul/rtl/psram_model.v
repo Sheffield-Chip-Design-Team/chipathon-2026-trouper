@@ -44,6 +44,15 @@ module psram_model #(
     localparam NADDR = ADDR_BITS + 1;          // nibble-address width
     reg [3:0] mem [0:(1<<NADDR)-1];
 
+    // sio_in has no reset (see the dedicated BRAM-inferable block below) — its
+    // FPGA power-up value comes from this initial block, which Vivado
+    // synthesizes as the flop's INIT value rather than reset logic. Xilinx
+    // 7-series BRAM output registers don't support async reset; mixing one
+    // into the same process as the mem[] array (as the control FSM below
+    // does for everything else) prevented BRAM inference entirely — Vivado
+    // fell back to trying 524288 individual flip-flops and failed.
+    initial sio_in = 4'h0;
+
     // Transaction tracking.
     reg        active;          // ce_n low (a transaction in progress)
     reg [7:0]  cmd;             // assembled command byte
@@ -74,7 +83,6 @@ module psram_model #(
             oe_released <= 1'b0;
             rd_skip     <= 6'd0;
             rd_started  <= 4'd0;
-            sio_in      <= 4'h0;
         end else begin
             if (ce_n) begin
                 // Idle / between transactions.
@@ -100,10 +108,6 @@ module psram_model #(
                 if (nib >= 6'd2 && nib <= 6'd7)
                     addr <= {addr[18:0], sio_out};
 
-                // ---- WRITE: one nibble per cycle from nib==8 onward ----
-                if (is_write && nib >= 6'd8)
-                    mem[wr_naddr] <= sio_out;
-
                 // ---- READ: wait for bus release, then drive one nibble/cycle ----
                 if (is_read) begin
                     if (sio_oe == 4'h0) begin
@@ -113,13 +117,22 @@ module psram_model #(
                         end else if (rd_skip != 6'd0) begin
                             rd_skip <= rd_skip - 6'd1;
                         end else begin
-                            sio_in     <= mem[rd_naddr];   // clean registered read
                             rd_started <= rd_started + 4'd1;
                         end
                     end
                 end
             end
         end
+    end
+
+    // ---- Dedicated BRAM-inferable memory access: no reset, no other logic
+    //      mixed in (see the initial block above for sio_in's power-up value).
+    wire wr_en = is_write && (nib >= 6'd8);
+    wire rd_en = is_read && (sio_oe == 4'h0) && oe_released && (rd_skip == 6'd0);
+
+    always @(posedge clk_32m) begin
+        if (wr_en) mem[wr_naddr] <= sio_out;
+        if (rd_en) sio_in        <= mem[rd_naddr];
     end
 
 endmodule

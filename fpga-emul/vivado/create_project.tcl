@@ -3,10 +3,15 @@
 # Target: Digilent Arty A7-100T (xc7a100tcsg324-1)
 #
 # Reuses the existing AFE eval block design (MicroBlaze + EthernetLite +
-# AXI Quad SPI) and adds:
+# AXI Quad SPI for SX1257) and adds:
 #   - Extra MMCM output at 32 MHz (dsp_clk)
-#   - axi_dsp_ctrl peripheral (our RTL, clocked at 32 MHz)
-#   - AXI SmartConnect / clock converter bridge from MB AXI bus to 32 MHz
+#   - fpga_dsp_wrap (plain-Verilog module, not AXI) instantiating trouper_top.v
+#     directly — spi_slave + reg_bank included, so the ASIC's real host-SPI
+#     register interface is what gets exercised, not a parallel register file
+#   - A second AXI Quad SPI core (axi_quad_spi_1) acting as the SPI MASTER
+#     driving fpga_dsp_wrap's host_cs/spi_sck/spi_mosi/spi_miso internally
+#     (no external pins) — MicroBlaze firmware issues real SPI transactions
+#     against trouper_top's spi_slave exactly as the real RPi host would
 #   - REMOD output pins on JD PMOD for oscilloscope / SX1302 connection
 #
 # Usage (from Vivado Tcl console):
@@ -20,7 +25,7 @@
 set proj_name  "arty_dsp_emul"
 set proj_dir   [file normalize "[file dirname [info script]]/../vivado_proj"]
 set rtl_dir    [file normalize "[file dirname [info script]]/../rtl"]
-set asic_rtl   [file normalize "[file dirname [info script]]/../../rtl-test/rtl"]
+set asic_rtl   [file normalize "[file dirname [info script]]/../../src"]
 set afe_bd_dir [file normalize "[file dirname [info script]]/../../../claude/fpga-afe-eval/build/vivado/arty_afe_eval/arty_afe_eval.srcs"]
 set part       "xc7a100tcsg324-1"
 
@@ -35,23 +40,28 @@ create_project $proj_name $proj_dir -part $part -force
 set emul_srcs [list \
     "$rtl_dir/sync_fifo.v"        \
     "$rtl_dir/psram_model.v"      \
+    "$rtl_dir/axi_inj_ctrl.v"     \
     "$rtl_dir/fpga_dsp_wrap.v"    \
-    "$rtl_dir/axi_dsp_ctrl.v"     \
 ]
 
-# ASIC RTL (the modules under test — same files used by Verilator testbenches).
-# Topology kept in sync with trouper_top: TDM8 decimator, no weight_gen (firmware
-# weights), no noise_est (noise via training_acc Zdiag), SC delay via PSRAM
-# (psram_buf_ctrl + on-chip BRAM psram_model in place of the APS6404L chip).
+# ASIC RTL (the modules under test — pulled from src/, the definitive ASIC
+# source tree). fpga_dsp_wrap instantiates trouper_top.v directly, so the full
+# tapeout module list is needed: fixed R=64 half-band decimator, no weight_gen
+# (firmware weights), no noise_est (noise via training_acc Zdiag), SC delay
+# via PSRAM (psram_buf_ctrl + on-chip BRAM psram_model in place of the
+# APS6404L chip), plus spi_slave + reg_bank for the real host-SPI interface.
 set asic_srcs [list \
-    "$asic_rtl/sd_decimator_cic_tdm8.v" \
-    "$asic_rtl/dc_removal.v"         \
-    "$asic_rtl/psram_buf_ctrl.v"     \
-    "$asic_rtl/sc_detector.v"        \
-    "$asic_rtl/training_acc.v"       \
-    "$asic_rtl/packet_ctrl_fsm.v"    \
-    "$asic_rtl/mrc_combiner.v"       \
-    "$asic_rtl/sd_remod.v"           \
+    "$asic_rtl/top/trouper_top.v"              \
+    "$asic_rtl/decimator/sd_decimator_poly.v" \
+    "$asic_rtl/frontend/dc_removal.v"         \
+    "$asic_rtl/frontend/sc_detector.v"        \
+    "$asic_rtl/control/psram_buf_ctrl.v"      \
+    "$asic_rtl/combiner/training_acc.v"       \
+    "$asic_rtl/control/packet_ctrl_fsm.v"     \
+    "$asic_rtl/combiner/mrc_combiner.v"       \
+    "$asic_rtl/remod/sd_remod.v"              \
+    "$asic_rtl/control/spi_slave.v"           \
+    "$asic_rtl/control/reg_bank.v"            \
 ]
 
 add_files -norecurse $emul_srcs
@@ -85,8 +95,9 @@ current_bd_design [get_bd_designs system]
 #             (1.28:1 over the 25 MHz MII clock) the EmacLite AXI↔MII CDC is
 #             marginal and produces MII bit-slips → CRC/alignment errors. 100 MHz
 #             (4:1) matches the proven Arty A7 EmacLite ping design.
-#   CLKOUT2 = 32 MHz   DSP chain (axi_dsp_ctrl), bridged to the 100 MHz bus by an
-#             AXI clock converter (inserted by axi4 automation).
+#   CLKOUT2 = 32 MHz   DSP chain (fpga_dsp_wrap / trouper_top), clocked directly
+#             (no AXI on this domain — MicroBlaze talks to it only via the
+#             internal axi_quad_spi_1 SPI link).
 #   CLKOUT3 = 25 MHz   reference clock driven OUT to the Arty A7 Ethernet PHY
 #             (TI DP83848, MII mode) on eth_ref_clk / pin G18. Without it the PHY
 #             PLL never starts → no link, no link LED.
@@ -182,6 +193,83 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_quad_spi_0/ext_spi_clk]
 make_bd_intf_pins_external [get_bd_intf_pins axi_quad_spi_0/SPI_0]
 
+# --- AXI Quad SPI (SPI MASTER driving trouper_top's host-SPI slave) --------
+# Internal-only: standard (1-wire-each) master mode, single slave. Its
+# sck_o/ss_o[0]/io0_o pins drive fpga_dsp_wrap's spi_sck/host_cs/spi_mosi, and
+# fpga_dsp_wrap's spi_miso feeds back into io1_i. No external pins — this
+# link never leaves the fabric.
+#
+# C_USE_STARTUP must be 0: the default (1) routes SCK through the 7-series
+# STARTUP primitive (for booting off an SPI config flash) and does NOT expose
+# sck_i/sck_o/sck_t as ordinary fabric pins at all — confirmed by generating
+# this IP's instantiation template with each setting. We need a plain
+# discrete SCK pin to wire straight to fpga_dsp_wrap, not the STARTUP path.
+set spi_host [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_quad_spi:3.2 axi_quad_spi_1]
+set_property -dict [list \
+    CONFIG.C_SCK_RATIO      {16} \
+    CONFIG.C_NUM_SS_BITS    {1} \
+    CONFIG.C_SPI_MODE       {0} \
+    CONFIG.C_USE_STARTUP    {0} \
+] $spi_host
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "Auto" Master "/microblaze_0 (Periph)" \
+              intc_ip "Auto" master_apm "0" } \
+    [get_bd_intf_pins axi_quad_spi_1/AXI_LITE]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_quad_spi_1/ext_spi_clk]
+
+# --- fpga_dsp_wrap (plain Verilog, not AXI) — instantiates trouper_top.v ----
+set dsp_wrap [create_bd_cell -type module -reference fpga_dsp_wrap fpga_dsp_wrap_0]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins fpga_dsp_wrap_0/clk]
+connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
+               [get_bd_pins fpga_dsp_wrap_0/rst_n]
+
+# Internal SPI link: axi_quad_spi_1 (master) <-> fpga_dsp_wrap_0 (slave pins)
+connect_bd_net [get_bd_pins axi_quad_spi_1/sck_o]  [get_bd_pins fpga_dsp_wrap_0/spi_sck]
+connect_bd_net [get_bd_pins axi_quad_spi_1/ss_o]   [get_bd_pins fpga_dsp_wrap_0/host_cs]
+connect_bd_net [get_bd_pins axi_quad_spi_1/io0_o]  [get_bd_pins fpga_dsp_wrap_0/spi_mosi]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/spi_miso] [get_bd_pins axi_quad_spi_1/io1_i]
+
+# --- axi_inj_ctrl (custom peripheral, 32 MHz DSP domain) -------------------
+# Injection FIFO + rate-matching pacer feeding fpga_dsp_wrap's SD-modulator
+# injection path (replaces the old int8-level INJECT mode). Firmware pushes
+# int8 I/Q over Ethernet; this peripheral paces samples out at the
+# decimator's R=64 output rate for fpga_dsp_wrap to ΣΔ-modulate back onto
+# hw_iq_i/hw_iq_q.
+set inj_ctrl [create_bd_cell -type module -reference axi_inj_ctrl axi_inj_ctrl_0]
+connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins axi_inj_ctrl_0/s_axi_aclk]
+connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
+               [get_bd_pins axi_inj_ctrl_0/s_axi_aresetn]
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "/clk_wiz_0/clk_out2 (32 MHz)" \
+              Master "/microblaze_0 (Periph)" intc_ip "Auto" master_apm "0" } \
+    [get_bd_intf_pins axi_inj_ctrl_0/s_axi]
+
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_en]    [get_bd_pins fpga_dsp_wrap_0/inj_en]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_valid] [get_bd_pins fpga_dsp_wrap_0/inj_valid]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i0] [get_bd_pins fpga_dsp_wrap_0/inj_i0]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q0] [get_bd_pins fpga_dsp_wrap_0/inj_q0]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i1] [get_bd_pins fpga_dsp_wrap_0/inj_i1]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q1] [get_bd_pins fpga_dsp_wrap_0/inj_q1]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i2] [get_bd_pins fpga_dsp_wrap_0/inj_i2]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q2] [get_bd_pins fpga_dsp_wrap_0/inj_q2]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i3] [get_bd_pins fpga_dsp_wrap_0/inj_i3]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q3] [get_bd_pins fpga_dsp_wrap_0/inj_q3]
+
+# --- AXI GPIO (1-bit input) for firmware to poll trouper_top's sticky IRQ --
+set irq_gpio [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_irq]
+set_property -dict [list \
+    CONFIG.C_GPIO_WIDTH   {1} \
+    CONFIG.C_ALL_INPUTS   {1} \
+] $irq_gpio
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "Auto" Master "/microblaze_0 (Periph)" \
+              intc_ip "Auto" master_apm "0" } \
+    [get_bd_intf_pins axi_gpio_irq/S_AXI]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/irq] [get_bd_pins axi_gpio_irq/gpio_io_i]
+
 # --- AXI UART Lite (debug) ----------------------------------------------------
 set uart [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_uartlite:2.0 axi_uartlite_0]
 set_property CONFIG.C_BAUDRATE {115200} $uart
@@ -192,33 +280,17 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
     [get_bd_intf_pins axi_uartlite_0/S_AXI]
 make_bd_intf_pins_external [get_bd_intf_pins axi_uartlite_0/UART]
 
-# --- axi_dsp_ctrl (custom peripheral, 32 MHz DSP domain) ---------------------
-set dsp_ctrl [create_bd_cell -type module -reference axi_dsp_ctrl axi_dsp_ctrl_0]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins axi_dsp_ctrl_0/dsp_clk]
-connect_bd_net [get_bd_pins clk_wiz_0/clk_out2] [get_bd_pins axi_dsp_ctrl_0/s_axi_aclk]
-connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
-               [get_bd_pins axi_dsp_ctrl_0/s_axi_aresetn]
-
-# Connect axi_dsp_ctrl to the MicroBlaze peripheral bus. Master is the 100 MHz
-# bus, slave is the 32 MHz DSP domain — the differing Clk_master/Clk_slave makes
-# the axi4 automation insert an AXI clock converter for the CDC.
-apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
-    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
-              Clk_slave  "/clk_wiz_0/clk_out2 (32 MHz)" \
-              Master "/microblaze_0 (Periph)" intc_ip "Auto" master_apm "0" } \
-    [get_bd_intf_pins axi_dsp_ctrl_0/s_axi]
-
 # --- I/Q input ports (SX1257 PMOD pins, synchronous to 32 MHz dsp_clk) ------
 create_bd_port -dir I -from 3 -to 0 hw_iq_i
 create_bd_port -dir I -from 3 -to 0 hw_iq_q
-connect_bd_net [get_bd_ports hw_iq_i] [get_bd_pins axi_dsp_ctrl_0/hw_iq_i]
-connect_bd_net [get_bd_ports hw_iq_q] [get_bd_pins axi_dsp_ctrl_0/hw_iq_q]
+connect_bd_net [get_bd_ports hw_iq_i] [get_bd_pins fpga_dsp_wrap_0/hw_iq_i]
+connect_bd_net [get_bd_ports hw_iq_q] [get_bd_pins fpga_dsp_wrap_0/hw_iq_q]
 
 # --- REMOD output ports (JD PMOD for oscilloscope) ---------------------------
 create_bd_port -dir O remod_i
 create_bd_port -dir O remod_q
-connect_bd_net [get_bd_pins axi_dsp_ctrl_0/remod_i] [get_bd_ports remod_i]
-connect_bd_net [get_bd_pins axi_dsp_ctrl_0/remod_q] [get_bd_ports remod_q]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/remod_i] [get_bd_ports remod_i]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/remod_q] [get_bd_ports remod_q]
 
 # --- Validate and save --------------------------------------------------------
 validate_bd_design
@@ -239,4 +311,5 @@ set_property STEPS.WRITE_BITSTREAM.ARGS.BIN_FILE true [get_runs impl_1]
 
 puts "Project created: $proj_dir"
 puts "Next: open the block design, complete address assignment, then run synthesis."
-puts "      Address map target for axi_dsp_ctrl: 0x0002_0000 (64 KB segment)"
+puts "      axi_quad_spi_1 is the SPI master driving trouper_top's host-SPI slave;"
+puts "      firmware talks to the ASIC register map (reg_bank) through it."

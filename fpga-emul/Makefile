@@ -1,18 +1,23 @@
 # fpga-emul/Makefile
 # Simulation (Verilator via SGE) and Vivado build targets for the DSP chain FPGA emulation.
 #
+# fpga_dsp_wrap.v instantiates trouper_top.v directly (spi_slave + reg_bank
+# included) — the host-SPI register interface is exercised through the
+# wrapper's host_cs/spi_sck/spi_mosi/spi_miso ports. On real hardware these
+# are wired to a dedicated axi_quad_spi core so MicroBlaze firmware drives
+# them exactly as the real RPi host would (see vivado/create_project.tcl).
+#
 # SGE targets (primary): submit Verilator jobs to the homelab SGE cluster.
-#   make sge_sim_inject      — INJECT mode: preamble → sc_lock + weights
-#   make sge_sim_decim_eth   — DECIM_ETH mode: 1-bit bitstream → decimated output
-#   make sge_sim_all         — both sims
+#   make sge_sim_spi_reg     — SPI register pass-through smoke test
+#   make sge_sim_all         — same
 #
 # Local Verilator targets (for use inside the chipathon26 container directly):
-#   make sim_inject / sim_decim_eth / sim_all
+#   make sim_spi_reg / sim_psram / sim_all
 #
 # After submitting an SGE job, poll completion with:
 #   curl -s http://nas.home:4783/api/jobs/<ID>
 # Read output from:
-#   /srv/eda/logs/timothyn/job-<ID>.o
+#   /srv/eda/logs/timothyjabez/job-<ID>.o
 
 HLAB_SGE_URL  = http://nas.home:4783
 NFS_DESIGN    = /srv/eda/designs/timothyjabez/lora-mimo
@@ -24,20 +29,26 @@ VFLAGS      = --binary --timing -Wall --Wno-UNUSED --Wno-DECLFILENAME \
               --Wno-UNOPTFLAT -sv
 
 RTL         = rtl
-ASIC_RTL    = ../rtl-test/rtl
+ASIC_RTL    = ../src
 
-# All ASIC RTL modules needed by fpga_dsp_wrap
-ASIC_SRCS   = $(ASIC_RTL)/sd_decimator_cic_tdm8.v \
-              $(ASIC_RTL)/dc_removal.v          \
-              $(ASIC_RTL)/psram_buf_ctrl.v      \
-              $(ASIC_RTL)/sc_detector.v         \
-              $(ASIC_RTL)/training_acc.v        \
-              $(ASIC_RTL)/packet_ctrl_fsm.v     \
-              $(ASIC_RTL)/mrc_combiner.v        \
-              $(ASIC_RTL)/sd_remod.v
+# All ASIC RTL modules needed by fpga_dsp_wrap (trouper_top.v + its subblocks).
+# src/ is the definitive ASIC source tree (rtl-test/rtl is the
+# working/synthesis-and-sim copy).
+ASIC_SRCS   = $(ASIC_RTL)/top/trouper_top.v             \
+              $(ASIC_RTL)/decimator/sd_decimator_poly.v \
+              $(ASIC_RTL)/frontend/dc_removal.v        \
+              $(ASIC_RTL)/frontend/sc_detector.v       \
+              $(ASIC_RTL)/control/psram_buf_ctrl.v     \
+              $(ASIC_RTL)/combiner/training_acc.v      \
+              $(ASIC_RTL)/control/packet_ctrl_fsm.v    \
+              $(ASIC_RTL)/combiner/mrc_combiner.v      \
+              $(ASIC_RTL)/remod/sd_remod.v             \
+              $(ASIC_RTL)/control/spi_slave.v          \
+              $(ASIC_RTL)/control/reg_bank.v
 
-FPGA_SRCS   = $(RTL)/psram_model.v  \
-              $(RTL)/sync_fifo.v      \
+FPGA_SRCS   = $(RTL)/sync_fifo.v    \
+              $(RTL)/psram_model.v  \
+              $(RTL)/axi_inj_ctrl.v \
               $(RTL)/fpga_dsp_wrap.v
 
 # ============================================================================
@@ -45,53 +56,40 @@ FPGA_SRCS   = $(RTL)/psram_model.v  \
 # Scripts in sge/ run inside the chipathon26 container on the NFS-mounted tree.
 # ============================================================================
 
-.PHONY: sge_sim_inject sge_sim_decim_eth sge_sim_all \
-        sim_inject sim_decim_eth sim_all sim_psram clean vivado_project vivado_synth \
+.PHONY: sge_sim_spi_reg sge_sim_all \
+        sim_spi_reg sim_all sim_psram clean vivado_project vivado_synth \
         test_fw run_test_fw eth_fw run_eth_fw
 
-sge_sim_inject:
+sge_sim_spi_reg:
 	HLAB_SGE_URL=$(HLAB_SGE_URL) hqsub \
-	    --name fpga-sim-inject \
+	    --name fpga-sim-spi-reg \
 	    --cpus 4 \
 	    --mem 8G \
-	    $(NFS_DESIGN)/fpga-emul/sge/sim_inject.sh
+	    $(NFS_DESIGN)/fpga-emul/sge/sim_spi_reg.sh
 
-sge_sim_decim_eth:
-	HLAB_SGE_URL=$(HLAB_SGE_URL) hqsub \
-	    --name fpga-sim-decim-eth \
-	    --cpus 4 \
-	    --mem 8G \
-	    $(NFS_DESIGN)/fpga-emul/sge/sim_decim_eth.sh
-
-sge_sim_all: sge_sim_inject sge_sim_decim_eth
+sge_sim_all: sge_sim_spi_reg
 
 # ============================================================================
 # Local Verilator targets (run inside chipathon26 container)
 # ============================================================================
 
-# INJECT mode simulation: synthetic preamble → verify sc_lock + weights
-sim_inject: obj_dir_inject/Vtb_fpga_inject
+# SPI register pass-through smoke test (wrapper wiring only — the deep
+# spi_slave/reg_bank/GRP-arbiter correctness tests live in rtl-test/tb/
+# against trouper_top.v directly)
+sim_spi_reg: obj_dir_spi_reg/Vtb_fpga_spi_reg
 	$<
 
-obj_dir_inject/Vtb_fpga_inject: tb/tb_fpga_inject.v $(FPGA_SRCS) $(ASIC_SRCS)
-	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_inject \
-	    --top-module tb_fpga_inject $^
+obj_dir_spi_reg/Vtb_fpga_spi_reg: tb/tb_fpga_spi_reg.v $(FPGA_SRCS) $(ASIC_SRCS)
+	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_spi_reg \
+	    --top-module tb_fpga_spi_reg $^
 
-# DECIM_ETH mode simulation: 1-bit random stream → decimated output
-sim_decim_eth: obj_dir_decim_eth/Vtb_fpga_decim_eth
-	$<
-
-obj_dir_decim_eth/Vtb_fpga_decim_eth: tb/tb_fpga_decim_eth.v $(FPGA_SRCS) $(ASIC_SRCS)
-	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_decim_eth \
-	    --top-module tb_fpga_decim_eth $^
-
-sim_all: sim_inject sim_decim_eth
+sim_all: sim_spi_reg
 
 # PSRAM model cosim: psram_buf_ctrl ⇄ psram_model, checks the SC delay path
 sim_psram: obj_dir_psram/Vtb_psram_model
 	$<
 
-obj_dir_psram/Vtb_psram_model: tb/tb_psram_model.v $(RTL)/psram_model.v $(ASIC_RTL)/psram_buf_ctrl.v
+obj_dir_psram/Vtb_psram_model: tb/tb_psram_model.v $(RTL)/psram_model.v $(ASIC_RTL)/control/psram_buf_ctrl.v
 	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_psram \
 	    --top-module tb_psram_model $^
 
@@ -159,6 +157,6 @@ run_eth_fw: $(SW)/lora_mimo_fw.elf
 # Clean
 # ============================================================================
 clean:
-	rm -rf obj_dir_inject obj_dir_decim_eth obj_dir_psram *.vcd
+	rm -rf obj_dir_spi_reg obj_dir_psram *.vcd
 	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map
 	rm -f $(SW)/lora_mimo_fw.elf

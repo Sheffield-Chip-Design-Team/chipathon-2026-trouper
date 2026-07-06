@@ -1,16 +1,18 @@
 // tb_psram_model.v
 // Cosimulation of psram_buf_ctrl ⇄ psram_model (BRAM-backed APS6404L model).
-// Validates the SC delay-line path: after N = 2^SF iq_valid samples, the
-// del_i0/del_q0 outputs must equal the branch-0 sample written N samples ago.
+// Validates the SC delay-line path: after N = 2^(SF+sample_shift) iq_valid
+// samples, the del_i0/del_q0 outputs must equal the branch-0 sample written
+// N samples ago (see psram_buf_ctrl.v's del_n_c derivation).
 //
 // Build with: verilator --binary --timing  (top tb_psram_model).
 
 `timescale 1ns/1ps
 `default_nettype none
 module tb_psram_model;
-    localparam SF = 7;                // N = 128 sample delay (smallest LoRa SF)
-    localparam N  = (1 << SF);
-    localparam integer PERIOD = 128;  // clk cycles per iq_valid (≈250 kHz @32 MHz)
+    localparam SF           = 7;      // smallest LoRa SF
+    localparam SAMPLE_SHIFT = 1;      // 250 kHz BW, 2x oversample
+    localparam N  = (1 << (SF + SAMPLE_SHIFT));  // 256 sample delay
+    localparam integer PERIOD = 128;  // clk cycles per iq_valid (250 kHz @32 MHz)
 
     reg clk = 1'b0;
     reg rst_n = 1'b0;
@@ -33,7 +35,7 @@ module tb_psram_model;
     psram_buf_ctrl u_buf (
         .clk_32m (clk), .rst_n (rst_n),
         .psram_en (1'b1), .init_start (1'b1), .qspi_owner (1'b0),
-        .sf (SF[3:0]),
+        .sf (SF[3:0]), .sample_shift (SAMPLE_SHIFT[1:0]),
         .iq_i0 (iq_i0), .iq_i1 (8'sd0), .iq_i2 (8'sd0), .iq_i3 (8'sd0),
         .iq_q0 (iq_q0), .iq_q1 (8'sd0), .iq_q2 (8'sd0), .iq_q3 (8'sd0),
         .iq_valid (iq_valid),

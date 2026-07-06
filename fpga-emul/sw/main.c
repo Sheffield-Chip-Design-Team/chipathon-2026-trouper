@@ -2,56 +2,45 @@
  * LoRa MIMO DSP Chain FPGA Emulation Firmware
  * Arty A7-100T, MicroBlaze, 32 MHz DSP clock
  *
- * Three operating modes (controlled by CTRL register bit [1:0]):
+ * fpga_dsp_wrap now instantiates trouper_top.v directly (spi_slave + reg_bank
+ * included), so this firmware talks to the ASIC's real host-SPI register
+ * interface (see planning/Register Map.md) through a dedicated axi_quad_spi
+ * core (axi_quad_spi_1), instead of memory-mapping a custom parallel register
+ * file. Real SX1257 samples run through the full chain to REMOD_A_I/Q.
  *
- *   MODE 0 — DECIM_ETH
- *     Raw 4-channel decimated I/Q streamed as UDP to host.
- *     Same format as the original AFE eval firmware.
- *     Use when chips arrive to characterise the SX1257 front-end.
- *
- *   MODE 1 — FULL_DSP
- *     Full ASIC DSP chain runs on live SX1257 samples.
- *     Combined I/Q output and status (sc_lock, weights, energy)
- *     streamed as separate UDP packet types.
- *     Use to verify the chain on real RF signals.
- *
- *   MODE 2 — INJECT
- *     Synthetic int8 I/Q samples injected via UDP from host PC.
- *     The hardware rate-matching timer (INJ_PERIOD register) consumes
- *     samples from the injection FIFO at the correct sample rate.
- *     Full DSP chain processes injected samples and streams results back.
- *     Use before SX1257 chips arrive to test DSP correctness.
+ * There is no int8-level injection port on trouper_top.v itself, but
+ * fpga_dsp_wrap.v has an Ethernet-fed injection path: samples pushed here are
+ * ΣΔ-re-modulated (via sd_remod, the same core used for the TX path) back
+ * into a 1-bit stream that replaces the real SX1257 pins, so injected signals
+ * go through the real R=64 decimator and the rest of the chain — unlike the
+ * old int8-level bypass. Pushed through axi_inj_ctrl (a separate small AXI
+ * peripheral, not part of the ASIC register map).
  *
  * Network (direct cable):
  *   FPGA  192.168.10.2  MAC 02:12:34:56:78:9B
  *   Host  192.168.10.1
- *   UDP data port:    5005  (FPGA → host)
- *   UDP status port:  5006  (FPGA → host)
- *   UDP inject port:  5007  (host → FPGA, INJECT mode)
- *   UDP control port: 5008  (host → FPGA, mode control)
+ *   UDP status port:  5006  (FPGA -> host, periodic register snapshot)
+ *   UDP inject port:  5007  (host -> FPGA, int8 I/Q samples)
+ *   UDP control port: 5008  (host -> FPGA, config / weight load)
  *
- * UDP data packet (port 5005):
+ * UDP status packet (port 5006):
  *   [0..3]  magic = 0x4C4D494D ("LMIM")
- *   [4]     pkt_type: 0=raw_IQ, 1=combined, 2=status
- *   [5]     mode
- *   [6..7]  sample_count (u16 BE)
+ *   [4]     pkt_type = 2 (status)
+ *   [5]     reserved
+ *   [6..7]  reserved
  *   [8..11] seq (u32 BE)
- *   [12..]  samples (type-dependent, see below)
+ *   [12..]  dsp_status_t (see below)
  *
- *   pkt_type=0 (raw IQ, mode 0): each sample = {i0,q0,i1,q1,i2,q2,i3,q3} (8 bytes)
- *   pkt_type=1 (combined, mode 1/2): each sample = {y_i,y_q,flags} (3 bytes)
- *   pkt_type=2 (status, mode 1/2): 48 bytes of status (see dsp_status_pkt_t)
- *
- * UDP inject packet (port 5007, host → FPGA):
+ * UDP inject packet (port 5007, host -> FPGA):
  *   [0..3]  magic = 0x494E4A54 ("INJT")
  *   [4..7]  sample_count (u32 BE)
  *   [8..]   samples: each = {i0,q0,i1,q1,i2,q2,i3,q3} (8 bytes, int8)
  *
- * UDP control packet (port 5008, host → FPGA):
+ * UDP control packet (port 5008, host -> FPGA):
  *   [0..3]  magic = 0x43544C52 ("CTLR")
- *   [4]     cmd: 0=set_mode, 1=set_sf, 2=set_sc_thr, 3=set_decim,
- *                4=load_fw_weights, 5=commit_fw_weights, 6=reset_dsp
- *   [5..]   cmd-specific payload (see handle_control())
+ *   [4]     cmd: 1=set_sf, 2=set_sc_thr, 3=set_bw,
+ *                4=load_fw_weights, 5=commit_fw_weights, 6=set_inj_en
+ *   [5..]   cmd-specific payload (see handle_control_pkt())
  */
 
 #include "xparameters.h"
@@ -71,111 +60,103 @@
 #define HOST_IP_DEFAULT {192, 168, 10, 1}
 #define HOST_MAC_BCAST  {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
-#define UDP_SPORT       5005
-#define UDP_DATA_PORT   5005
+#define UDP_SPORT       5006
 #define UDP_STATUS_PORT 5006
 #define UDP_INJECT_PORT 5007
 #define UDP_CTRL_PORT   5008
 
 /* -----------------------------------------------------------------------
- * DSP controller register map (base from xparameters.h)
+ * axi_inj_ctrl register map (fpga-emul/rtl/axi_inj_ctrl.v) — FPGA-only
+ * helper peripheral, NOT part of the ASIC register map.
  * ----------------------------------------------------------------------- */
-#ifdef XPAR_AXI_DSP_CTRL_0_BASEADDR
-  #define DSP_BASE  XPAR_AXI_DSP_CTRL_0_BASEADDR
+#ifdef XPAR_AXI_INJ_CTRL_0_BASEADDR
+  #define INJ_BASE  XPAR_AXI_INJ_CTRL_0_BASEADDR
 #else
-  #define DSP_BASE  0x00020000UL   /* fallback — check Vivado address map */
+  #define INJ_BASE  0x00010000UL   /* fallback -- check Vivado address map */
 #endif
 
-#define DSP_CTRL        (DSP_BASE + 0x00)
-#define DSP_STATUS      (DSP_BASE + 0x04)
-#define DSP_ETH_LO      (DSP_BASE + 0x08)
-#define DSP_ETH_HI      (DSP_BASE + 0x0C)
-#define DSP_INJ_LO      (DSP_BASE + 0x10)
-#define DSP_INJ_HI      (DSP_BASE + 0x14)
-#define DSP_INJ_PERIOD  (DSP_BASE + 0x18)
-#define DSP_TIMING_REF  (DSP_BASE + 0x1C)
-#define DSP_W_RE01      (DSP_BASE + 0x20)
-#define DSP_W_IM01      (DSP_BASE + 0x24)
-#define DSP_W_RE23      (DSP_BASE + 0x28)
-#define DSP_W_IM23      (DSP_BASE + 0x2C)
-#define DSP_ENERGY01    (DSP_BASE + 0x30)
-#define DSP_ENERGY23    (DSP_BASE + 0x34)
-#define DSP_FW_W_RE01   (DSP_BASE + 0x38)
-#define DSP_FW_W_IM01   (DSP_BASE + 0x3C)
-#define DSP_FW_W_RE23   (DSP_BASE + 0x40)
-#define DSP_FW_W_IM23   (DSP_BASE + 0x44)
-#define DSP_SC_CFG      (DSP_BASE + 0x48)
-#define DSP_NOISE_CFG   (DSP_BASE + 0x4C)
-#define DSP_CAL_RE01    (DSP_BASE + 0x50)
-#define DSP_CAL_IM01    (DSP_BASE + 0x54)
-#define DSP_CAL_RE23    (DSP_BASE + 0x58)
-#define DSP_CAL_IM23    (DSP_BASE + 0x5C)
-#define DSP_FW_W_COMMIT (DSP_BASE + 0x60)
-#define DSP_COMBINED    (DSP_BASE + 0x64)
+#define INJ_CTRL    (INJ_BASE + 0x00)
+#define INJ_STATUS  (INJ_BASE + 0x04)
+#define INJ_LO      (INJ_BASE + 0x08)
+#define INJ_HI      (INJ_BASE + 0x0C)
+#define INJ_PERIOD  (INJ_BASE + 0x10)
 
-/* CTRL bit fields */
-#define CTRL_MODE_SHIFT       0
-#define CTRL_MODE_MASK        0x3u
-#define CTRL_RST_DSP          (1u << 2)
-#define CTRL_INJ_RATE_EN      (1u << 3)
-#define CTRL_DECIM_SHIFT      4
-#define CTRL_DC_ALPHA_SHIFT   6
-#define CTRL_DC_BYPASS        (1u << 10)
-#define CTRL_SF_SHIFT         11
-#define CTRL_ANT_EN_SHIFT     15
-#define CTRL_WGT_MODE_SHIFT   19
-#define CTRL_WGT_AUTO_CMT     (1u << 21)
-#define CTRL_POST_GAIN_SHIFT  22
-#define CTRL_WGT_SRC          (1u << 27)
-#define CTRL_MIMO_MODE        (1u << 28)
+#define INJ_STATUS_FIFO_EMPTY (1u << 0)
+#define INJ_STATUS_FIFO_FULL  (1u << 1)
+#define INJ_STATUS_UNDERRUN   (1u << 2)
 
-/* STATUS bit fields */
-#define STATUS_SC_LOCK        (1u << 0)
-#define STATUS_TRAIN_DONE     (1u << 1)
-#define STATUS_W_COMMIT       (1u << 2)
-#define STATUS_PKT_ACTIVE     (1u << 3)
-#define STATUS_ETH_EMPTY      (1u << 8)
-#define STATUS_ETH_HALF       (1u << 9)
-#define STATUS_ETH_FULL       (1u << 10)
-#define STATUS_INJ_EMPTY      (1u << 16)
-#define STATUS_INJ_FULL       (1u << 17)
-#define STATUS_INJ_UNDERRUN   (1u << 18)
-#define STATUS_ETH_OVERFLOW   (1u << 19)
+#define INJ_RD(a)   Xil_In32(a)
+#define INJ_WR(a,v) Xil_Out32((a),(v))
 
-/* Mode values */
-#define MODE_DECIM_ETH  0u
-#define MODE_FULL_DSP   1u
-#define MODE_INJECT     2u
+/* -----------------------------------------------------------------------
+ * Trouper register map (planning/Register Map.md) — 7-bit address space,
+ * accessed over SPI via axi_quad_spi_1 (see reg_write/reg_read below).
+ * ----------------------------------------------------------------------- */
+#define REG_CHIP_ID           0x00u
+#define REG_CHIP_REV          0x01u
+#define REG_IRQ_STATUS        0x02u
+#define REG_IRQ_CLEAR         0x03u
+#define REG_MIMO_CTRL         0x08u
+#define REG_SF_CFG            0x09u
+#define REG_BW_CFG            0x0Au
+#define REG_PKT_TIMEOUT_SYMS  0x0Bu
+#define REG_SC_THR_HI         0x0Cu
+#define REG_SC_THR_LO         0x0Du
+#define REG_SC_HITS_REQ       0x0Eu
+#define REG_COMB_CFG          0x0Fu
+#define REG_PACKET_STATUS     0x1Cu
+#define REG_ACTIVE_STATUS     0x1Du
+#define REG_WGT_CTRL          0x1Eu
+#define REG_TACC_NOISE_TRIG   0x1Fu
+#define REG_TRAINING_STATUS   0x20u
+#define REG_SC_DBG_FLAGS      0x26u
+#define REG_W_BANK_BASE       0x30u   /* 16 bytes: 4 branches x {re_hi,re_lo,im_hi,im_lo} */
+#define REG_ZDIAG_BASE        0x64u   /* 12 bytes: 4 branches x 3-byte [31:8] */
 
-/* Defaults */
+#define W_BANK_LEN            16u
+#define ZDIAG_LEN             12u
+
+/* IRQ_STATUS / IRQ_CLEAR bits */
+#define IRQ_CORR_LOCK         (1u << 0)
+#define IRQ_TRAINING_DONE     (1u << 1)
+#define IRQ_W_MISSED_PACKET   (1u << 2)
+#define IRQ_PACKET_DONE       (1u << 3)
+#define IRQ_NOISE_READY       (1u << 4)
+
+/* PACKET_STATUS bits */
+#define PKT_ACTIVE            (1u << 0)
+#define PKT_PHASE_MASK        (0x7u << 1)
+#define PKT_TRAINING_DONE     (1u << 4)
+#define PKT_W_PENDING         (1u << 5)
+#define PKT_W_VALID           (1u << 6)
+#define PKT_W_MISSED          (1u << 7)
+
+/* SC_DBG_FLAGS bits */
+#define SC_DBG_HIT            (1u << 0)
+#define SC_DBG_LOCK           (1u << 3)
+
+/* Defaults (match reg_bank reset values, see Register Map.md) */
 #define DEFAULT_SF          7u
-#define DEFAULT_DECIM_RATIO 0u   /* R=256 → 125 kS/s */
-#define DEFAULT_DC_ALPHA    8u
-#define DEFAULT_SC_THR      4000u
-#define DEFAULT_SC_HITS     3u
+#define DEFAULT_BW_SEL      0u    /* 0 = 250 kHz */
+#define DEFAULT_SC_THR      0x01CCu
+#define DEFAULT_SC_HITS     2u
 #define DEFAULT_ANT_EN      0xFu /* all 4 antennas */
-#define INJ_PERIOD_125K     256u /* 32 MHz / 256 = 125 kHz */
+#define DEFAULT_PKT_TIMEOUT 0x50u
 
-/* UDP packet parameters */
-#define SAMPLES_PER_PKT     64u
-#define MAX_INJ_SAMPLES     512u  /* max samples per inject UDP packet */
 #define MAGIC_DATA          0x4C4D494Du  /* "LMIM" */
 #define MAGIC_INJECT        0x494E4A54u  /* "INJT" */
 #define MAGIC_CONTROL       0x43544C52u  /* "CTLR" */
+#define PKT_STATUS          2u
 
-/* PKT types */
-#define PKT_RAW_IQ   0u
-#define PKT_COMBINED 1u
-#define PKT_STATUS   2u
+#define MAX_INJ_SAMPLES     512u  /* max samples per inject UDP packet */
 
-/* Control commands */
-#define CMD_SET_MODE       0u
-#define CMD_SET_SF         1u
-#define CMD_SET_SC_THR     2u
-#define CMD_SET_DECIM      3u
-#define CMD_LOAD_FW_WEIGHTS 4u
-#define CMD_COMMIT_FW_WEIGHTS 5u
-#define CMD_RESET_DSP      6u
+/* Control commands (UDP port 5008) */
+#define CMD_SET_SF            1u
+#define CMD_SET_SC_THR         2u
+#define CMD_SET_BW             3u
+#define CMD_LOAD_FW_WEIGHTS    4u
+#define CMD_COMMIT_FW_WEIGHTS  5u
+#define CMD_SET_INJ_EN         6u
 
 /* -----------------------------------------------------------------------
  * Ethernet helpers (identical to AFE eval firmware)
@@ -202,16 +183,12 @@ static u8 HostIp[IP_ADDR_LEN]   = HOST_IP_DEFAULT;
 static u8 HostMac[ETH_ADDR_LEN] = HOST_MAC_BCAST;
 
 static XEmacLite EmacInst;
-static XSpi     SpiInst;
+static XSpi     SpiInst;      /* axi_quad_spi_0 -> SX1257 front-ends */
+static XSpi     SpiHost;      /* axi_quad_spi_1 -> trouper_top host-SPI slave */
 
 static u8  RxBuf[XEL_MAX_FRAME_SIZE];
 static u8  TxBuf[XEL_MAX_FRAME_SIZE];
-static u32 udp_seq     = 0;
-static u32 current_mode = MODE_DECIM_ETH;
-static u32 current_ctrl = 0;
-
-#define DSP_RD(a)     Xil_In32(a)
-#define DSP_WR(a,v)   Xil_Out32((a),(v))
+static u32 udp_seq = 0;
 
 static u16 be16r(const u8 *p) { return (u16)(((u16)p[0]<<8)|p[1]); }
 static u32 be32r(const u8 *p) {
@@ -306,96 +283,93 @@ static void handle_icmp(const u8 *rx, unsigned rlen) {
 }
 
 /* -----------------------------------------------------------------------
- * DSP controller helpers
+ * Trouper host-SPI register access (axi_quad_spi_1 -> trouper_top spi_slave)
+ * Frame format matches rtl-test/tb/tb_trouper_spi.v: command byte
+ * {R/W#, addr[6:0]} followed by N data bytes, HOST_CS held low for the
+ * whole burst (auto-increment address).
  * ----------------------------------------------------------------------- */
-static void dsp_set_ctrl(u32 val) {
-    current_ctrl = val;
-    DSP_WR(DSP_CTRL, val);
+static void reg_write(u8 addr, u8 data) {
+    u8 tx[2] = { (u8)(addr & 0x7Fu), data };
+    XSpi_SetSlaveSelect(&SpiHost, 1u);
+    XSpi_Transfer(&SpiHost, tx, NULL, 2);
 }
 
-static u32 dsp_build_ctrl(u32 mode, u32 sf, u32 decim, u32 dc_alpha,
-                           u32 antenna_en, u32 wgt_mode, u32 post_gain,
-                           int inj_rate_en) {
-    return (mode         & 0x3u)
-         | ((u32)inj_rate_en << 3)
-         | ((decim       & 0x3u) << CTRL_DECIM_SHIFT)
-         | ((dc_alpha    & 0xFu) << CTRL_DC_ALPHA_SHIFT)
-         | ((sf          & 0xFu) << CTRL_SF_SHIFT)
-         | ((antenna_en  & 0xFu) << CTRL_ANT_EN_SHIFT)
-         | ((wgt_mode    & 0x3u) << CTRL_WGT_MODE_SHIFT)
-         | CTRL_WGT_AUTO_CMT
-         | ((post_gain   & 0x7u) << CTRL_POST_GAIN_SHIFT);
+static u8 reg_read(u8 addr) {
+    u8 tx[2] = { (u8)(0x80u | (addr & 0x7Fu)), 0x00u };
+    u8 rx[2] = { 0, 0 };
+    XSpi_SetSlaveSelect(&SpiHost, 1u);
+    XSpi_Transfer(&SpiHost, tx, rx, 2);
+    return rx[1];
+}
+
+static void reg_write_burst(u8 addr, const u8 *data, u32 n) {
+    u8 tx[1u + 16u];
+    tx[0] = (u8)(addr & 0x7Fu);
+    memcpy(&tx[1], data, n);
+    XSpi_SetSlaveSelect(&SpiHost, 1u);
+    XSpi_Transfer(&SpiHost, tx, NULL, 1u + n);
+}
+
+static void reg_read_burst(u8 addr, u8 *data, u32 n) {
+    u8 tx[1u + 16u];
+    u8 rx[1u + 16u];
+    tx[0] = (u8)(0x80u | (addr & 0x7Fu));
+    memset(&tx[1], 0, n);
+    XSpi_SetSlaveSelect(&SpiHost, 1u);
+    XSpi_Transfer(&SpiHost, tx, rx, 1u + n);
+    memcpy(data, &rx[1], n);
 }
 
 /* -----------------------------------------------------------------------
- * UDP: send raw I/Q packet (mode 0, DECIM_ETH)
- * samples: array of SAMPLES_PER_PKT entries, each 8 bytes {i0,q0,i1,q1,i2,q2,i3,q3}
- * ----------------------------------------------------------------------- */
-static void send_raw_iq_pkt(u8 samples[][8], u32 count) {
-    u16 payload_len = (u16)(12u + count*8u);
-    u8 *p = udp_build_hdr(HostMac, HostIp, UDP_SPORT, UDP_DATA_PORT, payload_len);
-    be32w(p, MAGIC_DATA); p[4]=PKT_RAW_IQ; p[5]=(u8)current_mode;
-    be16w(p+6, (u16)count); be32w(p+8, udp_seq);
-    p += 12;
-    u32 i;
-    for (i=0; i<count; i++) { memcpy(p, samples[i], 8); p+=8; }
-    udp_seq++;
-    eth_send(TxBuf, (unsigned)(p - TxBuf));
-}
-
-/* -----------------------------------------------------------------------
- * UDP: send combined output packet (mode 1/2, FULL_DSP/INJECT)
- * samples: array of SAMPLES_PER_PKT entries, each 4 bytes {y_i,y_q,flags,0}
- * ----------------------------------------------------------------------- */
-static void send_combined_pkt(u8 samples[][4], u32 count) {
-    u16 payload_len = (u16)(12u + count*4u);
-    u8 *p = udp_build_hdr(HostMac, HostIp, UDP_SPORT, UDP_DATA_PORT, payload_len);
-    be32w(p, MAGIC_DATA); p[4]=PKT_COMBINED; p[5]=(u8)current_mode;
-    be16w(p+6, (u16)count); be32w(p+8, udp_seq);
-    p += 12;
-    u32 i;
-    for (i=0; i<count; i++) { memcpy(p, samples[i], 4); p+=4; }
-    udp_seq++;
-    eth_send(TxBuf, (unsigned)(p - TxBuf));
-}
-
-/* -----------------------------------------------------------------------
- * UDP: send DSP status packet (mode 1/2)
+ * UDP: send DSP status packet (port 5006)
  * ----------------------------------------------------------------------- */
 typedef struct {
     u32 seq;
-    u32 status;         /* raw STATUS register */
-    u32 timing_ref;
-    u16 W_re[4];
-    u16 W_im[4];
-    u16 energy[4];
-} dsp_status_t;         /* 48 bytes */
+    u8  packet_status;   /* PACKET_STATUS (0x1C) */
+    u8  sc_dbg_flags;    /* SC_DBG_FLAGS (0x26) */
+    u8  irq_status;      /* IRQ_STATUS (0x02), cleared after read */
+    u8  reserved;
+    u8  w_bank[W_BANK_LEN];   /* 0x30-0x3F, raw big-endian int16 pairs */
+    u8  zdiag[ZDIAG_LEN];     /* 0x64-0x6F, 4 x 24-bit big-endian */
+} dsp_status_t;
 
 static void send_status_pkt(void) {
     dsp_status_t s;
-    u32 w;
-    s.seq        = udp_seq;
-    s.status     = DSP_RD(DSP_STATUS);
-    s.timing_ref = DSP_RD(DSP_TIMING_REF);
-    w=DSP_RD(DSP_W_RE01); s.W_re[0]=(u16)(w&0xFFFF); s.W_re[1]=(u16)(w>>16);
-    w=DSP_RD(DSP_W_RE23); s.W_re[2]=(u16)(w&0xFFFF); s.W_re[3]=(u16)(w>>16);
-    w=DSP_RD(DSP_W_IM01); s.W_im[0]=(u16)(w&0xFFFF); s.W_im[1]=(u16)(w>>16);
-    w=DSP_RD(DSP_W_IM23); s.W_im[2]=(u16)(w&0xFFFF); s.W_im[3]=(u16)(w>>16);
-    w=DSP_RD(DSP_ENERGY01); s.energy[0]=(u16)(w&0xFFFF); s.energy[1]=(u16)(w>>16);
-    w=DSP_RD(DSP_ENERGY23); s.energy[2]=(u16)(w&0xFFFF); s.energy[3]=(u16)(w>>16);
+    s.seq           = udp_seq;
+    s.packet_status = reg_read(REG_PACKET_STATUS);
+    s.sc_dbg_flags  = reg_read(REG_SC_DBG_FLAGS);
+    s.irq_status    = reg_read(REG_IRQ_STATUS);
+    s.reserved      = 0;
+    reg_read_burst(REG_W_BANK_BASE, s.w_bank, W_BANK_LEN);
+    reg_read_burst(REG_ZDIAG_BASE,  s.zdiag,  ZDIAG_LEN);
+
+    /* Ack any sticky IRQ bits we just observed */
+    if (s.irq_status) reg_write(REG_IRQ_CLEAR, s.irq_status);
 
     u16 payload_len = (u16)(12u + sizeof(dsp_status_t));
     u8 *p = udp_build_hdr(HostMac, HostIp, UDP_SPORT, UDP_STATUS_PORT, payload_len);
-    be32w(p, MAGIC_DATA); p[4]=PKT_STATUS; p[5]=(u8)current_mode;
+    be32w(p, MAGIC_DATA); p[4]=PKT_STATUS; p[5]=0;
     be16w(p+6, 1); be32w(p+8, udp_seq);
     p += 12;
     memcpy(p, &s, sizeof(s));
     udp_seq++;
     eth_send(TxBuf, (unsigned)(p - TxBuf + sizeof(dsp_status_t)));
+
+    if (s.irq_status & IRQ_CORR_LOCK)
+        xil_printf("[IRQ] CORR_LOCK\r\n");
+    if (s.irq_status & IRQ_TRAINING_DONE)
+        xil_printf("[IRQ] TRAINING_DONE\r\n");
+    if (s.irq_status & IRQ_W_MISSED_PACKET)
+        xil_printf("[IRQ] W_MISSED_PACKET\r\n");
+    if (s.irq_status & IRQ_PACKET_DONE)
+        xil_printf("[IRQ] PACKET_DONE\r\n");
+    if (s.irq_status & IRQ_NOISE_READY)
+        xil_printf("[IRQ] NOISE_READY\r\n");
 }
 
 /* -----------------------------------------------------------------------
- * Handle inject packet: host → FPGA samples for injection FIFO
+ * Handle inject packet: host -> FPGA samples for the axi_inj_ctrl FIFO
+ * (fpga_dsp_wrap's SD-modulator injection path -- see file header)
  * ----------------------------------------------------------------------- */
 static void handle_inject_pkt(const u8 *payload, unsigned plen) {
     u32 n_samples, i;
@@ -411,7 +385,7 @@ static void handle_inject_pkt(const u8 *payload, unsigned plen) {
     for (i=0; i<n_samples; i++) {
         /* Wait if FIFO full (back-pressure) */
         u32 timeout = 100000;
-        while ((DSP_RD(DSP_STATUS) & STATUS_INJ_FULL) && --timeout);
+        while ((INJ_RD(INJ_STATUS) & INJ_STATUS_FIFO_FULL) && --timeout);
 
         /* Write {i0,q0,i1,q1} to INJ_LO, then {i2,q2,i3,q3} to INJ_HI.
          * INJ_HI write pushes the 64-bit entry into the FIFO. */
@@ -419,97 +393,72 @@ static void handle_inject_pkt(const u8 *payload, unsigned plen) {
                  ((u32)(u8)sp[2]<<8) |(u8)sp[3];
         u32 hi = ((u32)(u8)sp[4]<<24)|((u32)(u8)sp[5]<<16)|
                  ((u32)(u8)sp[6]<<8) |(u8)sp[7];
-        DSP_WR(DSP_INJ_LO, lo);
-        DSP_WR(DSP_INJ_HI, hi);
+        INJ_WR(INJ_LO, lo);
+        INJ_WR(INJ_HI, hi);
         sp += 8;
     }
     xil_printf("INJ: pushed %u samples\r\n", (unsigned)n_samples);
 }
 
 /* -----------------------------------------------------------------------
- * Handle control packet
+ * Handle control packet (UDP port 5008)
  * ----------------------------------------------------------------------- */
 static void handle_control_pkt(const u8 *payload, unsigned plen) {
     u8 cmd;
-    u32 val;
     if (plen < 6) return;
     if (be32r(payload) != MAGIC_CONTROL) return;
     cmd = payload[4];
 
     switch (cmd) {
-    case CMD_SET_MODE:
-        if (plen < 6) return;
-        val = payload[5] & 0x3u;
-        current_mode = val;
-        current_ctrl = (current_ctrl & ~CTRL_MODE_MASK) | val;
-        /* Enable rate-matching timer when switching to INJECT */
-        if (val == MODE_INJECT)
-            current_ctrl |= CTRL_INJ_RATE_EN;
-        else
-            current_ctrl &= ~CTRL_INJ_RATE_EN;
-        dsp_set_ctrl(current_ctrl);
-        xil_printf("CTRL: mode=%u\r\n", (unsigned)val);
+    case CMD_SET_SF: {
+        u8 val = payload[5] & 0xFu;
+        if (val < 7u || val > 12u) val = DEFAULT_SF;
+        reg_write(REG_SF_CFG, val);
+        xil_printf("CTRL: SF=%u\r\n", (unsigned)val);
         break;
+    }
 
-    case CMD_SET_SF:
-        if (plen < 6) return;
-        val = payload[5] & 0xFu;
-        if (val < 6u || val > 12u) val = DEFAULT_SF;
-        current_ctrl = (current_ctrl & ~(0xFu<<CTRL_SF_SHIFT))|(val<<CTRL_SF_SHIFT);
-        dsp_set_ctrl(current_ctrl);
-        DSP_WR(DSP_INJ_PERIOD, 1u<<val);  /* update injection period = 2^sf cycles */
-        xil_printf("CTRL: SF=%u, inj_period=%u\r\n", (unsigned)val, 1u<<val);
-        break;
-
-    case CMD_SET_SC_THR:
+    case CMD_SET_SC_THR: {
         if (plen < 10) return;
-        {
-            u16 thr   = (u16)be16r(payload+6);
-            u8  hits  = payload[8] & 0x7u;
-            DSP_WR(DSP_SC_CFG, ((u32)hits<<16)|(u32)thr);
-            xil_printf("CTRL: sc_thr=%u hits=%u\r\n",
-                       (unsigned)thr, (unsigned)hits);
-        }
+        u16 thr  = be16r(payload+6) & 0x0FFFu;
+        u8  hits = payload[8] & 0x3u;
+        if (hits == 0u) hits = 1u;
+        reg_write(REG_SC_THR_HI, (u8)(thr >> 8));
+        reg_write(REG_SC_THR_LO, (u8)(thr & 0xFF));
+        reg_write(REG_SC_HITS_REQ, hits);
+        xil_printf("CTRL: sc_thr=0x%03X hits=%u\r\n",
+                   (unsigned)thr, (unsigned)hits);
         break;
+    }
 
-    case CMD_SET_DECIM:
-        if (plen < 6) return;
-        val = payload[5] & 0x3u;  /* 0=R256, 1=R128, 2=R64, 3=R32 */
-        current_ctrl = (current_ctrl & ~(0x3u<<CTRL_DECIM_SHIFT))
-                     | (val<<CTRL_DECIM_SHIFT);
-        dsp_set_ctrl(current_ctrl);
-        xil_printf("CTRL: decim_ratio=%u\r\n", (unsigned)val);
+    case CMD_SET_BW: {
+        u8 bw_sel = payload[5] & 0x1u;  /* 0=250 kHz, 1=125 kHz */
+        reg_write(REG_BW_CFG, bw_sel);
+        xil_printf("CTRL: bw_sel=%u\r\n", (unsigned)bw_sel);
         break;
+    }
 
-    case CMD_LOAD_FW_WEIGHTS:
-        /* Payload[5..36]: W_re0,W_im0,...,W_re3,W_im3 (4×2×int16 BE) */
-        if (plen < 5u+32u) return;
-        {
-            const u8 *wp = payload+5;
-            u32 re01 = ((u32)(u16)be16r(wp+2)<<16)|(u16)be16r(wp+0);
-            u32 im01 = ((u32)(u16)be16r(wp+6)<<16)|(u16)be16r(wp+4);
-            u32 re23 = ((u32)(u16)be16r(wp+10)<<16)|(u16)be16r(wp+8);
-            u32 im23 = ((u32)(u16)be16r(wp+14)<<16)|(u16)be16r(wp+12);
-            DSP_WR(DSP_FW_W_RE01, re01);
-            DSP_WR(DSP_FW_W_IM01, im01);
-            DSP_WR(DSP_FW_W_RE23, re23);
-            DSP_WR(DSP_FW_W_IM23, im23);
-            xil_printf("CTRL: fw weights loaded\r\n");
-        }
+    case CMD_LOAD_FW_WEIGHTS: {
+        /* Payload[5..20]: W_0_re,W_0_im,...,W_3_re,W_3_im (4x2xint16 BE) ==
+         * 16 bytes, written directly into the 0x30-0x3F shadow bank. */
+        if (plen < 5u + W_BANK_LEN) return;
+        reg_write_burst(REG_W_BANK_BASE, payload+5, W_BANK_LEN);
+        xil_printf("CTRL: fw weights loaded\r\n");
         break;
+    }
 
     case CMD_COMMIT_FW_WEIGHTS:
-        DSP_WR(DSP_FW_W_COMMIT, 1u);
+        reg_write(REG_WGT_CTRL, 0x01u);   /* W1P */
         xil_printf("CTRL: fw weights committed\r\n");
         break;
 
-    case CMD_RESET_DSP:
-        /* Assert RST, wait, deassert */
-        DSP_WR(DSP_CTRL, current_ctrl | CTRL_RST_DSP);
-        usleep(100);
-        DSP_WR(DSP_CTRL, current_ctrl & ~CTRL_RST_DSP);
-        xil_printf("CTRL: DSP reset\r\n");
+    case CMD_SET_INJ_EN: {
+        u32 en = payload[5] & 0x1u;
+        INJ_WR(INJ_CTRL, en);
+        xil_printf("CTRL: inj_en=%u (%s)\r\n", (unsigned)en,
+                   en ? "injected samples -> hw_iq" : "real SX1257 pins -> hw_iq");
         break;
+    }
 
     default:
         xil_printf("CTRL: unknown cmd %u\r\n", (unsigned)cmd);
@@ -560,7 +509,8 @@ static void process_rx(unsigned rlen) {
 }
 
 /* -----------------------------------------------------------------------
- * SX1257 helpers (same as AFE eval firmware)
+ * SX1257 helpers (same as AFE eval firmware) — unchanged, still on
+ * axi_quad_spi_0 (SpiInst)
  * ----------------------------------------------------------------------- */
 #define SX1257_REG_MODE    0x01
 #define SX1257_REG_FRF_MSB 0x04
@@ -608,7 +558,7 @@ int main(void) {
         XEmacLite_FlushReceive(&EmacInst);
     }
 
-    /* ---- SPI ---- */
+    /* ---- SPI: SX1257 front-ends (axi_quad_spi_0) ---- */
     {
         XSpi_Config *sc = XSpi_LookupConfig(
 #ifdef SDT
@@ -617,30 +567,50 @@ int main(void) {
             XPAR_SPI_0_DEVICE_ID
 #endif
         );
-        if (!sc) { xil_printf("SPI config fail\r\n"); return XST_FAILURE; }
+        if (!sc) { xil_printf("SPI0 config fail\r\n"); return XST_FAILURE; }
         XSpi_CfgInitialize(&SpiInst, sc, sc->BaseAddress);
         XSpi_SetOptions(&SpiInst, XSP_MASTER_OPTION|XSP_MANUAL_SSELECT_OPTION);
         XSpi_Start(&SpiInst);
         XSpi_IntrGlobalDisable(&SpiInst);
     }
 
-    /* ---- Reset DSP chain ---- */
-    DSP_WR(DSP_CTRL, CTRL_RST_DSP);
-    usleep(100);
+    /* ---- SPI: trouper_top host-SPI slave (axi_quad_spi_1) ---- */
+    {
+        XSpi_Config *sc = XSpi_LookupConfig(
+#ifdef SDT
+            XPAR_XSPI_1_BASEADDR
+#else
+            XPAR_SPI_1_DEVICE_ID
+#endif
+        );
+        if (!sc) { xil_printf("SPI1 (host) config fail\r\n"); return XST_FAILURE; }
+        XSpi_CfgInitialize(&SpiHost, sc, sc->BaseAddress);
+        XSpi_SetOptions(&SpiHost, XSP_MASTER_OPTION|XSP_MANUAL_SSELECT_OPTION);
+        XSpi_Start(&SpiHost);
+        XSpi_IntrGlobalDisable(&SpiHost);
+    }
 
-    /* ---- Configure defaults ---- */
-    DSP_WR(DSP_SC_CFG,    ((u32)DEFAULT_SC_HITS<<16)|(u32)DEFAULT_SC_THR);
-    DSP_WR(DSP_NOISE_CFG, (20u<<16)|200u);
-    DSP_WR(DSP_INJ_PERIOD, INJ_PERIOD_125K);
+    /* ---- Verify the host-SPI link is alive before configuring ---- */
+    {
+        u8 chip_id  = reg_read(REG_CHIP_ID);
+        u8 chip_rev = reg_read(REG_CHIP_REV);
+        xil_printf("trouper_top: CHIP_ID=0x%02X CHIP_REV=0x%02X %s\r\n",
+                   (unsigned)chip_id, (unsigned)chip_rev,
+                   (chip_id == 0xA7) ? "OK" : "MISMATCH");
+    }
 
-    /* Default CTRL: MODE=DECIM_ETH, SF=7, R=256, DC_alpha=8, all ants */
-    current_ctrl = dsp_build_ctrl(MODE_DECIM_ETH, DEFAULT_SF, DEFAULT_DECIM_RATIO,
-                                  DEFAULT_DC_ALPHA, DEFAULT_ANT_EN, 0, 2, 0);
-    current_mode = MODE_DECIM_ETH;
-    DSP_WR(DSP_CTRL, current_ctrl);  /* deassert rst_dsp */
+    /* ---- Configure defaults over the host-SPI link ---- */
+    reg_write(REG_MIMO_CTRL, (u8)(DEFAULT_ANT_EN << 4));  /* MODE=MRC, all ants */
+    reg_write(REG_SF_CFG, DEFAULT_SF);
+    reg_write(REG_BW_CFG, DEFAULT_BW_SEL);
+    reg_write(REG_PKT_TIMEOUT_SYMS, DEFAULT_PKT_TIMEOUT);
+    reg_write(REG_SC_THR_HI, (u8)(DEFAULT_SC_THR >> 8));
+    reg_write(REG_SC_THR_LO, (u8)(DEFAULT_SC_THR & 0xFF));
+    reg_write(REG_SC_HITS_REQ, DEFAULT_SC_HITS);
+    /* COMB_CFG left at its reset default (0x10). */
 
 #ifdef NO_SX1257
-    xil_printf("NO_SX1257: SX1257 init skipped (inject/emulation only)\r\n");
+    xil_printf("NO_SX1257: SX1257 init skipped (register-link bring-up only)\r\n");
 #else
     {
         u8 chip;
@@ -648,101 +618,25 @@ int main(void) {
     }
 #endif
 
-    xil_printf("Ready. Mode=%u (0=DECIM_ETH, 1=FULL_DSP, 2=INJECT)\r\n",
-               (unsigned)current_mode);
-    xil_printf("Send to UDP 5008 to change mode / load weights\r\n");
-    xil_printf("Send to UDP 5007 to inject I/Q samples (mode 2)\r\n");
+    xil_printf("Ready. Send to UDP 5008 to configure / load weights.\r\n");
+    xil_printf("Send to UDP 5007 to inject I/Q samples (see CMD_SET_INJ_EN).\r\n");
+    xil_printf("Status snapshots streamed to UDP 5006.\r\n");
 
     /* =========================================================================
-     * Main loop
+     * Main loop — poll Ethernet, periodically snapshot registers over SPI
      * ========================================================================= */
-    static u8 raw_samples[SAMPLES_PER_PKT][8];
-    static u8 comb_samples[SAMPLES_PER_PKT][4];
-    u32 raw_cnt  = 0;
-    u32 comb_cnt = 0;
     u32 loop_cnt = 0;
-    u32 last_status_seq = 0;
 
     while (1) {
-        /* --- Poll Ethernet --- */
         unsigned rlen = XEmacLite_Recv(&EmacInst, RxBuf);
         if (rlen) process_rx(rlen);
 
-        /* --- Read DSP STATUS --- */
-        u32 status = DSP_RD(DSP_STATUS);
-
-        /* --- Drain ETH output FIFO --- */
-        while (!(status & STATUS_ETH_EMPTY)) {
-            u32 lo, hi;
-            /* Read ETH_LO: pops FIFO entry into shadow, returns shadow[63:32]
-             * (previous entry low word on first read). Protocol: read ETH_LO
-             * to trigger pop, read ETH_HI for high word (both same entry). */
-            lo = DSP_RD(DSP_ETH_LO);
-            hi = DSP_RD(DSP_ETH_HI);
-
-            if (current_mode == MODE_DECIM_ETH) {
-                /* lo = {i0,q0,i1,q1}  hi = {i2,q2,i3,q3} */
-                raw_samples[raw_cnt][0] = (u8)(lo>>24);
-                raw_samples[raw_cnt][1] = (u8)(lo>>16);
-                raw_samples[raw_cnt][2] = (u8)(lo>>8);
-                raw_samples[raw_cnt][3] = (u8)(lo);
-                raw_samples[raw_cnt][4] = (u8)(hi>>24);
-                raw_samples[raw_cnt][5] = (u8)(hi>>16);
-                raw_samples[raw_cnt][6] = (u8)(hi>>8);
-                raw_samples[raw_cnt][7] = (u8)(hi);
-                raw_cnt++;
-                if (raw_cnt >= SAMPLES_PER_PKT) {
-                    send_raw_iq_pkt(raw_samples, raw_cnt);
-                    raw_cnt = 0;
-                }
-            } else {
-                /* Mode 1/2: lo[63:56]=y_i, lo[55:48]=y_q, lo[47]=sc_lock,
-                 *           lo[46]=training_done, lo[45]=W_commit, lo[44]=pkt_active */
-                comb_samples[comb_cnt][0] = (u8)(lo>>24);   /* y_i */
-                comb_samples[comb_cnt][1] = (u8)(lo>>16);   /* y_q */
-                comb_samples[comb_cnt][2] = (u8)(lo>>8);    /* flags byte */
-                comb_samples[comb_cnt][3] = 0;
-                comb_cnt++;
-                if (comb_cnt >= SAMPLES_PER_PKT) {
-                    send_combined_pkt(comb_samples, comb_cnt);
-                    comb_cnt = 0;
-                }
-            }
-
-            status = DSP_RD(DSP_STATUS);
-        }
-
-        /* Flush partial packets every ~1000 iterations to avoid stale data */
+        /* Send a status snapshot roughly every ~50k loop iterations */
         loop_cnt++;
-        if (loop_cnt >= 1000u) {
+        if (loop_cnt >= 50000u) {
             loop_cnt = 0;
-            if (raw_cnt > 0 && current_mode == MODE_DECIM_ETH) {
-                send_raw_iq_pkt(raw_samples, raw_cnt);
-                raw_cnt = 0;
-            }
-            if (comb_cnt > 0 && current_mode != MODE_DECIM_ETH) {
-                send_combined_pkt(comb_samples, comb_cnt);
-                comb_cnt = 0;
-            }
-        }
-
-        /* Send status packet periodically in FULL_DSP/INJECT modes */
-        if (current_mode != MODE_DECIM_ETH &&
-            (udp_seq - last_status_seq) >= 50u) {
             send_status_pkt();
-            last_status_seq = udp_seq;
         }
-
-        /* Log SC lock / training events to UART */
-        if (status & STATUS_SC_LOCK)
-            xil_printf("[SC] lock  timing_ref=0x%08X\r\n",
-                       (unsigned)DSP_RD(DSP_TIMING_REF));
-        if (status & STATUS_W_COMMIT)
-            xil_printf("[W]  weights committed\r\n");
-        if (status & STATUS_ETH_OVERFLOW)
-            xil_printf("[!]  ETH FIFO overflow\r\n");
-        if (status & STATUS_INJ_UNDERRUN)
-            xil_printf("[!]  injection FIFO underrun\r\n");
     }
 
     return 0;
