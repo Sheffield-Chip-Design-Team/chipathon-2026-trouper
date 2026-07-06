@@ -293,7 +293,7 @@ Migration record: `planning/decimator-hb-migration-impact-plan.md` (Gates
 | TRPR-DCR-012 | Reset clears accumulators/outputs | T | every cocotb test (full reset per case, immediate clean re-lock) | ✅ (functional) |
 | TRPR-DCR-013 | Post-reset settle < ~74 samples with DC present | T | — | ❌ No test drives a deliberate DC offset at reset and measures settle. |
 | TRPR-DCR-014 | No bypass port (by design) | I | — | ✅ (by construction) |
-| TRPR-DCR-015 | ≥64-sample `sc_lock` hold-off after reset ("open RTL gap" per spec) | T | `cocotb/tests/test_startup.py::test_sc_correlator_idle_until_del_rdy` | ✅ **Structurally closed — spec text is stale.** The spec's "no such hold-off exists" predates the PSRAM delay-line migration: SC evaluations cannot begin until `del_rdy` (M ≥ 128 warm-up samples ≥ the required 64), which `test_startup.py` measures (4.092 ms at SF9/BW125 ≈ predicted). The scenario the requirement guards against (spurious lock inside the first symbol from power-on DC) cannot occur. Spec row should be reworded from "open RTL gap" to "provided by the PSRAM delay-line warm-up". |
+| TRPR-DCR-015 | ≥64-sample `sc_lock` hold-off after reset (provided by PSRAM warm-up) | T | `cocotb/tests/test_startup.py::test_sc_correlator_idle_until_del_rdy` | ✅ Spec reworded 2026-07-06: the old "open RTL gap" text predated the PSRAM migration — SC evaluations cannot begin until `del_rdy` (M ≥ 128 warm-up samples ≥ the required 64), measured by `test_startup.py`. |
 
 **Open items:** DCR-006/013 directed convergence tests missing (low value — behavior continuously exercised); DCR-015 spec text needs the warm-up rewording.
 
@@ -307,7 +307,7 @@ the delay line. These rows are traced against their PSRAM equivalents.
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
 | TRPR-FBC-001 | M-sample delay via PSRAM QPI read at `write_ptr − M` | T | = TRPR-PSR-016 | ✅ (see PSR-016) |
-| TRPR-FBC-002 | On `buf_freeze`: freeze packet-start pointer, cease SC delay reads | T | — | 🗑️ **Spec drift:** `psram_buf_ctrl` has no `buf_freeze` input — the packet-start pointer latches on `sc_lock` directly and SC delay reads cease on `sc_lock` (PSR-002/016, both ✅). The *behavior* is fully verified; the *plumbing* the row describes doesn't exist (`buf_freeze` is a dead FSM output, Open Risks #25). Needs a spec rewording, not a test. |
+| TRPR-FBC-002 | At packet start: latch packet-start pointer, cease SC delay reads (off `sc_lock`) | T | = TRPR-PSR-002/016 (`test_capture_playback.py`, formal) | ✅ Spec reworded 2026-07-06 to the actual `sc_lock`-based plumbing (was written against the removed `buf_freeze` path; that FSM output remains dead, Open Risks #25). Behavior fully verified via PSR-002/016. |
 | TRPR-FBC-003 | `x[n]`/`x[n−M]` valid & stable before each evaluation | T | `test_capture_playback.py`, `test_startup.py` (warm-up), formal `a_del_valid_needs_rdy` | ✅ |
 | TRPR-FBC-004 | Delay-read vs capture-write arbitration margin | A | = TRPR-PSR-014 | ✅ (analysis + formal) |
 | TRPR-FBC-005 | Legacy frontend registers removed; status via `PSRAM_STATUS` | I | `tb_trouper_spi.v` (reserved/removed addresses read 0) | ✅ |
@@ -328,7 +328,7 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 | TRPR-WGN-005 | Primary mode: MRC row-sum | T | `sim/tests/run_ber.py` (Python model only) | ⚠️ The full SPI flow test used the *eigenvector* mode; no end-to-end flow test commits MRC-row-sum weights. Low risk — the hardware path is weight-agnostic (proven bit-exact for arbitrary W by job 3286) — but the row-sum arithmetic itself is Python-only. |
 | TRPR-WGN-006 | Secondary mode: power-iteration eigenvector | T | `test_weight_gen_spi_flow.py` (job 3286, bit-exact vs `sim/models/eigvec_fw.py`), `sim/tests/test_eigvec_fw.py` | ✅ |
 | TRPR-WGN-007 | Mode selectable in firmware, no HW register | I | — | ✅ (by construction) |
-| TRPR-WGN-008 | Bypass on missed commit + `DBG_MISSED_PKTS` counter | T | bypass half = PCF-005 (✅, job 3305/3310) | ⚠️ **`DBG_MISSED_PKTS` is a phantom** — no such register exists in `Register Map.md` or RTL (flagged in the 2026-07-05 reconciliation, still unresolved). Either the spec means a firmware-memory counter (like the AGC thresholds — then reword) or the row's register claim should be dropped. Hardware provides everything needed: sticky `W_MISSED_PACKET` readback (since 2026-07-06) + IRQ bit 2. |
+| TRPR-WGN-008 | Bypass on missed commit + firmware-memory missed-packet counter | T | bypass half = PCF-005 (✅, jobs 3305/3310); HW inputs to the counter (IRQ[2], sticky `WGT_CTRL[3]`/`PACKET_STATUS[7]`) all verified | ✅ Spec clarified 2026-07-06: `DBG_MISSED_PKTS` is a **firmware variable**, not a Trouper register (same software-owned pattern as the AGC-002 thresholds) — the phantom-register ambiguity from the 2026-07-05 reconciliation is resolved. The firmware increment itself is untestable from RTL (tracked with the rest of firmware coverage, Open Risks #8). |
 | TRPR-WGN-009 | *(REMOVED — no `Z_SHIFT`)* | — | — | ✅ (reworded 2026-07-05) |
 | TRPR-WGN-010/011 | `cal_j` scalar-only correction; linear-combiner impairment documentation | A | — | ✅ (analysis/documentation statements, no test target) |
 
@@ -368,7 +368,7 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 | TRPR-REG-002 | Bus slave reachable from SPI bridge and Grouper master | T | `tb_trouper_grp_arb.v` | ✅ |
 | TRPR-REG-003 | Multi-byte registers big-endian | I | every multi-byte read in the suites (Z, N_ACC, SC snapshots, W) | ✅ (functional) |
 | TRPR-REG-004 | Reserved reads 0, writes ignored | T | `tb_trouper_spi.v` | ✅ |
-| TRPR-REG-005 | Register bank generated by Python tool from single source | I | — | 🗑️ **False claim.** `reg_bank.v` is hand-written; no generator exists in the repo (`CLAUDE.md` repeats the claim). The 0x1D mismatch above is exactly the divergence class the requirement was meant to prevent. Either build the generator or reword the requirement to a manual-sync discipline + the (recommended) reset/RW sweep test. |
+| TRPR-REG-005 | Register bank is custom RTL; Register Map.md is the source of truth, RTL+map updated together | I | register-level tests throughout the suites | ✅ Spec reworded 2026-07-06 (was "generated by the project Python tool" — no generator exists or is planned; reg_bank is deliberately hand-written). The discipline the reworded requirement demands is what this matrix enforces; a full generated reset/RW sweep test (REG-001 note) remains the recommended backstop. |
 | TRPR-REG-006 | W1P registers self-clear | T | `tb_trouper_spi.v` + all five W1Ps functionally exercised (W_COMMIT everywhere; NOISE_TRIG job 3310; CLR_ERR + RD_TRIG job 3313; RX_GAIN_COMMIT tb_spi #13) | ✅ |
 | TRPR-REG-007 | Sticky status clears only via explicit clear register | T | `tb_trouper_two_packet.v` (job 3203), every IRQ_CLEAR use since | ✅ |
 
@@ -416,15 +416,15 @@ All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace
 | TRPR-INT-003 | Arbiter: Grouper priority, SPI stalls mid-cycle | T | `tb_trouper_grp_arb.v` (collision cases 3a/4a) | ✅ |
 | TRPR-INT-004 | Grouper idle/reset → SPI-only operation clean | T | every cocotb suite (GRP inputs tied off in `tb_trouper_cocotb.v`) | ✅ (continuously exercised) |
 | TRPR-INT-005 | IRQ line to Grouper on any status bit | T | — | ⚠️ = IRQ-003 pin-level gap. |
-| TRPR-INT-006 | Control plane on `CLK_16M`; AHB HCLK = CLK_16M | I | — | 🗑️ **Spec drift:** the implemented design is a single 32 MHz clock with a CE-gated control plane (`clk_en`, honest MCP=2) — there is no separate `CLK_16M` HCLK net. Functionally equivalent intent, wrong description; already the subject of Open Risks #24 (spec clock-architecture drift). |
+| TRPR-INT-006 | Single 32 MHz clock; control plane CE-gated to 16 MHz effective (no `CLK_16M` net) | I | CE-gating verified by the SPI-write timing work (`[[project_ce16_partition]]`, all register suites) | ✅ Spec reworded 2026-07-06 to the implemented single-clock + clock-enable architecture (was written against a two-clock `CLK_16M` scheme that never shipped; this also retires the corresponding item of Open Risks #24's clock-architecture drift). |
 | TRPR-INT-009 | Commit flow (Z read → W write → commit → latch) | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ |
 | TRPR-INT-010 | Bypass when Grouper inactive / no commit | T | `test_w_missed_packet.py`, `test_bypass_e2e.py` (jobs 3304–3310) | ✅ |
 | TRPR-INT-011 | Host pre-config over SPI without firmware | T | every cocotb suite's setup sequence is exactly this | ✅ |
 | TRPR-INT-012 | Grouper-inactive Mode-1 = functional single-antenna path | T | `test_bypass_e2e.py` (job 3304, raw stream to remod end-to-end) | ✅ |
 
 **Open items surfaced by this pass (all blocks above):**
-1. **Two false/stale documentation claims found:** REG-005's "Python-generated register bank" (no generator exists — and the 0x1D reset mismatch is the exact failure it was meant to prevent) and `CLAUDE.md`'s block list (names `weight_gen.v` and an SPI master, neither exists). WGN-008's `DBG_MISSED_PKTS` phantom register still needs a spec decision (firmware counter vs delete).
-2. **DCR-015's "open RTL gap" is stale** — the PSRAM warm-up structurally provides the required hold-off; spec should be reworded, not patched.
-3. **FBC-002 and INT-006 describe plumbing that doesn't exist** (`buf_freeze` into the buffer controller; a `CLK_16M` net) although the behaviors are verified — both fold into the existing spec-drift item (Open Risks #24/#25).
+1. ~~Two false/stale documentation claims~~ — **RESOLVED 2026-07-06**: REG-005 reworded to the deliberate custom-RTL + map-as-source-of-truth discipline; WGN-008's `DBG_MISSED_PKTS` clarified as a firmware variable; `CLAUDE.md` block list corrected.
+2. ~~DCR-015's "open RTL gap" is stale~~ — **RESOLVED 2026-07-06**: spec reworded to the warm-up-provided hold-off.
+3. ~~FBC-002 and INT-006 describe plumbing that doesn't exist~~ — **RESOLVED 2026-07-06**: both reworded to the shipped plumbing (`sc_lock`-latched pointer; single-clock + CE). `buf_freeze` itself remains a dead output (Open Risks #25).
 4. **Cheap test adds:** pin-level `IRQ_OUT`/`IRQ_GROUPER` asserts (IRQ-003/004/INT-005), MISO tri-state (SPS-008), in-burst 0x76 non-increment (SPS-010), and a generated full reset/RW register sweep (REG-001).
 5. **Stale standalone tbs:** `tb_sqnr*.v` predate the HB migration (DEC-003) — regenerate against `sd_decimator_poly` or retire in favor of the migration-record analysis.
