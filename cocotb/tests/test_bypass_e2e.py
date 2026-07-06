@@ -343,6 +343,65 @@ async def test_mode1_e2e_ant2(dut):
 
 
 @cocotb.test()
+async def test_mimo_ctrl_deferred_latch(dut):
+    """TRPR-PCF-006: MIMO_CTRL writes DURING an active packet update only the
+    shadow -- ACTIVE_STATUS (0x1D) must keep the values latched at this
+    packet's sc_lock, and the new config takes effect only at the next lock.
+    Also the first test to read ACTIVE_STATUS at its register position.
+
+    Uses PKT_TIMEOUT_SYMS=20 so the packet ends quickly and the next lock
+    (driver keeps running, SC re-arms at IDLE) demonstrates the deferred
+    latch actually landing."""
+    tag = "mimo_defer"
+    sym_ns = await _reset_and_lock(dut, mode=0, ant_mask=0xF, tag=tag,
+                                   pkt_timeout_syms=20)
+
+    # Reset-vs-map note: before the first lock ACTIVE_STATUS held the FSM
+    # reset values (mode=0, antenna_en=0x1 -> 0x10); at lock it latched the
+    # shadow (mode=0, mask=0xF -> 0xF0).
+    act = await spi_read(dut, 0x1D)
+    assert act == 0xF0, f"{tag}: ACTIVE_STATUS=0x{act:02X} after lock, expected 0xF0"
+
+    # Mid-packet reconfig: MODE=1, ANTENNA_EN=0xC -- must NOT take effect now
+    await spi_write(dut, 0x08, (0xC << 4) | 0x01)
+    for _ in range(3):
+        await Timer(sym_ns, unit="ns")
+        act = await spi_read(dut, 0x1D)
+        assert act == 0xF0, \
+            f"{tag}: ACTIVE_STATUS=0x{act:02X} changed mid-packet -- MIMO_CTRL " \
+            f"write was not deferred to the safe-switch boundary (TRPR-PCF-006)"
+        assert int(dut.u_dut.active_mode.value) == 0
+        assert int(dut.u_dut.active_antenna_en.value) == 0xF
+
+    # Wait out the packet, then the next lock must latch the new shadow
+    done_ok = False
+    for _ in range(30):
+        await Timer(sym_ns, unit="ns")
+        if (await spi_read(dut, 0x02)) & 0x08:
+            done_ok = True
+            break
+    assert done_ok, f"{tag}: PACKET_DONE never fired"
+    await spi_write(dut, 0x03, 0xFF)
+
+    relock_ok = False
+    for _ in range(20):
+        await Timer(sym_ns, unit="ns")
+        if (await spi_read(dut, 0x02)) & 0x01:
+            relock_ok = True
+            break
+    assert relock_ok, f"{tag}: no re-lock after packet end"
+
+    act = await spi_read(dut, 0x1D)
+    assert act == 0xC1, \
+        f"{tag}: ACTIVE_STATUS=0x{act:02X} after next lock, expected 0xC1 " \
+        f"(deferred MODE=1/ANTENNA_EN=0xC not latched)"
+    assert int(dut.u_dut.bypass_ant.value) == 2, \
+        f"{tag}: bypass_ant={int(dut.u_dut.bypass_ant.value)} != 2 for mask 0xC"
+    dut._log.info(f"{tag}: PASS -- mid-packet write deferred, latched at next lock "
+                  f"(ACTIVE_STATUS 0xF0 -> 0xC1)")
+
+
+@cocotb.test()
 async def test_mode0_pretraining_auto_bypass(dut):
     """TRPR-MRC-005: in MRC mode (MODE=0), BEFORE any W_COMMIT the combiner
     must auto-fall-back to bypass (use_mrc_r = W_valid && !mode with

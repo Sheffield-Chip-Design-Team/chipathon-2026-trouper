@@ -128,3 +128,68 @@ async def test_sc_dbg_flags_readback(dut):
         f"two consecutive hits must be exactly one symbol apart"
     dut._log.info(f"{tag}: PASS -- flags=0x{flags:02X} sc_stat=0x{sc_stat:04X} "
                   f"first_hit={first_hit} lock_snap={lock_snap} (delta={lock_snap-first_hit})")
+
+
+@cocotb.test()
+async def test_low_energy_hit_suppression(dut):
+    """TRPR-SCD-016 negative case: at a sub-guard input amplitude, no SC hit
+    may ever fire. The divider-free ratio test |C|^2 >= THR*E is
+    amplitude-independent for a periodic input, so without the e_slice guard
+    (eval_e_acc[25:13] == 0 suppresses the hit) a tiny CW would still lock;
+    this drives CW at amplitude 1 (energy slice ~= A^2*256/1024 = 0.25 -> 0,
+    vs 240 at the standard A=31) and asserts zero hits across 15 symbols --
+    using the held SC_HIT readback (sc_hit_hold) so a hit at ANY evaluated
+    symbol would be caught, not just one racing a poll."""
+    from test_noise_trig import _StimMode, _noise_or_cw_driver
+
+    tag = "e_slice_neg"
+    sf, bw_khz = 7, 250
+    sample_shift = 1
+    M = 1 << (sf + sample_shift)
+    clk_per_iq = 64
+    sym_ns = M * clk_per_iq * CLK_NS
+
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value   = 1
+    dut.SPI_MOSI.value  = 0
+    dut.SPI_SCK.value   = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value    = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    mode = _StimMode()
+    mode.cw = True
+    cocotb.start_soon(_noise_or_cw_driver(dut, mode, cw_amp=1))  # sub-guard CW
+
+    await spi_read(dut, 0x00)
+    await spi_read(dut, 0x09)
+    await spi_write(dut, 0x09, sf & 0x0F)
+    await spi_write(dut, 0x0A, 0)
+    await spi_write(dut, 0x0C, 0x01)   # same permissive threshold every lock test uses
+    await spi_write(dut, 0x0D, 0x00)
+    await spi_write(dut, 0x0E, 0x00)   # 1 hit would lock -- strictest setting
+
+    await spi_write(dut, 0x70, 0x01)
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    # 15 symbols of evaluations at sub-guard amplitude: zero hits, zero lock
+    for n in range(15):
+        await Timer(sym_ns, unit="ns")
+        irq = await spi_read(dut, 0x02)
+        assert not (irq & 0x01), \
+            f"{tag}: sc_lock fired at symbol {n} on an amplitude-1 input -- " \
+            f"e_slice guard failed to suppress a sub-energy hit"
+        flags = await spi_read(dut, 0x26)
+        assert not (flags & 0x01), \
+            f"{tag}: SC_HIT held bit set at symbol {n} (flags=0x{flags:02X}) -- " \
+            f"a low-energy evaluation produced a hit"
+    dut._log.info(f"{tag}: PASS -- 15 symbols at amplitude 1, zero hits, no lock")
