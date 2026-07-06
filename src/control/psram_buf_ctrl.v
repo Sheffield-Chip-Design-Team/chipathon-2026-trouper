@@ -194,6 +194,14 @@ module psram_buf_ctrl (
     // Helpers
     // -----------------------------------------------------------------------
     reg  sck_en;
+    // Deferred-effect copy of qspi_owner for the pad clock gate (TRPR-PSR-011):
+    // latched only between QPI bursts, so an ownership request landing mid-burst
+    // lets the in-flight transaction complete with its clock running (CE# low
+    // with SCK frozen and SIO still driven is exactly the pad glitch the spec
+    // prohibits — that was the pre-2026-07-06 behavior). New bursts are blocked
+    // by the raw qspi_owner at every launch site, so nothing starts after the
+    // request; the effect lands at the first engine-idle boundary.
+    reg  qspi_owner_eff;
     assign sck = sck_en & clk_32m;
 
     wire [ABITS-1:0] cur_wr = wr_ptr;
@@ -227,6 +235,7 @@ module psram_buf_ctrl (
             dbg_buf        <= 64'd0;
             dbg_idx        <= 3'd0;
             sck_en         <= 1'b0;
+            qspi_owner_eff <= 1'b0;
             ce_n           <= 1'b1;
             sio_out        <= 4'd0;
             sio_oe         <= 4'd0;
@@ -264,7 +273,8 @@ module psram_buf_ctrl (
             del_valid    <= 1'b0;
             state_dbg    <= state;
 
-            sck_en <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner;
+            if (!qpi_busy) qspi_owner_eff <= qspi_owner;
+            sck_en <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner_eff;
 
             // Sticky error clear (write-1 pulse via PSRAM_CLR_ERR). Placed before
             // the per-state error sets below and before sample_skip detection, so a
@@ -572,7 +582,10 @@ module psram_buf_ctrl (
                     end else if (!qpi_busy) begin
                         ce_n   <= 1'b1;
                         sio_oe <= 4'd0;
-                        if (iq_valid && psram_en) begin
+                        // !qspi_owner gate added 2026-07-06 (TRPR-PSR-010/011):
+                        // S_WRITE's launch had it, this one didn't — an owner
+                        // request mid-REPLAY never suspended the replay bursts.
+                        if (iq_valid && psram_en && !qspi_owner) begin
                             wr_data  <= {iq_i0, iq_q0, iq_i1, iq_q1,
                                          iq_i2, iq_q2, iq_i3, iq_q3};
                             qpi_busy <= 1'b1;

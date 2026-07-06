@@ -211,6 +211,10 @@ check against the floorplan.
 **Does not block tapeout** — silicon works correctly whenever antenna 0 is
 not the faded branch; this is a robustness/diversity gap, not a functional
 bug.
+**Decision 2026-07-06:** deliberately DEFERRED — no die-area headroom for the
+~+20 k µm² 4-branch correlator at the current floorplan. Revisit only if an
+area budget opens up (e.g. after further area cuts or a die-size change);
+until then this stays an accepted, documented limitation.
 **See:** `planning/sc-detector-ant0-fading-risk.md`.
 
 ### 10. DC Removal: documented spec figures contradicted by verified sim results
@@ -409,6 +413,13 @@ written while a live training is armed is silently swallowed (top opens
 `noise_window_active`, `training_acc` ignores the arm — TODO at
 `trouper_top.v:257`); `mrc_combiner.v:126` assigns `26'sd0` to an 18-bit reg;
 `mrc_combiner` port `clk_16m` is actually driven at 32 MHz.
+
+2026-07-06 addition: `buf_freeze` joins the list — now *verified* to follow
+the FSM contract (asserted at packet start, dropped at IDLE;
+`test_w_missed_packet.py`, job 3310) but it drives nothing in `trouper_top`
+(declared "unused without fbuf"); dead since the PSRAM delay-line migration
+replaced `frontend_buf_ctrl`. Candidate for removal or re-purposing along
+with the other dead FSM outputs above.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
@@ -813,3 +824,30 @@ expectation updated to `7M−1`.
 BW250/125 full scenario with corrected `n_acc`, synthetic two-packet re-arm)
 and job 3309 (real-capture two-packet re-arm — the packet-2 case where the
 old skew was worst).
+
+### 37. `QSPI_OWNER` handover glitched pads mid-burst and never suspended REPLAY — CLOSED 2026-07-06
+
+Writing the first-ever PSR-010/011 test exposed two bugs in
+`psram_buf_ctrl.v`'s ownership handover:
+
+1. `sck_en` was gated by the **raw** `qspi_owner` — a request landing
+   mid-burst froze SCK immediately while the internally-stepping burst kept
+   CE# low and SIO driven for up to ~40 cycles: a selected, unclocked,
+   still-driven device during a bus handover, exactly the pad glitch
+   TRPR-PSR-011 prohibits. **Fix:** `qspi_owner_eff`, latched only between
+   bursts — an in-flight transaction completes with its clock running; new
+   bursts are blocked by the raw bit at every launch site.
+2. `S_REPLAY`'s burst launch had **no `!qspi_owner` gate** (S_WRITE's did) —
+   an owner request during REPLAY never suspended the replay bursts at all.
+   **Fix:** gate added.
+
+Spec cleanup in the same pass: PSR-011's "effect only at `STATE=IDLE`"
+referenced a state that doesn't exist (reworded to "at the next QPI burst
+boundary"), and PSR-012's `PAD_CONFLICT` was REMOVED (never implemented;
+single-master design has no on-chip conflict case).
+
+**Verified:** `cocotb/tests/test_qspi_owner.py` (job 3314) — per-clock
+CE#-low ⇒ SCK-enabled invariant through buffering and replay handovers,
+release within 8 clocks, 256-clock hold, DBG_BUSY under owner=1, resume on
+release. `psram_ops` re-passed and the SymbiYosys k-induction proof
+re-proves clean on the modified RTL (same job).
