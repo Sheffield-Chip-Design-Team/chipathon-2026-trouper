@@ -441,8 +441,8 @@ Trouper has no on-chip SPI master. Grouper firmware owns SX1257 LNA gain control
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-AGC-001 | C | I | Per-antenna preamble power SHALL be measured via `Zdiag[k][31:16] / n_acc` after `training_done`. Controlling software reads Zdiag at 0x64–0x6B and the full 18-bit `N_ACC` at 0x21–0x23. | T |
-| TRPR-AGC-002 | C | I | The AGC strategy SHALL be "maximum gain before saturation": Grouper firmware SHALL increase LNA gain unless Zdiag/n_acc exceeds `AGC_THR_HI` (0x2B–0x2C), and decrease gain if it exceeds `AGC_THR_SAT` (0x2D–0x2E). One SX1257 LNA gain step per packet. All four antennas are controlled independently. | T |
+| TRPR-AGC-001 | C | I | Per-antenna preamble power SHALL be measured via `Zdiag[k][31:8] / n_acc` after `training_done`. Controlling software reads Zdiag at 0x64–0x6F and the full 18-bit `N_ACC` at 0x21–0x23. | T |
+| TRPR-AGC-002 | C | I | The AGC strategy SHALL be "maximum gain before saturation": Grouper firmware SHALL increase LNA gain unless Zdiag/n_acc exceeds a firmware-held high-water threshold, and decrease gain if it exceeds a firmware-held saturation threshold. **No on-chip `AGC_THR_HI`/`AGC_THR_SAT` comparator registers exist** — both thresholds live entirely in host/Grouper firmware memory; the comparison itself is a software computation against the Zdiag/n_acc value read per TRPR-AGC-001 (see `planning/Register Map.md` "Former addresses": these register names were never implemented in RTL). One SX1257 LNA gain step per packet. All four antennas are controlled independently. | T |
 | TRPR-AGC-003 | H | I | After programming each SX1257 (board-level SPI master), controlling software SHALL write the applied gain byte to `RX_GAIN_SHADOW_k` (0x10–0x13) and strobe `RX_GAIN_COMMIT` (0x18[0]=1). Trouper SHALL latch shadow→`RX_GAIN_ACTIVE_k` (0x14–0x17) on the commit pulse within one 32 MHz clock cycle. | T |
 
 **Noise EMA — weight quality, separate from AGC:**

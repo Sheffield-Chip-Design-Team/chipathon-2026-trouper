@@ -15,70 +15,69 @@ be refreshed by grepping rather than re-auditing by hand.
 
 ---
 
-## Register Address Reconciliation
+## Register Address Reconciliation — RESOLVED 2026-07-05
 
 While building the per-block sections below, individual requirements kept citing
-register addresses that don't match `planning/Register Map.md`. This section is
-the full sweep: every `0x..` address cited anywhere in `Trouper Chip
+register addresses that don't match `planning/Register Map.md`. This section
+documents the full sweep — every `0x..` address cited anywhere in `Trouper Chip
 Specification.md`'s `TRPR-*` rows, cross-checked against the active register
-table. It covers the **whole spec**, not just the blocks traced so far — so it
-includes findings (WGN, AGC) for blocks that don't have a traceability section
-yet.
+table, covering the **whole spec** (not just the blocks traced below, so it
+includes WGN/AGC findings for blocks that don't have a traceability section yet)
+— **and the corrective edit applied directly to `Trouper Chip Specification.md`.**
+All 14 rows below are now fixed in the spec; this table is kept as the change record.
 
 Root cause, in every case checked: the register map was reshuffled at least
 twice (the 128-register repack, and the Zdiag 16→24-bit widening in commit
 `46e1da0`) and the spec's per-requirement address citations were never
-re-swept afterward. None of these are RTL bugs — the RTL and `Register
-Map.md` agree with each other throughout; only the spec text lags.
+re-swept afterward. None of these were RTL bugs — the RTL and `Register
+Map.md` agreed with each other throughout; only the spec text lagged.
 
-| Requirement | Spec says | Actually is | Note |
+| Requirement | Spec said | Actually is | Note |
 |---|---|---|---|
-| TRPR-TAC-005 | `ZDIAG_k` at 0x64–0x6B, 16-bit | `ZDIAG_0..3` at **0x64–0x6F**, 24-bit each | Stale since the Zdiag widening fix (`46e1da0`) |
-| TRPR-TAC-006 | `Z_SHIFT` at 0x63 | *(removed — hardwired 0)* | Register retired, spec never updated |
-| TRPR-TAC-008 | `TRAINING_STATUS` at 0x60 | **0x20** | 0x60 is unallocated in the current map |
-| TRPR-TAC-011 | `TACC_REF_SEL` at 0x6B | *(removed — superseded by `TACC_NOISE_TRIG`)* | Register retired, spec never updated |
-| TRPR-SCD-008 | `SC_HITS_REQ` at 0x1B | **0x0E** | RTL and tests both correctly use 0x0E |
-| TRPR-SCD-009 | `SC_STAT` at 0x50–0x51 | `SC_STAT_HI/LO` at **0x24–0x25** | Also untested at either address |
-| TRPR-PCF-006 | `ACTIVE_MODE`/`ACTIVE_ANTENNA_EN` at 0x30/0x31 | Packed into `ACTIVE_STATUS` at **0x1D** | 0x30/0x31 are actually `W_0_RE_HI/LO` — collision risk |
-| TRPR-PCF-007 | `PKT_TIMEOUT_SYMS` at 0x16 | **0x0B** | RTL and tests both correctly use 0x0B |
-| TRPR-PCF-009 | `PACKET_STATUS` at 0x34 | **0x1C** | 0x34 is actually `W_1_RE_HI` — collision risk |
-| TRPR-MRC-007 | `COMB_POST_GAIN_SHIFT` at 0x36[2:0] | `COMB_CFG` at **0x0F**[2:0] | 0x36 is actually `W_1_IM_HI` — collision risk |
-| TRPR-MRC-011 | `WGT_CTRL` at 0x35 | **0x1E** | 0x35 is actually `W_1_RE_LO` — collision risk |
-| TRPR-WGN-006 | `ZDIAG_k` at 0x64–0x6B, bits [31:16] | **0x64–0x6F**, bits [31:8] | Same widening staleness as TAC-005, plus wrong bit slice — a firmware author following this spec text verbatim would misread every Zdiag value |
-| TRPR-AGC-001 | Zdiag at 0x64–0x6B | **0x64–0x6F** | Same widening staleness as TAC-005/WGN-006 |
-| TRPR-AGC-002 | `AGC_THR_HI` at 0x2B–0x2C, `AGC_THR_SAT` at 0x2D–0x2E | *(removed — never implemented in RTL, AGC comparison is software-owned)* | 0x2B–0x2E are actually `SC_FIRST_HIT`/`SC_LOCK_SNAP` — collision risk. This requirement describes hardware comparator registers that were never built; the strategy itself (max-gain-before-saturation) is real, but entirely a firmware/host computation with no on-chip threshold registers to point at |
+| TRPR-TAC-005 | `ZDIAG_k` at 0x64–0x6B, 16-bit | `ZDIAG_0..3` at **0x64–0x6F**, 24-bit each | Stale since the Zdiag widening fix (`46e1da0`); **fixed** |
+| TRPR-TAC-006 | `Z_SHIFT` at 0x63 | *(removed — hardwired 0)* | Reworded to REMOVED, cross-referencing TRPR-WGN-009; **fixed** |
+| TRPR-TAC-008 | `TRAINING_STATUS` at 0x60 | **0x20** | 0x60 is unallocated in the current map; **fixed** |
+| TRPR-TAC-011 | `TACC_REF_SEL` at 0x6B | *(removed — superseded by `TACC_NOISE_TRIG`)* | Reworded to REMOVED; **fixed** |
+| TRPR-SCD-008 | `SC_HITS_REQ` at 0x1B | **0x0E** | RTL and tests both correctly use 0x0E; **fixed** |
+| TRPR-SCD-009 | `SC_STAT` at 0x50–0x51 | `SC_STAT_HI/LO` at **0x24–0x25** | Also untested at either address (coverage gap unchanged); **address fixed** |
+| TRPR-PCF-006 | `ACTIVE_MODE`/`ACTIVE_ANTENNA_EN` at 0x30/0x31 | Packed into `ACTIVE_STATUS` at **0x1D** | 0x30/0x31 are actually `W_0_RE_HI/LO` — collision risk; **fixed** |
+| TRPR-PCF-007 | `PKT_TIMEOUT_SYMS` at 0x16 | **0x0B** | RTL and tests both correctly use 0x0B; **fixed** |
+| TRPR-PCF-009 | `PACKET_STATUS` at 0x34 | **0x1C** | 0x34 is actually `W_1_RE_HI` — collision risk; **fixed** |
+| TRPR-MRC-007 | `COMB_POST_GAIN_SHIFT` at 0x36[2:0] | `COMB_CFG` at **0x0F**[2:0] | 0x36 is actually `W_1_IM_HI` — collision risk; **fixed** |
+| TRPR-MRC-011 | `WGT_CTRL` at 0x35 | **0x1E** | 0x35 is actually `W_1_RE_LO` — collision risk; **fixed** |
+| TRPR-WGN-006 | `ZDIAG_k` at 0x64–0x6B, bits [31:16] | **0x64–0x6F**, bits [31:8] | Same widening staleness as TAC-005, plus wrong bit slice; **fixed**, and the now-redundant left-shift-to-align-scales instruction was removed since both Z_kl and Zdiag are read at the same [31:8] scale post-widening |
+| TRPR-WGN-009 | `Z_SHIFT` at 0x63 | *(removed — hardwired 0)* | Same root cause as TAC-006, initially miscategorised as "checked clean" in an earlier draft of this table — caught on a second pass; **fixed**, reworded to REMOVED |
+| TRPR-AGC-001 | Zdiag at 0x64–0x6B | **0x64–0x6F** | Same widening staleness as TAC-005/WGN-006; **fixed** |
+| TRPR-AGC-002 | `AGC_THR_HI` at 0x2B–0x2C, `AGC_THR_SAT` at 0x2D–0x2E | *(removed — never implemented in RTL, AGC comparison is software-owned)* | 0x2B–0x2E are actually `SC_FIRST_HIT`/`SC_LOCK_SNAP` — collision risk; **fixed**, reworded to make clear the strategy is real but the comparator registers never existed in RTL |
 
 **Checked clean** (address citations that do match the current register map,
-included for completeness since they were part of the same sweep): SPS-002,
-SPS-006 (`CHIP_ID` 0x00), SPS-010/011 (`PSRAM_DBG_DATA` 0x76, `0x7F` reserved),
-REG-004, REG-006 (`TACC_NOISE_TRIG` 0x1F, `WGT_CTRL.W_COMMIT` 0x1E, `RX_GAIN_COMMIT`
-0x18, `PSRAM_CLR_ERR` 0x70, `PSRAM_DBG_CTRL.RD_TRIG` 0x75), REG-007/IRQ-001/002/006
-(`IRQ_STATUS` 0x02, `IRQ_CLEAR` 0x03), AGC-003 (`RX_GAIN_SHADOW`/`ACTIVE` 0x10–0x17),
-AGC-004 (`TACC_NOISE_TRIG` 0x1F), INT-002/009 (0x00–0x7F range, W shadow 0x30–0x3F,
-`WGT_CTRL` 0x1E), TAC-002/003/004/007 (Z pairs 0x40–0x63, `N_ACC` 0x21–0x23,
-`TACC_WINDOW_SYMS` 0x27), PSR-006/007/009/010/017/020 (`PSRAM_STATUS` 0x71,
-`PSRAM_CTRL` 0x70, `PSRAM_DBG_*` 0x72–0x76), SCD-010/011/012, WGN-003/007/009.
+included for completeness since they were part of the same sweep, no edits
+needed): SPS-002, SPS-006 (`CHIP_ID` 0x00), SPS-010/011 (`PSRAM_DBG_DATA` 0x76,
+`0x7F` reserved), REG-004, REG-006 (`TACC_NOISE_TRIG` 0x1F, `WGT_CTRL.W_COMMIT`
+0x1E, `RX_GAIN_COMMIT` 0x18, `PSRAM_CLR_ERR` 0x70, `PSRAM_DBG_CTRL.RD_TRIG` 0x75),
+REG-007/IRQ-001/002/006 (`IRQ_STATUS` 0x02, `IRQ_CLEAR` 0x03), AGC-003
+(`RX_GAIN_SHADOW`/`ACTIVE` 0x10–0x17), AGC-004 (`TACC_NOISE_TRIG` 0x1F), INT-002/009
+(0x00–0x7F range, W shadow 0x30–0x3F, `WGT_CTRL` 0x1E), TAC-002/003/004/007
+(Z pairs 0x40–0x63, `N_ACC` 0x21–0x23, `TACC_WINDOW_SYMS` 0x27), PSR-006/007/
+009/010/017/020 (`PSRAM_STATUS` 0x71, `PSRAM_CTRL` 0x70, `PSRAM_DBG_*` 0x72–0x76),
+SCD-010/011/012, WGN-003/007.
 
-**Two distinct classes of finding, worth keeping separate when acting on this:**
-1. **Wrong address for a register that exists** (TAC-008, SCD-008/009, PCF-006/007/009,
-   MRC-007/011) — a pure spec-text fix: update the hex address to match
-   `Register Map.md`. Several of these point at addresses that are now *other*
-   live registers (weight-shadow bytes, mostly), so anyone hand-implementing
-   firmware straight from the spec table would silently corrupt or misread
-   unrelated state.
-2. **Register removed or never implemented** (TAC-006/011, AGC-002) — not a
-   simple address swap. These requirements describe functionality that was
-   deliberately cut; the spec text needs to either be retired/reworded to
-   match current scope, or (for AGC-002 specifically) reworded to make clear
-   the strategy is real but purely a firmware/host computation with no
-   on-chip register to back it.
+**Two distinct classes of finding, kept separate in the edits applied:**
+1. **Wrong address for a register that exists** (TAC-005/008, SCD-008/009,
+   PCF-006/007/009, MRC-007/011, WGN-006, AGC-001) — pure spec-text address
+   swap. Several pointed at addresses that are now *other* live registers
+   (weight-shadow bytes, mostly) — a real collision risk for anyone who'd
+   hand-implemented firmware straight from the spec table.
+2. **Register removed or never implemented** (TAC-006/011, WGN-009, AGC-002) —
+   not a simple address swap. Reworded each row to `Pri/Type = —`, requirement
+   text `**REMOVED.**`/clarified, matching the existing style already used for
+   `TRPR-PSR-008` (`**DELETED.**`).
 
-**Suggested next step:** a single editing pass over `Trouper Chip
-Specification.md` fixing every address in the left column above to the
-middle/right column, plus a one-line note on TAC-006/011 and AGC-002 that the
-referenced register doesn't exist. This doesn't require writing any new
-tests — it's pure spec-text correction, orthogonal to the coverage gaps
-tracked in the per-block sections below.
+**Not covered by this pass:** `TRPR-WGN-008`'s `DBG_MISSED_PKTS` counter
+register doesn't appear anywhere in `Register Map.md` either, but it wasn't
+caught by this sweep (no hex address to grep for) — worth a follow-up check,
+and ties into the already-tracked `W_MISSED_PACKET` untested-bit gap in the
+PCF-005/PCF-009/MRC-011 findings below.
 
 ---
 
@@ -90,13 +89,13 @@ tracked in the per-block sections below.
 | TRPR-TAC-002 | Window controlled by `TACC_WINDOW_SYMS`, reset clamps to 8 | T | `tb_training_acc_equiv.v`, `tb_tacc_resetless_equiv.v` | ✅ |
 | TRPR-TAC-003 | `training_done` asserts; `n_acc` latched 18-bit | T | `tb_training_acc_equiv.v`, `tb_tacc_resetless_equiv.v` | ✅ |
 | TRPR-TAC-004 | Z_kl readback format, 0x40–0x63, 24-bit BE | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ (via SPI, real capture data) |
-| TRPR-TAC-005 | Zdiag readback 0x64–0x6B, 16-bit | T | `test_weight_gen_spi_flow.py` (job 3286) | 🗑️ **Spec is stale on both address range and width** (see Register Address Reconciliation below) — actual `ZDIAG_0..3` span `0x64`–`0x6F`, 24-bit each (widened by commit `46e1da0`, "widen Zdiag readback from top-16 to top-24 bits"). The test itself reads the correct current registers; only the spec text lagged the fix. |
-| TRPR-TAC-006 | Common right-shift `Z_SHIFT` (0x63) applied to Z_kl | T | — | 🗑️ **`Z_SHIFT` (0x63–0x69) is hardwired 0 in `trouper_top`, per `planning/Register Map.md` "Former addresses" table** — the register this requirement describes does not exist in current RTL. Spec is stale; needs reconciling (either restore the register or retire/reword TAC-006). |
+| TRPR-TAC-005 | Zdiag readback 0x64–0x6F, 24-bit | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ Spec address/width fixed 2026-07-05 (was 0x64–0x6B/16-bit, stale since the Zdiag widening in `46e1da0`) — see Register Address Reconciliation above. The test itself always read the correct current registers; only the spec text had lagged. |
+| TRPR-TAC-006 | *(REMOVED — no hardware `Z_SHIFT` register in the current revision)* | — | — | ✅ Spec reworded 2026-07-05 to state the register doesn't exist, cross-referencing TRPR-WGN-009 — see Register Address Reconciliation above. Was previously describing a register hardwired 0 in `trouper_top`. |
 | TRPR-TAC-007 | Firmware noise-trigger mode (`TACC_NOISE_TRIG`) | T | `tb_trouper_spi.v` (W1P self-clear only) | ⚠️ Only the register self-clear behavior is tested (overlaps TRPR-REG-006). The actual noise-accumulation *function* (arm without `sc_lock`, Z_kl≈0, Zdiag≈σ²·n_acc) has no dedicated test. |
-| TRPR-TAC-008 | `TRAINING_STATUS` (0x60) exposes DONE/ARMED bits | T | `tb_training_acc_equiv.v`, `tb_tacc_resetless_equiv.v` (internal `training_done`/`training_armed` signals only) | 🗑️⚠️ **Spec gives the wrong address** (see Register Address Reconciliation below) — `TRAINING_STATUS` is at **0x20**, not `0x60` (`0x60` is unallocated in the current 128-register map). Coverage is also still only at the RTL signal level: no test reads register 0x20 directly over SPI/AHB to confirm the bit mapping. |
+| TRPR-TAC-008 | `TRAINING_STATUS` (0x20) exposes DONE/ARMED bits | T | `tb_training_acc_equiv.v`, `tb_tacc_resetless_equiv.v` (internal `training_done`/`training_armed` signals only) | ⚠️ Spec address fixed 2026-07-05 (was `0x60`, unallocated in the current map — see Register Address Reconciliation above). Coverage is still only at the RTL signal level: no test reads register 0x20 directly over SPI/AHB to confirm the bit mapping. |
 | TRPR-TAC-009 | Z_kl/n_acc matches Python `h_k·conj(h_l)` within Q1.15 | T | `test_weight_gen_spi_flow.py` (job 3286, oracle compare), `sim/tests/test_eigvec_fw.py` | ✅ |
 | TRPR-TAC-010 | Auto-reset on each `sc_lock` | T | `tb_tacc_resetless_equiv.v` (B2, job — see `project_area_cuts_b1_banked_b2_rejected_3v` memory), `test_capture_two_packet.py` (job 3273, real-capture two-packet re-arm) | ✅ |
-| TRPR-TAC-011 | `TACC_REF_SEL` (0x6B) legacy, no functional effect | I | — | 🗑️ Same issue as TAC-006: `TACC_REF_SEL` (0x6A–0x6B) is in the register map's "Former addresses / removed" table, superseded by `TACC_NOISE_TRIG`. Requirement describes a register that no longer exists — spec is stale. |
+| TRPR-TAC-011 | *(REMOVED — no hardware `TACC_REF_SEL` register in the current revision)* | — | — | ✅ Spec reworded 2026-07-05 — see Register Address Reconciliation above. Was previously describing a legacy register in the map's "Former addresses / removed" table, superseded by `TACC_NOISE_TRIG`. |
 
 **Open items surfaced by this pass:**
 1. **TAC-006 / TAC-011 spec-RTL mismatch** — both requirements describe registers (`Z_SHIFT`, `TACC_REF_SEL`) that `planning/Register Map.md` lists as removed/hardwired-0. These aren't test gaps, they're stale spec text — needs a spec update pass, not a test.
@@ -121,8 +120,8 @@ embedded in a full-DSP-chain testbench (`tb_dsp_chain*.v`, `tb_trouper_top.v`,
 | TRPR-SCD-005 | `timing_ref = lock_sample − (SC_HITS_REQ+1)·M + 1` | T | — | ⚠️ `timing_ref` is exercised (feeds `training_acc`'s window) in every DSP-chain testbench, but no test asserts its value against the closed-form formula directly — correctness is only inferred indirectly through downstream Z-value correctness. |
 | TRPR-SCD-006 | RTL operates on antenna branch 0 only (by design) | I | — | ℹ️ Not a testable requirement — it's a documented design limitation. Tracked as an open risk: `planning/sc-detector-ant0-fading-risk.md` (ant0 deep-fade SPOF, no 4-branch pooling before lock). |
 | TRPR-SCD-007 | `SC_THR_HI/LO` (0x0C/0x0D) writable, RTL consumes low 12 bits, reset default `0x01CC` | I | `tb_trouper_top.v`, `test_trouper_top.py` (write `SC_THR_HI/LO` over SPI) | ⚠️ Write path exercised; reset-default value (`0x01CC`) not asserted anywhere. |
-| TRPR-SCD-008 | `SC_HITS_REQ` configurable via register **0x1B** | T | `test_trouper_top.py`, `tb_trouper_top.v` (write via SPI) | 🗑️ **Spec gives the wrong address.** `planning/Register Map.md` (line 40) has `SC_HITS_REQ` at **0x0E**, and both tests write `0x0E` — matches current RTL, not the `0x1B` the spec text cites. Spec is stale. |
-| TRPR-SCD-009 | `SC_STAT` (spec says 0x50–0x51) exposes `\|C[s]\|²` telemetry | I | — | 🗑️ **Spec gives the wrong address.** Register Map has `SC_STAT_HI/LO` at **0x24/0x25**, not `0x50–0x51`. No test reads it at either address — untested regardless of the address mismatch. |
+| TRPR-SCD-008 | `SC_HITS_REQ` configurable via register **0x0E** | T | `test_trouper_top.py`, `tb_trouper_top.v` (write via SPI) | ✅ Spec address fixed 2026-07-05 (was `0x1B` — see Register Address Reconciliation above). RTL and both tests already correctly used 0x0E. |
+| TRPR-SCD-009 | `SC_STAT_HI/LO` (0x24–0x25) exposes `\|C[s]\|²` telemetry | I | — | 🗑️ Spec address fixed 2026-07-05 (was `0x50–0x51` — see Register Address Reconciliation above). Coverage gap unchanged: no test reads it at either address. |
 | TRPR-SCD-010 | Debug regs `SC_DBG_FLAGS` (0x26), `SC_FIRST_HIT` (0x28–0x2B), `SC_LOCK_SNAP` (0x2C–0x2F) | T | — | ❌ Addresses match the current register map, but no test reads any of these three registers over SPI/AHB. |
 | TRPR-SCD-011 | `CORR_MAG_n` (0x48–0x4F) reserved, tied to 0 | I | — | ✅ (by inspection — matches Register Map "Former addresses" table; nothing to functionally test) |
 | TRPR-SCD-012 | `C_POOL_I/Q` (0x64–0x67) reserved, tied to 0 | I | — | ✅ (by inspection — matches Register Map; nothing to functionally test) |
@@ -191,10 +190,10 @@ correctness, FSM legality, bus-driving safety, and delay-line warm-up.
 | TRPR-PCF-003 | On `training_done`: → W_PENDING, assert `TRAINING_DONE` IRQ | T | `test_weight_gen_spi_flow.py` (job 3286, `IRQ_STATUS[TRAINING_DONE]`) | ✅ |
 | TRPR-PCF-004 | On `W_COMMIT`: latch `W_ACTIVE` at safe-switch boundary, → PAYLOAD_ACTIVE | T | `test_weight_gen_spi_flow.py`, `test_capture_playback.py` (`W_COMMIT`→`WGT_CTRL[1]` W_VALID→combiner uses committed weight) | ✅ (via `WGT_CTRL`, not `PACKET_STATUS`, mirror — see PCF-009) |
 | TRPR-PCF-005 | No `W_COMMIT` before payload boundary → stay in bypass, set `W_MISSED_PACKET`, assert IRQ | T | — | ❌ **RTL fix landed (commit `46e1da0`: "packet_ctrl_fsm: set W_missed_packet on the wpend timeout path when W_valid never arrived") with no accompanying regression test.** `W_MISSED_PACKET`/`DBG_MISSED_PKTS` have zero references anywhere in `rtl-test/tb/` or `cocotb/tests/`. |
-| TRPR-PCF-006 | `ACTIVE_MODE` (spec says 0x30)/`ACTIVE_ANTENNA_EN` (spec says 0x31) latched from `MIMO_CTRL` only at safe-switch (IDLE) | T | `test_bypass_antenna.py` | 🗑️⚠️ **Spec gives the wrong addresses** (see Register Address Reconciliation below) — both bits are actually packed into a single register, `ACTIVE_STATUS` at **0x1D** (`[1:0]`=`ACTIVE_MODE`, `[7:4]`=`ACTIVE_ANTENNA_EN`); `0x30`/`0x31` are actually `W_0_RE_HI`/`W_0_RE_LO` (weight shadow bytes) — another real collision risk, same shape as PCF-009's `PACKET_STATUS`/`W_re1` collision. Test coverage is also still partial: confirms the write→readback mux logic itself (`bypass_ant` selection), explicitly scoped to avoid the latch-timing behavior — no test writes `MIMO_CTRL` **during an active packet** to confirm the change is deferred rather than taking effect immediately. |
-| TRPR-PCF-007 | Packet timeout via `PKT_TIMEOUT_SYMS` (spec says 0x16) forces IDLE, asserts `PACKET_DONE` IRQ | T | `tb_trouper_two_packet.v` (writes `PKT_TIMEOUT_SYMS` at **0x0B**, job 3203) | 🗑️ **Spec gives the wrong address** — `planning/Register Map.md` (line 37) and the test both use `0x0B`, not the `0x16` the spec text cites. Same stale-address pattern as TAC-006/011, SCD-008/009, PCF-009. Functionally, the timeout path is exercised (FSM does return to IDLE and re-lock without ever sending `W_COMMIT`), but no test explicitly checks the `PACKET_DONE` IRQ bit fires on that transition. |
+| TRPR-PCF-006 | `ACTIVE_MODE`/`ACTIVE_ANTENNA_EN`, packed into `ACTIVE_STATUS` (0x1D), latched from `MIMO_CTRL` only at safe-switch (IDLE) | T | `test_bypass_antenna.py` | ⚠️ Spec address fixed 2026-07-05 (was two separate registers at `0x30`/`0x31`, which are actually `W_0_RE_HI`/`W_0_RE_LO` weight-shadow bytes — see Register Address Reconciliation above). Test coverage is still partial: confirms the write→readback mux logic itself (`bypass_ant` selection), explicitly scoped to avoid the latch-timing behavior — no test writes `MIMO_CTRL` **during an active packet** to confirm the change is deferred rather than taking effect immediately. |
+| TRPR-PCF-007 | Packet timeout via `PKT_TIMEOUT_SYMS` (0x0B) forces IDLE, asserts `PACKET_DONE` IRQ | T | `tb_trouper_two_packet.v` (writes `PKT_TIMEOUT_SYMS` at **0x0B**, job 3203) | ⚠️ Spec address fixed 2026-07-05 (was `0x16` — see Register Address Reconciliation above). RTL and the test already correctly used 0x0B. Functionally, the timeout path is exercised (FSM does return to IDLE and re-lock without ever sending `W_COMMIT`), but no test explicitly checks the `PACKET_DONE` IRQ bit fires on that transition. |
 | TRPR-PCF-008 | On IDLE entry: `buf_freeze` de-asserts, frontend buffer resumes | T | — | ❌ No test found — same gap as PCF-002, `buf_freeze` is never observed coming out of `packet_ctrl_fsm` in any test. |
-| TRPR-PCF-009 | `PACKET_STATUS` (spec says 0x34) exposes PACKET_ACTIVE/PHASE/TRAINING_DONE/W_PENDING/W_VALID/W_MISSED_PACKET | I | `tb_trouper_spi.v` (RO-write-ignored check only) | 🗑️ **Spec gives the wrong address.** Register Map (line 54) has `PACKET_STATUS` at **0x1C**; spec's `0x34` is actually the `W_re1` weight-shadow byte (see `tb_trouper_top.v:430`) — a real collision risk if anyone trusted the spec's address. Coverage itself is also weak: the only test touching `0x1C` confirms it's read-only, never checks its bit *content* during a live packet. |
+| TRPR-PCF-009 | `PACKET_STATUS` (0x1C) exposes PACKET_ACTIVE/PHASE/TRAINING_DONE/W_PENDING/W_VALID/W_MISSED_PACKET | I | `tb_trouper_spi.v` (RO-write-ignored check only) | ⚠️ Spec address fixed 2026-07-05 (was `0x34`, actually the `W_1_RE_HI` weight-shadow byte — see Register Address Reconciliation above). Coverage itself is still weak: the only test touching `0x1C` confirms it's read-only, never checks its bit *content* during a live packet. |
 | TRPR-PCF-010 | No deadlock: W_PENDING → timeout → IDLE when firmware absent/no `W_COMMIT` | T | `tb_trouper_two_packet.v` (job 3203) — every packet in this test completes via the timeout path since `W_COMMIT` is never sent | ✅ (functional — the test's entire premise depends on this path not deadlocking) |
 | TRPR-PCF-011 | Mode 1 passthrough: route lowest-enabled antenna to remod, bypass training/weights | T | `test_bypass_antenna.py` (antenna-select mux logic only, explicitly scoped) | ⚠️ Mux selection is proven correct (4/4 cases). The requirement's second half — that training accumulation and weight computation are actually bypassed and the selected antenna reaches the re-modulator — is explicitly out of scope for this test per its own docstring ("without needing bypass mode's downstream"), and no other test covers it. |
 
@@ -217,11 +216,11 @@ correctness, FSM legality, bus-driving safety, and delay-line warm-up.
 | TRPR-MRC-004 | Shadow bank promoted to `W_ACTIVE` atomically on `W_COMMIT` at a safe-switch boundary | T | `test_weight_gen_spi_flow.py` | ⚠️ **Spec describes an atomicity guarantee the RTL doesn't actually implement.** `mrc_combiner.v`'s `W_re0..W_im3` ports are wired directly to `rb_w_shadow` (`trouper_top.v:493-496`) — there is no separate `W_ACTIVE` latch gated on a "safe-switch boundary." The combiner just reads whatever is currently in the shadow bank each time it latches inputs at state 0 (once per ~500 kS/s sample). Functionally harmless in every test so far (weights are always written well before the next sample), but a mid-packet `W_SHADOW` rewrite would take effect within one combine cycle, not at a packet boundary as the spec implies. Not previously documented anywhere. |
 | TRPR-MRC-005 | Before `W_COMMIT`: output bypass signal (lowest-enabled antenna, no weighting) | T | `test_bypass_antenna.py` (job 3276, Open Risks #4 fix) | ⚠️ The antenna-select mux (`bypass_ant` = lowest enabled bit) is proven correct 4/4 cases — this is the mux TRPR-MRC-005's bypass path depends on, and was the subject of a real bug fix (Open Risks #4: previously selected antenna 1, not the lowest-enabled). But the test drives bypass via explicit `MIMO_CTRL.MODE=1`, not the "no `W_COMMIT` yet" pre-training auto-fallback (`use_mrc_r <= W_valid && !mode` — same `bypass_ant` wire serves both cases, but the *pre-training* trigger condition itself is never directly exercised as such). |
 | TRPR-MRC-006 | Weights stored as 4 complex int16 Q1.15 pairs at 0x30–0x3F | I | `test_weight_gen_spi_flow.py` | 🗑️ **Real precision gap, not just a stale claim.** `mrc_combiner.v` takes `signed [7:0]` weight inputs — only the HI byte of each Q1.15 pair (`W_0_RE_HI` at `0x30`, etc.) reaches the combiner; the LO byte (`0x31`, etc.) is write-only and silently discarded. Effective precision is Q0.7 (int8, ±127), not the full Q1.15 this requirement and the register names imply. Found while building `test_weight_gen_spi_flow.py` (job 3286); now documented in `planning/Register Map.md`'s `0x30`–`0x3F` section and Open Risks #33. Spec text needs updating to say Q0.7. |
-| TRPR-MRC-007 | `COMB_POST_GAIN_SHIFT` (pgs) at spec-cited `0x36[2:0]`, effective division 2^(8−pgs) | T | `tb_mrc_fw_rand.v` (job 2010, quantisation-loss figures cited directly in the spec text), `test_remod_backoff.py` (writes pgs via `COMB_CFG`) | 🗑️ **Spec gives the wrong address.** `COMB_POST_GAIN_SHIFT` is at `0x0F` bits[2:0] (packed together with `REMOD_BACKOFF_SHIFT` at bits[5:4] in `COMB_CFG`, per `planning/Register Map.md`), not a standalone `0x36`. Same recurring stale-address pattern as TAC-006/011, SCD-008/009, PCF-007/009. |
+| TRPR-MRC-007 | `COMB_POST_GAIN_SHIFT` (pgs) at `COMB_CFG` 0x0F[2:0], effective division 2^(8−pgs) | T | `tb_mrc_fw_rand.v` (job 2010, quantisation-loss figures cited directly in the spec text), `test_remod_backoff.py` (writes pgs via `COMB_CFG`) | ✅ Spec address fixed 2026-07-05 (was a standalone `0x36[2:0]` — see Register Address Reconciliation above). `COMB_POST_GAIN_SHIFT` is actually packed together with `REMOD_BACKOFF_SHIFT` at bits[5:4] in `COMB_CFG` (0x0F). |
 | TRPR-MRC-008 | Post-combining SNR gain ≥ 5 dB vs. single-antenna (flat channel, equal power) | A | `sim/tests/run_ber.py` (Python `--nt 1` MRC sweep) | ✅ (Python model only — no RTL-level SNR-gain measurement, consistent with the requirement's `Verif=P` (Python) column) |
 | TRPR-MRC-009 | AGC keeps branch amplitude ≤ −3 dBFS (≤90 counts) so combined sum fits after ÷2; int8 saturation is a safety net, not the normal path | P | — | ❌ Not testable at the RTL level — this requirement is about AGC's firmware control loop, which has no test at all (Open Risks #8). `test_remod_backoff.py` shows the combiner reaches near-full-scale (`comb_y` peak ~120, i.e. above the 90-count/−3 dBFS line) quite easily under a synthetic forced-weight stimulus — a reminder that the RTL provides no independent enforcement of this constraint; it depends entirely on AGC/firmware discipline plus the `REMOD_BACKOFF_SHIFT` margin (TRPR-RMD-004) as a second line of defense. |
 | TRPR-MRC-010 | ŷ matches numpy `W@x` within ±2 LSB (int8) | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ **Exceeds requirement** — bit-exact (`max_err=0.00`), not just within ±2 LSB. |
-| TRPR-MRC-011 | `WGT_CTRL` (spec-cited `0x35`) exposes `W_COMMIT`/`W_VALID`/`W_PENDING`/`W_MISSED_PACKET` | I | `tb_trouper_spi.v` (`W_COMMIT` W1P mechanics, reset value) | 🗑️ **Spec gives the wrong address** — `WGT_CTRL` is at `0x1E` (`planning/Register Map.md`), not `0x35`. Coverage is also partial: only `W_COMMIT`'s W1P behavior is tested; `W_VALID`/`W_PENDING`/`W_MISSED_PACKET` readback over SPI is untested (see PCF-005 above re: `W_MISSED_PACKET` specifically having zero coverage). |
+| TRPR-MRC-011 | `WGT_CTRL` (0x1E) exposes `W_COMMIT`/`W_VALID`/`W_PENDING`/`W_MISSED_PACKET` | I | `tb_trouper_spi.v` (`W_COMMIT` W1P mechanics, reset value) | ⚠️ Spec address fixed 2026-07-05 (was `0x35` — see Register Address Reconciliation above). Coverage is still partial: only `W_COMMIT`'s W1P behavior is tested; `W_VALID`/`W_PENDING`/`W_MISSED_PACKET` readback over SPI is untested (see PCF-005 above re: `W_MISSED_PACKET` specifically having zero coverage). |
 
 **Open items surfaced by this pass:**
 1. **MRC-006 is a real, previously-undocumented precision cliff**, not a stale-spec issue like the address mismatches elsewhere — the combiner silently drops half of every committed weight's precision. Now documented in the Register Map; spec text (`Trouper Chip Specification.md` TRPR-MRC-006) still says Q1.15 and should be corrected to Q0.7.

@@ -105,10 +105,18 @@ Not applicable — control-only block, no signal path.
 
 ## 9. ΣΔ Re-modulator (`sd_remod.v`)
 
-**Not yet quantified** as an isolated SNR-loss item at the current OSR=64
-operating point (previously ran over-specified at OSR=128). Stability/SQNR
-sweep at OSR=64 is flagged as pending in
-`planning/decimator-hb-migration-impact-plan.md` Gate 9/10.
+| Effect | Measured | Conditions | Status | Reference |
+|---|---|---|---|---|
+| 3rd-order (deployed) SQNR at OSR=64 | ≈65.7-66.8 dB (realistic op point to peak-achievable) | amp=0.5 (deployed op point) to amp≈0.78 (peak, pre-cliff) | Verified — clears the ≥40 dB Gate 10 accept bar by >25 dB | `sim/notebooks/14_sd_remod.ipynb`; `sim/tests/remod_order_sweep.py` |
+| 3rd-order stability boundary | Stable to amp≈0.88; −3 dBFS design guideline (amp≈0.708) sits ~1.9 dB inside that boundary | OSR=64, single-tone SQNR collapse detection | Verified | same |
+| 2nd-order (B3 area-cut candidate, not deployed) SQNR at OSR=64 | ≈49.0 dB at the realistic op point (amp=0.5), ≈52.8 dB peak-achievable | same sweep, order=2 CIFF, `synthesizeNTF(order=2, OSR=64, H_inf=1.5)` coefficients | Verified — **does not clear** the int8 quantisation floor (≈49.9 dB) at the realistic operating point (−0.9 dB margin); roadmap's earlier ">25 dB margin" estimate was a physics-argument guess, not a measurement | same |
+
+Previously **not yet quantified**; the OSR=64 stability/SQNR sweep flagged as
+pending in `planning/decimator-hb-migration-impact-plan.md` Gate 9/10 has now
+been run (Gate 10 status updated to ACCEPTED, 2026-07-05). The 3rd-order
+(deployed) design clears its accept bar comfortably. The 2nd-order variant
+explored as area-cut candidate B3 (`planning/area-reduction-roadmap.md` §7)
+does not — see that section for the rejection.
 
 ## 10. Carrier Frequency Offset (CFO), system-level
 

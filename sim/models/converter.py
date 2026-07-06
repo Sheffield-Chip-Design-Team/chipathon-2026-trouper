@@ -13,31 +13,52 @@ class ADCModel:
 
 class SigmaDeltaRemodulator:
     """
-    Stage 8 — 3rd-order CIFF ΣΔ re-modulator. Matches sd_remod.v exactly.
+    Stage 8 — CIFF ΣΔ re-modulator. `order=3` (default) matches sd_remod.v exactly.
 
     Architecture: Cascade of Integrators, Feed-Forward (CIFF).
-      Three saturating integrators; Q8 weighted feed-forward summer; sign quantizer.
-      Coefficients from synthesizeNTF(order=3, OSR=64) via python-deltasigma.
-      Matches SX1257 datasheet §6.2.3 Figure 6-3.
+      N saturating integrators; Q8 weighted feed-forward summer; sign quantizer.
+      Coefficients from synthesizeNTF(order, OSR=64, H_inf=1.5) via python-deltasigma.
+      order=3 matches SX1257 datasheet §6.2.3 Figure 6-3 / deployed RTL.
+      order=2 is the B3 area-cut candidate (planning/area-reduction-roadmap.md §7) —
+      NOT deployed in RTL; coefficients derived the same way for a fair comparison.
 
     Normalised convention: input |x| <= 1.0, feedback = ±1.0.
     Integrators saturate at ±CLIP (= 32767/127, matching int16/int8 ratio in RTL).
-    Input must be < −3 dBFS (|x| < 0.708) for stability.
+    Input must be < −3 dBFS (|x| < 0.708) for 3rd-order stability (RTL header).
     """
 
-    A1   = 205 / 256   # 0.800 — Q8 coefficient matching RTL
-    A2   =  74 / 256   # 0.289
-    A3   =  11 / 256   # 0.043
+    # Q8 feed-forward coefficients, round(synthesizeNTF(order, OSR=64, H_inf=1.5) * 256) / 256.
+    # order=3 verified to reproduce the deployed RTL constants (sd_remod.v A1/A2/A3 = 205/74/11).
+    _COEFFS = {
+        2: (198 / 256, 55 / 256),          # 0.7734, 0.2148 — B3 candidate, not in RTL
+        3: (205 / 256, 74 / 256, 11 / 256),  # 0.800, 0.289, 0.043 — matches sd_remod.v
+    }
     CLIP = 32767 / 127  # integrator saturation limit in normalised units (~258)
 
     def __init__(self, order: int = 3):
-        # `order` kept for API compatibility; always 3rd-order CIFF
+        if order not in self._COEFFS:
+            raise ValueError(f"order must be one of {sorted(self._COEFFS)}")
         self.order = order
-        self._s1 = self._s2 = self._s3 = 0j
+        self._a = self._COEFFS[order]
+        self._s = [0j] * order
         self._prev_fb = 0j
 
+    # Back-compat accessors for the 3rd-order-only call sites (notebook 14, debug scripts)
+    @property
+    def A1(self): return self._a[0]
+    @property
+    def A2(self): return self._a[1]
+    @property
+    def A3(self): return self._a[2] if self.order >= 3 else 0.0
+    @property
+    def _s1(self): return self._s[0]
+    @property
+    def _s2(self): return self._s[1]
+    @property
+    def _s3(self): return self._s[2] if self.order >= 3 else 0j
+
     def reset(self):
-        self._s1 = self._s2 = self._s3 = 0j
+        self._s = [0j] * self.order
         self._prev_fb = 0j
 
     def _sat(self, v: complex) -> complex:
@@ -47,10 +68,12 @@ class SigmaDeltaRemodulator:
     def process(self, sample: complex) -> complex:
         """Process one complex sample. Returns ±1+j·±1 (1-bit per I/Q)."""
         e = sample - self._prev_fb
-        self._s1 = self._sat(self._s1 + e)
-        self._s2 = self._sat(self._s2 + self._s1)
-        self._s3 = self._sat(self._s3 + self._s2)
-        v = e + self.A1 * self._s1 + self.A2 * self._s2 + self.A3 * self._s3
+        v = e
+        prev = e
+        for k in range(self.order):
+            prev = self._sat(self._s[k] + prev)
+            self._s[k] = prev
+            v = v + self._a[k] * prev
         q = (1.0 if v.real >= 0 else -1.0) + 1j * (1.0 if v.imag >= 0 else -1.0)
         self._prev_fb = q
         return q

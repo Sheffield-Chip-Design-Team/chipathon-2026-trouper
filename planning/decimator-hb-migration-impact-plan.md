@@ -187,7 +187,9 @@ saturation, and bypass/MRC transitions. Do not assume OSR=128 results transfer.
 **Accept when:** stable over the allowed range, SQNR >=40 dB at the defined test
 amplitude, and loopback error meets the current int8 tolerance.
 
-**Status:** CONDITIONALLY ACCEPTED 2026-06-20. RTL: `sd_remod_hb.v` (byte-for-byte copy of `sd_remod.v`, module rename only). NTF coefficients were already synthesized for OSR=64 (`synthesizeNTF(order=3, OSR=64)`); production code was running them at OSR=128 (over-specified). HB brings OSR to the nominal design point. Integrators run at 32 MHz; `in_valid` latching handles 64-cycle update interval transparently. Stability/SQNR simulation sweep pending (not yet run at OSR=64).
+**Status:** ACCEPTED 2026-07-05 (was CONDITIONALLY ACCEPTED 2026-06-20, sweep now run). RTL: `sd_remod_hb.v` (byte-for-byte copy of `sd_remod.v`, module rename only). NTF coefficients were already synthesized for OSR=64 (`synthesizeNTF(order=3, OSR=64)`); production code was running them at OSR=128 (over-specified). HB brings OSR to the nominal design point. Integrators run at 32 MHz; `in_valid` latching handles 64-cycle update interval transparently. Stability/SQNR sweep run in `sim/notebooks/14_sd_remod.ipynb` and cross-checked in `sim/tests/remod_order_sweep.py`: stable to amp≈0.88 (vs the −3 dBFS / amp≈0.708 design guideline, ~1.9 dB margin), flat-region SQNR ≈66–67 dB (well above the ≥40 dB accept bar), full SF7–12 × BW125/250 loopback exact. **Accept criteria met.**
+
+**Related area-cut finding (2026-07-05):** the same sweep tooling was extended to test a 2nd-order CIFF variant for the B3 area-cut candidate (`planning/area-reduction-roadmap.md` §7 B3) — see that section for the result (REJECTED, does not clear the int8 floor at the deployed operating point). This does not affect the order=3 acceptance above; the deployed remodulator is unchanged.
 
 ### Gate 11: Integrated RTL and physical verification
 
@@ -266,6 +268,6 @@ contradictory legacy rates or symbol definitions.
 | 7 | 2026-06-20 | ACCEPTED | `packet_ctrl_fsm_hb.v`; iq_samp_cnt domain fix; cocotb job 2086 | — |
 | 8 | 2026-06-20 | DEFERRED | Debug fetch (31 cyc) > spare window (20 cyc) at 64-cycle iq_valid | Directed SAMPLE_SKIP=0 test at SF12/BW125 |
 | 9 | 2026-06-20 | ACCEPTED | `dc_removal_hb.v` α=1/32, 13-bit Q8.5; τ=64 µs preserved | — |
-| 10 | 2026-06-20 | CONDITIONAL | `sd_remod_hb.v`; NTF already OSR=64; stability sweep not yet run | Run remod SQNR sweep |
+| 10 | 2026-07-05 | ACCEPTED | `sd_remod_hb.v`; stability/SQNR sweep run (notebook 14 + `remod_order_sweep.py`): stable to amp≈0.88, SQNR≈66-67 dB, loopback exact SF7-12×BW125/250 | — |
 | 11 | 2026-06-20 | ACCEPTED | Cocotb 12/12 PASS job 2086; P&R jobs 2093–2095; **6 blocks (1650×1100 µm) confirmed** job 2094 TT/FF WNS=0.0 ns DRC=0; 5-block L-shape infeasible | — |
 | 12 | 2026-06-21 | ACCEPTED | Spec/Register Map/CLAUDE.md/arch + block docs updated to HB R=64/500 kS/s; consistency sweep clean | Migrate `sim/models/` + firmware constants; sandbox cleanup |

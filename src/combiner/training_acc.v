@@ -211,14 +211,10 @@ module training_acc (
             raw_i2_r <= 8'sd0; raw_i3_r <= 8'sd0;
             raw_q0_r <= 8'sd0; raw_q1_r <= 8'sd0;
             raw_q2_r <= 8'sd0; raw_q3_r <= 8'sd0;
-            Zpair_i0 <= 32'sd0; Zpair_q0 <= 32'sd0;
-            Zpair_i1 <= 32'sd0; Zpair_q1 <= 32'sd0;
-            Zpair_i2 <= 32'sd0; Zpair_q2 <= 32'sd0;
-            Zpair_i3 <= 32'sd0; Zpair_q3 <= 32'sd0;
-            Zpair_i4 <= 32'sd0; Zpair_q4 <= 32'sd0;
-            Zpair_i5 <= 32'sd0; Zpair_q5 <= 32'sd0;
-            Zdiag_0 <= 32'd0; Zdiag_1 <= 32'd0;
-            Zdiag_2 <= 32'd0; Zdiag_3 <= 32'd0;
+            // B2: Zpair_*/Zdiag_* are intentionally NOT reset here. They are
+            // zeroed at arm time below (every training window) and never read
+            // before that zeroing, so the reset was dead area — proven by
+            // tb_tacc_resetless_equiv.v (garbage-init equivalence, 2 arm windows).
         end else begin
             if (iq_valid)
                 sample_count <= sample_count + 32'd1;

@@ -457,7 +457,27 @@ Results (all on SGE, current RTL synced to NFS):
   dir). Read WNS from the run whose `06-yosys-synthesis` timestamp matches the job
   start, not the newest dir.
 
-**B2. Reset-free data flops — ❌ PnR-REJECTED at 3.0 V 2026-07-04 (revisit at 5 V).**
+**B2. Reset-free data flops — ✅ REVISED 2026-07-05: banked at the current 1200×1100/88%-density floorplan (superseded the 2026-07-04 rejection below).**
+The 07-04 rejection (immediately below) was measured at the older 1380×1100/50%-density
+floorplan. Re-tested same-day-current on `config_current_signoff.json` as it stands now
+(1200×1100, `PL_TARGET_DENSITY_PCT=88`, fixed `io_placement_bl.cfg` pin order) — a clean
+apples-to-apples pair, only `training_acc.v` differing (confirmed via netlist: the
+without-B2 run's `Zpair_i` flops are `dffrnq_1`; the with-B2 run's are the reset-free cell):
+**without B2** (job 3251, `RUN_2026-07-05_00-56-34`): SS WNS **−25.39 ns**, util 85.25%,
+instance area 1,264,650 µm², DRC/LVS/route-DRC 0/0/0, antenna 3.
+**with B2** (job 3266, standalone probe dir `tacc_b2_pnr_probe`, same config):
+SS WNS **−20.50 ns (+4.89 ns BETTER)**, util 86.02%, instance area 1,264,650 µm²
+(*identical* — the raw flop saving is still fully reabsorbed, same mechanism as before),
+DRC/LVS/route-DRC 0/0/0, antenna 4. So the tradeoff is unchanged in kind (no free area;
+the −3.6K synth flop saving never survives to placed area, at this or any density so far
+tested) but reversed in direction on SS: at 1380×1100/50% it cost ~1 ns of SS; at the
+current denser 1200×1100/88% floorplan it *gains* ~4.9 ns instead. Promoted
+`training_acc.v` (resetless Zpair_*/Zdiag_*) to `src/combiner/training_acc.v`.
+**This result is density/congestion-coupled, same as the voltage-coupling noted below —
+re-verify if the die size or density target changes again; do not assume it holds at a
+different floorplan without re-running both sides of the comparison.**
+
+**B2 original 2026-07-04 result (kept for history; see revision above) — PnR-REJECTED at 3.0 V (revisit at 5 V).**
 training_acc beachhead built + functionally proven, but the SS PnR gate killed it:
 combined B1+B2 (job 3222, RUN_2026-07-04_15-05-34) = **SS −17.02 ns vs B1-only
 −16.08 → −0.94 ns WORSE**, with **util 74.56% ≈ B1's 74.47% (flat/up)** — i.e. the
@@ -502,16 +522,33 @@ sim on the post-synth netlist with flops left X (no setundef -zero).
 3222 − 3219). Risk still open per §1: confirm no SS echo of the decimator
 reset-removal regression before banking.
 
-**B3. sd_remod 3rd→2nd order. −15–18K. BLOCKED on the pending OSR=64 sweep.**
-§1 table says "SQNR-locked, do not touch", but the DSP Chain SNR Loss Budget §9
-records that remod SQNR at OSR=64 is **not yet quantified** (Gate 9/10 sweep
-pending) — the lock is a placeholder, not a measurement. Physics argument: the
-remod input is int8 (≈50 dB floor); 2nd-order OSR=64 in-band SQNR ≈ 77 dB still
-clears it by >25 dB. Dropping order 3→2 removes two integrators + two constant-
-mult chains and shortens the 27-bit summer cone (32 MHz single-cycle — also an
-SS pressure point). Decision path: run the pending stability/SQNR sweep with
-both orders in `sim/notebooks/06_sd_decimator.ipynb` tooling; if 2nd-order
-passes the loss budget, take the cut; either way the sweep debt (§9) gets paid.
+**B3. sd_remod 3rd→2nd order. ❌ REJECTED 2026-07-05 — measured, does not clear the noise floor.**
+§1 table said "SQNR-locked, do not touch" pending the DSP Chain SNR Loss Budget
+§9 sweep (Gate 9/10), which was a placeholder physics argument, not a
+measurement: "2nd-order OSR=64 in-band SQNR ≈ 77 dB, clears the ≈50 dB int8
+floor by >25 dB." That sweep has now been run (`sim/tests/remod_order_sweep.py`,
+extending `sim/notebooks/14_sd_remod.ipynb`'s methodology to a genuinely
+order-configurable `SigmaDeltaRemodulator`, `sim/models/converter.py`) and the
+estimate does not hold:
+
+| | order=3 (deployed) | order=2 (this candidate) |
+|---|---|---|
+| SQNR at realistic operating amplitude (0.5) | 65.7 dB | **49.0 dB** |
+| Peak-achievable SQNR (near instability cliff) | 66.8 dB | 52.8 dB |
+| Margin over int8 floor (≈49.9 dB) at op point | +15.8 dB | **−0.9 dB** |
+| Stability cliff / margin over −3 dBFS | amp 0.88 / +1.9 dB | amp 1.00 / +3.0 dB |
+| Full SF7-12×BW125/250 loopback | PASS | PASS |
+
+2nd-order is actually *more* stable (wider input range, as CIFF theory
+predicts for lower order) but its SQNR sits right at the int8 quantisation
+floor with no margin at the amplitude the design actually operates at — not
+the 25 dB of headroom the physics argument assumed. The symbol-loopback test
+alone doesn't catch this (single-symbol chirp demod is a much coarser probe
+than SQNR), which is why it still passes. **Do not take this cut** unless the
+design is willing to trade away integrator headroom margin to push the
+operating amplitude toward the 2nd-order cliff — which itself erodes the
+safety margin `sim/notebooks/14_sd_remod.ipynb` §4 relies on. Sweep debt (§9)
+is now paid either way.
 
 **B4. mrc_combiner: delete local W latches. −6K.**
 `wr_re/wr_im[0:3]` (64 flops + enable muxes) re-latch reg_bank W-shadow values
@@ -544,8 +581,10 @@ zero-checks. `M_val` needs only 15 bits (M ≤ 16,384).
   deferred-increment fix — exactly where the timing_ref class of bug lives.
 - **Decimator anything** (width, storage, reset style): CLOSED per §1.
 
-Stack estimate: B1+B2+B4+B5+B6 ≈ **−48K** with no algorithmic change; +B3 if
-the sweep clears it ≈ **−65K** → synth ~875–890K. Per §2 that does not by
-itself unlock a die step below the 1260–1380 signoff window (binding limit
-below 1380 is SS timing, and placed area is buffering-inflated), but it buys
-util headroom at 1380/1340 and shrinks the SS repair burden.
+Stack estimate: B1+B2+B4+B5+B6 ≈ **−48K** with no algorithmic change; synth
+~892K. **B3 is now closed (rejected, see above) and does not add to this
+stack** — the ≈−65K figure that assumed B3 clearing the sweep no longer
+applies. Per §2 the −48K stack does not by itself unlock a die step below the
+1260–1380 signoff window (binding limit below 1380 is SS timing, and placed
+area is buffering-inflated), but it buys util headroom at 1380/1340 and
+shrinks the SS repair burden.
