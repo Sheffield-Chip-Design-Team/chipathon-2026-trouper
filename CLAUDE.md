@@ -134,14 +134,14 @@ The ASIC digital signal chain (all synchronous at 32 MHz):
 1. **ΣΔ Decimator** (`sd_decimator_poly.v`) — half-band chain R=64 (CIC-3 R=16 → HB1 ÷2 → HB2 ÷2), polyphase HB delay lines + 14-bit CIC, 1-bit → int8 at 500 kS/s, ×4 branches (TDM)
 2. **DC Removal** (`dc_removal.v`) — IIR leaky integrator, α=2^{−5} (13-bit Q8.5 acc), ×4
 3. **Schmidl-Cox Detector** (`sc_detector.v`) — sliding autocorr, produces `sc_lock` + `timing_ref`
-4. **Frontend Buffer Controller** (`frontend_buf_ctrl.v`) — 1 kB SRAM rolling buffer for delayed-sample storage; optional PSRAM replay via APS6404L
-5. **Noise Estimation** (`noise_est.v`) — Manhattan-norm per-antenna noise snapshot (no multipliers); feeds energy_snap for packet-ctrl energy gating
-6. **Training Accumulator** (`training_acc.v`) — all-pairs cross-correlator: 6 Z_kl pairs (C(4,2)) + 4 Z_kk diagonal + W_k per-branch sums. W_k → HW weight_gen; Z_kl pairs → firmware eigenvector MRC via reg_bank 0x40–0x63 (24-bit [31:8] readback; Zdiag at 0x64–0x6B). Noise mode: firmware write to TACC_NOISE_TRIG (0x1F) arms accumulator without sc_lock; Z_kk ≈ σ²_k·n_acc for noise EMA. Register map is 7-bit (0x00–0x7F) — see planning/Register Map.md.
+4. **PSRAM Buffer Controller** (`psram_buf_ctrl.v`) — APS6404L QPI controller: circular capture, SC delay-line reads at `write_ptr − M`, same-packet replay on `W_COMMIT` (replaces the removed `frontend_buf_ctrl.v`/on-chip SRAM)
+5. **Noise Estimation** — `noise_est.v` removed; firmware-triggered `training_acc` noise mode (`TACC_NOISE_TRIG`) + SC-contamination gate (`NOISE_READY` IRQ) replace it
+6. **Training Accumulator** (`training_acc.v`) — all-pairs cross-correlator: 6 Z_kl pairs (C(4,2)) + 4 Z_kk diagonal. Z_kl pairs → firmware weight computation (MRC row-sum or eigenvector) via reg_bank 0x40–0x63 (24-bit [31:8] readback; Zdiag at 0x64–0x6F). Noise mode: firmware write to TACC_NOISE_TRIG (0x1F) arms accumulator without sc_lock; Z_kk ≈ σ²_k·n_acc for noise EMA. Register map is 7-bit (0x00–0x7F) — see planning/Register Map.md.
 7. **Packet Control FSM** (`packet_ctrl_fsm.v`) — controls buf_freeze, W gating, safe_switch
-8. **Weight Generation** (`weight_gen.v`) — SHIFT→CAL→COMPUTE→SCALE; HW modes: EGC/MRC/SC; SW: ALMMSE via PicoRV32
+8. **Weight Generation** — firmware-only (no `weight_gen.v` in RTL, TRPR-WGN-001): Grouper/host reads Z over SPI/GRP bus, computes W (MRC row-sum or power-iteration eigenvector, `sim/models/eigvec_fw.py`), writes the W shadow (0x30–0x3F) and pulses `WGT_CTRL.W_COMMIT`
 9. **MRC Combiner** (`mrc_combiner.v`) — ŷ[n] = w^H·x[n], int32→int8 (÷2 guard shift)
 10. **ΣΔ Re-modulator** (`sd_remod.v`) — 3rd-order NTF synthesised for **OSR=64** (int8 in at 500 kS/s, 1-bit out at 32 MS/s), input must be < −3 dBFS (wrap-around causes permanent instability)
 
-**Control plane:** PicoRV32 RV32IM (`ip/picorv32/`) connected via AHB-Lite bus to Register Bank (Python-generated), SPI Slave (RPi host), SPI Master (→ SX1257), IRQ Controller, JTAG TAP. Top-level integration: `mimo_rx_top.v`.
+**Control plane:** no on-chip CPU, SPI master, or JTAG. Host SPI slave (RPi) and the Grouper inter-project register bus (`GRP_*`, priority over SPI) arbitrate into a hand-written `reg_bank.v` (7-bit map 0x00–0x7F; *not* Python-generated — see TRPR-REG-005 note in planning/Traceability.md); sticky IRQ_STATUS drives the `IRQ_OUT` pad and `IRQ_GROUPER`. SX1257 configuration is external (TRPR-SPM-001). Top-level integration: `src/top/trouper_top.v`.
 
 **Key constraint:** The `gf180mcu_fd_sc_mcu7t5v0` standard cell library is characterised at 3 V SS but designed for 5 V — it fails 32 MHz timing on all blocks at the SS corner. AS cells (`gf180mcu_as_sc_mcu7t3v3`) close SS timing but are unproven and not the current tapeout plan; the preferred path is FD cells with MCP or clock-domain partitioning to meet 32 MHz.

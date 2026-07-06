@@ -249,3 +249,182 @@ correctness, FSM legality, bus-driving safety, and delay-line warm-up.
 2. **RMD-004's detect/flag mitigation doesn't exist on-chip**, and its AGC-prevention alternative is untested (Open Risks #8) — the only proven mitigation is the `REMOD_BACKOFF_SHIFT` margin itself.
 3. **RMD-006 is only spot-checked at two amplitudes**, not swept across the full claimed stable range.
 4. ~~**RMD-008 / MRC-005 / PCF-011 all converge on the same untested claim**~~ — **CLOSED 2026-07-06** by exactly the single test proposed here: `cocotb/tests/test_bypass_e2e.py` (Verilator, job 3304, 3/3 PASS) drives real `MIMO_CTRL.MODE=1` end-to-end with per-antenna-distinct amplitudes and confirms `remod_in_i/q` tracks the selected antenna's raw decimated sample bit-exact, with committed weights ignored. Also picked up `PSRAM_STATUS.REPLAY_ACTIVE` register-level readback (PSR-006, now 2/7 bits) for free.
+
+---
+
+## Scope note — groups traced at block level only
+
+`TRPR-SYS` (system), `TRPR-PHY` (pads/package), `TRPR-CAL` (calibration
+procedures), `TRPR-VER` (verification-process meta) and `TRPR-SPEC` are
+system/procedural requirement groups, not RTL blocks — they are exercised
+via bring-up plans and signoff flows, not this matrix. Every RTL-block
+group is now traced below or above.
+
+---
+
+## 4.1 ΣΔ Decimator (`sd_decimator_poly.v`) — TRPR-DEC
+
+Migration record: `planning/decimator-hb-migration-impact-plan.md` (Gates
+0–12) is the canonical evidence trail for the R=64 half-band chain.
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-DEC-001 | 1-bit I/Q @32 MS/s in → int8 I/Q out | T | `tb_decimator_poly_equiv.v`, every chain/cocotb test | ✅ |
+| TRPR-DEC-002 | Fixed R=64 HB chain (CIC-3 R=16 → HB1 → HB2), 500 kS/s | T | `tb_decimator_poly_equiv.v` (bit-true vs `sd_decimator_poly_ref.v`/Python), migration Gates | ✅ |
+| TRPR-DEC-003 | SQNR ≥ 30 dB at −3 dBFS | T | migration-plan Gate record; `tb_sqnr.v`/`tb_sqnr_4ch.v` | ⚠️ The standalone SQNR tbs target the pre-migration `sd_decimator_top`; the HB chain's SQNR evidence lives in the migration record's Python analysis, not a current-RTL testbench. |
+| TRPR-DEC-004 | Identical branch inputs → bit-identical branch outputs (TDM) | T | `tb_dsp_chain_rand.v` (job 1789, per-branch oracle), `test_capture_playback.py` (distinct branches, ZDIAG ranking) | ✅ (functional) |
+| TRPR-DEC-005 | CIC saturating arithmetic, no wrap on all-1s/all-0s | T | — | ⚠️ Overflow safety of the 14-bit CIC was established analytically during the area work ("overflow-locked", area roadmap); no directed all-ones/all-zeros stimulus test exists. |
+| TRPR-DEC-006 | `iq_valid` every 64 clocks | T | every cocotb test (all timing math assumes `clk_per_iq=64`; any deviation fails lock/training immediately) | ✅ (functional) |
+| TRPR-DEC-007 | Stopband > 40 dB | A | migration-plan filter analysis | ✅ (analysis, per Verif=A) |
+| TRPR-DEC-008 | `bw_sel` selects BW only; R fixed at 64 | I | SF sweep (job 3311) passes both BWs with identical decimator timing | ✅ |
+| TRPR-DEC-009 | Passband droop ≤ 0.5 dB (≈ −0.17 dB inherent) | A | migration record, `sim/tests/test_cfo_droop.py` | ✅ (analysis) |
+
+**Open items:** DEC-003 standalone SQNR tb is stale vs the HB chain (regenerate or retire `tb_sqnr*.v`); DEC-005 lacks a directed saturation stimulus.
+
+---
+
+## 4.2 DC Removal (`dc_removal.v`) — TRPR-DCR
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-DCR-001..004, 009, 011 | Structure: 4 branches, Q8.5 acc, full-diff update, int8 I/O, fixed α=1/32, `out_valid` = `raw_valid`+1 | I | inspection + every chain test times downstream from `out_valid` | ✅ (per Verif=I; structure exercised continuously by all chain tests) |
+| TRPR-DCR-005, 007, 008, 010 | τ=64 µs, no-saturation bound, acc-overflow-impossible bound, AC droop < 0.1 dB | A | arithmetic analysis in spec rows | ✅ (analysis) |
+| TRPR-DCR-006 | Steady-state DC < 1 LSB after 256 samples | T | — | ⚠️ Only indirect: every SDM-driven test's lock/training depends on DC removal converging (driver docstrings budget < 3% attenuation), but no test asserts the residual-DC number. |
+| TRPR-DCR-012 | Reset clears accumulators/outputs | T | every cocotb test (full reset per case, immediate clean re-lock) | ✅ (functional) |
+| TRPR-DCR-013 | Post-reset settle < ~74 samples with DC present | T | — | ❌ No test drives a deliberate DC offset at reset and measures settle. |
+| TRPR-DCR-014 | No bypass port (by design) | I | — | ✅ (by construction) |
+| TRPR-DCR-015 | ≥64-sample `sc_lock` hold-off after reset ("open RTL gap" per spec) | T | `cocotb/tests/test_startup.py::test_sc_correlator_idle_until_del_rdy` | ✅ **Structurally closed — spec text is stale.** The spec's "no such hold-off exists" predates the PSRAM delay-line migration: SC evaluations cannot begin until `del_rdy` (M ≥ 128 warm-up samples ≥ the required 64), which `test_startup.py` measures (4.092 ms at SF9/BW125 ≈ predicted). The scenario the requirement guards against (spurious lock inside the first symbol from power-on DC) cannot occur. Spec row should be reworded from "open RTL gap" to "provided by the PSRAM delay-line warm-up". |
+
+**Open items:** DCR-006/013 directed convergence tests missing (low value — behavior continuously exercised); DCR-015 spec text needs the warm-up rewording.
+
+---
+
+## 4.4 SC Delay Line / former Frontend Buffer — TRPR-FBC
+
+The `frontend_buf_ctrl` block was removed; the PSRAM controller provides
+the delay line. These rows are traced against their PSRAM equivalents.
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-FBC-001 | M-sample delay via PSRAM QPI read at `write_ptr − M` | T | = TRPR-PSR-016 | ✅ (see PSR-016) |
+| TRPR-FBC-002 | On `buf_freeze`: freeze packet-start pointer, cease SC delay reads | T | — | 🗑️ **Spec drift:** `psram_buf_ctrl` has no `buf_freeze` input — the packet-start pointer latches on `sc_lock` directly and SC delay reads cease on `sc_lock` (PSR-002/016, both ✅). The *behavior* is fully verified; the *plumbing* the row describes doesn't exist (`buf_freeze` is a dead FSM output, Open Risks #25). Needs a spec rewording, not a test. |
+| TRPR-FBC-003 | `x[n]`/`x[n−M]` valid & stable before each evaluation | T | `test_capture_playback.py`, `test_startup.py` (warm-up), formal `a_del_valid_needs_rdy` | ✅ |
+| TRPR-FBC-004 | Delay-read vs capture-write arbitration margin | A | = TRPR-PSR-014 | ✅ (analysis + formal) |
+| TRPR-FBC-005 | Legacy frontend registers removed; status via `PSRAM_STATUS` | I | `tb_trouper_spi.v` (reserved/removed addresses read 0) | ✅ |
+
+---
+
+## 4.6 Weight Generation (firmware path) — TRPR-WGN
+
+No hardware weight block exists (WGN-001); rows trace the firmware-facing
+contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-WGN-001 | No HW weight_gen block | I | — | ✅ (by construction — no such module in `src/`) |
+| TRPR-WGN-002 | Z_kl/Z_kk exposure for firmware | T | = TAC-004/005 (`test_weight_gen_spi_flow.py`, job 3286) | ✅ |
+| TRPR-WGN-003 | W shadow write + `W_COMMIT` within W_PENDING | T | `test_weight_gen_spi_flow.py`, `test_psram_ops.py` | ✅ |
+| TRPR-WGN-004 | Firmware timing margins (same-packet replay) | A | spec-row margin analysis | ✅ (analysis) |
+| TRPR-WGN-005 | Primary mode: MRC row-sum | T | `sim/tests/run_ber.py` (Python model only) | ⚠️ The full SPI flow test used the *eigenvector* mode; no end-to-end flow test commits MRC-row-sum weights. Low risk — the hardware path is weight-agnostic (proven bit-exact for arbitrary W by job 3286) — but the row-sum arithmetic itself is Python-only. |
+| TRPR-WGN-006 | Secondary mode: power-iteration eigenvector | T | `test_weight_gen_spi_flow.py` (job 3286, bit-exact vs `sim/models/eigvec_fw.py`), `sim/tests/test_eigvec_fw.py` | ✅ |
+| TRPR-WGN-007 | Mode selectable in firmware, no HW register | I | — | ✅ (by construction) |
+| TRPR-WGN-008 | Bypass on missed commit + `DBG_MISSED_PKTS` counter | T | bypass half = PCF-005 (✅, job 3305/3310) | ⚠️ **`DBG_MISSED_PKTS` is a phantom** — no such register exists in `Register Map.md` or RTL (flagged in the 2026-07-05 reconciliation, still unresolved). Either the spec means a firmware-memory counter (like the AGC thresholds — then reword) or the row's register claim should be dropped. Hardware provides everything needed: sticky `W_MISSED_PACKET` readback (since 2026-07-06) + IRQ bit 2. |
+| TRPR-WGN-009 | *(REMOVED — no `Z_SHIFT`)* | — | — | ✅ (reworded 2026-07-05) |
+| TRPR-WGN-010/011 | `cal_j` scalar-only correction; linear-combiner impairment documentation | A | — | ✅ (analysis/documentation statements, no test target) |
+
+---
+
+## SPI Slave (`spi_slave.v`) — TRPR-SPS
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-SPS-001/002/003 | Mode-0 frames, R/W#+7-bit-addr command byte, reg-bus translation | T | `tb_trouper_spi.v` (21 checks, job 1693), every cocotb SPI helper | ✅ |
+| TRPR-SPS-004 | Max SPI clock 10 MHz | A | all tbs run 8 MHz (under max) | ✅ (analysis; no at-speed 10 MHz sim, margin covered by STA) |
+| TRPR-SPS-005 | CS/SCK synchronisers (async domain) | I | inspection; POR frame-flop fix verified (Open Risks #26, closed 2026-07-02) | ✅ |
+| TRPR-SPS-006 | `CHIP_ID` = 0xA7 | T | `tb_trouper_spi.v`, every cocotb test's settle read | ✅ |
+| TRPR-SPS-007 | Grouper-priority arbitration, SPI stalls | T | `tb_trouper_grp_arb.v` (write/read collision cases) | ✅ |
+| TRPR-SPS-008 | `SPI_MISO` tri-state while CS high | T | — | ❌ No test samples MISO with CS de-asserted. Board-level relevance only (shared SPI bus); cheap to add to `tb_trouper_spi.v`. |
+| TRPR-SPS-009 | Read-data timing (addr latched on 8th SCK edge) | T | `tb_trouper_spi.v` (the 2026-06-12 one-byte-late bug's regression) | ✅ |
+| TRPR-SPS-010 | Burst auto-increment mod 128; `0x76` exception | T | `tb_trouper_spi.v` (16-byte burst + 0x7E→0x00 wrap) | ⚠️ Auto-increment fully tested. The `0x76` no-increment *exception* is proven only via repeated single-transaction reads (`test_psram_ops.py` drains 8 bytes that way, job 3313) — never inside one continuous CS-low burst. |
+| TRPR-SPS-011 | `0x7F` reserved (protocol escape) | I | `tb_trouper_spi.v` | ✅ |
+
+**Open items:** SPS-008 MISO tri-state check; SPS-010 in-burst 0x76 case.
+
+---
+
+## SPI Master — TRPR-SPM
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-SPM-001/002 | No on-chip SPI master; SX1257 config is external | I | — | ✅ (by construction — no master RTL; `CLAUDE.md`'s "SPI Master (→ SX1257)" control-plane line is stale) |
+
+---
+
+## Register Bank (`reg_bank.v`) — TRPR-REG
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-REG-001 | All registers per map: reset values, R/W permissions | T | `tb_trouper_spi.v` (reset spot-checks: SF/MIMO/COMB_CFG/RX_GAIN/TACC_WINDOW; write masks; RO-write-ignored) | ⚠️ Spot-checked, not swept. The 0x1D reset-value error found 2026-07-06 (map said 0x0F, RTL 0x10) shows a full generated reset/RW sweep would pay for itself. |
+| TRPR-REG-002 | Bus slave reachable from SPI bridge and Grouper master | T | `tb_trouper_grp_arb.v` | ✅ |
+| TRPR-REG-003 | Multi-byte registers big-endian | I | every multi-byte read in the suites (Z, N_ACC, SC snapshots, W) | ✅ (functional) |
+| TRPR-REG-004 | Reserved reads 0, writes ignored | T | `tb_trouper_spi.v` | ✅ |
+| TRPR-REG-005 | Register bank generated by Python tool from single source | I | — | 🗑️ **False claim.** `reg_bank.v` is hand-written; no generator exists in the repo (`CLAUDE.md` repeats the claim). The 0x1D mismatch above is exactly the divergence class the requirement was meant to prevent. Either build the generator or reword the requirement to a manual-sync discipline + the (recommended) reset/RW sweep test. |
+| TRPR-REG-006 | W1P registers self-clear | T | `tb_trouper_spi.v` + all five W1Ps functionally exercised (W_COMMIT everywhere; NOISE_TRIG job 3310; CLR_ERR + RD_TRIG job 3313; RX_GAIN_COMMIT tb_spi #13) | ✅ |
+| TRPR-REG-007 | Sticky status clears only via explicit clear register | T | `tb_trouper_two_packet.v` (job 3203), every IRQ_CLEAR use since | ✅ |
+
+---
+
+## IRQ — TRPR-IRQ
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-IRQ-001 | Five sticky sources at bits [4:0] | T | bit0/1: every suite; bit2: `test_w_missed_packet.py`; bit3: same; bit4: `test_noise_trig.py` (all job 3310+) | ✅ All five bits now exercised at their positions. |
+| TRPR-IRQ-002 | Per-bit clear via `IRQ_CLEAR` | T | `tb_trouper_two_packet.v` (job 3203, the Open Risks #3 fix regression) + ubiquitous use | ✅ |
+| TRPR-IRQ-003 | `IRQ_OUT` + `IRQ_GROUPER` both driven by `\|irq_status` | T | — | ⚠️ Register-level `\|irq_status` behavior is thoroughly proven, but no test asserts the two **pins** — every tb wires them and never samples them. One-line adds to any cocotb test. |
+| TRPR-IRQ-004 | Level-high until all bits cleared | T | `tb_trouper_two_packet.v` (status level semantics) | ⚠️ Same pin-level caveat as IRQ-003. |
+| TRPR-IRQ-005 | *(DELETED — JTAG removed)* | — | — | — n/a |
+| TRPR-IRQ-006 | Edge-set (no re-assert of cleared bit while source held) | T | `tb_trouper_two_packet.v` (job 3203 fix) | ✅ |
+
+**Open item:** pin-level `IRQ_OUT`/`IRQ_GROUPER` assertion — trivial to add.
+
+---
+
+## AGC (firmware strategy + hardware hooks) — TRPR-AGC
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-AGC-001 | Per-antenna power via `Zdiag/n_acc` readback | T | `test_weight_gen_spi_flow.py` (3286), `test_noise_trig.py` (3310) | ✅ |
+| TRPR-AGC-002 | Software-owned threshold strategy (no HW comparators) | T | — | ✅ (reworded 2026-07-05; nothing in RTL to test — firmware coverage tracked as Open Risks #8) |
+| TRPR-AGC-003 | Gain shadow→active latch on commit | T | `tb_trouper_spi.v` check #13 (write shadow → commit → active readback) | ✅ |
+| TRPR-AGC-004 | Noise window via `TACC_NOISE_TRIG` | T | `test_noise_trig.py` (job 3310) | ✅ |
+| TRPR-AGC-005 | Per-antenna noise EMA in firmware | T | — | ℹ️ Firmware-only (no RTL surface); untested firmware is the substance of Open Risks #8 — not closable from this matrix. |
+
+---
+
+## JTAG — TRPR-JTG
+
+All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace. ✅ n/a.
+
+---
+
+## Integration / Control Fabric — TRPR-INT
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-INT-001/007/008 | Fabric exists; one shared map; byte-only transactions | I | `tb_trouper_grp_arb.v` + all SPI suites | ✅ |
+| TRPR-INT-002 | Grouper path reaches full register map, same semantics | T | `tb_trouper_grp_arb.v` (GRP write → SPI readback and vice versa) | ✅ |
+| TRPR-INT-003 | Arbiter: Grouper priority, SPI stalls mid-cycle | T | `tb_trouper_grp_arb.v` (collision cases 3a/4a) | ✅ |
+| TRPR-INT-004 | Grouper idle/reset → SPI-only operation clean | T | every cocotb suite (GRP inputs tied off in `tb_trouper_cocotb.v`) | ✅ (continuously exercised) |
+| TRPR-INT-005 | IRQ line to Grouper on any status bit | T | — | ⚠️ = IRQ-003 pin-level gap. |
+| TRPR-INT-006 | Control plane on `CLK_16M`; AHB HCLK = CLK_16M | I | — | 🗑️ **Spec drift:** the implemented design is a single 32 MHz clock with a CE-gated control plane (`clk_en`, honest MCP=2) — there is no separate `CLK_16M` HCLK net. Functionally equivalent intent, wrong description; already the subject of Open Risks #24 (spec clock-architecture drift). |
+| TRPR-INT-009 | Commit flow (Z read → W write → commit → latch) | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ |
+| TRPR-INT-010 | Bypass when Grouper inactive / no commit | T | `test_w_missed_packet.py`, `test_bypass_e2e.py` (jobs 3304–3310) | ✅ |
+| TRPR-INT-011 | Host pre-config over SPI without firmware | T | every cocotb suite's setup sequence is exactly this | ✅ |
+| TRPR-INT-012 | Grouper-inactive Mode-1 = functional single-antenna path | T | `test_bypass_e2e.py` (job 3304, raw stream to remod end-to-end) | ✅ |
+
+**Open items surfaced by this pass (all blocks above):**
+1. **Two false/stale documentation claims found:** REG-005's "Python-generated register bank" (no generator exists — and the 0x1D reset mismatch is the exact failure it was meant to prevent) and `CLAUDE.md`'s block list (names `weight_gen.v` and an SPI master, neither exists). WGN-008's `DBG_MISSED_PKTS` phantom register still needs a spec decision (firmware counter vs delete).
+2. **DCR-015's "open RTL gap" is stale** — the PSRAM warm-up structurally provides the required hold-off; spec should be reworded, not patched.
+3. **FBC-002 and INT-006 describe plumbing that doesn't exist** (`buf_freeze` into the buffer controller; a `CLK_16M` net) although the behaviors are verified — both fold into the existing spec-drift item (Open Risks #24/#25).
+4. **Cheap test adds:** pin-level `IRQ_OUT`/`IRQ_GROUPER` asserts (IRQ-003/004/INT-005), MISO tri-state (SPS-008), in-burst 0x76 non-increment (SPS-010), and a generated full reset/RW register sweep (REG-001).
+5. **Stale standalone tbs:** `tb_sqnr*.v` predate the HB migration (DEC-003) — regenerate against `sd_decimator_poly` or retire in favor of the migration-record analysis.
