@@ -386,15 +386,22 @@ Feature gap in both firmware and the Python reference model.
 
 ### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)
 
-`Register Map.md` and `reg_bank.v` agree; the spec body does not. Spec §3.1 /
-TRPR-SYS-003/015/016 / TRPR-INT-006 / TRPR-PHY-014 still mandate a real
-`CLK_16M` generated-clock tree (RTL is single-clock + `ce_16m` CE on reg_bank
-only). Stale spec addresses: SC_HITS_REQ 0x1B→0x0E, PKT_TIMEOUT_SYMS
-0x16→0x0B, WGT_CTRL 0x35→0x1E, PACKET_STATUS 0x34→0x1C, TRAINING_STATUS
-0x60→0x20; TRPR-TAC-005 ZDIAG 16-bit@0x64–0x6B vs actual 24-bit@0x64–0x6F;
-TRPR-TAC-006 `Z_SHIFT` (0x63) does not exist; TRPR-SCD-012 C_POOL double-books
-0x64–0x67; TRPR-MRC-001/006 say int16 Q1.15 weights but hardware consumes the
-high byte only (8-bit, per TRPR-MRC-002). Stale R=128 comments remain in
+`Register Map.md` and `reg_bank.v` agree; the spec body does not.
+**Progress 2026-07-05/06:** all the stale register addresses below were fixed
+in the spec (Traceability.md "Register Address Reconciliation"), and
+TRPR-INT-006 / TRPR-DCR-015 / TRPR-FBC-002 / TRPR-REG-005 / TRPR-WGN-008 /
+TRPR-PSR-011/012 were reworded to the shipped design. **Still open:** spec
+§3.1 / TRPR-SYS-003/015/016 / TRPR-PHY-014 still mandate a real `CLK_16M`
+generated-clock tree (RTL is single-clock + `ce_16m` CE on reg_bank only);
+TRPR-MRC-001/006 say int16 Q1.15 weights but hardware consumes the high byte
+only (8-bit, per TRPR-MRC-002 / Open Risks #33); TRPR-MRC-004's safe-switch
+"W_ACTIVE" latch is spec-only (Open Risks #13); PCF-011's "bypass training"
+overstates Mode 1 (training runs, weights are ignored); RMD-003's "permanent
+instability" framing doesn't match observed failure signatures.
+Historical record of the fixed addresses: SC_HITS_REQ 0x1B→0x0E,
+PKT_TIMEOUT_SYMS 0x16→0x0B, WGT_CTRL 0x35→0x1E, PACKET_STATUS 0x34→0x1C,
+TRAINING_STATUS 0x60→0x20; ZDIAG width/address; `Z_SHIFT` removed; SCD-012
+C_POOL double-booking. Stale R=128 comments remain in
 `trouper_top.v:150`, `psram_buf_ctrl.v:11`, `mrc_combiner.v:19`,
 `training_acc.v:15` (budgets still fit the 64-cycle window).
 
