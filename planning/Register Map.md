@@ -263,7 +263,7 @@ Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
 | [4] | `TRAINING_DONE` | Training accumulator complete this packet |
 | [5] | `W_PENDING` | Training is done and W commit is pending |
 | [6] | `W_VALID` | Active W bank is valid for the current packet |
-| [7] | `W_MISSED_PACKET` | W missed the current packet safe-switch point |
+| [7] | `W_MISSED_PACKET` | W missed the current packet safe-switch point. Sticky: held through IDLE (readable after `PACKET_DONE`), cleared at the next packet start |
 
 ### `0x1D` — ACTIVE_STATUS (read-only)
 
@@ -284,7 +284,7 @@ Weight-path commit control and status. Firmware is the sole weight source (there
 | [0] | `W_COMMIT` | Write-1 pulse after W shadow writes complete |
 | [1] | `W_VALID` | Read-only: active W bank is valid for the current packet |
 | [2] | `W_PENDING` | Read-only: training done but W commit not yet received |
-| [3] | `W_MISSED_PACKET` | Read-only: W was not committed before safe-switch; current packet stayed bypass |
+| [3] | `W_MISSED_PACKET` | Read-only: W was not committed before safe-switch; current packet stayed bypass. Sticky: held through IDLE, cleared at the next packet start |
 | [7:4] | — | Reserved |
 
 ### `0x1F` — TACC_NOISE_TRIG (write-only, W1P)

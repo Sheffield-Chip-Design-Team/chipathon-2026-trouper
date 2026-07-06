@@ -344,6 +344,7 @@ module trouper_top (
     // Stage 7: Packet Control FSM
     // =========================================================================
     wire        safe_switch, W_valid_set, W_missed_packet;
+    wire        W_missed_q;   // sticky per-packet readback mirror of the pulse
     wire        combiner_source;
     wire [2:0]  packet_phase;
     wire        packet_active;
@@ -384,6 +385,7 @@ module trouper_top (
         .safe_switch     (safe_switch),
         .W_valid_set     (W_valid_set),
         .W_missed_packet (W_missed_packet),
+        .W_missed_q      (W_missed_q),
         .combiner_source (combiner_source),
         .psram_packet_arm  (),
         .psram_replay_start(),
@@ -658,7 +660,7 @@ module trouper_top (
         .training_done_rb (training_done),
         .w_pending_rb     (w_pending),
         .w_valid_rb       (W_valid),
-        .w_missed_rb      (W_missed_packet),
+        .w_missed_rb      (W_missed_q),
         .irq_set          (rb_irq_set),
         .sc_stat         (sc_stat),
         .training_armed  (training_armed),

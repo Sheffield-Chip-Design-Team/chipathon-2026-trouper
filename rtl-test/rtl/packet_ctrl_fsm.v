@@ -22,6 +22,11 @@ module packet_ctrl_fsm (
     output reg         safe_switch,
     output reg         W_valid_set,
     output reg         W_missed_packet,
+    // Sticky per-packet mirror of W_missed_packet for register readback
+    // (PACKET_STATUS[7] / WGT_CTRL[3]): W_missed_packet is a 1-cycle pulse
+    // consumed by the IRQ path and is firmware-invisible if wired to
+    // reg_bank directly. Held through IDLE, cleared at the next packet start.
+    output reg         W_missed_q,
     output reg         combiner_source,
     output reg         psram_packet_arm,
     output reg         psram_replay_start,
@@ -85,6 +90,7 @@ module packet_ctrl_fsm (
             safe_switch      <= 1'b1;
             W_valid_set      <= 1'b0;
             W_missed_packet  <= 1'b0;
+            W_missed_q       <= 1'b0;
             combiner_source  <= 1'b0;
             psram_packet_arm <= 1'b0;
             psram_replay_start <= 1'b0;
@@ -123,6 +129,7 @@ module packet_ctrl_fsm (
 
                     // SC lock rising edge -> start packet acquisition
                     if (sc_lock && !sc_lock_prev) begin
+                        W_missed_q        <= 1'b0;
                         lat_timing_ref    <= timing_ref;
                         acq_timeout_q     <= acq_timeout_next;
                         wpend_timeout_q   <= wpend_timeout_next;
@@ -149,6 +156,7 @@ module packet_ctrl_fsm (
                     end else if (sample_count > acq_timeout_q) begin
                         // Timeout: proceed without weight update
                         W_missed_packet <= 1'b1;
+                        W_missed_q      <= 1'b1;
                         state           <= ST_PAYLOAD_ACTIVE;
                         packet_phase    <= 3'd3;
                     end
@@ -166,8 +174,10 @@ module packet_ctrl_fsm (
                         packet_phase     <= 3'd3;
                     end else if (sample_count > wpend_timeout_q) begin
                         // Timeout: use whatever W_valid we have
-                        if (!W_valid)
+                        if (!W_valid) begin
                             W_missed_packet <= 1'b1;
+                            W_missed_q      <= 1'b1;
+                        end
                         if (W_valid) combiner_source <= 1'b1;
                         state        <= ST_PAYLOAD_ACTIVE;
                         packet_phase <= 3'd3;
@@ -188,6 +198,7 @@ module packet_ctrl_fsm (
 
                     // New sc_lock -> start next packet
                     if (sc_lock && !sc_lock_prev) begin
+                        W_missed_q  <= 1'b0;
                         psram_abort <= psram_replay_active;
                         lat_timing_ref    <= timing_ref;
                         acq_timeout_q     <= acq_timeout_next;

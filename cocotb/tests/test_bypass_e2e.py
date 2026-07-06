@@ -113,9 +113,14 @@ async def sdm_driver_multi(dut, amps=ANT_AMPS):
             sine_ptr = (sine_ptr + 1) % P
 
 
-async def _reset_and_lock(dut, *, mode, ant_mask, tag):
+async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None):
     """Reset, configure (MIMO_CTRL before lock so the FSM latches it),
-    bring up PSRAM, and poll to sc_lock. Returns sym_ns."""
+    bring up PSRAM, and poll to sc_lock. Returns sym_ns.
+
+    pkt_timeout_syms, if given, is written to PKT_TIMEOUT_SYMS (0x0B)
+    BEFORE lock -- the FSM latches pkt_end at the sc_lock edge, so writing
+    it later has no effect on the current packet (used by
+    test_w_missed_packet.py to shorten the packet window)."""
     sf, bw_khz = 7, 250
     sample_shift = 1
     M = 1 << (sf + sample_shift)
@@ -144,6 +149,9 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag):
     await spi_write(dut, 0x0C, 0x01)
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)
+
+    if pkt_timeout_syms is not None:
+        await spi_write(dut, 0x0B, pkt_timeout_syms & 0xFF)
 
     # MIMO_CTRL: [0]=MODE, [7:4]=ANTENNA_EN -- must land before sc_lock so
     # packet_ctrl_fsm latches active_mode/active_antenna_en from the shadow
