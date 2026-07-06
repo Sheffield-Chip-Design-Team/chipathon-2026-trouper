@@ -730,3 +730,86 @@ not just test bugs:
 
 (Move items here as they're resolved, with the closing evidence — job ID,
 commit, or doc reference.)
+### 34. `W_MISSED_PACKET` register readback was firmware-invisible — CLOSED 2026-07-06
+
+`packet_ctrl_fsm.v`'s `W_missed_packet` is a 1-cycle pulse consumed by the IRQ
+edge-set path — and `trouper_top` wired that same pulse straight into
+`reg_bank`'s combinational `w_missed_rb`. `PACKET_STATUS[7]` (0x1C) and
+`WGT_CTRL[3]` (0x1E), both documented in `Register Map.md` as readable status
+bits, therefore always read 0 to firmware (a 1-clock race is unwinnable over
+SPI). Only the sticky `IRQ_STATUS[2]` captured the event.
+
+**Fix:** sticky per-packet `W_missed_q` output in `packet_ctrl_fsm.v` — set at
+both miss sites (ACQ timeout, W_PENDING timeout with `!W_valid`), held through
+IDLE so firmware can still read it after `PACKET_DONE`, cleared at the next
+packet start (both the IDLE and back-to-back PAYLOAD→PREAMBLE re-lock paths).
+The pulse still feeds the IRQ path unchanged.
+
+**Verified:** `cocotb/tests/test_w_missed_packet.py` (Verilator, SGE job 3305)
+— also the first regression for the TRPR-PCF-005 `46e1da0` miss-path fix
+itself: miss IRQ on a withheld `W_COMMIT`, sticky readback at both register
+positions across W_PENDING/PAYLOAD/IDLE, bypass payload, `PACKET_DONE` IRQ,
+clear-on-next-lock.
+
+### 35. `SC_DBG_FLAGS.SC_HIT` had the same pulse-readback bug; `RX_GAIN_CTRL` "commit-pending" readback was fiction — CLOSED 2026-07-06
+
+A pulse-vs-level audit of every `reg_bank` status input (prompted by #34)
+found one more instance and one doc fiction:
+
+- `sc_detector.v`'s `sc_hit_dbg` is default-cleared every clock (1-cycle
+  pulse, correct for its internal consumer — the noise-window contamination
+  latch), but it also fed `SC_DBG_FLAGS[0]` (0x26) directly → firmware always
+  read 0. **Fix:** new `sc_hit_hold` — the most recent symbol evaluation's hit
+  decision, held until the next evaluation, cleared on reset/`sc_clr` — wired
+  to the register readback; pulse unchanged.
+- `RX_GAIN_CTRL` (0x18[0]) claimed to "read back commit-pending", but the W1P
+  auto-clears after one CE period and the shadow→active latch completes within
+  one clock — no pending state is ever observable. **Fix:** readback hardwired
+  to 0 (matching `WGT_CTRL[0]`), `rx_gain_pending` port and loopback deleted,
+  Register Map reworded. All other status inputs audited clean (level or
+  sticky at source).
+
+**Verified:** `cocotb/tests/test_sc_dbg_flags.py` (Verilator, SGE job 3307) —
+SC_HIT/SC_LOCK/hit-counter bits, nonzero `SC_STAT`, and
+`SC_LOCK_SNAP == SC_FIRST_HIT + M` with `SC_HITS_REQ=1`; plus zero baseline
+for 0x24–0x2F before the delay line exists. `tb_trouper_spi.v`'s
+RX_GAIN_COMMIT self-clear check unaffected (asserts the bit reads 0).
+
+### 36. `sc_detector` sample_count double-counted after the PSRAM delay-line migration — `timing_ref` in wrong units, error grew over the session — CLOSED 2026-07-06
+
+Found by `test_sc_dbg_flags.py`'s `SC_LOCK_SNAP − SC_FIRST_HIT == M` assertion
+(measured 2M). `sc_detector.v` counted each sample **twice** once delayed
+samples flowed: once via the `iq_valid_r && !delayed_valid_r` path — written
+for the old on-chip-SRAM delay line where delayed data arrived in the same
+cycle as `iq_valid`, but `psram_buf_ctrl` asserts `del_valid` ~44 clocks later
+so the guard passed for every sample — and again at TDM step 7 when the
+delayed sample was processed.
+
+Consequences: `eval_sample_mark`, `timing_ref`, `SC_FIRST_HIT` and
+`SC_LOCK_SNAP` were in inflated units relative to `iq_samp_cnt` (packet FSM
+timeouts) and `training_acc`'s own 1× counter. The skew was ~2 symbols by the
+first lock (why every synthetic/stationary-CW test passed) but **grew with
+session time**: a packet locking at true sample T got `timing_ref ≈ 2T`, so
+packet-2+ training windows and FSM timeouts landed ~T samples late — the
+two-packet tests only checked IRQ ordering and never caught it.
+
+**Fix:** count each sample exactly once, at its `iq_valid_r` (keeping the
+`iq_inc_pending` deferral so an increment never lands mid-TDM-burst before the
+boundary mark latches); TDM step-7 increment removed; `eval_sample_mark`
+becomes the plain count (was `+1` — same 1-based index, verified equivalent
+for the legacy same-cycle-delay testbenches).
+
+**Exposed design semantics, not a bug:** with correct units, `timing_ref`
+points at the start of the locking-hit window — *before* `sc_lock` — and
+`training_acc` accumulates forward from arming, so the window's first
+`SC_HITS_REQ+1` symbols are never accumulated: `n_acc = 7M−1` at the default
+8-symbol window with 1-hit lock, not `8M`. The old `n_acc == 8M` test
+expectation encoded the counter bug (window pushed 2 symbols late, fully
+forward-reachable by accident). Z is normalized by the `n_acc` readback, so
+the partial window is functionally correct; `test_trouper_top.py`'s
+expectation updated to `7M−1`.
+
+**Verified:** SGE jobs 3307/3308 (sc_dbg delta==M, w_missed, bypass_e2e, SF7
+BW250/125 full scenario with corrected `n_acc`, synthetic two-packet re-arm)
+and job 3309 (real-capture two-packet re-arm — the packet-2 case where the
+old skew was worst).

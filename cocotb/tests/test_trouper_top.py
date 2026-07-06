@@ -235,9 +235,19 @@ async def run_scenario(dut, sf, bw_khz, *, full):
     n_mid = await spi_read(dut, 0x22)   # [15:8]
     n_lo  = await spi_read(dut, 0x23)   # [7:0]
     n_acc_rb = ((n_hi & 0x03) << 16) | (n_mid << 8) | n_lo
-    expected_n = 8 * M   # training window = 8*M samples
-    # Allow ±1 for pipeline latency
-    assert abs(n_acc_rb - expected_n) <= 1, \
+    # Training window spans [timing_ref, timing_ref + 8*M), but training_acc
+    # accumulates FORWARD from arming at sc_lock -- and with SC_HITS_REQ=0 the
+    # lock fires at the END of the window's first symbol (timing_ref points at
+    # that symbol's start: lock_mark - 1*M + 1). The first symbol is therefore
+    # already in the past at arming and is never accumulated: n_acc = 7*M - 1.
+    # (Until the 2026-07-06 sc_detector sample_count double-count fix,
+    # timing_ref was inflated by ~2 symbols, which pushed the window entirely
+    # after the lock and made n_acc read exactly 8*M -- that value encoded the
+    # counter bug, not the design intent. Z is normalized by the n_acc
+    # readback, so the partial window is functionally correct.)
+    expected_n = 7 * M - 1
+    # Allow a few samples for arming/pipeline latency
+    assert abs(n_acc_rb - expected_n) <= 4, \
         f"{tag}: n_acc={n_acc_rb} expected~{expected_n}"
     dut._log.info(f"{tag}: n_acc={n_acc_rb} (expected {expected_n})")
 
@@ -271,6 +281,15 @@ async def run_scenario(dut, sf, bw_khz, *, full):
     assert (locked_bw & 0x01) == (orig_bw & 0x01), \
         f"{tag}: BW_CFG changed during packet (was 0x{orig_bw:02X}, now 0x{locked_bw:02X})"
     dut._log.info(f"{tag}: BW_CFG write-lock during packet OK")
+
+    # -- TRPR-PSR-020: sticky SAMPLE_SKIP must stay 0 across a full packet of
+    # sustained iq_valid (the directed check the spec text claims exists --
+    # this makes the claim true). A nonzero read here means the QPI engine
+    # missed a capture window (see Open Risks #30, stale R=128 budget).
+    psram_status = await spi_read(dut, 0x71)
+    assert not (psram_status & 0x04), \
+        f"{tag}: PSRAM SAMPLE_SKIP sticky flag set (PSRAM_STATUS=0x{psram_status:02X})"
+    dut._log.info(f"{tag}: SAMPLE_SKIP clean (PSRAM_STATUS=0x{psram_status:02X})")
 
     # -- register spot-checks -------------------------------------------------
     chip_id = await spi_read(dut, 0x00)

@@ -221,7 +221,8 @@ module trouper_top (
     // =========================================================================
     wire [31:0] timing_ref;
     wire [15:0] sc_stat;
-    wire        sc_hit_dbg;
+    wire        sc_hit_dbg;    // 1-cycle pulse: noise-window contamination latch
+    wire        sc_hit_hold;   // held per-symbol mirror: SC_DBG_FLAGS[0] readback
     wire [1:0]  sc_hit_cnt_dbg;
     wire [31:0] sc_first_hit_dbg, sc_lock_snap_dbg;
 
@@ -244,6 +245,7 @@ module trouper_top (
         .c_i0 (), .c_q0 (),
         .sc_stat              (sc_stat),
         .sc_hit_dbg           (sc_hit_dbg),
+        .sc_hit_hold          (sc_hit_hold),
         .sc_hit_count_dbg     (sc_hit_cnt_dbg),
         .sc_first_hit_dbg     (sc_first_hit_dbg),
         .sc_lock_sample_dbg   (sc_lock_snap_dbg)
@@ -652,7 +654,6 @@ module trouper_top (
         // Hardware status inputs
         .rx_gain_active_0 (rx_gain_active_r[0]), .rx_gain_active_1 (rx_gain_active_r[1]),
         .rx_gain_active_2 (rx_gain_active_r[2]), .rx_gain_active_3 (rx_gain_active_r[3]),
-        .rx_gain_pending  (rb_rx_gain_commit),
         .active_mode_rb   (active_mode),
         .active_antenna_en_rb (active_antenna_en),
         .packet_active    (packet_active),
@@ -673,7 +674,7 @@ module trouper_top (
         .zpair_i5 (Zpair_i[5]), .zpair_q5 (Zpair_q[5]),
         .zdiag_0  (Zdiag[0]),   .zdiag_1  (Zdiag[1]),
         .zdiag_2  (Zdiag[2]),   .zdiag_3  (Zdiag[3]),
-        .sc_hit_dbg          (sc_hit_dbg),
+        .sc_hit_dbg          (sc_hit_hold),   // held mirror — the pulse is SPI-invisible
         .sc_hit_count_dbg    (sc_hit_cnt_dbg),
         .sc_lock_dbg         (sc_lock),
         .sc_first_hit_dbg    (sc_first_hit_dbg),

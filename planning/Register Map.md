@@ -48,7 +48,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x15` | `RX_GAIN_ACTIVE_1` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_2 |
 | `0x16` | `RX_GAIN_ACTIVE_2` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_3 |
 | `0x17` | `RX_GAIN_ACTIVE_3` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_4 |
-| `0x18` | `RX_GAIN_CTRL` | R/W | `0x00` | AGC | [0] `RX_GAIN_COMMIT` (W1P: latches shadow→active, auto-clears; reads back commit-pending) |
+| `0x18` | `RX_GAIN_CTRL` | R/W | `0x00` | AGC | [0] `RX_GAIN_COMMIT` (W1P: latches shadow→active, auto-clears; reads 0 — commit completes within one clock, there is no observable pending state) |
 | `0x19`–`0x1B` | — | — | — | — | Reserved for gain/AGC growth |
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
@@ -62,7 +62,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **SC Status / Bring-Up Debug** (`0x24`–`0x2F`) | | | | | |
 | `0x24` | `SC_STAT_HI` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `\|C[s]\|^2` telemetry [15:8] |
 | `0x25` | `SC_STAT_LO` | R | `0x00` | Schmidl-Cox | Current SC metric numerator `\|C[s]\|^2` telemetry [7:0] |
-| `0x26` | `SC_DBG_FLAGS` | R | `0x00` | Schmidl-Cox | [0] `SC_HIT`; [2:1] hit counter; [3] `SC_LOCK`; [7:4] reserved |
+| `0x26` | `SC_DBG_FLAGS` | R | `0x00` | Schmidl-Cox | [0] `SC_HIT` (hit decision of the most recent symbol evaluation, held until the next one; cleared on re-arm); [2:1] hit counter; [3] `SC_LOCK`; [7:4] reserved |
 | `0x27` | `TACC_WINDOW_SYMS` | R/W | `0x08` | Training Accumulator | [3:0] accumulation endpoint in symbols from `timing_ref`; writes below 8 clamp to 8; [7:4] read 0 |
 | `0x28`–`0x2B` | `SC_FIRST_HIT` | R | `0x00` | Schmidl-Cox | First-hit sample-count snapshot [31:0], big-endian ([31:24] at `0x28`) |
 | `0x2C`–`0x2F` | `SC_LOCK_SNAP` | R | `0x00` | Schmidl-Cox | Lock sample-count snapshot [31:0], big-endian ([31:24] at `0x2C`) |
@@ -245,7 +245,7 @@ Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `RX_GAIN_COMMIT` | W1P: latches all four `RX_GAIN_SHADOW_n → RX_GAIN_ACTIVE_n`; auto-clears. Reads back the commit-pending pulse. |
+| [0] | `RX_GAIN_COMMIT` | W1P: latches all four `RX_GAIN_SHADOW_n → RX_GAIN_ACTIVE_n`; auto-clears. Reads 0 (like `WGT_CTRL[0]`): the latch completes within one clock, so no pending state is ever observable over SPI. |
 | [7:1] | — | Reserved |
 
 **AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.

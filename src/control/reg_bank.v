@@ -30,7 +30,6 @@ module reg_bank (
     // RX gain active values (applied to SX1257)
     input  wire [7:0]  rx_gain_active_0, rx_gain_active_1,
                        rx_gain_active_2, rx_gain_active_3,
-    input  wire        rx_gain_pending,
     // Packet / weight control readback
     input  wire [1:0]  active_mode_rb,
     input  wire [3:0]  active_antenna_en_rb,
@@ -291,7 +290,10 @@ module reg_bank (
             8'h15: rdata_next = rx_gain_active_1;
             8'h16: rdata_next = rx_gain_active_2;
             8'h17: rdata_next = rx_gain_active_3;
-            8'h18: rdata_next = {7'h0, rx_gain_pending};
+            // W1P commit bit reads back 0 (same as WGT_CTRL[0]): the pulse
+            // lasts one CE period and the shadow→active latch completes within
+            // one clock — there is no observable "pending" state over SPI.
+            8'h18: rdata_next = 8'h00;
             // --- Packet / weight / training control ---
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,
                             training_done_rb, packet_phase, packet_active};

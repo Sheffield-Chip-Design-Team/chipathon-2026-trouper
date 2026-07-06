@@ -102,6 +102,12 @@ module sc_detector (
     output reg  signed [31:0] c_i0, c_q0,
     output reg  [15:0] sc_stat,
     output reg         sc_hit_dbg,
+    // Held mirror of sc_hit_dbg for register readback (SC_DBG_FLAGS[0]):
+    // sc_hit_dbg is a 1-cycle pulse (internal consumer: the noise-window
+    // contamination latch in trouper_top) — read combinationally over SPI it
+    // is firmware-invisible. This holds the most recent symbol evaluation's
+    // hit decision until the next evaluation; cleared on reset and sc_clr.
+    output reg         sc_hit_hold,
     output reg  [1:0]  sc_hit_count_dbg,
     output reg  [31:0] sc_first_hit_dbg,
     output reg  [31:0] sc_lock_sample_dbg
@@ -262,6 +268,7 @@ module sc_detector (
             c_i0 <= 32'sd0; c_q0 <= 32'sd0;
             sc_stat            <= 16'd0;
             sc_hit_dbg         <= 1'b0;
+            sc_hit_hold        <= 1'b0;
             sc_hit_count_dbg   <= 2'd0;
             sc_first_hit_dbg   <= 32'd0;
             sc_lock_sample_dbg <= 32'd0;
@@ -281,13 +288,29 @@ module sc_detector (
                 tdm_step <= 4'd0;
                 tdm_wait <= 2'd0;
                 tdm_busy <= 1'b1;
-            end else if (iq_valid_r && !delayed_valid_r && !tdm_busy) begin
+            end
+
+            // -----------------------------------------------------------------
+            // sample_count: exactly ONE increment per iq sample (iq_valid_r),
+            // independent of when (or whether) its delayed counterpart gets
+            // processed. Fixed 2026-07-06: this used to be guarded with
+            // !delayed_valid_r and ALSO incremented at TDM step 7 — correct
+            // when the delay line returned data in the same cycle as iq_valid
+            // (old on-chip-SRAM frontend_buf_ctrl), but psram_buf_ctrl asserts
+            // del_valid ~44 clocks AFTER iq_valid, so both paths fired and
+            // every sample was counted TWICE. That put eval_sample_mark /
+            // timing_ref / SC_FIRST_HIT / SC_LOCK_SNAP in inflated units
+            // relative to iq_samp_cnt (packet FSM) and training_acc's counter,
+            // with the error growing over the session (~2 symbols by the first
+            // lock, ~T samples by a lock at true sample T).
+            // The iq_inc_pending deferral is kept: an increment must not land
+            // while a TDM burst is in flight, so the symbol-boundary
+            // eval_sample_mark latch always reads the pre-increment value of
+            // any sample that arrives mid-burst.
+            // -----------------------------------------------------------------
+            if (iq_valid_r && !tdm_busy) begin
                 sample_count <= sample_count + 32'd1;
-            end else if (iq_valid_r && !delayed_valid_r && tdm_busy) begin
-                // The paced (24-clock) burst can overlap the next current-sample
-                // valid; remember it and apply the sample_count++ on the first
-                // idle cycle after the burst (after eval reads sample_count, so
-                // eval_sample_mark timing is preserved exactly).
+            end else if (iq_valid_r && tdm_busy) begin
                 iq_inc_pending <= 1'b1;
             end else if (iq_inc_pending && !tdm_busy) begin
                 sample_count   <= sample_count + 32'd1;
@@ -332,8 +355,10 @@ module sc_detector (
                                 + {{8{tdm_mul_r[15]}}, tdm_mul_r}
                                 + {{8{tdm_mul[15]}},   tdm_mul};
                         // ----- End of TDM for this sample -----
+                        // (sample_count is NOT incremented here — this sample
+                        // was already counted at its iq_valid_r; see the
+                        // single-increment block above, fixed 2026-07-06.)
                         tdm_busy     <= 1'b0;
-                        sample_count <= sample_count + 32'd1;
 
                         if (sym_cnt == M_val - 15'd1) begin
                             sym_cnt <= 15'd0;
@@ -348,7 +373,12 @@ module sc_detector (
                             eval_step       <= 4'd0;
                             eval_busy       <= 1'b1;
                             mul_start       <= 1'b1;  // launch product 0 (ci0²)
-                            eval_sample_mark <= sample_count + 32'd1;
+                            // sample_count already includes the current sample
+                            // (counted at its iq_valid_r), so the mark is the
+                            // plain count — previously `+ 1` because the old
+                            // step-7 increment for this sample had not landed
+                            // yet in the same NBA cycle. 1-based index either way.
+                            eval_sample_mark <= sample_count;
 
                             acc_ci0   <= 24'sd0; acc_cq0   <= 24'sd0;
                             acc_E0cur <= 24'sd0; acc_E0del <= 24'sd0;
@@ -401,7 +431,8 @@ module sc_detector (
             // Lock detection
             // -----------------------------------------------------------------
             if (metric_valid_pulse && !sc_lock) begin
-                sc_hit_dbg <= eval_hit;
+                sc_hit_dbg  <= eval_hit;
+                sc_hit_hold <= eval_hit;   // held (no default clear) for SPI readback
                 if (eval_hit) begin
                     if (hit_count == 2'd0)
                         first_hit_sample <= eval_sample_mark;
@@ -453,6 +484,7 @@ module sc_detector (
                 mul_start          <= 1'b0;
                 metric_valid_pulse <= 1'b0;
                 sc_hit_dbg         <= 1'b0;
+                sc_hit_hold        <= 1'b0;
             end
         end
     end

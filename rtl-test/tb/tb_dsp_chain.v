@@ -192,6 +192,7 @@ module tb_dsp_chain;
         .c_i0           (c_i0), .c_q0 (c_q0),
         .sc_stat        (sc_stat),
         .sc_hit_dbg     (),
+        .sc_hit_hold    (),
         .sc_hit_count_dbg (),
         .sc_first_hit_dbg (),
         .sc_lock_sample_dbg ()
