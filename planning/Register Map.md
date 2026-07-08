@@ -101,7 +101,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [7:0] |
 | `0x73` | `PSRAM_DBG_ADDR_MID` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [15:8] |
 | `0x74` | `PSRAM_DBG_ADDR_HI` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [22:16] (bit [7] reserved) |
-| `0x75` | `PSRAM_DBG_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `RD_TRIG` (strobe, self-clears); [1] `AUTO_INC` (re-arm after 8-byte drain); [7] `DBG_BUSY` (R only — held during fetch and while `packet_active=1` or `QSPI_OWNER=1`) |
+| `0x75` | `PSRAM_DBG_CTRL` | R/W | `0x80` | PSRAM Buffer | [0] `RD_TRIG` (strobe, self-clears); [1] `AUTO_INC` (re-arm after 8-byte drain); [7] `DBG_BUSY` (R only — held during fetch, while `packet_active=1` or `QSPI_OWNER=1`, and before `qe_init_done`; reads `1` at power-on since PSRAM init has not run yet) |
 | `0x76` | `PSRAM_DBG_DATA` | R | `0x00` | PSRAM Buffer | Byte window into last fetched 8-byte IQ sample; 8 consecutive reads drain one sample (byte order: i0,q0,i1,q1,i2,q2,i3,q3); address advances by 8 after the eighth read when `AUTO_INC=1`. Never auto-increments the SPI burst address. |
 | **Reserved** (`0x77`–`0x7F`) | | | | | |
 | `0x77`–`0x7E` | — | — | — | — | Reserved for future growth |
