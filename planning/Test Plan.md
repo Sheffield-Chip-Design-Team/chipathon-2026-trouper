@@ -218,7 +218,7 @@ See [Frontend Calibration Procedure](../Frontend%20Calibration%20Procedure.md) f
 
 ### AFE characterization before full-system integration
 
-These checks are intended to de-risk coherent combining before full packet-path testing is available. The primary method is synchronous FPGA capture of the four SX1257 `1-bit I/Q` outputs after injecting a common RF source through a 4-way splitter.
+These checks are intended to de-risk coherent combining before full packet-path testing is available. The primary method is synchronous FPGA capture of the four SX1257 `1-bit I/Q` outputs after injecting a common RF source through a 4-way splitter. The MISO front-end test board (AFE) used for this characterization is at <https://gitlab.com/m0rtal/miso_frontend>.
 
 | Test | Method | Pass criterion |
 | --- | --- | --- |

@@ -129,8 +129,10 @@ connect_bd_net [get_bd_ports ext_resetn] [get_bd_pins clk_wiz_0/resetn]
 # Mirror that here — bring CLK_OUT in through a BUFG and clock the DSP domain
 # from it, so the emulator samples hw_iq on the very clock that produced the
 # data (a free-running MMCM 32 MHz would bit-slip against the board TCXO). All
-# four radios share one TCXO (coherent), so any CLK_OUT works; the XDC picks
-# CLK_OUT_4 on JB C15 (0-ohm MRCC, cleanest edge). The MMCM's own 32 MHz output
+# four radios share one TCXO (coherent), so any CLK_OUT works electrically; the
+# XDC picks CLK_OUT_2 on JD F4 — the only one of the four on a P-side MRCC pin,
+# i.e. the only pin usable as a single-ended clock input (F3/D3/C15 are N-side
+# and the placer rejects them, Place 30-876). The MMCM's own 32 MHz output
 # (clk_wiz clk_out2) is intentionally left unused after this.
 #
 # Bring-up ordering (same as the real chip): CLK_OUT only appears once the

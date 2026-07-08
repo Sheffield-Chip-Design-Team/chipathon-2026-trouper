@@ -85,7 +85,7 @@ set_property IOSTANDARD LVCMOS33 [get_ports {UART_0_*}]
 #   * PSRAM is a REAL external APS6404L on JA (was the internal psram_model).
 #     DONE: fpga_dsp_wrap USE_EXT_PSRAM=1 + IOBUFs; pins constrained below.
 #   * CLK_OUT_1..4 are the SX1257 I/Q sampling clocks (MRCC pins). DONE: the DSP
-#     domain is now clocked from CLK_OUT_4 (C15) via a BUFG, matching silicon
+#     domain is now clocked from CLK_OUT_2 (F4, P-side MRCC) via a BUFG, silicon
 #     (IQ_CLK = SX1257 CLK_OUT); the MMCM 32 MHz is unused. See bottom + BD.
 #   * remod_i/remod_q have NO net on this receive-only PCB — their old pins
 #     (D4/D3) now carry RFFE_SCK/CLK_OUT_3. DONE: dropped from the BD (no port).
@@ -158,10 +158,34 @@ set_property IOSTANDARD LVCMOS33 [get_ports {psram_sio[*]}]
 # ============================================================================
 # The real ASIC's IQ_CLK is the SX1257 CLK_OUT, so the emulator clocks its whole
 # DSP domain from CLK_OUT (see create_project.tcl: sx_clk_out -> BUFG -> dsp_clk).
-# CLK_OUT_4 lands on JB C15 — 0-ohm series, MRCC clock-capable, cleanest edge of
-# the four (CLK_OUT_1..3 sit behind JD's 200-ohm resistors). All four radios
-# share one TCXO, so this single clock is coherent for every branch.
-set_property PACKAGE_PIN C15  [get_ports {sx_clk_out}]
+# The ASIC needs only ONE clock; the board brings out all four CLK_OUTs so the
+# other three can be MEASURED against this one to prove they are phase-locked
+# before committing the single-clock architecture to silicon (they share one
+# TCXO, so they are frequency-locked; static inter-chip phase skew is the open
+# question — measure it, and note RFFE_RST, the shared divider reset, currently
+# floats: PCB review finding 5).
+#
+# MUST use CLK_OUT_2 on JD F4. Every clock-capable pin is half of a P/N
+# differential pair, and a single-ended clock is only legal on the P (master)
+# side — the dedicated low-skew route to the clock buffers is bonded to P; an
+# N pin reaches the clock tree only via the differential buffer, so the placer
+# rejects a single-ended clock on it (Place 30-876). Of the four CLK_OUTs, only
+# F4 is a P pin. Pairing (verified via Vivado get_package_pins on this part):
+#   CLK_OUT_1 = F3  (IO_L13N_T2_MRCC_35)  N  <- P partner is F4 (= CLK_OUT_2)
+#   CLK_OUT_2 = F4  (IO_L13P_T2_MRCC_35)  P  <- USE THIS
+#   CLK_OUT_3 = D3  (IO_L12N_T1_MRCC_35)  N  <- P partner is E3 = the Arty 100 MHz
+#                                              onboard oscillator (occupied) -> dead end
+#   CLK_OUT_4 = C15 (IO_L12N_T1_MRCC_15)  N  <- P partner is D15 = JB pin 3 (n/c)
+# The review preferred C15 for its 0-ohm edge, but C15 is an N pin and thus
+# electrically unusable as a clock. F4 sits behind JD's 200-ohm series R (softer
+# edge; measure it). F3/D3/C15 remain usable as ordinary SAMPLED inputs for the
+# clock-sync measurement above — they only fail AS clocks, which we don't want.
+#
+# BOARD RESPIN FIX: move the CLK_OUT_4 net one pin, C15 -> D15 (JB pin 3), the
+# P-partner of the same L12_15 pair. D15 is a P-side MRCC on the 0-ohm JB header,
+# giving a clock that is BOTH clock-legal AND clean-edged. (CLK_OUT_3 cannot be
+# rescued this way: its P partner E3 is the onboard oscillator, not on a header.)
+set_property PACKAGE_PIN F4   [get_ports {sx_clk_out}]
 set_property IOSTANDARD LVCMOS33 [get_ports {sx_clk_out}]
 create_clock -period 31.250 -name sx_clk_out [get_ports {sx_clk_out}]
 

@@ -46,8 +46,8 @@
 // Clock domain: single clock (clk = 32 MHz), matching trouper_top's
 // single-clock-domain design (ce_16m derived internally). On the board this
 // clk is the SX1257 CLK_OUT (the front-end sample clock), exactly as the ASIC's
-// IQ_CLK is on silicon — the BD BUFGs CLK_OUT_4 into this pin. The old MMCM
-// 32 MHz is no longer used.
+// IQ_CLK is on silicon — the BD BUFGs CLK_OUT_2 (JD F4) into this pin. The old
+// MMCM 32 MHz is no longer used.
 //
 // Source RTL directory (relative to this file): ../../src/ (definitive)
 
