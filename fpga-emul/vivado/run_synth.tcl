@@ -24,6 +24,11 @@ puts "Synthesis complete."
 # Reset impl_1 so it picks up the updated XDC
 reset_run impl_1
 
+# Attach pre-place hook to demote PLIO-9 (sample clock sx_clk_out is hardwired to
+# C15, an N-type CCIO pin) — must run before place_design, where the DRC fires.
+set pre_place [file normalize "[file dirname [info script]]/pre_place.tcl"]
+set_property STEPS.PLACE_DESIGN.TCL.PRE $pre_place [get_runs impl_1]
+
 # Attach pre-bitstream hook to demote UCIO-1/NSTD-1 DRC errors on MRCC clock pins
 set pre_hook [file normalize "[file dirname [info script]]/pre_bitstream.tcl"]
 set_property STEPS.WRITE_BITSTREAM.TCL.PRE $pre_hook [get_runs impl_1]

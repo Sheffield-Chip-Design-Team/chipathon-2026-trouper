@@ -32,18 +32,32 @@
 // SX1257 pins. This exercises the real decimator and the rest of the chain,
 // unlike the old bypass.
 //
-// PSRAM substitution: psram_model.v provides a BRAM-backed APS6404L QPI model
-//   driven by trouper_top's psram_buf_ctrl, used until the external PSRAM
-//   PMOD board is ready.
+// PSRAM: parameter USE_EXT_PSRAM selects the QPI back-end.
+//   0 (default) — psram_model.v, a BRAM-backed APS6404L QPI model driven by
+//     trouper_top's psram_buf_ctrl. No external pins; used by the Verilator
+//     smoke tests and any bitstream built without the MISO front-end board.
+//   1 — the real external APS6404L on the daughterboard (PCB J8 -> Arty JA).
+//     Four IOBUFs bridge trouper_top's SIO_OUT/OE/IN to the bidirectional
+//     psram_sio[3:0] pads; psram_sck/psram_ce_n become real output pins. The
+//     block design (create_project.tcl) sets this to 1 and constrains the pins
+//     in arty_dsp_emul.xdc. (IOBUF is a UNISIM primitive, so it must stay out
+//     of the USE_EXT_PSRAM=0 path to keep the Verilator build clean.)
 //
-// Clock domain: single clock (clk = 32 MHz from MMCM), matching trouper_top's
-// single-clock-domain design (ce_16m derived internally).
+// Clock domain: single clock (clk = 32 MHz), matching trouper_top's
+// single-clock-domain design (ce_16m derived internally). On the board this
+// clk is the SX1257 CLK_OUT (the front-end sample clock), exactly as the ASIC's
+// IQ_CLK is on silicon — the BD BUFGs CLK_OUT_4 into this pin. The old MMCM
+// 32 MHz is no longer used.
 //
 // Source RTL directory (relative to this file): ../../src/ (definitive)
 
 `default_nettype none
 
-module fpga_dsp_wrap (
+module fpga_dsp_wrap #(
+    // 0 = internal BRAM PSRAM model (sim / no-daughterboard); 1 = external
+    // APS6404L via IOBUFs on psram_sio/psram_sck/psram_ce_n (board bitstream).
+    parameter USE_EXT_PSRAM = 0
+) (
     input  wire        clk,
     input  wire        rst_n,
 
@@ -75,6 +89,15 @@ module fpga_dsp_wrap (
     output wire        remod_q,
 
     // -----------------------------------------------------------------------
+    // External APS6404L PSRAM QPI bus (only driven when USE_EXT_PSRAM=1; tied
+    // off / high-Z otherwise). psram_sio is bidirectional (SIO0..3); direction
+    // is set per-bit by trouper_top's psram_buf_ctrl via the IOBUF T inputs.
+    // -----------------------------------------------------------------------
+    output wire        psram_sck,
+    output wire        psram_ce_n,
+    inout  wire [3:0]  psram_sio,
+
+    // -----------------------------------------------------------------------
     // Host-SPI register interface — internal-only; wired to a dedicated
     // axi_quad_spi core (SPI master) in the Vivado block design so MicroBlaze
     // firmware drives it exactly as the real RPi host would.
@@ -98,9 +121,10 @@ module fpga_dsp_wrap (
     wire [7:0] grp_rdata_unused;
     wire       grp_ready_unused;
 
-    // QPI pad nets between trouper_top's psram_buf_ctrl and the BRAM PSRAM model.
-    wire        psram_sck, psram_ce_n;
-    wire [3:0]  psram_sio_out, psram_sio_in, psram_sio_oe;
+    // QPI pad nets between trouper_top's psram_buf_ctrl and the selected
+    // back-end (internal BRAM model or external IOBUFs — see generate below).
+    wire        ps_sck, ps_ce_n;
+    wire [3:0]  ps_sio_out, ps_sio_in, ps_sio_oe;
 
     // =========================================================================
     // Injection path: 4x sd_remod turn paced int8 samples into a 1-bit stream,
@@ -131,11 +155,11 @@ module fpga_dsp_wrap (
         .IQ_DATA_Q     (muxed_iq_q),
         .REMOD_A_I     (remod_i),
         .REMOD_A_Q     (remod_q),
-        .PSRAM_SCK     (psram_sck),
-        .PSRAM_CE_N    (psram_ce_n),
-        .PSRAM_SIO_OUT (psram_sio_out),
-        .PSRAM_SIO_IN  (psram_sio_in),
-        .PSRAM_SIO_OE  (psram_sio_oe),
+        .PSRAM_SCK     (ps_sck),
+        .PSRAM_CE_N    (ps_ce_n),
+        .PSRAM_SIO_OUT (ps_sio_out),
+        .PSRAM_SIO_IN  (ps_sio_in),
+        .PSRAM_SIO_OE  (ps_sio_oe),
         .HOST_CS       (host_cs),
         .SPI_SCK       (spi_sck),
         .SPI_MOSI      (spi_mosi),
@@ -150,16 +174,44 @@ module fpga_dsp_wrap (
         .IRQ_GROUPER   ()
     );
 
-    // BRAM-backed APS6404L model (replaces the real chip until the PSRAM
-    // board is ready). sck is unused in this same-domain model.
-    psram_model #(.ADDR_BITS(16)) u_psram_mem (
-        .clk_32m (clk),
-        .rst_n   (rst_n),
-        .ce_n    (psram_ce_n),
-        .sio_out (psram_sio_out),
-        .sio_oe  (psram_sio_oe),
-        .sio_in  (psram_sio_in)
-    );
+    // =========================================================================
+    // PSRAM back-end select.
+    //   USE_EXT_PSRAM=1 : real APS6404L on the daughterboard. Four IOBUFs make
+    //     psram_sio[3:0] bidirectional — T=~oe so the controller drives the pad
+    //     when psram_buf_ctrl asserts the per-bit output enable, and samples the
+    //     chip's read data on ps_sio_in otherwise. sck/ce_n are plain outputs.
+    //   USE_EXT_PSRAM=0 : BRAM-backed model, no external pins. The board pads
+    //     are parked (sck low, ce_n high, sio high-Z) so an unconstrained/
+    //     unconnected build is still safe. sck is unused by the same-domain
+    //     model. (No IOBUF here → Verilator/iverilog clean.)
+    // =========================================================================
+    generate
+    if (USE_EXT_PSRAM) begin : g_ext_psram
+        assign psram_sck  = ps_sck;
+        assign psram_ce_n = ps_ce_n;
+        genvar gi;
+        for (gi = 0; gi < 4; gi = gi + 1) begin : g_sio_iobuf
+            IOBUF u_iobuf (
+                .I  (ps_sio_out[gi]),   // controller → pad
+                .O  (ps_sio_in[gi]),    // pad → controller
+                .T  (~ps_sio_oe[gi]),   // T=0 drives; oe=1 means drive
+                .IO (psram_sio[gi])
+            );
+        end
+    end else begin : g_int_psram
+        assign psram_sck  = 1'b0;
+        assign psram_ce_n = 1'b1;
+        assign psram_sio  = 4'bzzzz;
+        psram_model #(.ADDR_BITS(16)) u_psram_mem (
+            .clk_32m (clk),
+            .rst_n   (rst_n),
+            .ce_n    (ps_ce_n),
+            .sio_out (ps_sio_out),
+            .sio_oe  (ps_sio_oe),
+            .sio_in  (ps_sio_in)
+        );
+    end
+    endgenerate
 
 endmodule
 `default_nettype wire

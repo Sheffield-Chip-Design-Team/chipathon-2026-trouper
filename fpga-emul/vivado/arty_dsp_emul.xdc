@@ -67,69 +67,116 @@ set_property PACKAGE_PIN D10  [get_ports {UART_0_txd}]
 set_property IOSTANDARD LVCMOS33 [get_ports {UART_0_*}]
 
 # ============================================================================
-# JB PMOD — SPI bus to SX1257 chips
+# MISO front-end test PCB pin map  (re-pinned per tmp/miso_frontend_pcb_review_2026-07-08.md)
 # ============================================================================
-# JB[0] E15  SPI_SCK — driven internally by AXI Quad SPI; no BD port for SCK
-# JB[1] E16  SPI_MOSI
-set_property PACKAGE_PIN E16  [get_ports {SPI_0_0_io0_io}]
+# The daughterboard mounts over the Arty with the HEADER ORDER REVERSED:
+#     PCB J5 -> Arty JD,   PCB J6 -> Arty JC,
+#     PCB J7 -> Arty JB,   PCB J8 -> Arty JA
+# (pin 1 mates with pin 1 within each header; pins 5/11 = GND, 6/12 = 3V3_IN).
+#
+# Consequences of the real PCB net list (review findings 6 & 7):
+#   * SX1257 I/Q data is scattered by chip across ALL FOUR headers, not grouped
+#     JA=chip0/1, JC=chip2/3 as before. Re-pinned below to the physical nets.
+#   * NSS is a 2-bit ENCODED address (RFFE_NSS_A0/A1) feeding an on-board
+#     SN74LVC1G139 2-to-4 decoder — NOT four one-hot selects. Only ss_io[0]/[1]
+#     have a pin; the BD is now built with 2 SS bits so ss_io[2]/[3] no longer
+#     exist. Firmware still emits a one-hot select on the two lines; reworking it
+#     to a true 2-bit ENCODED address is the open TODO (fpga-emul/TODO.md).
+#   * PSRAM is a REAL external APS6404L on JA (was the internal psram_model).
+#     DONE: fpga_dsp_wrap USE_EXT_PSRAM=1 + IOBUFs; pins constrained below.
+#   * CLK_OUT_1..4 are the SX1257 I/Q sampling clocks (MRCC pins). DONE: the DSP
+#     domain is now clocked from CLK_OUT_4 (C15) via a BUFG, matching silicon
+#     (IQ_CLK = SX1257 CLK_OUT); the MMCM 32 MHz is unused. See bottom + BD.
+#   * remod_i/remod_q have NO net on this receive-only PCB — their old pins
+#     (D4/D3) now carry RFFE_SCK/CLK_OUT_3. DONE: dropped from the BD (no port).
+#
+# ---------------------------------------------------------------------------
+# SX1257 I/Q data  (FPGA reads I_OUT_n / Q_OUT_n; index n-1 -> hw_iq_*[n-1])
+# ---------------------------------------------------------------------------
+# chip 1  (PCB J5 -> JD pin 10 / 9)
+set_property PACKAGE_PIN G2   [get_ports {hw_iq_i[0]}] ;# I_OUT_1
+set_property PACKAGE_PIN H2   [get_ports {hw_iq_q[0]}] ;# Q_OUT_1
+# chip 2  (PCB J6 -> JC pin 4 / 10)
+set_property PACKAGE_PIN V11  [get_ports {hw_iq_i[1]}] ;# I_OUT_2
+set_property PACKAGE_PIN U13  [get_ports {hw_iq_q[1]}] ;# Q_OUT_2
+# chip 3  (PCB J6 -> JC pin 2 / 8)
+set_property PACKAGE_PIN V12  [get_ports {hw_iq_i[2]}] ;# I_OUT_3
+set_property PACKAGE_PIN V14  [get_ports {hw_iq_q[2]}] ;# Q_OUT_3
+# chip 4  (PCB J7 -> JB pin 2 / 8)
+set_property PACKAGE_PIN E16  [get_ports {hw_iq_i[3]}] ;# I_OUT_4
+set_property PACKAGE_PIN J18  [get_ports {hw_iq_q[3]}] ;# Q_OUT_4
+set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_i[*]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_q[*]}]
+
+# ---------------------------------------------------------------------------
+# SX1257 SPI  (PCB J5 -> JD)
+# ---------------------------------------------------------------------------
+# RFFE_MOSI  J5 pin 7 -> JD  E2
+set_property PACKAGE_PIN E2   [get_ports {SPI_0_0_io0_io}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_io0_io}]
-# JB[3] C15  SPI_MISO
-set_property PACKAGE_PIN C15  [get_ports {SPI_0_0_io1_io}]
+# RFFE_MISO  J5 pin 8 -> JD  D2
+set_property PACKAGE_PIN D2   [get_ports {SPI_0_0_io1_io}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_io1_io}]
-# JB[4] J17  NSS[0]
-set_property PACKAGE_PIN J17  [get_ports {SPI_0_0_ss_io[0]}]
+# RFFE_SCK   J5 pin 1 -> JD  D4  — AXI Quad SPI drives SCK internally (no BD port).
+#            The board routes SCK to D4; expose a SCK port in the BD to constrain it.
+#
+# NSS: 2-bit encoded address into the on-board SN74LVC1G139 (review finding 4/6).
+# Map the two available select bits to the address pins as a stop-gap; firmware
+# must be reworked to emit a 2-bit code rather than a one-hot select.
+# RFFE_NSS_A0  PCB J8 -> JA  A18
+set_property PACKAGE_PIN A18  [get_ports {SPI_0_0_ss_io[0]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_ss_io[0]}]
-# JB[5] J18  NSS[1]
-set_property PACKAGE_PIN J18  [get_ports {SPI_0_0_ss_io[1]}]
+# RFFE_NSS_A1  PCB J8 -> JA  B18
+set_property PACKAGE_PIN B18  [get_ports {SPI_0_0_ss_io[1]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_ss_io[1]}]
-# JB[6] K15  NSS[2]
-set_property PACKAGE_PIN K15  [get_ports {SPI_0_0_ss_io[2]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_ss_io[2]}]
-# JB[7] J15  NSS[3]
-set_property PACKAGE_PIN J15  [get_ports {SPI_0_0_ss_io[3]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_ss_io[3]}]
+# ss_io[2] / ss_io[3]: no longer exist — the BD now builds axi_quad_spi_0 with
+# 2 SS bits (C_NUM_SS_BITS=2), matching the two board pins above.
+
+# ---------------------------------------------------------------------------
+# remod_i / remod_q: NO net on this receive-only PCB. Dropped from the BD (no
+# top-level port, no constraint). Their former pins D4/D3 are now RFFE_SCK /
+# CLK_OUT_3. Re-add a BD port + pin here if a TX/remod path is added.
+# ---------------------------------------------------------------------------
 
 # ============================================================================
-# JA PMOD — SX1257 chips 0 and 1 I/Q data
-# ============================================================================
-# JA[0] G13  I_OUT chip 0  (NOTE: conflict with MII rxd[2] — hardware resolve)
-set_property PACKAGE_PIN G13  [get_ports {hw_iq_i[0]}]
-# JA[1] B11  Q_OUT chip 0
-set_property PACKAGE_PIN B11  [get_ports {hw_iq_q[0]}]
-# JA[2] A11  I_OUT chip 1
-set_property PACKAGE_PIN A11  [get_ports {hw_iq_i[1]}]
-# JA[3] D12  Q_OUT chip 1
-set_property PACKAGE_PIN D12  [get_ports {hw_iq_q[1]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_i[0]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_q[0]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_i[1]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_q[1]}]
+# External APS6404L PSRAM QPI bus (PCB J8 -> JA, 200 ohm series)
+# Active build: fpga_dsp_wrap USE_EXT_PSRAM=1 (BD sets it), IOBUFs on psram_sio.
+# 200 ohm series into ~15 pF adds ~3 ns/crossing; folds into psram_buf_ctrl's
+# read-timing budget at 32 MHz SCLK (see PCB review finding 7).
+# ---------------------------------------------------------------------------
+set_property PACKAGE_PIN D12  [get_ports {psram_sck}]     ;# PSRAM_SCLK  JA pin 4
+set_property PACKAGE_PIN D13  [get_ports {psram_ce_n}]    ;# PSRAM_nCE   JA pin 7
+set_property PACKAGE_PIN A11  [get_ports {psram_sio[0]}]  ;# SI  / SIO0  JA pin 3
+set_property PACKAGE_PIN G13  [get_ports {psram_sio[1]}]  ;# SO  / SIO1  JA pin 1
+set_property PACKAGE_PIN B11  [get_ports {psram_sio[2]}]  ;# SIO2        JA pin 2
+set_property PACKAGE_PIN K16  [get_ports {psram_sio[3]}]  ;# SIO3        JA pin 10
+set_property IOSTANDARD LVCMOS33 [get_ports {psram_sck psram_ce_n}]
+set_property IOSTANDARD LVCMOS33 [get_ports {psram_sio[*]}]
 
 # ============================================================================
-# JC PMOD — SX1257 chips 2 and 3 I/Q data
+# SX1257 CLK_OUT — the DSP-domain sample clock (32 MHz)
 # ============================================================================
-set_property PACKAGE_PIN U12  [get_ports {hw_iq_i[2]}]
-set_property PACKAGE_PIN V12  [get_ports {hw_iq_q[2]}]
-set_property PACKAGE_PIN V10  [get_ports {hw_iq_i[3]}]
-set_property PACKAGE_PIN V11  [get_ports {hw_iq_q[3]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_i[2]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_q[2]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_i[3]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {hw_iq_q[3]}]
+# The real ASIC's IQ_CLK is the SX1257 CLK_OUT, so the emulator clocks its whole
+# DSP domain from CLK_OUT (see create_project.tcl: sx_clk_out -> BUFG -> dsp_clk).
+# CLK_OUT_4 lands on JB C15 — 0-ohm series, MRCC clock-capable, cleanest edge of
+# the four (CLK_OUT_1..3 sit behind JD's 200-ohm resistors). All four radios
+# share one TCXO, so this single clock is coherent for every branch.
+set_property PACKAGE_PIN C15  [get_ports {sx_clk_out}]
+set_property IOSTANDARD LVCMOS33 [get_ports {sx_clk_out}]
+create_clock -period 31.250 -name sx_clk_out [get_ports {sx_clk_out}]
 
-# ============================================================================
-# JD PMOD — REMOD output (sigma-delta combined output for oscilloscope/SX1302)
-# ============================================================================
-# JD[0] D4  REMOD_I (I_OUT combined)
-set_property PACKAGE_PIN D4   [get_ports remod_i]
-set_property IOSTANDARD LVCMOS33 [get_ports remod_i]
-# JD[1] D3  REMOD_Q (Q_OUT combined)
-set_property PACKAGE_PIN D3   [get_ports remod_q]
-set_property IOSTANDARD LVCMOS33 [get_ports remod_q]
+# The SX1257 sample clock and the MMCM-derived clocks (100 MHz MicroBlaze/AXI,
+# 25 MHz PHY ref) come from independent oscillators — the board TCXO vs the Arty
+# crystal. Declare them asynchronous; the AXI clock converters and reset
+# synchronisers in the BD handle the CDC. Without this the tool would time false
+# paths between the two unrelated domains.
+set_clock_groups -asynchronous \
+    -group [get_clocks -include_generated_clocks sys_clk_pin] \
+    -group [get_clocks sx_clk_out]
 
 # ============================================================================
 # Timing constraints
 # ============================================================================
-# Board-level PMOD timing is left unconstrained for bring-up. The previous
-# generic delays were binding against multiple derived clocks and producing
-# critical warnings during implementation.
+# Board-level PMOD data timing (hw_iq, SPI, PSRAM) is left unconstrained for
+# bring-up. The previous generic delays were binding against multiple derived
+# clocks and producing critical warnings during implementation.
