@@ -98,19 +98,36 @@ module fpga_dsp_wrap #(
     inout  wire [3:0]  psram_sio,
 
     // -----------------------------------------------------------------------
-    // Host-SPI register interface — internal-only; wired to a dedicated
-    // axi_quad_spi core (SPI master) in the Vivado block design so MicroBlaze
-    // firmware drives it exactly as the real RPi host would.
+    // Host-SPI register interface. Two possible masters, selected by spi_sel:
+    //   spi_sel=0 (default): the internal axi_quad_spi core (MicroBlaze plays
+    //     the RPi host over host_cs/spi_sck/spi_mosi; spi_miso feeds back). This
+    //     is the self-contained path used by CI / regression.
+    //   spi_sel=1: a REAL external host (RPi) on the ext_* pins, so the actual
+    //     host<->ASIC SPI link (10 MHz timing, CS framing, MISO drive, IRQ
+    //     handshake) is validated on hardware. spi_sel is a static board switch.
+    // Note: SPI_SCK is muxed BEFORE it becomes the spi_slave clock, so the
+    // external ext_spi_sck pin is an ordinary data input into the mux LUT (the
+    // BUFG sits on the mux output) — it does NOT need a clock-capable pin.
     // -----------------------------------------------------------------------
-    input  wire        host_cs,
+    input  wire        spi_sel,        // 0 = internal master, 1 = external RPi
+
+    input  wire        host_cs,        // internal master (from axi_quad_spi)
     input  wire        spi_sck,
     input  wire        spi_mosi,
-    output wire        spi_miso,
+    output wire        spi_miso,        // to internal master's io1_i
+
+    input  wire        ext_host_cs,    // external RPi host pins
+    input  wire        ext_spi_sck,
+    input  wire        ext_spi_mosi,
+    output wire        ext_spi_miso,
 
     // -----------------------------------------------------------------------
-    // Sticky IRQ (IRQ_OUT / IRQ_GROUPER are the same signal on trouper_top)
+    // Sticky IRQ (IRQ_OUT / IRQ_GROUPER are the same signal on trouper_top).
+    // irq feeds the internal AXI GPIO (firmware poll); ext_irq is the same
+    // signal on a pin for a real external host.
     // -----------------------------------------------------------------------
-    output wire        irq
+    output wire        irq,
+    output wire        ext_irq
 );
 
     // No Grouper chip on this board — GRP bus stays idle so the host-SPI path
@@ -148,6 +165,21 @@ module fpga_dsp_wrap #(
     wire [3:0] muxed_iq_i = inj_en ? inj_mod_i : hw_iq_i;
     wire [3:0] muxed_iq_q = inj_en ? inj_mod_q : hw_iq_q;
 
+    // Host-SPI source select. spi_sel is static (board switch); the 3 slave
+    // inputs mux internal (axi_quad_spi) vs external (RPi) here, ahead of
+    // spi_slave. spi_slave clocks on SPI_SCK, so the sck mux output becomes a
+    // clock (fabric->BUFG), keeping the external ext_spi_sck pin non-clock.
+    wire sel_host_cs = spi_sel ? ext_host_cs  : host_cs;
+    wire sel_spi_sck = spi_sel ? ext_spi_sck  : spi_sck;
+    wire sel_spi_mosi= spi_sel ? ext_spi_mosi : spi_mosi;
+
+    // trouper_top SPI-slave output + IRQ, fanned out to both internal and pins.
+    wire miso_w, irq_w;
+    assign spi_miso     = miso_w;   // to internal axi_quad_spi io1_i
+    assign ext_spi_miso = miso_w;   // to external RPi pin
+    assign irq          = irq_w;    // to internal AXI GPIO
+    assign ext_irq      = irq_w;    // to external IRQ pin
+
     trouper_top u_top (
         .IQ_CLK        (clk),
         .RESETB        (rst_n),
@@ -160,17 +192,17 @@ module fpga_dsp_wrap #(
         .PSRAM_SIO_OUT (ps_sio_out),
         .PSRAM_SIO_IN  (ps_sio_in),
         .PSRAM_SIO_OE  (ps_sio_oe),
-        .HOST_CS       (host_cs),
-        .SPI_SCK       (spi_sck),
-        .SPI_MOSI      (spi_mosi),
-        .SPI_MISO      (spi_miso),
+        .HOST_CS       (sel_host_cs),
+        .SPI_SCK       (sel_spi_sck),
+        .SPI_MOSI      (sel_spi_mosi),
+        .SPI_MISO      (miso_w),
         .GRP_ADDR      (GRP_IDLE_ADDR),
         .GRP_WDATA     (GRP_IDLE_WDATA),
         .GRP_WE        (1'b0),
         .GRP_RE        (1'b0),
         .GRP_RDATA     (grp_rdata_unused),
         .GRP_READY     (grp_ready_unused),
-        .IRQ_OUT       (irq),
+        .IRQ_OUT       (irq_w),
         .IRQ_GROUPER   ()
     );
 

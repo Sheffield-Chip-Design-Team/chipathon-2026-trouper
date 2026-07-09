@@ -89,6 +89,27 @@
 #define INJ_WR(a,v) Xil_Out32((a),(v))
 
 /* -----------------------------------------------------------------------
+ * axi_clk_sync_mon register map (fpga-emul/rtl/axi_clk_sync_mon.v) — FPGA-only.
+ * Measures whether the other three SX1257 CLK_OUTs are phase-locked to the one
+ * used as the DSP sample clock (F4). See clk_sync_measure().
+ * ----------------------------------------------------------------------- */
+#ifdef XPAR_AXI_CLK_SYNC_MON_0_BASEADDR
+  #define CSM_BASE  XPAR_AXI_CLK_SYNC_MON_0_BASEADDR
+#else
+  #define CSM_BASE  0x00020000UL   /* fallback -- check Vivado address map */
+#endif
+
+#define CSM_CTRL     (CSM_BASE + 0x00)   /* [0]=ARM (self-clearing) [1]=CONTINUOUS */
+#define CSM_STATUS   (CSM_BASE + 0x04)   /* [0]=DONE [1]=RUNNING [10:8]=LEVEL[2:0] */
+#define CSM_WINDOW   (CSM_BASE + 0x08)   /* [4:0]=window exponent (2^W cycles) */
+#define CSM_TOGGLES0 (CSM_BASE + 0x10)   /* CLK_OUT_1 (F3)  toggle count */
+#define CSM_TOGGLES1 (CSM_BASE + 0x14)   /* CLK_OUT_3 (D3) */
+#define CSM_TOGGLES2 (CSM_BASE + 0x18)   /* CLK_OUT_4 (C15/D15) */
+
+#define CSM_CTRL_ARM   (1u << 0)
+#define CSM_STATUS_DONE (1u << 0)
+
+/* -----------------------------------------------------------------------
  * Trouper register map (planning/Register Map.md) — 7-bit address space,
  * accessed over SPI via axi_quad_spi_1 (see reg_write/reg_read below).
  * ----------------------------------------------------------------------- */
@@ -537,6 +558,50 @@ static void sx1257_init_chip(u8 chip) {
 }
 
 /* -----------------------------------------------------------------------
+ * clk_sync_measure — run one CLK_OUT phase-lock measurement window and print
+ * the result over UART. win_exp selects the window length (2^win_exp dsp_clk
+ * cycles); e.g. 25 ~= 1.05 s at 32 MHz. A locked channel reads ~0 toggles; an
+ * unlocked one reads a large count that scales with the window.
+ * Requires the SX1257s configured and their CLK_OUTs running first.
+ * ----------------------------------------------------------------------- */
+static void clk_sync_measure(unsigned win_exp) {
+    u32 st, t0, t1, t2;
+    u32 spins = 0;
+
+    Xil_Out32(CSM_WINDOW, win_exp & 0x1Fu);
+    Xil_Out32(CSM_CTRL,   CSM_CTRL_ARM);        /* one-shot */
+
+    /* Poll DONE. Bounded so a dead sample clock can't hang the CPU forever. */
+    do {
+        st = Xil_In32(CSM_STATUS);
+    } while (!(st & CSM_STATUS_DONE) && (++spins < 200000000u));
+
+    if (!(st & CSM_STATUS_DONE)) {
+        xil_printf("CLKSYNC: TIMEOUT (no DONE) - is the DSP sample clock (F4 "
+                   "CLK_OUT) running? status=0x%08X\r\n", (unsigned)st);
+        return;
+    }
+
+    t0 = Xil_In32(CSM_TOGGLES0);
+    t1 = Xil_In32(CSM_TOGGLES1);
+    t2 = Xil_In32(CSM_TOGGLES2);
+
+    xil_printf("CLKSYNC win=2^%u  levels=%u%u%u\r\n",
+               win_exp & 0x1Fu,
+               (unsigned)((st >> 10) & 1u),
+               (unsigned)((st >> 9)  & 1u),
+               (unsigned)((st >> 8)  & 1u));
+    xil_printf("  CLK_OUT_1(F3)      toggles=%u  %s\r\n",
+               (unsigned)t0, t0 == 0 ? "LOCKED" : "NOT-LOCKED");
+    xil_printf("  CLK_OUT_3(D3)      toggles=%u  %s\r\n",
+               (unsigned)t1, t1 == 0 ? "LOCKED" : "NOT-LOCKED");
+    xil_printf("  CLK_OUT_4(C15/D15) toggles=%u  %s\r\n",
+               (unsigned)t2, t2 == 0 ? "LOCKED" : "NOT-LOCKED");
+    xil_printf("  (a handful of toggles = locked but sampled near the edge; a "
+               "large count that grows with the window = truly not locked)\r\n");
+}
+
+/* -----------------------------------------------------------------------
  * main
  * ----------------------------------------------------------------------- */
 int main(void) {
@@ -617,6 +682,12 @@ int main(void) {
         for (chip=0; chip<4; chip++) sx1257_init_chip(chip);
     }
 #endif
+
+    /* CLK_OUT phase-lock check: the SX1257s are configured and their CLK_OUTs
+     * are running, so measure whether the other three are locked to the F4
+     * sample clock that drives the DSP domain. Short window (2^20 ~= 33 ms) at
+     * startup; re-run with a longer window over UDP/JTAG for a tighter bound. */
+    clk_sync_measure(20u);
 
     xil_printf("Ready. Send to UDP 5008 to configure / load weights.\r\n");
     xil_printf("Send to UDP 5007 to inject I/Q samples (see CMD_SET_INJ_EN).\r\n");

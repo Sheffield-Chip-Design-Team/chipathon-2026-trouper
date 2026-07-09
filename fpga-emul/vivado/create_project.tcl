@@ -42,6 +42,7 @@ set emul_srcs [list \
     "$rtl_dir/sync_fifo.v"        \
     "$rtl_dir/psram_model.v"      \
     "$rtl_dir/axi_inj_ctrl.v"     \
+    "$rtl_dir/axi_clk_sync_mon.v" \
     "$rtl_dir/fpga_dsp_wrap.v"    \
 ]
 
@@ -269,6 +270,23 @@ connect_bd_net [get_bd_pins axi_quad_spi_1/ss_o]   [get_bd_pins fpga_dsp_wrap_0/
 connect_bd_net [get_bd_pins axi_quad_spi_1/io0_o]  [get_bd_pins fpga_dsp_wrap_0/spi_mosi]
 connect_bd_net [get_bd_pins fpga_dsp_wrap_0/spi_miso] [get_bd_pins axi_quad_spi_1/io1_i]
 
+# External host-SPI slave pins (real RPi host). Selected over the internal link
+# by spi_sel (a board slide switch). The ASIC's host<->SPI interface (spi_slave)
+# is exercised on real pins/timing when spi_sel=1; spi_sel=0 keeps the internal
+# MicroBlaze-as-host path for CI. See fpga_dsp_wrap.v.
+create_bd_port -dir I spi_sel
+create_bd_port -dir I ext_host_cs
+create_bd_port -dir I ext_spi_sck
+create_bd_port -dir I ext_spi_mosi
+create_bd_port -dir O ext_spi_miso
+create_bd_port -dir O ext_irq
+connect_bd_net [get_bd_ports spi_sel]      [get_bd_pins fpga_dsp_wrap_0/spi_sel]
+connect_bd_net [get_bd_ports ext_host_cs]  [get_bd_pins fpga_dsp_wrap_0/ext_host_cs]
+connect_bd_net [get_bd_ports ext_spi_sck]  [get_bd_pins fpga_dsp_wrap_0/ext_spi_sck]
+connect_bd_net [get_bd_ports ext_spi_mosi] [get_bd_pins fpga_dsp_wrap_0/ext_spi_mosi]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/ext_spi_miso] [get_bd_ports ext_spi_miso]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/ext_irq]      [get_bd_ports ext_irq]
+
 # --- axi_inj_ctrl (custom peripheral, 32 MHz DSP domain) -------------------
 # Injection FIFO + rate-matching pacer feeding fpga_dsp_wrap's SD-modulator
 # injection path (replaces the old int8-level INJECT mode). Firmware pushes
@@ -305,6 +323,28 @@ connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i2] [get_bd_pins fpga_dsp_wrap_0/
 connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q2] [get_bd_pins fpga_dsp_wrap_0/inj_q2]
 connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i3] [get_bd_pins fpga_dsp_wrap_0/inj_i3]
 connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q3] [get_bd_pins fpga_dsp_wrap_0/inj_q3]
+
+# --- axi_clk_sync_mon (CLK_OUT phase-lock measurement, 32 MHz DSP domain) ---
+# De-risks the single-clock ASIC: the DSP domain is clocked from one SX1257
+# CLK_OUT (F4). This peripheral samples the OTHER three CLK_OUTs against that
+# clock and counts toggles over a window — ~0 toggles => frequency-locked,
+# large => not locked. Runs on dsp_clk (same domain), so the measured clocks are
+# sampled directly by the DSP sample clock; the AXI slave crosses 100 MHz->dsp_clk
+# via the same clock-converter automation pattern as axi_inj_ctrl.
+set clksync [create_bd_cell -type module -reference axi_clk_sync_mon axi_clk_sync_mon_0]
+connect_bd_net $dsp_clk [get_bd_pins axi_clk_sync_mon_0/s_axi_aclk]
+connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
+               [get_bd_pins axi_clk_sync_mon_0/s_axi_aresetn]
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "/sx_clk_bufg/BUFG_O (32 MHz)" \
+              Master "/microblaze_0 (Periph)" intc_ip "Auto" master_apm "0" } \
+    [get_bd_intf_pins axi_clk_sync_mon_0/s_axi]
+
+# Measured CLK_OUT inputs (ordinary sampled inputs — NOT clocks, so N-side pins
+# are fine): [0]=CLK_OUT_1 (F3), [1]=CLK_OUT_3 (D3), [2]=CLK_OUT_4 (C15/D15).
+create_bd_port -dir I -from 2 -to 0 clk_meas
+connect_bd_net [get_bd_ports clk_meas] [get_bd_pins axi_clk_sync_mon_0/clk_meas]
 
 # --- AXI GPIO (1-bit input) for firmware to poll trouper_top's sticky IRQ --
 set irq_gpio [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_irq]

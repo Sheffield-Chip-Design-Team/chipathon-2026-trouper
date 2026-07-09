@@ -57,7 +57,7 @@ FPGA_SRCS   = $(RTL)/sync_fifo.v    \
 # ============================================================================
 
 .PHONY: sge_sim_spi_reg sge_sim_all \
-        sim_spi_reg sim_all sim_psram clean vivado_project vivado_synth \
+        sim_spi_reg sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
         test_fw run_test_fw eth_fw run_eth_fw
 
 sge_sim_spi_reg:
@@ -92,6 +92,16 @@ sim_psram: obj_dir_psram/Vtb_psram_model
 obj_dir_psram/Vtb_psram_model: tb/tb_psram_model.v $(RTL)/psram_model.v $(ASIC_RTL)/control/psram_buf_ctrl.v
 	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_psram \
 	    --top-module tb_psram_model $^
+
+# CLK_OUT phase-lock monitor: self-checking (locked vs unlocked) via Vivado
+# xsim (no verilator/iverilog dependency). Standalone — axi_clk_sync_mon.v only.
+XSIM_BIN = /home/timothyjabez/tools/Xilinx/2025.2/Vivado/bin
+sim_clksync:
+	rm -rf xsim_clksync && mkdir xsim_clksync
+	cd xsim_clksync && \
+	  $(XSIM_BIN)/xvlog ../rtl/axi_clk_sync_mon.v ../tb/tb_clk_sync_mon.v && \
+	  $(XSIM_BIN)/xelab tb_clk_sync_mon -s tb_run --timescale 1ns/1ps --debug off && \
+	  $(XSIM_BIN)/xsim tb_run -R
 
 # ============================================================================
 # Vivado project

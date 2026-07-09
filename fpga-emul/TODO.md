@@ -27,9 +27,11 @@ The MISO front-end test board (AFE) design is at
     CLK_OUTs so the other three can be measured against this one to prove they
     are phase-locked before committing the single-clock design to silicon. A
     shared TCXO guarantees *frequency* lock (no drift); static inter-chip *phase*
-    skew is the open question (set by each SX1257's ÷2^n divider start, which a
-    synchronized RFFE_RST would align — but RFFE_RST currently floats, review
-    finding 5). See the "Clock-sync measurement harness" item below.
+    skew and RX pipeline latency are open questions. The SX1257 datasheet does
+    not guarantee that synchronized RFFE_RST aligns internal divider state,
+    sampling-clock phase, ADC latency, or RF PLL phase. See
+    `SX1257_CLOCK_RESET_SYNCHRONIZATION.md` and the "Clock-sync measurement
+    harness" item below.
   - Pin choice: F4 is the ONLY one of the four CLK_OUTs on a P-side MRCC pin, so
     it is the only one the FPGA accepts as a single-ended clock. A single-ended
     clock is legal only on the P (master) pin — the dedicated low-skew route to
@@ -47,24 +49,75 @@ The MISO front-end test board (AFE) design is at
     the P-partner of the same L12_15 pair — a P-side MRCC on the 0 Ω JB header,
     so it is both clock-legal *and* clean-edged. (CLK_OUT_3 can't be rescued:
     its P partner E3 is the onboard oscillator, not on a header.)
-  - [ ] **Clock-sync measurement harness** (new; de-risks the single-clock ASIC):
-    bring F3/D3/C15 in as ordinary SAMPLED inputs (they're fine as data pins,
-    only illegal as clocks) and capture them against the F4 dsp_clk. A static
-    sampled level ⇒ frequency-locked; a slowly walking pattern ⇒ not locked. For
-    phase magnitude, sweep an IDELAY (~78 ps/tap) or MMCM fine phase on the F4
-    clock to find each input's edge. Expose lock/phase over the reg/UART path.
+  - [x] **Clock-sync measurement harness** (de-risks the single-clock ASIC).
+    DONE at RTL/BD/FW level. `rtl/axi_clk_sync_mon.v`: AXI4-Lite peripheral on
+    dsp_clk that samples the other three CLK_OUTs (F3/D3/C15 as ordinary inputs
+    via `clk_meas[2:0]`, 2-FF synced) and counts toggles over a 2^W window —
+    ~0 ⇒ frequency-locked, large ⇒ not locked; captured LEVEL is a coarse phase
+    bit. BD instantiates it at **0x0002_0000** (dsp_clk AXI automation); XDC
+    constrains F3/D3/C15 (respin: C15→D15) with `set_false_path`. Firmware
+    `clk_sync_measure()` in `sw/main.c` arms/polls/prints over UART at startup
+    (2^20 window). Verified in xsim: `make sim_clksync` (TB PASS — classifies
+    locked=0 vs unlocked toggles correctly).
+    - Firmware change needs a Vitis rebuild against a regenerated `.xsa` (the new
+      BD adds the peripheral); until then the ELF won't see 0x0002_0000.
+    - Fine phase magnitude (IDELAY ~78 ps/tap or MMCM fine phase sweep) is a
+      future extension; this block gives lock/no-lock + coarse phase only.
+    - Found while writing the tb: `axi_inj_ctrl.v`'s AXI read channel asserts
+      `rvalid` one cycle before `rdata` is valid (registered-on-do_read mux), so
+      reads return the *previous* transaction's data. `axi_clk_sync_mon.v` uses a
+      combinational read mux to avoid it. Worth auditing axi_inj_ctrl reads.
 - [x] **remod_i / remod_q.** DONE. Dropped from the BD (no top-level port, no
   constraint); the wrapper still exposes them as unconnected cell pins. Re-add
   a port + pin if a TX/remod path is ever added to the board.
-- [ ] **2-bit encoded NSS.** The board decodes chip-select with an on-board
-  SN74LVC1G139 (2-to-4) driven by `RFFE_NSS_A0`/`A1`. The BD now builds
-  `axi_quad_spi_0` with `C_NUM_SS_BITS=2` (so `ss_io[3:2]` are gone and the
-  unconstrained-port warnings are cleared), but it still emits a **one-hot**
-  select on the two lines. Rework the BD/firmware to drive a true 2-bit
-  **encoded** address into the decoder. `ss_io[0]`=A18 (A0), `ss_io[1]`=B18 (A1).
-  - Note: the 1G139 has no enable pin, so it can never deselect all radios
-    (review finding 4). If the board is respun with a 1G138/139A that has an
-    enable, add an "SPI active" GPIO to the BD too.
+- [x] **External host-SPI slave (real RPi path).** DONE. trouper_top's host SPI
+  slave + IRQ_OUT are now selectable between the internal axi_quad_spi master
+  (CI) and real external pins via `spi_sel` (Arty SW0=A8). `fpga_dsp_wrap` muxes
+  the three slave inputs before spi_slave (so the external SCK pin need not be
+  clock-capable — the BUFG sits on the fabric mux output). Pins (ChipKit header,
+  from Arty-A7-100-Master.xdc): ext_host_cs=C1, ext_spi_sck=F1, ext_spi_mosi=H1,
+  ext_spi_miso=G1, ext_irq=R11(ck_io30). XDC has a 10 MHz async `create_clock`
+  on ext_spi_sck. Full P&R clean: all timing met, ext_spi_sck +39.4 ns setup /
+  +0.143 hold (0 failing/80), IOB 50/210. (The 2 `Place 30-73` critical warnings
+  are PRE-EXISTING axi_quad_spi_1 IOB-packing artifacts, not from this change.)
+  - GRP bus intentionally NOT exposed: it is an on-die inter-project bus (not
+    bond pads — see trouper_top pad count 23, GRP excluded), tied idle here;
+    arbitration is covered by rtl-test tb_trouper_grp_arb. IRQ_GROUPER unused.
+  - `tb_fpga_spi_reg.v` ties spi_sel=0 + ext_* inputs low (internal path). When
+    spi_sel=1 the internal master is muxed out; firmware SPI is then a no-op.
+- [ ] **NSS + RFFE_RST via I2C IO expander (DECIDED 2026-07-09; supersedes the
+  2-bit-encoded-NSS plan).** Replace the on-board SN74LVC1G139 decoder with an
+  I2C IO expander (TCA-family, e.g. TCA9535 16-bit) on the daughterboard, driving
+  **four discrete active-low NSS lines** plus **RFFE_RST** (and spare bits for RX
+  enables). Rationale — all-deselect is essential on a shared-MISO multi-drop SPI
+  bus (clean idle, correct NSS-rising frame termination, matches the ASIC host's
+  ability to deselect); the 1G139 (no enable) can never deselect all radios
+  (review finding 4). Bonus: the expander lives next to the SX1257s, so RFFE_RST
+  gets a short daughterboard trace — this **retires the PMOD reset-pin crosstalk
+  hunt** (no need for the J15 dedicated pin).
+  - Board respin: drop the 1G139; add the expander (SDA/SCL to 2 FPGA pins via a
+    PMOD + 4.7k pull-ups; address straps; its own RESET tied high/to board rst).
+    Expander push-pull outputs: 4× NSS (active-low), 1× RFFE_RST, spares. The
+    RFFE SPI *data* path (MOSI/SCK/MISO) stays FPGA-driven; only chip-select and
+    reset move to I2C. **Frees A18/B18** (old NSS_A0/A1).
+  - Crosstalk: I2C is slow open-drain and **idle during I/Q capture** (all of
+    NSS/reset is config-time), so SDA/SCL are non-aggressors — they may even use
+    the JC diff-pair pins that were rejected for a floating reset. Keep the bus
+    idle while sampling.
+  - RESET sequence (satisfies both datasheet §6.2 and crosstalk): expander POR =
+    Hi-Z ⇒ RFFE_RST floats at power-on (datasheet-compliant, safe — nothing is
+    switching yet). Firmware then drives it HIGH >100 us (reset pulse), waits
+    5 ms, then drives it **LOW** for the whole capture (actively deasserted ⇒
+    crosstalk-immune, not floating). Shared net ⇒ all four resets are inherently
+    simultaneous, which the clock-sync experiment needs.
+  - FPGA/BD rework: add an AXI IIC master (2 pins). axi_quad_spi_0 SS no longer
+    goes to pins (hardware auto-SS is lost) — chip-select becomes firmware-
+    sequenced: I2C select chip N → SPI frame → I2C all-deselect. Slower per
+    access but SX1257 config is one-time, so fine. Set/leave axi_quad_spi_0
+    C_NUM_SS_BITS minimal/unused.
+  - Expander choice matters: use a TCA-type whose POR state is inputs/Hi-Z (float
+    at POR); a PCF8574 powers up outputs weakly HIGH → would assert RFFE_RST at
+    POR. Confirm push-pull drive for the RESET-low-during-capture step.
 
 ## Validation
 
@@ -82,11 +135,21 @@ The MISO front-end test board (AFE) design is at
   Bitstream written to `fpga-emul/arty_dsp_emul.bit`.
   - (First impl attempt failed on the C15 N-side clock-pin error; fixed by
     moving the sample clock to the P-side F4 pin, as documented above.)
+  - Re-run WITH the axi_clk_sync_mon peripheral + clk_meas[2:0] inputs also
+    passes: all timing met, sx_clk_out setup WNS +9.94 ns / hold +0.034 ns,
+    overall WNS +1.03 ns, IOB 44/210, LUT 15.7% / FF 8.2%. clk_meas false-paths
+    honored (3 new IOBs, no clock created).
 - [ ] **Reset/bring-up ordering.** rst_32m now releases the DSP domain only once
   CLK_OUT is toggling. Confirm firmware configures the SX1257 (over RFFE SPI,
   100 MHz domain) to start CLK_OUT before expecting any DSP-domain activity.
+  RFFE_RST is now driven from the I2C IO expander (see the NSS+RFFE_RST item
+  above), not a dedicated FPGA pin: float (Hi-Z) at POR, pulse high >100 us,
+  wait >=5 ms, then drive low for capture. Shared net ⇒ inherently simultaneous
+  across the four devices — but this gives repeatable init, NOT phase alignment;
+  prove alignment with the measurement harness.
 - [ ] **Scope CLK_OUT_2 edge quality** at F4 (200 Ω) at 32 MHz before trusting
   captures — the 200 Ω series may soften the edge. A board respin to a P-side
   0 Ω pin (D15, see above) would remove this concern.
-- [ ] Fold the finalized pin map into `HARDWARE_SETUP.md` once verified against a
-  physical board.
+- [~] Pin map + control-plane wiring documented in `HARDWARE_SETUP.md` §6 (MISO
+  board map, CLK_OUT monitor, external-RPi host-SPI wiring + RPi pinout). Mark
+  fully done once verified against a physical board (pins/switch/RPi link).

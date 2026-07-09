@@ -199,6 +199,52 @@ set_clock_groups -asynchronous \
     -group [get_clocks sx_clk_out]
 
 # ============================================================================
+# CLK_OUT phase-lock measurement inputs (axi_clk_sync_mon)
+# ============================================================================
+# The other three SX1257 CLK_OUTs, brought in as ORDINARY sampled inputs (not
+# clocks — so the N-side pins F3/D3/C15 are perfectly fine here) and measured
+# against the F4 sample clock to prove they are phase-locked. See the pin-pairing
+# note above and axi_clk_sync_mon.v.
+#   clk_meas[0] = CLK_OUT_1 (JD F3)
+#   clk_meas[1] = CLK_OUT_3 (JD D3)
+#   clk_meas[2] = CLK_OUT_4 (JB C15 now; -> D15 after the C15->D15 respin)
+set_property PACKAGE_PIN F3   [get_ports {clk_meas[0]}]
+set_property PACKAGE_PIN D3   [get_ports {clk_meas[1]}]
+set_property PACKAGE_PIN C15  [get_ports {clk_meas[2]}]   ;# respin: change to D15
+set_property IOSTANDARD LVCMOS33 [get_ports {clk_meas[*]}]
+# These carry a ~32 MHz clock but are treated as async data (sampled + toggle-
+# counted in the dsp_clk domain); no create_clock. Exclude from clock-domain
+# timing so the tool does not try to time them as clocks.
+set_false_path -from [get_ports {clk_meas[*]}]
+
+# ============================================================================
+# Host SPI slave — external RPi host path (selected by spi_sel)
+# ============================================================================
+# The ASIC's host-SPI slave (trouper_top spi_slave) is normally driven by the
+# internal axi_quad_spi master (spi_sel=0, for CI). Setting spi_sel=1 routes it
+# to these external pins so a real RPi host drives the register interface on
+# actual pins/timing. Pins are the Arty ChipKit dedicated SPI header + one ck_io
+# for IRQ + slide switch SW0 for the select (all from Arty-A7-100-Master.xdc).
+#   ext_host_cs  = ck_ss   (C1)   ext_spi_sck  = ck_sck  (F1)
+#   ext_spi_mosi = ck_mosi (H1)   ext_spi_miso = ck_miso (G1)
+#   ext_irq      = ck_io30 (R11)  spi_sel      = sw[0]   (A8)
+set_property PACKAGE_PIN C1   [get_ports {ext_host_cs}]
+set_property PACKAGE_PIN F1   [get_ports {ext_spi_sck}]
+set_property PACKAGE_PIN H1   [get_ports {ext_spi_mosi}]
+set_property PACKAGE_PIN G1   [get_ports {ext_spi_miso}]
+set_property PACKAGE_PIN R11  [get_ports {ext_irq}]
+set_property PACKAGE_PIN A8   [get_ports {spi_sel}]
+set_property IOSTANDARD LVCMOS33 [get_ports {ext_host_cs ext_spi_sck ext_spi_mosi ext_spi_miso ext_irq spi_sel}]
+
+# External SPI clock: RPi SPI, CPOL=0/CPHA=0, up to 10 MHz (100 ns). It is muxed
+# (fpga_dsp_wrap sel_spi_sck) BEFORE becoming the spi_slave clock, so F1 is an
+# ordinary data input and the BUFG sits on the fabric mux output (F1 need not be
+# clock-capable). spi_slave resynchronises everything into dsp_clk via 2-FF, so
+# this clock is asynchronous to all others.
+create_clock -period 100.000 -name ext_spi_sck [get_ports {ext_spi_sck}]
+set_clock_groups -asynchronous -group [get_clocks ext_spi_sck]
+
+# ============================================================================
 # Timing constraints
 # ============================================================================
 # Board-level PMOD data timing (hw_iq, SPI, PSRAM) is left unconstrained for

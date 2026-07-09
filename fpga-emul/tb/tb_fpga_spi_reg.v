@@ -42,11 +42,17 @@ module tb_fpga_spi_reg;
         .inj_i3 (8'sd0), .inj_q3 (8'sd0),
         .remod_i   (remod_i),
         .remod_q   (remod_q),
+        .spi_sel      (1'b0),          // internal master path (this test)
         .host_cs   (host_cs),
         .spi_sck   (spi_sck),
         .spi_mosi  (spi_mosi),
         .spi_miso  (spi_miso),
-        .irq       (irq)
+        .ext_host_cs  (1'b0),
+        .ext_spi_sck  (1'b0),
+        .ext_spi_mosi (1'b0),
+        .ext_spi_miso (),
+        .irq       (irq),
+        .ext_irq      ()
     );
 
     // ---- SPI master model (Mode 0, MSB first) ----
