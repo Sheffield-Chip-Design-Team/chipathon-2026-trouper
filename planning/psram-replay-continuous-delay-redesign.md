@@ -1,6 +1,8 @@
 # Same-Packet PSRAM Replay: Continuous-Delay Redesign Proposal
 
-**Status:** PROPOSED — not implemented. Written 2026-07-11.
+**Status:** PROPOSED — not implemented. Written 2026-07-11; revised same day
+(margin anchor moved from `buf_base` to `training_done`, mux keyed on
+`replay_active`, timeout benefit added — see §2/§3/§4a).
 **Motivated by:** `TRPR-RMD-009` (Trouper Chip Specification §4.9 — no
 time-index jump in the re-modulator's input during normal operation).
 **Touches:** `psram_buf_ctrl.v`, `trouper_top.v`, `reg_bank.v`, Register Map,
@@ -28,23 +30,39 @@ one architectural:
 ## 2. Proposed mechanism
 
 Replace "wait indefinitely for `W_COMMIT`, then rewind to `buf_base`" with
-"wait for a bounded margin, then start a continuously-trailing delay line
-from `buf_base` that never rewinds again."
+"wait for a bounded margin **after `training_done`**, then start a
+continuously-trailing delay line from `buf_base` that never rewinds again."
+
+**Why the margin is anchored at `training_done`, not `buf_base`:** the chain
+from packet start to `W_COMMIT` is (a) the training window —
+`tacc_window·M` samples, anchored at `timing_ref` (`training_acc.v`
+`acc_start/acc_end`), deterministic but strongly SF-dependent (~3.6 k
+samples at SF7 up to ~115 k at SF12) — then (b) host response: IRQ latency
++ SPI Z-bank readout + weight compute + W-shadow write + commit, which is
+SF-independent but jittery (RPi scheduling, SPI clock). A margin measured
+from `buf_base` would have to cover both, making the register SF-dependent
+and dominated by (a); worse, a compute-sized value (~1000 samples) would
+expire before `training_done` on every packet at every SF. Anchoring at
+`training_done` means the register bounds only (b). (`sc_lock` detection
+latency shifts neither anchor: `buf_base` is backdated via `timing_ref`,
+and the training window is `timing_ref`-anchored too — a late lock only
+shrinks `n_acc`, a separate Z-quality issue.)
 
 1. **New register**, `REPLAY_DELAY_SAMPLES` (raw sample count, not
-   symbols — the thing being bounded is firmware compute time, which is
-   SF-independent). Firmware sizes it to the worst-case weight-compute time
-   it's actually using (see Open Risks #7 for current estimates: ~750–1000
-   samples for 8 iterations).
+   symbols — it bounds only host response time, which is SF-independent).
+   Firmware sizes it to its worst-case IRQ + readout + compute + commit
+   latency (see Open Risks #7 for the compute portion: ~750–1000 samples
+   for 8 iterations; add readout/IRQ overhead on top).
 2. At `sc_lock`, `buf_base` is latched exactly as today.
-3. Output stays silent only until `(wr_ptr − buf_base) ≥
-   REPLAY_DELAY_SAMPLES × 8` (byte units) — i.e., until enough backlog has
-   accumulated between the packet's true start and live time to guarantee
-   the configured margin. This wait is bounded by `REPLAY_DELAY_SAMPLES`
-   (worst case), not by however long firmware happens to take.
+3. At `training_done`, latch a wait reference (`wr_ptr` at that instant).
+   Output stays silent until `wr_ptr` has advanced
+   `REPLAY_DELAY_SAMPLES × 8` bytes past it. This wait is bounded by
+   `tacc_window·M + REPLAY_DELAY_SAMPLES` from packet start (worst case),
+   not by however long firmware happens to take.
 4. Once the margin is met, `rd_ptr` starts at `buf_base` and advances in
    lockstep with `wr_ptr` (the same interleaved one-write-one-read-per-cycle
-   mechanism `S_REPLAY` already uses) — a fixed-depth delay line for the
+   mechanism `S_REPLAY` already uses) — a fixed-depth delay line
+   (depth = `tacc_window·M + margin`, per-packet deterministic) for the
    rest of the packet. **No further state transitions, no rewind.**
 5. Weights: bypass mode until `W_COMMIT` (unchanged), then a smooth
    coefficient change applied to the already-continuously-flowing stream —
@@ -52,15 +70,33 @@ from `buf_base` that never rewinds again."
    changes are both explicitly permitted; re-presenting already-sent
    time-index is not, and this design never does that).
 
+**Honest cost this exposes:** the silence window is inherently
+≥ training + host response (~`tacc_window` symbols + margin) — the packet
+cannot be MRC-weighted from its start with weights that don't exist yet.
+The original draft's ~1000-sample figure quietly hid this.
+
 ## 3. QPI budget: no new parallel read needed
 
 The SC delay-read (`del_addr`, feeding `sc_detector`) is only useful
 pre-lock (searching for a new packet). This new replay delay-read is only
 useful post-lock (a packet is active). They're mutually exclusive in time —
-mux the read-address source by `sc_lock` and reuse the same sub-cycle slot,
-rather than running two parallel PSRAM reads. Stays within the existing
-44-of-64 sub-cycle write+read budget (see Open Risks #30); does not require
+mux the read-address source and reuse the same sub-cycle slot, rather than
+running two parallel PSRAM reads. Stays within the existing 44-of-64
+sub-cycle write+read budget (see Open Risks #30); does not require
 increasing PSRAM throughput.
+
+**Mux key: `replay_active` (or `state == S_REPLAY`), not raw `sc_lock`.**
+No extra interlock is needed against `sc_lock` dropping while replay still
+holds the slot, because it can't in the current wiring: `sc_lock` is sticky
+from detection until `sc_clr` (`sc_detector.v`), and `sc_clr` is
+`packet_done_pulse` (`trouper_top.v`) — the same pulse fed to
+`psram_buf_ctrl` as `packet_end`, so lock-clear and `S_REPLAY`-exit fire on
+the same edge (± one cycle of registration skew). But a raw-`sc_lock` mux
+would silently inherit that timing if `sc_clr` is ever rewired (e.g. to a
+firmware-controlled clear). Keying on the buffer controller's own state
+makes the mux self-consistent with its FSM and cleanly defines the
+margin-wait window (lock high, replay not yet started): read slot idle —
+SC doesn't need delayed samples post-lock, replay hasn't begun.
 
 ## 4. New status: partial-miss visibility
 
@@ -88,33 +124,63 @@ These are mutually exclusive in practice: `W_COMMIT_LATE` fires at the
 moment of a late commit; `W_MISSED_PACKET` fires at `packet_end` only if no
 commit ever happened.
 
+## 4a. Built-in weight-arrival timeout (graceful degradation)
+
+The margin expiry doubles as a weight-arrival timeout — no extra hardware.
+Today the design is all-or-nothing: replay only starts at `W_COMMIT`
+(`psram_buf_ctrl.v` `S_WRITE`), so a host that never commits (crashed
+firmware, SPI contention) leaves the output in the silence/DC-hold state
+for the **entire packet** — total loss, flagged `W_MISSED_PACKET` only
+after the fact. In this redesign the delay line starts unconditionally at
+`training_done + REPLAY_DELAY_SAMPLES`, with the combiner in its existing
+`!W_valid` bypass fallback (single antenna via `bypass_ant`):
+
+- Weights on time → full packet MRC-weighted, no flags.
+- Weights late → packet flows in bypass, upgrades to MRC mid-stream at
+  commit, `W_COMMIT_LATE` set — ~6 dB diversity loss on the prefix instead
+  of losing the packet.
+- Weights never → whole packet demodulated in bypass, `W_MISSED_PACKET` at
+  `packet_end` — degraded reception instead of silence.
+
+The failure ladder goes from {perfect, total loss} to {perfect, partial
+degradation, bypass-only}, each rung firmware-visible. Note the semantics:
+a "stop waiting" timeout, not an abort — nothing is cancelled, the stream
+starts without weights and accepts them whenever they show up (exactly what
+`TRPR-RMD-009`'s mid-stream-weight-change clause permits).
+
 ## 5. RTL change summary (`psram_buf_ctrl.v`)
 
 - Remove the `W_commit`-gated trigger: `if (W_commit && buf_base_valid &&
   psram_en) begin rd_ptr <= buf_base; ... state <= S_REPLAY; end`.
-- Add a margin-gated trigger instead: once `(wr_ptr − buf_base) >=
-  replay_delay_bytes` (a registered comparison, `replay_delay_bytes`
-  derived from the new register), latch `rd_ptr <= buf_base` and enter
-  `S_REPLAY` — independent of `W_commit`.
+- Add a margin-gated trigger instead: at `training_done` (new input from
+  `training_acc`), latch a wait reference `wait_base <= wr_ptr`; once
+  `(wr_ptr − wait_base) >= replay_delay_bytes` (a registered comparison,
+  `replay_delay_bytes` derived from the new register), latch
+  `rd_ptr <= buf_base` and enter `S_REPLAY` — independent of `W_commit`.
 - `W_commit` no longer starts replay; it only gates `W_valid` in the
   combiner (already decoupled — `mrc_combiner` already auto-falls-back to
   bypass when `!W_valid`, no change needed there).
-- Add `W_COMMIT_LATE` detection: when `W_commit` pulses, compare current
-  `rd_ptr` against `buf_base` — if `rd_ptr != buf_base` (i.e., replay has
-  already been running), set the sticky bit.
-- Read-address mux: `del_addr` (SC path) only computed/used when `!sc_lock`;
-  when `sc_lock`, the same read sub-cycle slot computes the replay address
-  instead (§3).
+- Add `W_COMMIT_LATE` detection: sticky bit set when `W_commit` pulses
+  while replay is already running. Use a `replay_started` flag (set on the
+  `S_REPLAY` entry, cleared at `packet_end`) rather than a
+  `rd_ptr != buf_base` comparison — the pointer compare is true from the
+  second replay cycle onward anyway, and would read a stale `rd_ptr` from
+  the previous packet if a commit lands during the margin wait.
+- Read-address mux: keyed on `replay_active`/`state == S_REPLAY`, not raw
+  `sc_lock` (§3). `del_addr` (SC path) used outside replay; the same read
+  sub-cycle slot computes the replay address inside it.
 
 ## 6. Edge cases to resolve before implementation
 
-- **`packet_end` before the margin is met** (very short packet, or lock
-  happens near the packet's own end): replay never starts; packet stays
-  silent throughout. Needs to be a clean, non-error fallback, not a stuck
-  state.
+- **`packet_end` before the margin is met — or before `training_done`
+  fires at all** (very short packet, or lock happens near the packet's own
+  end): replay never starts; packet stays silent throughout. Needs to be a
+  clean, non-error fallback, not a stuck state; `wait_base` state must be
+  invalidated at `packet_end` like `buf_base_valid` is today.
 - **`REPLAY_DELAY_SAMPLES = 0`:** valid but degrades to "start immediately
-  at lock" — early preamble permanently bypass-weighted (same limitation as
-  next-packet mode). Firmware's choice; not a hardware error case.
+  at `training_done`" — output begins before firmware can possibly have
+  committed, so the training window's worth of packet is always
+  bypass-weighted. Firmware's choice; not a hardware error case.
 - **`QSPI_OWNER` handover during the margin wait or during replay:** the
   existing owner-suspend logic (`TRPR-PSR-010/011`, Open Risks #37, closed)
   should already cover this via `qspi_owner_eff` — needs confirmation, not
@@ -130,11 +196,13 @@ commit ever happened.
 Open Risks #14 ("PSRAM replay is truncated at packet timeout") is caused by
 `rd_ptr` trailing `wr_ptr` by an unpredictable amount — "the training+commit
 latency" — which today can be nearly the whole packet if `W_COMMIT` is
-late. In this redesign, the trailing gap is bounded by the small, known
-`REPLAY_DELAY_SAMPLES` margin instead, so the packet-tail-truncation risk
-from `PKT_TIMEOUT_SYMS` being smaller than the replay lag shrinks
-substantially. Worth re-evaluating #14 once this lands, not closing
-pre-emptively.
+late. In this redesign, the trailing gap is bounded and per-packet
+deterministic: `tacc_window·M + REPLAY_DELAY_SAMPLES` (≈ the training
+window plus the host-response margin), instead of unbounded-until-commit.
+Still SF-dependent via the `tacc_window·M` term, but now a known quantity
+firmware can budget `PKT_TIMEOUT_SYMS` against, so the tail-truncation
+risk shrinks substantially. Worth re-evaluating #14 once this lands, not
+closing pre-emptively.
 
 ## 8. Register Map additions (proposed)
 
@@ -151,10 +219,13 @@ reserved) becomes `W_COMMIT_LATE` (§4).
 
 A cocotb test in the style of `cocotb/sc_ant_sel/test_sc_ant_sel.py`:
 monotonic time-index check on the remod input (no rewind, ever, past the
-one silence→signal transition per packet), margin-wait duration bit-exact
-against the configured register value, `W_COMMIT_LATE`/`W_MISSED_PACKET`
-semantics under early/late/never commit timing, and the `packet_end`-before-margin
-graceful-fallback case.
+one silence→signal transition per packet), replay-start instant bit-exact
+at `training_done` + the configured register value, timeout behaviour
+(§4a) under early/late/never commit timing with the matching
+`W_COMMIT_LATE`/`W_MISSED_PACKET` flags, the `packet_end`-before-margin
+(and before-`training_done`) graceful-fallback case, and a two-packet run
+confirming the `replay_active`-keyed read mux hands the slot back to the
+SC delay-read for the second packet's search.
 
 ## 10. Next steps
 

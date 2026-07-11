@@ -82,25 +82,23 @@ floorplan tried since (jobs 2165–2168). Described in the source doc as
 **See:** `planning/area-reduction-roadmap.md` §4 (Gate 0 blocker);
 `planning/ss-corner-decimator-pacing-closure.md`.
 
-### 7. Eigenvector power-iteration firmware timing may not fit at low SF (live mode)
+### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode)
 
-PicoRV32 in this project uses the slow non-`FAST_MUL` multiplier
-(~31 cycles/MUL, not the ~1 cycle originally assumed in the doc). The
-8-iteration default now costs an estimated ~1.0–1.1 ms — SF-independent —
-against a deadline that scales with SF (`4·M/500 kHz`). **SF6 dropped from
-this analysis 2026-07-11 — `SF_CFG`'s valid range is 7–12 (Register Map
-`0x09`), SF6 is out of scope and was never a supported configuration.**
-With SF6 out of scope, **SF7 (the tightest supported SF) is only roughly
-break-even**, comfortable from SF8 up. Bumping to 16 iterations (needed to
-meaningfully shrink a real ~0.5 dB residual combining-gain loss) costs
-~2 ms and likely needs SF8+. This is a **back-of-envelope estimate, not yet
-cycle-accurately verified** (no compile/disassemble/simulate pass has been
-run). PSRAM replay mode sidesteps the deadline entirely (`W_COMMIT` can
-arrive any time up to `packet_end`); the baseline live-mode path does not —
-this risk is specifically about the live-mode (no same-packet replay)
-fallback path.
+**Cycle-accurate measurement 2026-07-11 (SGE jobs 3333–3335) — worse than estimated.**
+The weight kernel run on the real `picorv32.v` (slow non-`FAST_MUL` multiplier,
+corrected 7-bit-map kernel with faithful MMIO ingest) costs **33,283 cyc = 2.08 ms
+@16 MHz** for the 8-iteration default on rv32im (36,458 cyc = 2.28 ms on the
+Grouper's rv32emc/RV32E core, ~+10% from 16-register spilling), SF-independent —
+**~2× the old ~1.0–1.1 ms back-of-envelope**, which had wrongly assumed ~1 cyc/instr
+for the non-multiply work (real CPI ≈ 10). Against the live-mode deadline
+(`4·M/500 kHz`): **SF7 (~1.02 ms) and SF8 (~2.05 ms) both miss on both ISAs; only
+SF9+ fits.** 16 iterations (~3.88/4.28 ms) needs SF9+ (rv32im) or SF10+ (rv32emc).
+The 24-bit ZDIAG widening is timing-neutral (−30/−54 cyc). PSRAM replay mode
+sidesteps the deadline entirely (`W_COMMIT` can arrive any time up to `packet_end`)
+and is therefore **mandatory for SF7/SF8 MRC gain, not optional**; this risk is
+specifically about the live-mode (no same-packet replay) path.
 
-**Risk:** silently missing the weight-computation deadline at low SF in live
+**Risk:** silently missing the weight-computation deadline at SF7/SF8 in live
 mode, producing stale/garbage MRC weights with no error indication.
 **See:** `planning/blocks/Eigenvector Weight Computation.md` (Timing
 Budget); `planning/DSP Chain SNR Loss Budget.md` §6.

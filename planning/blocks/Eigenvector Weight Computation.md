@@ -373,70 +373,108 @@ the next safe-switch boundary.
 
 ## Timing Budget
 
-> **Correction (superseded the previous version of this table):** the figures
-> below were revised after discovering none of this project's PicoRV32
-> wrapper configs (`picorv32_wrap_rvi.v`, `picorv32_wrap_im_sp*.v`,
-> `picorv32_wrap_fdsram.v`) enable `ENABLE_FAST_MUL` — only `ENABLE_MUL(1)`,
-> PicoRV32's slow shift-add multiplier. Per `ip/picorv32/picorv32.v`
-> (`mul_counter <= 31 - STEPS_AT_ONCE`, `STEPS_AT_ONCE=1` here), a 32×32 MUL
-> costs **~31–32 cycles**, not ~1. The original "~3,000–5,000 cycles /
-> ~200–300 µs" estimate implicitly assumed near-single-cycle multiply and was
-> wrong by roughly 4–5×. The numbers below are a corrected back-of-envelope
-> estimate, **not yet cycle-accurate** (no compiled/disassembled/simulated
-> measurement has been done) — treat as directional, not final.
+> **2026-07-11: cycle-accurate measurement (supersedes all prior estimates).**
+> The weight kernel was compiled (`riscv64-unknown-elf-gcc 15.2`, `-Os`) and run on
+> the real `ip/picorv32/picorv32.v` core in Icarus Verilog, configured to match the
+> project's PicoRV32 (`ENABLE_MUL=1`, `ENABLE_FAST_MUL=0`, `BARREL_SHIFTER=0`,
+> `ENABLE_DIV=1`), with ideal 1-cycle SRAM; cycles read from `rdcycle`/`rdinstret`
+> bracketing the call. Numbers below are from the **corrected kernel** (`bench2.c`)
+> that matches the current 7-bit register map and `sim/models/eigvec_fw.py`, with
+> Z ingested via realistic big-endian byte-loads (faithful MMIO cost). Harness +
+> logs: `/srv/eda/designs/timothyjabez/eigvec_bench/`, SGE jobs 3333–3335. **The
+> measured cost is ~2× the previous back-of-envelope**, because that estimate
+> assumed ~1 cycle/instruction for the non-multiply work; PicoRV32 is a multi-cycle
+> core (CPI ≈ 10 here — the 448 slow `mul`s eat roughly half the cycles, and every
+> ALU/load/store op is itself multi-cycle).
 
-**Multiply-dominated cost, independent of SF.** `compute_eigvec_weights_fw()`
-does 7 multiply terms × 2 (re/im) × 4 rows = **56 MUL instructions per power
-iteration**, regardless of SF (the matrix is always 4×4 — `M`/SF never enters
-the eigenvector computation itself):
+**Multiply-heavy, independent of SF.** The kernel does 7 multiply terms × 2 (re/im)
+× 4 rows = **56 MULs per power iteration**, regardless of SF (the matrix is always
+4×4 — `M`/SF never enters the eigenvector computation). Measured at 16 MHz:
 
-| Parameter | Value |
-|---|---|
-| CPU clock | 16 MHz |
-| MUL cost (`ENABLE_MUL`, no `ENABLE_FAST_MUL`) | ~31–32 cycles/instruction |
-| MULs per iteration | 56 → ~1,800 cycles/iteration |
-| 8 iterations (current default) | ~14,400 cycles (muls alone) + register reads/isqrt/Q1.15 division/writes ≈ **~16,000–17,500 cycles total ≈ 1.0–1.1 ms** |
-| 16 iterations | ≈ **~2.0 ms** (roughly double) |
-
-**The deadline scales with SF; the compute cost does not.** In the baseline
-live path, `training_done` fires at `timing_ref + PREAMBLE_LEN·M` and the
-payload deadline is `payload_start_estimate = timing_ref + 12·M`
-(`planning/blocks/Packet Control FSM.md`), so the compute window is
-`(12 − PREAMBLE_LEN)·M` samples = `4·M` samples at `PREAMBLE_LEN=8`, i.e.
-`4·M / 500 kHz` seconds of real time:
-
-| SF | M = 2^SF | Compute window (`4·M / 500 kHz`) | 8 iterations (~1.0–1.1 ms) | 16 iterations (~2.0 ms) |
+| Core config | 8 iterations (default) | @16 MHz | 16 iterations | @16 MHz |
 |---|---|---|---|---|
-| SF6 | 64 | ~512 µs | **Out of scope** — `SF_CFG` valid range is 7–12 (`planning/Register Map.md`); not a supported configuration | Out of scope |
-| SF7 | 128 | ~1.02 ms | Roughly break-even | Does not fit |
-| SF8 | 256 | ~2.05 ms | Comfortable margin | Roughly break-even |
-| SF9+ | 512+ | ≥4.1 ms | Comfortable margin | Comfortable margin |
+| **rv32im** (32-reg — Trouper fw Makefile ABI) | **33,283 cyc** | **2.08 ms** | 62,083 cyc | 3.88 ms |
+| **rv32emc** (16-reg RV32E — Grouper `picorv32_hello_top`) | 36,458 cyc | 2.28 ms | 68,503 cyc | 4.28 ms |
 
-**2026-07-11: SF6 dropped from scope.** This table previously listed SF6 as
-"does not fit," treating it as a real coverage gap. `SF_CFG`'s documented
-valid range is 7–12 (`planning/Register Map.md` `0x09`); SF6 was never a
-supported configuration, so its timing miss is moot, not a risk. **SF7 is
-now the tightest supported case**, and it's only roughly break-even at the
-current 8-iteration default — that remains a real, open concern (not yet
-cycle-accurately verified). If `W_COMMIT` does not arrive in time,
-`W_MISSED_PACKET` asserts and the packet stays in bypass (see the fallback
-policy in `Firmware Spec.md`) — so a miss degrades to single-antenna
-reception rather than breaking the receiver, but SF7 marginal timing is
-still a real coverage gap worth closing, not just a missed optimisation
-opportunity.
+Instret (8 it): im = 3,201, emc = 3,776. RV32E costs **~+10% cycles** (16-register
+spilling in this register-heavy kernel), partly offset in code size (~1.5 KB vs
+~1.8 KB `.text`).
 
-**PSRAM replay mode sidesteps this entirely.** The deadline relaxes from
-`payload_start_estimate` to `packet_end_estimate − TACC_GUARD` (the SX1302
-sees zeros until `W_commit`, so there is no live-payload race) — a
-packet-length-scaled window (tens of symbols), not a single-symbol one. This
-gives ample margin for 16+ iterations at any SF, and is the safe path if the
-baseline live-mode numbers above hold up under real measurement.
+> **rv32emc is the current Grouper plan** — the RV32E row is the operative one;
+> read the SF-window table below against the rv32emc columns. Note also that
+> these numbers bound only the *on-Grouper* mode: in the external-host mode
+> (RPi over SPI, `## Alternative: Unconstrained Host Implementation` below) the
+> compute itself is effectively free (float `eigh` on an application-class core
+> runs in the tens of µs; the ~60-byte SPI exchange is < 100 µs) — the off-chip
+> path is limited by host IRQ/scheduling latency, not by this kernel, and can
+> beat the PicoRV32 numbers outright. Deployments that need live-mode SF7/SF8
+> MRC therefore have a second lever besides replay mode: run the weight commit
+> from the RPi — with the caveat that Linux scheduling jitter on a stock
+> kernel can itself approach SF7's ~1 ms window, so the live-SF7 case needs
+> the `IRQ_OUT` GPIO-edge path (not SPI polling) and measurement before it's
+> counted on.
 
-**Next step before acting on any of this:** get a real cycle count — compile
-`compute_eigvec_weights_fw()` for RV32IM, disassemble, and either count
-instructions by hand or run it through PicoRV32's cycle-accurate testbench.
-The back-of-envelope numbers above already revised the original estimate by
-~4-5×; they should not be treated as final either.
+> **24-bit ZDIAG widening is timing-neutral.** The `ZDIAG` `[31:16]`→`[31:8]`
+> widening (commit 46e1da0, the ~0.9 dB combining-gain fix) costs **nothing** on
+> PicoRV32 — measured at **−30 cyc (rv32im) / −54 cyc (rv32emc)**, i.e. the 24-bit
+> path is marginally *faster*: the wider value already sits at the off-diagonal
+> scale, dropping a `<<8` align on all four diagonals, which outweighs the one
+> extra byte-load each. The 32-bit datapath carries the extra 8 bits for free
+> (24 bits fits one register; the slow multiply is a fixed 32 steps regardless of
+> operand size). So the SPI-to-external-MCU backup path pays nothing for it either.
+> `firmware/picorv32/main.c` and `asic_regs.h` now implement the current 7-bit
+> map and read all diagonal and off-diagonal components as matched-scale 24-bit
+> `[31:8]` values.
+
+> **RV32E ABI requirement.** `firmware/picorv32/Makefile` targets
+> `-march=rv32emc -mabi=ilp32e`, matching the Grouper
+> `ENABLE_REGS_16_31=0`, `COMPRESSED_ISA=1`, `ENABLE_MUL=1` configuration.
+> Building this firmware as `rv32im/ilp32` is invalid: a 32-register image traps
+> on that RV32E core when it accesses x16–x31. The current image was verified to
+> build with `riscv64-unknown-elf-gcc` in the `chipathon26` container and occupies
+> 1,634 bytes of the 4 KiB SRAM.
+
+**The deadline scales with SF; the compute cost does not.** In the baseline live
+path, `training_done` fires at `timing_ref + PREAMBLE_LEN·M` and the payload
+deadline is `payload_start_estimate = timing_ref + 12·M`
+(`planning/blocks/Packet Control FSM.md`), so the compute window is
+`(12 − PREAMBLE_LEN)·M` = `4·M` samples at `PREAMBLE_LEN=8`, i.e.
+`4·M / 500 kHz` seconds:
+
+| SF | M = 2^SF | Live window (`4·M / 500 kHz`) | rv32im 8it (2.08 ms) | rv32emc 8it (2.28 ms) |
+|---|---|---|---|---|
+| SF7 | 128 | ~1.02 ms | ❌ **miss** (~2× over) | ❌ miss |
+| SF8 | 256 | ~2.05 ms | ❌ miss (~1.5% over) | ❌ miss |
+| SF9 | 512 | ~4.10 ms | ✅ comfortable | ✅ comfortable |
+| SF10–12 | 1024+ | ≥8.19 ms | ✅ | ✅ |
+
+(SF6 is out of scope — `SF_CFG` valid range is 7–12 per `planning/Register Map.md`
+`0x09`.) 16-iteration runs push SF9 harder still: rv32im/16it (3.88 ms) clears SF9;
+rv32emc/16it (4.28 ms) *misses* SF9's 4.10 ms window — only SF10+ is safe at 16
+iterations on the RV32E core.
+
+**Revised conclusion — live-mode firmware weight compute fits only SF9 and up.**
+This is materially worse than the old "SF7 break-even, SF8 comfortable" estimate.
+At the 8-iteration default, **SF7 and SF8 both miss** on both ISAs (SF8 only just —
+~1.5% over — but a miss). If `W_COMMIT` misses the deadline,
+`W_MISSED_PACKET` asserts and the packet stays in bypass (fallback in
+`Firmware Spec.md`) — a miss degrades to single-antenna reception, it does not
+break the receiver — but SF7/SF8 losing MRC gain in live mode is a real coverage
+gap, not an optimisation nicety.
+
+**PSRAM replay mode is therefore mandatory for SF7/SF8, not optional.** The
+deadline relaxes from `payload_start_estimate` to `packet_end_estimate −
+TACC_GUARD` (the SX1302 sees zeros until `W_commit`, so there is no live-payload
+race) — a packet-length-scaled window (tens of symbols) that gives ample margin
+for 8–16 iterations at any SF on either ISA. Any deployment that wants MRC gain at
+SF7/SF8 must run the weight commit through replay mode.
+
+**Levers if live-mode SF7/SF8 is ever required** (in rough order of payoff):
+enable `ENABLE_FAST_MUL` (single-cycle DSP multiplier — removes the dominant
+~50% mul cost, at some area/timing cost); drop to fewer power iterations if
+convergence allows; or move the weight compute off-core to the host/Grouper
+(`## Alternative: Unconstrained Host Implementation` below), whose float `eigh`
+is not multiply-bound.
 
 ---
 
