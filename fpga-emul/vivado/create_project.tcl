@@ -178,6 +178,10 @@ set_property -dict [list \
     CONFIG.C_I_LMB             {1} \
     CONFIG.C_USE_ICACHE        {0} \
     CONFIG.C_USE_DCACHE        {0} \
+    CONFIG.C_USE_HW_MUL        {1} \
+    CONFIG.C_USE_DIV           {1} \
+    CONFIG.C_USE_BARREL        {1} \
+    CONFIG.C_USE_FPU           {0} \
 ] $mb
 
 # MicroBlaze MCS-style automation (creates LMB BRAM, debug, AXI interconnect)
@@ -368,6 +372,18 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
               intc_ip "Auto" master_apm "0" } \
     [get_bd_intf_pins axi_uartlite_0/S_AXI]
 make_bd_intf_pins_external [get_bd_intf_pins axi_uartlite_0/UART]
+
+# --- AXI Timer (100 MHz benchmark timebase) ---------------------------------
+# Provides a deterministic cycle counter for separating eigenvector-kernel,
+# SPI-transfer, and end-to-end TRAINING_DONE -> W_COMMIT latency.  Keep this on
+# the MicroBlaze clock so one timer tick is exactly 10 ns.
+set timer [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_timer:2.0 axi_timer_0]
+set_property CONFIG.enable_timer2 {0} $timer
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "Auto" Master "/microblaze_0 (Periph)" \
+              intc_ip "Auto" master_apm "0" } \
+    [get_bd_intf_pins axi_timer_0/S_AXI]
 
 # --- I/Q input ports (SX1257 PMOD pins, synchronous to 32 MHz dsp_clk) ------
 create_bd_port -dir I -from 3 -to 0 hw_iq_i

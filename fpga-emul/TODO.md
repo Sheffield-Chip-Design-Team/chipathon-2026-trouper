@@ -10,6 +10,22 @@ rework.
 The MISO front-end test board (AFE) design is at
 <https://gitlab.com/m0rtal/miso_frontend>.
 
+## Automatic MRC benchmark (WIP 2026-07-11)
+
+- [x] Enable MicroBlaze hardware MUL, DIV, and barrel shift; keep FPU/caches off.
+- [x] Add the 100 MHz `axi_timer_0` benchmark counter at `0x41C0_0000`.
+- [x] Port the current 8-iteration fixed-point eigenvector kernel to `sw/main.c`.
+- [x] On `IRQ_TRAINING_DONE`, read the 48-byte matrix over the real internal SPI
+  path, compute, write Q1.15 weights, commit, clear the IRQ, and calculate
+  compute-only plus end-to-end cycle counts.
+- [x] Rebuild/P&R: all constraints met (overall WNS +1.414 ns, WHS +0.011 ns),
+  bitstream and 28,192-byte ELF generated and programmed successfully.
+- [ ] Fix the regenerated build's UARTLite stall/no-output condition. Correct
+  host port is confirmed as `/dev/ttyUSB1` (Digilent interface 01); XSDB sees
+  the CPU at `XUartLite_SendByte`, PC `0x00004978`.
+- [ ] Trigger training and capture the first measured `compute` and `total`
+  latency figures; add the result to the SF timing table.
+
 ## Block design / firmware re-pin (from PCB review 2026-07-08)
 
 - [x] **External APS6404L PSRAM.** DONE. `fpga_dsp_wrap` gained a

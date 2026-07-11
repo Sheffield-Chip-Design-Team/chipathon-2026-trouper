@@ -26,7 +26,7 @@ Ethernet note below.
 | clk_wiz output | Freq    | Divider   | Drives                                                     |
 |----------------|---------|-----------|------------------------------------------------------------|
 | `clk_in1`      | 100 MHz | (input)   | board oscillator, pin **E3**                               |
-| `clk_out1`     | 100 MHz | 800/8     | MicroBlaze + AXI bus: EmacLite, Quad SPI, UARTLite, MDM    |
+| `clk_out1`     | 100 MHz | 800/8     | MicroBlaze + AXI bus: EmacLite, Quad SPI, UARTLite, timer, MDM |
 | `clk_out2`     | 32 MHz  | 800/25    | DSP chain (`axi_dsp_ctrl` → `fpga_dsp_wrap`)               |
 | `clk_out3`     | 25 MHz  | 800/32    | Ethernet PHY reference clock → `eth_ref_clk` (pin **G18**) |
 
@@ -41,6 +41,17 @@ Reset input `ext_resetn` on pin **C2** (active-low) feeds `clk_wiz` and two
 
 The DSP chain is internally synchronous to `clk_out2` only (32 MHz); `axi_dsp_ctrl`
 uses it for both `dsp_clk` and `s_axi_aclk`.
+
+**MicroBlaze arithmetic configuration:** hardware integer multiply, integer
+divide, and barrel shifting are enabled; FPU and instruction/data caches remain
+disabled. Code and data use the deterministic 64 KiB LMB BRAM. `axi_timer_0`
+runs at 100 MHz (10 ns/tick) for kernel, SPI, and end-to-end latency benchmarks.
+
+**Post-route result (Vivado 2025.2, 2026-07-11):** all timing constraints pass.
+Overall WNS is +1.414 ns and WHS is +0.011 ns; the 100 MHz MicroBlaze/AXI domain
+has +1.414 ns setup slack and the 32 MHz DSP domain has +10.376 ns. Utilisation
+is 10,546 LUTs (16.63%), 10,917 registers (8.61%), 20 BRAM tiles (14.81%), and
+28 DSP48E1s (11.67%). The generated bitstream is `fpga-emul/arty_dsp_emul.bit`.
 
 ---
 
@@ -265,3 +276,44 @@ Notes:
 > After any BD change, regenerate the XSA (`vivado/gen_xsa.tcl`) and rebuild the
 > BSP so firmware picks up current addresses — read live values from the generated
 > `xparameters.h` (the `#define`s in `sw/main.c` are only fallbacks).
+
+---
+
+## WIP — automatic MRC latency benchmark (2026-07-11)
+
+The FPGA build now has the hardware and firmware path needed to benchmark an
+external MCU performing the weight computation:
+
+- MicroBlaze runs at 100 MHz with hardware integer multiply/divide and barrel
+  shifting; FPU and caches are disabled.
+- `axi_timer_0` is mapped at `0x41C0_0000` and runs at 100 MHz (10 ns/tick).
+- On sticky `IRQ_TRAINING_DONE`, `sw/main.c` automatically reads `N_ACC` and the
+  complete 48-byte `Z` matrix through `axi_quad_spi_1` and Trouper's real SPI
+  slave, runs the 8-iteration fixed-point eigenvector kernel, writes the 16-byte
+  Q1.15 shadow weight bank, pulses `W_COMMIT`, and clears the training IRQ.
+- Firmware reports compute-only and complete CSR-read/compute/write/commit
+  latency as `MRC: ... compute=... cyc ... total=... cyc`.
+- Manual UDP weight load/commit commands remain available for directed tests.
+
+Build verification completed with Vivado/Vitis 2025.2. The final ELF is 28,192
+bytes including BSS and contains native MicroBlaze `mul`, `idiv`, and `idivu`
+instructions. The FPGA was programmed successfully over JTAG and the ELF was
+downloaded; XSDB observed the MicroBlaze running.
+
+### Current blocker
+
+No dynamic MRC latency has been captured yet. The current regenerated build
+emits no bytes on the USB-UART startup console, and repeated XSDB samples place
+the CPU at `XUartLite_SendByte` (`PC=0x00004978`), consistent with firmware
+waiting for UARTLite TX space. Host enumeration confirms `/dev/ttyUSB1` is the
+correct Digilent interface (`ID_USB_INTERFACE_NUM=01`, serial
+`210319BE7543`); there are no alternative ttyUSB/ttyACM ports.
+
+Next steps:
+
+1. Debug UARTLite clock/reset/addressing in the regenerated block design, or
+   expose benchmark counters through UDP/JTAG so measurement does not depend on
+   UART.
+2. Trigger a real or injected `TRAINING_DONE` event.
+3. Record compute-only and end-to-end latency and compare it with the SF7–SF12
+   live windows.

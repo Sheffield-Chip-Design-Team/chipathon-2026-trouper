@@ -3,6 +3,9 @@ set sw_dir   [file normalize "[file dirname [info script]]"]
 set xsa_file "$sw_dir/arty_dsp_emul.xsa"
 set ws_dir   "$sw_dir/vitis_ws"
 
+# The workspace is generated output. Recreate it so repeated hardware/firmware
+# builds cannot fail on stale platform and application objects.
+file delete -force $ws_dir
 setws $ws_dir
 
 # Create hardware platform from XSA

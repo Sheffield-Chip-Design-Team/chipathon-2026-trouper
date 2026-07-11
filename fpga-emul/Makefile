@@ -145,7 +145,8 @@ run_test_fw: $(SW)/test_fw.elf
 XSCT     = /home/timothyjabez/tools/Xilinx/2025.2/Vitis/bin/xsct
 BSP_DIR  = $(SW)/vitis_ws/arty_dsp_emul/export/arty_dsp_emul/sw/arty_dsp_emul/standalone_domain
 ETH_LD   = $(SW)/vitis_ws/lora_mimo_fw/src/lscript.ld
-ETH_FLAGS = -Wall -O2 -g -mlittle-endian -mcpu=v11.0 -mxl-soft-mul -Wl,--no-relax \
+ETH_FLAGS = -Wall -O2 -g -mlittle-endian -mcpu=v11.0 \
+            -mno-xl-soft-mul -mno-xl-soft-div -mxl-barrel-shift -Wl,--no-relax \
             -ffunction-sections -fdata-sections
 
 eth_fw: $(SW)/lora_mimo_fw.elf

@@ -130,12 +130,29 @@
 #define REG_WGT_CTRL          0x1Eu
 #define REG_TACC_NOISE_TRIG   0x1Fu
 #define REG_TRAINING_STATUS   0x20u
+#define REG_N_ACC_HI          0x21u
+#define REG_N_ACC_MID         0x22u
+#define REG_N_ACC_LO          0x23u
 #define REG_SC_DBG_FLAGS      0x26u
 #define REG_W_BANK_BASE       0x30u   /* 16 bytes: 4 branches x {re_hi,re_lo,im_hi,im_lo} */
+#define REG_Z_BASE             0x40u   /* 36 bytes: 6 complex int24 off-diagonal pairs */
 #define REG_ZDIAG_BASE        0x64u   /* 12 bytes: 4 branches x 3-byte [31:8] */
 
 #define W_BANK_LEN            16u
 #define ZDIAG_LEN             12u
+#define Z_MATRIX_LEN          48u
+
+/* AXI Timer 0: free-running 100 MHz up-counter (10 ns/tick). */
+#ifdef XPAR_AXI_TIMER_0_BASEADDR
+#define BENCH_TIMER_BASE XPAR_AXI_TIMER_0_BASEADDR
+#else
+#define BENCH_TIMER_BASE 0x41C00000u
+#endif
+#define TMR_TCSR0       (BENCH_TIMER_BASE + 0x00u)
+#define TMR_TLR0        (BENCH_TIMER_BASE + 0x04u)
+#define TMR_TCR0        (BENCH_TIMER_BASE + 0x08u)
+#define TMR_CSR_LOAD    0x00000020u
+#define TMR_CSR_ENABLE  0x00000080u
 
 /* IRQ_STATUS / IRQ_CLEAR bits */
 #define IRQ_CORR_LOCK         (1u << 0)
@@ -339,6 +356,148 @@ static void reg_read_burst(u8 addr, u8 *data, u32 n) {
     XSpi_SetSlaveSelect(&SpiHost, 1u);
     XSpi_Transfer(&SpiHost, tx, rx, 1u + n);
     memcpy(data, &rx[1], n);
+}
+
+/* -----------------------------------------------------------------------
+ * Automatic fixed-point eigenvector MRC computation
+ * ----------------------------------------------------------------------- */
+#define EIGVEC_ITERS 8
+#define EIGVEC_SCALE 12
+
+static u32 timer_read(void) { return Xil_In32(TMR_TCR0); }
+
+static void timer_init(void) {
+    Xil_Out32(TMR_TCSR0, 0u);
+    Xil_Out32(TMR_TLR0, 0u);
+    Xil_Out32(TMR_TCSR0, TMR_CSR_LOAD);
+    Xil_Out32(TMR_TCSR0, TMR_CSR_ENABLE);
+}
+
+static s32 read_s24(const u8 *p) {
+    u32 v = ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
+    if (v & 0x00800000u) v |= 0xFF000000u;
+    return (s32)v;
+}
+
+static u32 read_u24(const u8 *p) {
+    return ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
+}
+
+static u32 abs_s32(s32 v) {
+    return (v < 0) ? (u32)(-(u32)v) : (u32)v;
+}
+
+/* Read the complete 0x40-0x6f matrix window. The SPI helper is deliberately
+ * limited to 16 data bytes, so use three contiguous transactions. */
+static void read_z_matrix(u8 z[Z_MATRIX_LEN]) {
+    reg_read_burst(REG_Z_BASE +  0u, z +  0u, 16u);
+    reg_read_burst(REG_Z_BASE + 16u, z + 16u, 16u);
+    reg_read_burst(REG_Z_BASE + 32u, z + 32u, 16u);
+}
+
+static u32 read_n_acc(void) {
+    u8 n[3];
+    reg_read_burst(REG_N_ACC_HI, n, 3u);
+    return ((u32)(n[0] & 0x03u) << 16) | ((u32)n[1] << 8) | n[2];
+}
+
+/* Compute from an already captured register window and return the 16-byte
+ * big-endian Q1.15 shadow-bank image. Layout of z[] is exactly 0x40-0x6f. */
+static int compute_eigvec_weights(const u8 z[Z_MATRIX_LEN], u32 n_acc,
+                                  u8 weights[W_BANK_LEN]) {
+    s32 r01, q01, r02, q02, r03, q03;
+    s32 r12, q12, r13, q13, r23, q23;
+    u32 zd0, zd1, zd2, zd3, mx = 1u, t;
+    s16 d0, d1, d2, d3;
+    s16 m01r, m01i, m02r, m02i, m03r, m03i;
+    s16 m12r, m12i, m13r, m13i, m23r, m23i;
+    s32 vr[4] = { 1 << EIGVEC_SCALE, 0, 0, 0 };
+    s32 vi[4] = { 0, 0, 0, 0 };
+    int sh = 0, iter, k;
+
+    if (n_acc == 0u) return 0;
+
+    r01=read_s24(z+0x00); q01=read_s24(z+0x03);
+    r02=read_s24(z+0x06); q02=read_s24(z+0x09);
+    r03=read_s24(z+0x0c); q03=read_s24(z+0x0f);
+    r12=read_s24(z+0x12); q12=read_s24(z+0x15);
+    r13=read_s24(z+0x18); q13=read_s24(z+0x1b);
+    r23=read_s24(z+0x1e); q23=read_s24(z+0x21);
+    zd0=read_u24(z+0x24); zd1=read_u24(z+0x27);
+    zd2=read_u24(z+0x2a); zd3=read_u24(z+0x2d);
+
+#define UPD_ABS(x) do { t=abs_s32(x); if(t>mx) mx=t; } while(0)
+    UPD_ABS(r01); UPD_ABS(q01); UPD_ABS(r02); UPD_ABS(q02);
+    UPD_ABS(r03); UPD_ABS(q03); UPD_ABS(r12); UPD_ABS(q12);
+    UPD_ABS(r13); UPD_ABS(q13); UPD_ABS(r23); UPD_ABS(q23);
+#undef UPD_ABS
+    if (zd0 > mx) mx = zd0;
+    if (zd1 > mx) mx = zd1;
+    if (zd2 > mx) mx = zd2;
+    if (zd3 > mx) mx = zd3;
+    if (mx <= 1u) return 0;
+
+    { u32 tmp=mx, lim=(1u<<EIGVEC_SCALE)-1u; while(tmp>lim){tmp>>=1; sh++;} }
+    d0=(s16)(zd0>>sh); d1=(s16)(zd1>>sh);
+    d2=(s16)(zd2>>sh); d3=(s16)(zd3>>sh);
+    m01r=(s16)(r01>>sh); m01i=(s16)(q01>>sh);
+    m02r=(s16)(r02>>sh); m02i=(s16)(q02>>sh);
+    m03r=(s16)(r03>>sh); m03i=(s16)(q03>>sh);
+    m12r=(s16)(r12>>sh); m12i=(s16)(q12>>sh);
+    m13r=(s16)(r13>>sh); m13i=(s16)(q13>>sh);
+    m23r=(s16)(r23>>sh); m23i=(s16)(q23>>sh);
+
+    for (iter=0; iter<EIGVEC_ITERS; iter++) {
+        s32 wr[4], wi[4]; u32 wmx=1u; int sh2=0;
+        wr[0]=(s32)d0*vr[0]+(s32)m01r*vr[1]-(s32)m01i*vi[1]+(s32)m02r*vr[2]-(s32)m02i*vi[2]+(s32)m03r*vr[3]-(s32)m03i*vi[3];
+        wi[0]=(s32)d0*vi[0]+(s32)m01r*vi[1]+(s32)m01i*vr[1]+(s32)m02r*vi[2]+(s32)m02i*vr[2]+(s32)m03r*vi[3]+(s32)m03i*vr[3];
+        wr[1]=(s32)m01r*vr[0]+(s32)m01i*vi[0]+(s32)d1*vr[1]+(s32)m12r*vr[2]-(s32)m12i*vi[2]+(s32)m13r*vr[3]-(s32)m13i*vi[3];
+        wi[1]=(s32)m01r*vi[0]-(s32)m01i*vr[0]+(s32)d1*vi[1]+(s32)m12r*vi[2]+(s32)m12i*vr[2]+(s32)m13r*vi[3]+(s32)m13i*vr[3];
+        wr[2]=(s32)m02r*vr[0]+(s32)m02i*vi[0]+(s32)m12r*vr[1]+(s32)m12i*vi[1]+(s32)d2*vr[2]+(s32)m23r*vr[3]-(s32)m23i*vi[3];
+        wi[2]=(s32)m02r*vi[0]-(s32)m02i*vr[0]+(s32)m12r*vi[1]-(s32)m12i*vr[1]+(s32)d2*vi[2]+(s32)m23r*vi[3]+(s32)m23i*vr[3];
+        wr[3]=(s32)m03r*vr[0]+(s32)m03i*vi[0]+(s32)m13r*vr[1]+(s32)m13i*vi[1]+(s32)m23r*vr[2]+(s32)m23i*vi[2]+(s32)d3*vr[3];
+        wi[3]=(s32)m03r*vi[0]-(s32)m03i*vr[0]+(s32)m13r*vi[1]-(s32)m13i*vr[1]+(s32)m23r*vi[2]-(s32)m23i*vr[2]+(s32)d3*vi[3];
+        for(k=0;k<4;k++){t=abs_s32(wr[k]);if(t>wmx)wmx=t;t=abs_s32(wi[k]);if(t>wmx)wmx=t;}
+        {u32 tmp=wmx;while(tmp>(1u<<EIGVEC_SCALE)){tmp>>=1;sh2++;}}
+        for(k=0;k<4;k++){vr[k]=wr[k]>>sh2;vi[k]=wi[k]>>sh2;}
+    }
+
+    mx=1u;
+    for(k=0;k<4;k++){t=abs_s32(vr[k]);if(t>mx)mx=t;t=abs_s32(vi[k]);if(t>mx)mx=t;}
+    for(k=0;k<4;k++){
+        s16 re=(s16)((vr[k]*32767)/(s32)mx);
+        s16 im=(s16)((-vi[k]*32767)/(s32)mx);
+        weights[4*k+0]=(u8)((u16)re>>8); weights[4*k+1]=(u8)re;
+        weights[4*k+2]=(u8)((u16)im>>8); weights[4*k+3]=(u8)im;
+    }
+    return 1;
+}
+
+static void handle_training_done(void) {
+    u8 z[Z_MATRIX_LEN], weights[W_BANK_LEN];
+    u32 total_start=timer_read(), compute_start, compute_ticks, total_ticks;
+    u32 n_acc=read_n_acc();
+    read_z_matrix(z);
+    compute_start=timer_read();
+    if (!compute_eigvec_weights(z,n_acc,weights)) {
+        xil_printf("MRC: skipped (N_ACC=%u or empty Z)\r\n",(unsigned)n_acc);
+        return;
+    }
+    compute_ticks=timer_read()-compute_start;
+    reg_write_burst(REG_W_BANK_BASE,weights,W_BANK_LEN);
+    reg_write(REG_WGT_CTRL,0x01u);
+    total_ticks=timer_read()-total_start;
+    xil_printf("MRC: N_ACC=%u compute=%u cyc (%u us) total=%u cyc (%u us)\r\n",
+               (unsigned)n_acc,(unsigned)compute_ticks,(unsigned)(compute_ticks/100u),
+               (unsigned)total_ticks,(unsigned)(total_ticks/100u));
+}
+
+static void service_training_irq(void) {
+    u8 irq=reg_read(REG_IRQ_STATUS);
+    if (irq & IRQ_TRAINING_DONE) {
+        handle_training_done();
+        reg_write(REG_IRQ_CLEAR,IRQ_TRAINING_DONE);
+    }
 }
 
 /* -----------------------------------------------------------------------
@@ -655,6 +814,8 @@ int main(void) {
         XSpi_IntrGlobalDisable(&SpiHost);
     }
 
+    timer_init();
+
     /* ---- Verify the host-SPI link is alive before configuring ---- */
     {
         u8 chip_id  = reg_read(REG_CHIP_ID);
@@ -689,7 +850,8 @@ int main(void) {
      * startup; re-run with a longer window over UDP/JTAG for a tighter bound. */
     clk_sync_measure(20u);
 
-    xil_printf("Ready. Send to UDP 5008 to configure / load weights.\r\n");
+    xil_printf("Ready. TRAINING_DONE automatically computes and commits MRC weights.\r\n");
+    xil_printf("UDP 5008 manual weight load/commit remains available for tests.\r\n");
     xil_printf("Send to UDP 5007 to inject I/Q samples (see CMD_SET_INJ_EN).\r\n");
     xil_printf("Status snapshots streamed to UDP 5006.\r\n");
 
@@ -699,6 +861,10 @@ int main(void) {
     u32 loop_cnt = 0;
 
     while (1) {
+        /* Poll the sticky training IRQ every pass. The CSR path is the same
+         * internal SPI interface used by an external controller on silicon. */
+        service_training_irq();
+
         unsigned rlen = XEmacLite_Recv(&EmacInst, RxBuf);
         if (rlen) process_rx(rlen);
 
