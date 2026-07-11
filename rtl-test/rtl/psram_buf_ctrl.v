@@ -3,8 +3,12 @@
 //
 // SRAM-free design: the on-chip FD SRAM has been removed.  PSRAM serves both:
 //   (a) SC detector delay line — per iq_valid, write 8 bytes then read back
-//       del_i0/del_q0 (branch 0 only) from N samples ago.  cur_i0/cur_q0 are
-//       captured from the write data at write-done time.
+//       del_i0/del_q0 (one branch, selected by sc_ant_sel) from N samples ago.
+//       cur_i0/cur_q0 are captured from the write data at write-done time,
+//       same branch.  sc_ant_sel is write-locked during a packet (reg_bank
+//       0x0A[2:1]) — the SC correlator itself is still single-antenna, this
+//       just lets firmware route it away from a known-bad branch instead of
+//       always hardcoding antenna 0 (Open Risk #9).
 //   (b) Same-packet MRC replay — at W_commit, switch to S_REPLAY: interleaved
 //       write (live) + 8-byte read (from buf_base), feeding rpl_* to the combiner.
 //
@@ -60,6 +64,7 @@ module psram_buf_ctrl (
     input  wire        qspi_owner,   // 1 = ownership transferred away from local controller
     input  wire [3:0]  sf,           // spreading factor (7–12), for del address
     input  wire [1:0]  sample_shift, // BW offset: 1=250 kHz, 2=125 kHz; N=2^(SF+sample_shift)
+    input  wire [1:0]  sc_ant_sel,   // which branch (0-3) feeds cur_i0/cur_q0/del_i0/del_q0
 
     // Live IQ stream (4 branches, 8-bit signed)
     input  wire signed [7:0] iq_i0, iq_i1, iq_i2, iq_i3,
@@ -166,6 +171,10 @@ module psram_buf_ctrl (
 
     reg [63:0] wr_data;  // {i0,q0,i1,q1,i2,q2,i3,q3} latched from iq_valid
     reg [63:0] rd_data;  // accumulated nibbles from PSRAM during read phase
+
+    // sc_ant_sel-selected branch's byte pair out of wr_data, for cur_i0/cur_q0
+    wire [7:0] wr_data_ant_i = wr_data[63 - 16*sc_ant_sel -: 8];
+    wire [7:0] wr_data_ant_q = wr_data[55 - 16*sc_ant_sel -: 8];
 
     reg         dbg_mode;
     reg         dbg_fetch_busy;
@@ -430,7 +439,11 @@ module psram_buf_ctrl (
                         if (iq_valid && psram_en && qe_init_done && !qspi_owner) begin
                             wr_data  <= {iq_i0, iq_q0, iq_i1, iq_q1,
                                          iq_i2, iq_q2, iq_i3, iq_q3};
-                            del_addr <= (wr_ptr - del_offset_r) & AMASK;
+                            // Word-aligned base (del_offset_r is a multiple of
+                            // 8) ORed with the 2-byte lane for sc_ant_sel — safe
+                            // since the low 3 bits of the base are always 0.
+                            del_addr <= ((wr_ptr - del_offset_r) & AMASK) |
+                                        {20'd0, sc_ant_sel, 1'b0};
                             dbg_mode <= 1'b0;
                             qpi_busy <= 1'b1;
                             sub      <= 6'd0;
@@ -520,8 +533,8 @@ module psram_buf_ctrl (
                                 ce_n    <= 1'b1;
                                 sio_oe  <= 4'd0;
                                 wr_ptr  <= (wr_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
-                                cur_i0  <= $signed(wr_data[63:56]);
-                                cur_q0  <= $signed(wr_data[55:48]);
+                                cur_i0  <= $signed(wr_data_ant_i);
+                                cur_q0  <= $signed(wr_data_ant_q);
                                 sub     <= 6'd25;
                             end
                             // ---- DEL READ: CMD 0xEB ----

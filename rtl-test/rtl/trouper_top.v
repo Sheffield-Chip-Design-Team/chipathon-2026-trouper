@@ -172,6 +172,7 @@ module trouper_top (
     wire [3:0]  rb_sf_cfg;
     wire        rb_bw_sel;
     wire [1:0]  rb_sample_shift = rb_bw_sel ? 2'd2 : 2'd1;
+    wire [1:0]  rb_sc_ant_sel;
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
@@ -476,6 +477,7 @@ module trouper_top (
         .packet_active(packet_active),
         .sf           (rb_sf_cfg),
         .sample_shift (rb_sample_shift),
+        .sc_ant_sel   (rb_sc_ant_sel),
         .iq_i0 (dcr_i[0]), .iq_i1 (dcr_i[1]),
         .iq_i2 (dcr_i[2]), .iq_i3 (dcr_i[3]),
         .iq_q0 (dcr_q[0]), .iq_q1 (dcr_q[1]),
@@ -748,6 +750,7 @@ module trouper_top (
         .antenna_en      (rb_antenna_en),
         .sf_cfg          (rb_sf_cfg),
         .bw_sel          (rb_bw_sel),
+        .sc_ant_sel      (rb_sc_ant_sel),
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
         .pkt_timeout_syms(rb_pkt_timeout_syms),

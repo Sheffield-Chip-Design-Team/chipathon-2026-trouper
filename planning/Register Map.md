@@ -33,7 +33,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **RX / Modem Configuration** (`0x08`–`0x0F`) | | | | | |
 | `0x08` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
 | `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12); write ignored while `PACKET_ACTIVE` |
-| `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); write ignored while `PACKET_ACTIVE` |
+| `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); [2:1] `sc_ant_sel` SC correlator antenna (0-3); write ignored while `PACKET_ACTIVE` |
 | `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
 | `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
@@ -194,13 +194,22 @@ This configures `M = 2^SF` for the PSRAM delay line, SC detector, training accum
 | Bits | Field | Description |
 | --- | --- | --- |
 | [0] | `bw_sel` | LoRa bandwidth select: 0 = 250 kHz (2× oversample, `sample_shift=1`), 1 = 125 kHz (4× oversample, `sample_shift=2`) |
-| [7:1] | — | Reserved, write 0 |
+| [2:1] | `sc_ant_sel` | Which antenna branch (0-3) feeds the SC correlator's `cur_i0/cur_q0`/`del_i0/del_q0` delay-line taps in `psram_buf_ctrl`. Reset 0 (antenna 0, prior fixed behavior). |
+| [7:3] | — | Reserved, write 0 |
 
 The decimator is a fixed R=64 half-band chain (500 kS/s output); bandwidth is **not**
 a decimation-ratio change. `bw_sel` selects only `sample_shift`, which sets the
 symbol period `M = 1 << (SF + sample_shift)` used by every symbol-domain block (SC
 detector, training accumulator, packet-control FSM, PSRAM delay). Writes are ignored
 while `PACKET_ACTIVE = 1`; a BW (or SF) change re-arms decimator/delay warm-up.
+
+`sc_ant_sel` lets firmware route the SC correlator to a different antenna at packet
+idle time (e.g. after a noise-mode `Z_kk` energy scan flags antenna 0 as faded); it
+does **not** implement the spec's `Σ_j` incoherent 4-branch combine (Open Risk #9) —
+the correlator still evaluates exactly one antenna at a time, so acquisition still
+fails if the *currently selected* antenna is in a deep fade. Like `bw_sel`, writes are
+blocked while `PACKET_ACTIVE=1` (`psram_buf_ctrl`'s delay-line addressing must not
+change mid-packet).
 
 ### `0x0B` — PKT_TIMEOUT_SYMS (read/write)
 

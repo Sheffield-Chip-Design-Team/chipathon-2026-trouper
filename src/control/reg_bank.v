@@ -76,6 +76,7 @@ module reg_bank (
     output reg [3:0]   antenna_en,      // MIMO_CTRL[7:4]
     output reg [3:0]   sf_cfg,          // SF_CFG[3:0], direct-coded 7–12
     output reg         bw_sel,        // BW_CFG[0]: 0=250 kHz (sample_shift=1), 1=125 kHz (sample_shift=2)
+    output reg [1:0]   sc_ant_sel,    // BW_CFG[2:1]: SC correlator source antenna (0-3)
     // SC thresholds
     output reg [15:0]  sc_thr,
     output reg [1:0]   sc_hits_req,
@@ -155,6 +156,7 @@ module reg_bank (
             antenna_en       <= 4'hF;
             sf_cfg           <= 4'h7;
             bw_sel           <= 1'b0;
+            sc_ant_sel       <= 2'd0;
             sc_thr           <= 16'h01CC;   // 0x7333 ÷ 64; sc_thr[11:0] used (12-bit positive)
             sc_hits_req      <= 2'h2;
             pkt_timeout_syms <= 8'h50;
@@ -191,7 +193,10 @@ module reg_bank (
                                antenna_en   <= wdata[7:4];
                            end
                     8'h09: if (!packet_active) sf_cfg <= wdata[3:0]; // blocked during active packet
-                    8'h0A: if (!packet_active) bw_sel <= wdata[0]; // blocked during active packet
+                    8'h0A: if (!packet_active) begin // blocked during active packet
+                        bw_sel     <= wdata[0];
+                        sc_ant_sel <= wdata[2:1];
+                    end
                     8'h0B: pkt_timeout_syms <= wdata;
                     8'h0C: sc_thr[15:8]     <= wdata;
                     8'h0D: sc_thr[7:0]      <= wdata;
@@ -275,7 +280,7 @@ module reg_bank (
             // --- RX / modem configuration ---
             8'h08: rdata_next = {antenna_en, 2'h0, mimo_mode};
             8'h09: rdata_next = {4'h0, sf_cfg};
-            8'h0A: rdata_next = {7'h0, bw_sel};
+            8'h0A: rdata_next = {5'h0, sc_ant_sel, bw_sel};
             8'h0B: rdata_next = pkt_timeout_syms;
             8'h0C: rdata_next = sc_thr[15:8];
             8'h0D: rdata_next = sc_thr[7:0];
