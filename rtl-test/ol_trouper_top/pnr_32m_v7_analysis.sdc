@@ -4,7 +4,7 @@
 #   - Port set matches trouper_top (v6 referenced TMS_GPIO0/TDI_GPIO1, which only
 #     exist on mimo_rx_top; OpenSTA dropped those constraints).
 #   - PSRAM interface is constrained source-synchronously via a generated clock
-#     on PSRAM_SCK (sck = sck_en & clk in psram_buf_ctrl).  PSRAM_SIO_IN was
+#     on PSRAM_SCK (sck = sck_en & clk in psram_buf_ctrl).  PSRAM_SIO_IN_* was
 #     previously unconstrained entirely.
 #   - SPI_MOSI/SPI_MISO are constrained against SPI_SCK (their real clock), not
 #     IQ_CLK.  SPI_SCK is no longer an ideal network.
@@ -34,15 +34,15 @@ set_clock_groups -asynchronous \
     -group {SPI_SCK}
 
 # ---- IQ_CLK-domain inputs ----
-set_input_delay -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I[*] IQ_DATA_Q[*]}]
-set_input_delay -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I[*] IQ_DATA_Q[*]}]
-set_input_delay -max 10.0 -clock IQ_CLK [get_ports {GRP_ADDR[*] GRP_WDATA[*] GRP_WE GRP_RE}]
-set_input_delay -min 1.0  -clock IQ_CLK [get_ports {GRP_ADDR[*] GRP_WDATA[*] GRP_WE GRP_RE}]
+set_input_delay -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_*}]
+set_input_delay -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_*}]
+set_input_delay -max 10.0 -clock IQ_CLK [get_ports {GRP_ADDR_* GRP_WDATA_* GRP_WE GRP_RE}]
+set_input_delay -min 1.0  -clock IQ_CLK [get_ports {GRP_ADDR_* GRP_WDATA_* GRP_WE GRP_RE}]
 
 # ---- PSRAM QPI read data: APS6404L drives tCO ≤ ~6.5 ns after PSRAM_SCK rising,
 #      plus ~2.5 ns pads/board round trip ----
-set_input_delay -max 9.0 -clock PSRAM_SCK [get_ports {PSRAM_SIO_IN[*]}]
-set_input_delay -min 1.5 -clock PSRAM_SCK [get_ports {PSRAM_SIO_IN[*]}]
+set_input_delay -max 9.0 -clock PSRAM_SCK [get_ports {PSRAM_SIO_IN_*}]
+set_input_delay -min 1.5 -clock PSRAM_SCK [get_ports {PSRAM_SIO_IN_*}]
 
 # ---- SPI inputs (Mode 0; 10 MHz max — margins are large, modelling is
 #      deliberately conservative against the rising edge) ----
@@ -55,15 +55,15 @@ set_false_path -from [get_ports HOST_CS]
 
 # ---- IQ_CLK-domain outputs ----
 set_output_delay -max 2.0 -clock IQ_CLK \
-    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA[*] GRP_READY}]
+    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA_* GRP_READY}]
 set_output_delay -min 0.0 -clock IQ_CLK \
-    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA[*] GRP_READY}]
+    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA_* GRP_READY}]
 
 # ---- PSRAM source-synchronous outputs: APS6404L tSP = 2 ns, tHD = 2 ns ----
 set_output_delay -max 2.0  -clock PSRAM_SCK \
-    [get_ports {PSRAM_SIO_OUT[*] PSRAM_SIO_OE[*] PSRAM_CE_N}]
+    [get_ports {PSRAM_SIO_OUT_* PSRAM_SIO_OE_* PSRAM_CE_N}]
 set_output_delay -min -2.0 -clock PSRAM_SCK \
-    [get_ports {PSRAM_SIO_OUT[*] PSRAM_SIO_OE[*] PSRAM_CE_N}]
+    [get_ports {PSRAM_SIO_OUT_* PSRAM_SIO_OE_* PSRAM_CE_N}]
 
 # ---- SPI MISO: launched on falling SCK, master samples on next rising ----
 set_output_delay -max 15.0 -clock SPI_SCK [get_ports SPI_MISO]

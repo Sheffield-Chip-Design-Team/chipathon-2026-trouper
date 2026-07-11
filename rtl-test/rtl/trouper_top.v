@@ -30,8 +30,14 @@ module trouper_top (
     input  wire        RESETB,       // active-low chip reset
 
     // ---- SX1257 → ASIC: 1-bit sigma-delta IQ streams ----
-    input  wire [3:0]  IQ_DATA_I,    // [0]=ant0 .. [3]=ant3
-    input  wire [3:0]  IQ_DATA_Q,
+    input  wire        IQ_DATA_I_0,  // ant0
+    input  wire        IQ_DATA_I_1,  // ant1
+    input  wire        IQ_DATA_I_2,  // ant2
+    input  wire        IQ_DATA_I_3,  // ant3
+    input  wire        IQ_DATA_Q_0,  // ant0
+    input  wire        IQ_DATA_Q_1,  // ant1
+    input  wire        IQ_DATA_Q_2,  // ant2
+    input  wire        IQ_DATA_Q_3,  // ant3
 
     // ---- ASIC → SX1302: MRC-combined sigma-delta output ----
     output wire        REMOD_A_I,
@@ -40,9 +46,18 @@ module trouper_top (
     // ---- PSRAM QPI (SIO[3:0] on four dedicated pads) ----
     output wire        PSRAM_SCK,     // PSRAM clock (32 MHz, gated in psram_buf_ctrl)
     output wire        PSRAM_CE_N,
-    output wire [3:0]  PSRAM_SIO_OUT,
-    input  wire [3:0]  PSRAM_SIO_IN,
-    output wire [3:0]  PSRAM_SIO_OE,
+    output wire        PSRAM_SIO_OUT_0,
+    output wire        PSRAM_SIO_OUT_1,
+    output wire        PSRAM_SIO_OUT_2,
+    output wire        PSRAM_SIO_OUT_3,
+    input  wire        PSRAM_SIO_IN_0,
+    input  wire        PSRAM_SIO_IN_1,
+    input  wire        PSRAM_SIO_IN_2,
+    input  wire        PSRAM_SIO_IN_3,
+    output wire        PSRAM_SIO_OE_0,
+    output wire        PSRAM_SIO_OE_1,
+    output wire        PSRAM_SIO_OE_2,
+    output wire        PSRAM_SIO_OE_3,
 
     // ---- Host SPI slave (RPi) ----
     input  wire        HOST_CS,       // active-low chip select from RPi
@@ -51,17 +66,58 @@ module trouper_top (
     output wire        SPI_MISO,
 
     // ---- Grouper inter-project register bus (priority over SPI) ----
-    input  wire [7:0]  GRP_ADDR,
-    input  wire [7:0]  GRP_WDATA,
+    input  wire        GRP_ADDR_0,
+    input  wire        GRP_ADDR_1,
+    input  wire        GRP_ADDR_2,
+    input  wire        GRP_ADDR_3,
+    input  wire        GRP_ADDR_4,
+    input  wire        GRP_ADDR_5,
+    input  wire        GRP_ADDR_6,
+    input  wire        GRP_ADDR_7,
+    input  wire        GRP_WDATA_0,
+    input  wire        GRP_WDATA_1,
+    input  wire        GRP_WDATA_2,
+    input  wire        GRP_WDATA_3,
+    input  wire        GRP_WDATA_4,
+    input  wire        GRP_WDATA_5,
+    input  wire        GRP_WDATA_6,
+    input  wire        GRP_WDATA_7,
     input  wire        GRP_WE,
     input  wire        GRP_RE,
-    output wire [7:0]  GRP_RDATA,
+    output wire        GRP_RDATA_0,
+    output wire        GRP_RDATA_1,
+    output wire        GRP_RDATA_2,
+    output wire        GRP_RDATA_3,
+    output wire        GRP_RDATA_4,
+    output wire        GRP_RDATA_5,
+    output wire        GRP_RDATA_6,
+    output wire        GRP_RDATA_7,
     output wire        GRP_READY,
 
     // ---- Interrupt outputs ----
     output wire        IRQ_OUT,       // → dedicated IRQ pad; sticky, level-high
     output wire        IRQ_GROUPER    // → Grouper inter-project IRQ line; same signal as IRQ_OUT
 );
+
+    // Reassemble scalar physical pins into the vectors used inside the design.
+    wire [3:0] IQ_DATA_I = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
+    wire [3:0] IQ_DATA_Q = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
+    wire [3:0] PSRAM_SIO_OUT;
+    wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_IN_3, PSRAM_SIO_IN_2,
+                               PSRAM_SIO_IN_1, PSRAM_SIO_IN_0};
+    wire [3:0] PSRAM_SIO_OE;
+    wire [7:0] GRP_ADDR = {GRP_ADDR_7, GRP_ADDR_6, GRP_ADDR_5, GRP_ADDR_4,
+                           GRP_ADDR_3, GRP_ADDR_2, GRP_ADDR_1, GRP_ADDR_0};
+    wire [7:0] GRP_WDATA = {GRP_WDATA_7, GRP_WDATA_6, GRP_WDATA_5, GRP_WDATA_4,
+                            GRP_WDATA_3, GRP_WDATA_2, GRP_WDATA_1, GRP_WDATA_0};
+    wire [7:0] GRP_RDATA;
+
+    assign {PSRAM_SIO_OUT_3, PSRAM_SIO_OUT_2,
+            PSRAM_SIO_OUT_1, PSRAM_SIO_OUT_0} = PSRAM_SIO_OUT;
+    assign {PSRAM_SIO_OE_3, PSRAM_SIO_OE_2,
+            PSRAM_SIO_OE_1, PSRAM_SIO_OE_0} = PSRAM_SIO_OE;
+    assign {GRP_RDATA_7, GRP_RDATA_6, GRP_RDATA_5, GRP_RDATA_4,
+            GRP_RDATA_3, GRP_RDATA_2, GRP_RDATA_1, GRP_RDATA_0} = GRP_RDATA;
 
     // =========================================================================
     // Global clock and reset

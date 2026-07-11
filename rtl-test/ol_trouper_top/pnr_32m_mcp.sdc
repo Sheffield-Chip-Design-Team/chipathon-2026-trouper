@@ -18,8 +18,8 @@ create_clock -name IQ_CLK -period 31.25 [get_ports IQ_CLK]
 create_clock -name SPI_SCK -period 100.0 [get_ports SPI_SCK]
 set_clock_uncertainty 2.0 [get_clocks IQ_CLK]
 
-set_input_delay  -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I IQ_DATA_Q SPI_MOSI}]
-set_input_delay  -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I IQ_DATA_Q SPI_MOSI}]
+set_input_delay  -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_* SPI_MOSI}]
+set_input_delay  -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_* SPI_MOSI}]
 set_output_delay -max 2.0 -clock IQ_CLK [all_outputs]
 set_output_delay -min 0.0 -clock IQ_CLK [all_outputs]
 

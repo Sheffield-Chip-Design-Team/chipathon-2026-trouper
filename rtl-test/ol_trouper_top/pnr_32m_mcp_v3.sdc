@@ -17,8 +17,8 @@ set_clock_uncertainty 2.0 [get_clocks IQ_CLK]
 # SPI_SCK is an external asynchronous clock — prevent CTS from buffering it.
 set_ideal_network [get_ports SPI_SCK]
 
-set_input_delay  -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I IQ_DATA_Q SPI_MOSI}]
-set_input_delay  -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I IQ_DATA_Q SPI_MOSI}]
+set_input_delay  -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_* SPI_MOSI}]
+set_input_delay  -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_* SPI_MOSI}]
 set_output_delay -max 2.0 -clock IQ_CLK [all_outputs]
 set_output_delay -min 0.0 -clock IQ_CLK [all_outputs]
 
