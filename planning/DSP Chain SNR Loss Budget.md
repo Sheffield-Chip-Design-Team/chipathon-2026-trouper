@@ -35,10 +35,10 @@ duplicate the derivation — link to it.
 | Effect | Measured | Conditions | Status | Reference |
 |---|---|---|---|---|
 | −3 dB corner frequency | ≈ 2.45 kHz | `alpha=1/32`, `fs=500 kS/s`, floating-point equivalent | Verified | `sim/notebooks/dc_removal.ipynb` §1 |
-| AC passband droop @ 1 kHz | −8.5 dB | bit-exact model (`DCRemovalRTL`) | Verified — **contradicts** `planning/blocks/DC Removal.md`'s documented "< 0.1 dB" pass criterion at the same test point; doc review needed, not an RTL bug | `sim/notebooks/dc_removal.ipynb` §5 |
+| AC passband droop @ 1 kHz | −8.5 dB | bit-exact model (`DCRemovalRTL`) | Verified — expected: 1 kHz sits inside the ~2.45 kHz transition band, not the LoRa signal band. **Reconciled 2026-07-11** (Open Risks #10, closed): `planning/blocks/DC Removal.md`'s test point moved to 50 kHz | `sim/notebooks/dc_removal.ipynb` §5 |
 | Near-DC zero-crossing, matched-filter correlation loss | < 0.1 dB, worst case across SF7–12 × BW{125,250} kHz | every LoRa symbol's instantaneous frequency dips below the corner for ~1 sample/symbol; correlation-loss is the metric that maps to what the SC detector/dechirp correlator actually experiences | Verified — negligible | `sim/notebooks/dc_removal.ipynb` §6b |
 | Near-DC zero-crossing, peak per-sample error (undiluted) | −0.3 to −8.9 dB, SF-dependent (worse at low SF) | localized to ~1 sample/symbol | Verified — locally severe but does not propagate to correlation loss above | `sim/notebooks/dc_removal.ipynb` §6b |
-| Reset-recovery settling | 119 samples to ≤ 1 LSB for a 64-code offset | bit-exact model | Verified — **contradicts** `planning/blocks/DC Removal.md`'s documented "37 samples" criterion; doc review needed | `sim/notebooks/dc_removal.ipynb` §7 |
+| Reset-recovery settling | 119 samples to ≤ 1 LSB for a 64-code offset | bit-exact model | Verified — consistent with the doc's ~74-sample/90%-settling figure at a tighter tolerance. **Reconciled 2026-07-11** (Open Risks #10, closed): `planning/blocks/DC Removal.md`'s "37 samples" test criterion corrected to 119 | `sim/notebooks/dc_removal.ipynb` §7 |
 
 ## 3. Schmidl-Cox Detector (`sc_detector.v`)
 
@@ -48,17 +48,27 @@ lock decisions on antenna 0 only, so a deep antenna-0 fade can block
 `sc_lock` even with strong signal on antennas 1–3. See
 `planning/sc-detector-ant0-fading-risk.md`.
 
-## 4. Frontend Buffer Controller (`frontend_buf_ctrl.v`)
+## 4. PSRAM replay sample staleness (`psram_buf_ctrl.v`)
 
-**Not yet quantified.** No known lossy signal-path element (SRAM replay
-buffer), but not yet checked for e.g. PSRAM replay timing-induced sample
-staleness.
+**Retitled 2026-07-11 (Open Risks #18):** previously filed against
+`frontend_buf_ctrl.v`, which is dead code (not instantiated, replaced by
+`psram_buf_ctrl.v`). **Not yet quantified.** No known lossy signal-path
+element, but same-packet PSRAM replay (`S_REPLAY`, `rpl_i*/rpl_q*` feeding
+the combiner) has not been checked for replay timing-induced sample
+staleness relative to the live path.
 
-## 5. Noise Estimation (`noise_est.v`)
+## 5. Noise Estimation (`noise_est.v`) — dead code, superseded
 
-**Not yet quantified.** Manhattan-norm (no multiplier) noise estimate is a
-known approximation vs an L2-norm estimator; the resulting bias/variance on
-`energy_snap` has not been measured against an ideal estimator.
+**Moot as of 2026-07-11 (Open Risks #17, closed).** `noise_est.v`'s
+Manhattan-norm (no multiplier) `energy_snap` estimate was a known
+approximation vs an L2-norm estimator, and its bias/variance was never
+quantified against an ideal estimator — but the block is not instantiated
+in `trouper_top.v` and carries no signoff-config reference. Noise
+qualification is now entirely `training_acc`'s firmware-triggered noise-mode
+window (`TACC_NOISE_TRIG`) plus the SC-contamination gate (`NOISE_READY`
+IRQ); see `planning/Remove Noise Floor Estimator Migration Plan.md`. Left
+in this budget for historical reference only — no further quantification
+needed. The source files are still present but orphaned (not yet deleted).
 
 ## 6. Training Accumulator (`training_acc.v`)
 
@@ -68,7 +78,7 @@ known approximation vs an L2-norm estimator; the resulting bias/variance on
 | Baseline preamble-truncation loss (`SC_HITS_REQ=2`, `PREAMBLE_LEN=8`, 5 of 8 symbols accumulated) | ≈ −2.2 dB vs an ideal 8-symbol window | fixed, unavoidable in the baseline live path (not a fault condition) | Verified, matches doc | `sim/notebooks/11_training_accumulator.ipynb` §2 |
 | Late-SC-lock additional loss (low-SNR delayed lock) | −2.2 / −4.0 / −7.0 / −10.0 dB at 5/6/7/7.5 symbols locked (on top of baseline) | reproduces `planning/blocks/Training Accumulator.md`'s published late-lock table exactly | Verified | `sim/notebooks/11_training_accumulator.ipynb` §2 |
 | ZDIAG register widening (16-bit → 24-bit, `reg_bank.v` 0x64-0x6F) | Closed a ≈0.9 dB firmware combining-gain loss found in an earlier pass: −0.897 dB → −0.001 dB (noiseless test) | 500 random Rayleigh channels, baseline 5-symbol accumulation | **Fixed and verified.** RTL, `sim/models/eigvec_fw.py`, `sim/tests/test_eigvec_fw.py`, `sim/tests/test_pgs_fw.py`, `rtl-test/tb/tb_mrc_fw_precision.v`, `rtl-test/tb/test_capture_playback.py`, and all planning docs updated to match. Testing showed the gap was not recoverable by any firmware-only change (more iterations, wider int12 normalisation, warm-start) prior to the fix — the precision was discarded in hardware before firmware ever saw it. | `sim/notebooks/11_training_accumulator.ipynb` §3; `planning/blocks/Training Accumulator.md` "ZDIAG widening" |
-| Residual firmware combining-gain loss at low SNR, post-ZDIAG-fix | ≈ −0.8 dB at −16 dB per-antenna SNR with 8 iterations (current firmware default); ≈ −0.3 dB with 16 iterations | noisy Z, near-degenerate eigenvalues — power-iteration convergence-rate limited, not register precision | Verified as an SNR effect — **but NOT a cheap follow-up.** More iterations were tested and found *not* to help before the ZDIAG fix (the truncation bias dominated and masked this smaller effect); post-fix they measurably do. However, a corrected timing estimate (see `planning/blocks/Eigenvector Weight Computation.md` Timing Budget, revised after finding this project's PicoRV32 configs use the slow non-`FAST_MUL` multiplier, ~31 cycles/MUL not ~1) shows 8 iterations already costs ~1.0–1.1 ms — roughly SF-independent — against a deadline that scales with SF (`4·M/500kHz`). At SF6 this **does not fit**; SF7 is break-even; 16 iterations needs roughly SF8+ to fit comfortably. My earlier claim of "large timing slack" in this row was wrong and has been corrected. PSRAM replay mode sidesteps the problem (packet-length-scaled deadline) but the baseline live-mode picture is a real, previously unflagged risk — not yet cycle-accurately verified. | `sim/notebooks/11_training_accumulator.ipynb` §3; `planning/blocks/Eigenvector Weight Computation.md` Timing Budget |
+| Residual firmware combining-gain loss at low SNR, post-ZDIAG-fix | ≈ −0.8 dB at −16 dB per-antenna SNR with 8 iterations (current firmware default); ≈ −0.3 dB with 16 iterations | noisy Z, near-degenerate eigenvalues — power-iteration convergence-rate limited, not register precision | Verified as an SNR effect — **but NOT a cheap follow-up.** More iterations were tested and found *not* to help before the ZDIAG fix (the truncation bias dominated and masked this smaller effect); post-fix they measurably do. However, a corrected timing estimate (see `planning/blocks/Eigenvector Weight Computation.md` Timing Budget, revised after finding this project's PicoRV32 configs use the slow non-`FAST_MUL` multiplier, ~31 cycles/MUL not ~1) shows 8 iterations already costs ~1.0–1.1 ms — roughly SF-independent — against a deadline that scales with SF (`4·M/500kHz`). SF6 is out of scope (`SF_CFG` valid range is 7–12, Register Map `0x09`) and dropped from this analysis as of 2026-07-11; with SF6 excluded, **SF7 (the tightest supported SF) is break-even**; 16 iterations needs roughly SF8+ to fit comfortably. My earlier claim of "large timing slack" in this row was wrong and has been corrected. PSRAM replay mode sidesteps the problem (packet-length-scaled deadline) but the baseline live-mode picture is a real, previously unflagged risk — not yet cycle-accurately verified. | `sim/notebooks/11_training_accumulator.ipynb` §3; `planning/blocks/Eigenvector Weight Computation.md` Timing Budget |
 | Zpair 24-bit host-telemetry register readback error | ≈ −98 dB relative to typical Z magnitude — architecturally irrelevant to combining weights (firmware reads the un-truncated int32 accumulator directly; only host telemetry readback is truncated) | n_acc ≈ 640, int8 input | Verified — negligible, telemetry-only, unaffected by the ZDIAG fix | `sim/notebooks/11_training_accumulator.ipynb` §3 |
 | Combining-method SER, firmware eigvec vs its own float reference vs legacy W_k | `eigvec_fw` far better than legacy `W_k` (~1.4x lower SER @ −16 dB) but **still worse than its own float reference** `eigvec_pre` (~1.5-2x higher SER at −16 to −12 dB, now attributable to iteration count rather than ZDIAG) | SF7, NR4, reduced 250-pkt re-run of `sim/sims/compare_mrc_methods.py` | Verified; the float-vs-fixed-point firmware gap still isn't isolated in the doc's published 2000-pkt sweep table | `sim/notebooks/11_training_accumulator.ipynb` §4 |
 | Noise-mode off-diagonal leakage / diagonal accuracy | off-diagonal leakage ≈ −26 dB mean below diagonal; diagonal tracks σ²·n_acc within a few % | 8-symbol noise window (`TACC_NOISE_TRIG`), 200 trials | Verified | `sim/notebooks/11_training_accumulator.ipynb` §5 |
@@ -143,13 +153,15 @@ These aren't RTL bugs — they're places where a verification-table pass
 criterion doesn't match the same document's own stated design parameters.
 Listed here so they don't get lost, pending owner review:
 
-1. `planning/blocks/DC Removal.md` "AC passband" test claims < 0.1 dB droop
-   at 1 kHz; the documented `alpha=1/32` design point gives a ~2.45 kHz
-   corner, so 1 kHz sits in the transition band (measured −8.5 dB, not
-   < 0.1 dB).
-2. Same doc's "Reset recovery" test claims < 1 LSB within 37 samples; the
-   bit-exact model gives 119 samples for a 64-code offset (reset just
-   re-triggers the ordinary step response, ~74 samples to 90%).
+1. ~~`planning/blocks/DC Removal.md` "AC passband" test claims < 0.1 dB droop
+   at 1 kHz~~ — **fixed 2026-07-11**: the documented `alpha=1/32` design
+   point gives a ~2.45 kHz corner, so 1 kHz sits in the transition band
+   (measured −8.5 dB, not < 0.1 dB, as expected there); test point moved
+   to 50 kHz.
+2. ~~Same doc's "Reset recovery" test claims < 1 LSB within 37 samples~~ —
+   **fixed 2026-07-11**: the bit-exact model gives 119 samples for a
+   64-code offset (reset just re-triggers the ordinary step response,
+   ~74 samples to 90%); criterion corrected to 119 samples.
 3. `planning/System Architecture.md` cites `sim/notebooks/02_cfo_estimation.ipynb`,
    which does not exist.
 4. `planning/blocks/Training Accumulator.md`'s "Combining method performance"

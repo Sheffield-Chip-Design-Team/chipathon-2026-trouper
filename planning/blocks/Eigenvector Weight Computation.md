@@ -407,20 +407,23 @@ payload deadline is `payload_start_estimate = timing_ref + 12·M`
 
 | SF | M = 2^SF | Compute window (`4·M / 500 kHz`) | 8 iterations (~1.0–1.1 ms) | 16 iterations (~2.0 ms) |
 |---|---|---|---|---|
-| SF6 | 64 | ~512 µs | **Does not fit** | Does not fit |
+| SF6 | 64 | ~512 µs | **Out of scope** — `SF_CFG` valid range is 7–12 (`planning/Register Map.md`); not a supported configuration | Out of scope |
 | SF7 | 128 | ~1.02 ms | Roughly break-even | Does not fit |
 | SF8 | 256 | ~2.05 ms | Comfortable margin | Roughly break-even |
 | SF9+ | 512+ | ≥4.1 ms | Comfortable margin | Comfortable margin |
 
-This directly contradicts the previous claim that the computation "should
-complete well within the training-done to safe-switch window for all
-supported SFs (5–12)" — on this corrected estimate, **even the current
-8-iteration firmware may not fit at SF6, and is roughly break-even at SF7**.
-If `W_COMMIT` does not arrive in time, `W_MISSED_PACKET` asserts and the
-packet stays in bypass (see the fallback policy in `Firmware Spec.md`) — so
-a miss degrades to single-antenna reception rather than breaking the
-receiver, but this is a real coverage gap at low SF, not just a missed
-optimisation opportunity.
+**2026-07-11: SF6 dropped from scope.** This table previously listed SF6 as
+"does not fit," treating it as a real coverage gap. `SF_CFG`'s documented
+valid range is 7–12 (`planning/Register Map.md` `0x09`); SF6 was never a
+supported configuration, so its timing miss is moot, not a risk. **SF7 is
+now the tightest supported case**, and it's only roughly break-even at the
+current 8-iteration default — that remains a real, open concern (not yet
+cycle-accurately verified). If `W_COMMIT` does not arrive in time,
+`W_MISSED_PACKET` asserts and the packet stays in bypass (see the fallback
+policy in `Firmware Spec.md`) — so a miss degrades to single-antenna
+reception rather than breaking the receiver, but SF7 marginal timing is
+still a real coverage gap worth closing, not just a missed optimisation
+opportunity.
 
 **PSRAM replay mode sidesteps this entirely.** The deadline relaxes from
 `payload_start_estimate` to `packet_end_estimate − TACC_GUARD` (the SX1302

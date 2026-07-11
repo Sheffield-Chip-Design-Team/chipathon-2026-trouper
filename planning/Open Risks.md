@@ -61,7 +61,12 @@ were fixed and verified; see Closed.)
 `trouper_top.v:511-518` zeroes `remod_in_*` but also forces `in_valid=0`;
 `sd_remod.v:85` then *holds the last pre-lock sample* in `in_i_lat/in_q_lat`,
 so the SX1302 receives a constant DC tone for the whole BUFFERING phase
-instead of silence. Fix: keep `in_valid` asserted and feed zeros.
+instead of silence. Minimal fix: keep `in_valid` asserted and feed zeros.
+
+**Scope expanded 2026-07-11:** the minimal fix alone doesn't satisfy the new
+`TRPR-RMD-009` (no time-index jump in normal operation) — the replay
+rewind to `buf_base` at `W_COMMIT` is itself a jump. Redesign proposed:
+`planning/psram-replay-continuous-delay-redesign.md` (not yet implemented).
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
@@ -82,13 +87,18 @@ floorplan tried since (jobs 2165–2168). Described in the source doc as
 PicoRV32 in this project uses the slow non-`FAST_MUL` multiplier
 (~31 cycles/MUL, not the ~1 cycle originally assumed in the doc). The
 8-iteration default now costs an estimated ~1.0–1.1 ms — SF-independent —
-against a deadline that scales with SF (`4·M/500 kHz`): **does not fit at
-SF6, roughly break-even at SF7**, comfortable from SF8 up. Bumping to 16
-iterations (needed to meaningfully shrink a real ~0.5 dB residual combining-
-gain loss) costs ~2 ms and likely needs SF8+. This is a **back-of-envelope
-estimate, not yet cycle-accurately verified** (no compile/disassemble/
-simulate pass has been run). PSRAM replay mode sidesteps the deadline
-entirely; the baseline live-mode path does not.
+against a deadline that scales with SF (`4·M/500 kHz`). **SF6 dropped from
+this analysis 2026-07-11 — `SF_CFG`'s valid range is 7–12 (Register Map
+`0x09`), SF6 is out of scope and was never a supported configuration.**
+With SF6 out of scope, **SF7 (the tightest supported SF) is only roughly
+break-even**, comfortable from SF8 up. Bumping to 16 iterations (needed to
+meaningfully shrink a real ~0.5 dB residual combining-gain loss) costs
+~2 ms and likely needs SF8+. This is a **back-of-envelope estimate, not yet
+cycle-accurately verified** (no compile/disassemble/simulate pass has been
+run). PSRAM replay mode sidesteps the deadline entirely (`W_COMMIT` can
+arrive any time up to `packet_end`); the baseline live-mode path does not —
+this risk is specifically about the live-mode (no same-packet replay)
+fallback path.
 
 **Risk:** silently missing the weight-computation deadline at low SF in live
 mode, producing stale/garbage MRC weights with no error indication.
@@ -132,28 +142,6 @@ and honest-MCP work that the voltage path would otherwise unblock.
 (split-rail supply note); `planning/5v-core-voltage-strategy.md`.
 **Found:** 2026-07-04 (voltage-corner + external-part datasheet review).
 
-### 28. No signoff run uses the fixed / PCB pin order — DRT-0073 hazard
-
-`config_current_signoff.json` sets **no `FP_PIN_ORDER_CFG`**, so every signoff and
-experiment to date (B1 −16.08 ns, the buffering study, the 5 V-rail runs) places the
-block port pins **automatically** — the router puts them wherever is convenient. A
-tapeout-ready macro must instead pin the ports where the padring/PCB expects them, using
-the PCB-friendly **`io_placement_v2.cfg`** (59 ports, Q-then-I; variants exist:
-`io_placement_v3_loose.cfg`, `io_placement_v5_iqwest.cfg`). That is the **harder** routing
-case: forcing the fixed order previously **tripped DRT-0073 (`IQ_CLK` clkbuf pin-access)**
-on the tighter baselines — one of the reasons `CTS_APPLY_NDR: none` was adopted. So the
-current "signoff" is **not pin-realistic**, and making it so reintroduces a routability
-risk the present numbers do not exercise.
-
-**Action:** run a signoff with `FP_PIN_ORDER_CFG = io_placement_v2.cfg` (on the committed
-die and on whichever voltage rail is chosen) and confirm DRC/route-clean with the real pins
-before tapeout; treat DRT-0073 as the expected failure mode and reuse the NDR/CTS levers.
-**Blocks:** integration-ready signoff; final die/floorplan lock (pin order interacts with
-the clkbuf pin-access fragility, item 6).
-**See:** memory `project_io_placement`; `planning/area-reduction-roadmap.md` §4 / §6 (CTS
-pin-access levers); `rtl-test/ol_trouper_top/io_placement_v2.cfg`.
-**Found:** 2026-07-04.
-
 ### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption
 
 Grouper and Trouper are two **separately hardened MPW macros** joined by
@@ -193,50 +181,64 @@ synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
 
 ## Moderate
 
-### 9. SC Detector acquisition is hardcoded to antenna 0 (no diversity at lock time)
+### 9. SC Detector acquisition is single-antenna at any instant (no diversity at lock time)
 
-`sc_detector.v` wires only branch-0 `cur_i0/q0` / `del_i0/q0`
-(`trouper_top.v:228-236`); the `Sum_j` incoherent 4-branch combine that
-`planning/DSP Flow.md` Stage 5 specifies is not implemented. If antenna 0 is
-in a deep Rayleigh fade, the gateway fails to acquire the packet even when
-antennas 1–3 have strong signal — the 4-antenna array provides no diversity
-gain for detection, only for post-lock MRC combining. Confirmed both via
-measured-IQ playback (Rayleigh seed 7 vs 10) and a Monte-Carlo sweep
-(`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/branch SNR, P(lock) with
-antenna 0 in deep fade is 0% ant0-only vs 52% for the spec-intended combine).
-A spec-faithful fix (serial 4-channel TDM correlator, ~+20 k µm², no clock-
-period cost) is designed but not implemented, pending an area-headroom
-check against the floorplan.
+`sc_detector.v` correlates only one antenna branch's `cur_i0/q0` / `del_i0/q0`
+at a time via `psram_buf_ctrl`'s delay line; the `Sum_j` incoherent 4-branch
+combine that `planning/DSP Flow.md` Stage 5 specifies is not implemented. If
+the currently-selected antenna is in a deep Rayleigh fade, the gateway fails
+to acquire the packet even when the other 3 antennas have strong signal —
+the array provides no diversity gain for detection, only for post-lock MRC
+combining. Confirmed both via measured-IQ playback (Rayleigh seed 7 vs 10)
+and a Monte-Carlo sweep (`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/
+branch SNR, P(lock) with the selected antenna in deep fade is 0% single-
+antenna vs 52% for the spec-intended combine). A spec-faithful fix (serial
+4-channel TDM correlator, ~+20 k µm², no clock-period cost) is designed but
+not implemented, pending an area-headroom check against the floorplan.
 
-**Does not block tapeout** — silicon works correctly whenever antenna 0 is
-not the faded branch; this is a robustness/diversity gap, not a functional
-bug.
-**Decision 2026-07-06:** deliberately DEFERRED — no die-area headroom for the
-~+20 k µm² 4-branch correlator at the current floorplan. Revisit only if an
-area budget opens up (e.g. after further area cuts or a die-size change);
-until then this stays an accepted, documented limitation.
+**Mitigation added 2026-07-11:** `BW_CFG.sc_ant_sel` (`reg_bank` 0x0A[2:1])
+lets firmware pick *which* single antenna feeds the correlator, instead of
+the old hardcoded antenna 0 — cheap (a byte-lane mux + address offset in
+`psram_buf_ctrl.v`, no measurable area cost), verified bit-exact
+(`cocotb/sc_ant_sel/test_sc_ant_sel.py`, SGE job 3328). This does **not**
+close the underlying risk: the correlator is still single-antenna at any
+instant, so acquisition still fails if the *currently selected* antenna is
+the one in deep fade. It only means firmware can route around a
+known-bad branch (e.g. after a noise-mode `Z_kk` energy scan) instead of
+being permanently stuck on antenna 0. Firmware-side selection policy is not
+yet designed. See `planning/Register Map.md` `0x0A`.
+
+**Does not block tapeout** — silicon works correctly whenever the selected
+antenna is not the faded branch; this is a robustness/diversity gap, not a
+functional bug.
+**Decision 2026-07-06:** the full 4-branch correlator deliberately DEFERRED —
+no die-area headroom for the ~+20 k µm² cost at the current floorplan.
+Revisit only if an area budget opens up (e.g. after further area cuts or a
+die-size change); until then, `sc_ant_sel` is the accepted interim
+mitigation and the diversity gap itself stays an accepted, documented
+limitation.
 **See:** `planning/sc-detector-ant0-fading-risk.md`.
 
-### 10. DC Removal: documented spec figures contradicted by verified sim results
+### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
 
-Measured AC passband droop at 1 kHz is −8.5 dB vs. the block doc's stated
-"<0.1 dB" pass criterion; measured reset-recovery settling is 119 samples vs.
-the documented "37 samples." Flagged as a doc-vs-sim mismatch requiring
-review, not (yet) confirmed as an RTL defect — but unreconciled.
+At 1380×1100, `root_only` NDR preserved clock SI at no timing cost. Below
+1380, `CTS_APPLY_NDR:"none"` is required instead — full clock-SI loss plus
+~1 ns of additional SS penalty. Post-route clock skew/jitter/coupling-cap
+signoff against baseline is still an outstanding step regardless of the die
+size ultimately chosen.
 
-**See:** `planning/DSP Chain SNR Loss Budget.md` §2.
-
-### 11. Clock-net signal-integrity tradeoff below the 1380 µm die floor
-
-At the current 1380×1100 baseline, `root_only` NDR preserves clock SI at no
-timing cost. Shrinking below 1380 forces `CTS_APPLY_NDR:"none"` — full
-clock-SI loss plus ~1 ns of additional SS penalty. Post-route clock
-skew/jitter/coupling-cap signoff against baseline is still an outstanding
-step regardless of the die size ultimately chosen.
-
-**Contingent** — only bites if the die is shrunk further; not a risk at the
-current baseline.
-**See:** `planning/area-reduction-roadmap.md` §6.
+**Updated 2026-07-11:** this entry previously read "contingent — only bites
+if the die is shrunk further; not a risk at the current baseline," written
+when 1380×1100 was still the production baseline. That's no longer true:
+the current signoff config (`config_current_signoff.json`) is already at
+**1200×1100 with `CTS_APPLY_NDR:"none"` set** — the same shrink closed out
+by item #28 (fixed-pin floor). The clock-SI tradeoff has therefore already
+been taken in the live signoff, not merely a future possibility. The
+underlying technical content is unchanged; what changed is that the formal
+post-route clock skew/jitter/coupling-cap signoff step this entry calls for
+is now needed for the *actual* current config, not a hypothetical future
+one.
+**See:** `planning/area-reduction-roadmap.md` §6; `planning/die-shrink-routability-floor.md` §6–8.
 
 ### 12. 1100×1100 target die may be physically unreachable
 
@@ -324,17 +326,19 @@ next write regardless of latency budget.
 
 ## Low
 
-### 17. Noise Estimation Manhattan-norm bias/variance not quantified
+### 18. PSRAM-replay sample staleness unquantified
 
-`noise_est.v` uses an L1 (Manhattan) approximation instead of an ideal L2
-norm for `energy_snap`; the resulting bias/variance has never been measured
-against an ideal estimator.
-
-**See:** `planning/DSP Chain SNR Loss Budget.md` §5.
-
-### 18. Frontend Buffer Controller PSRAM-replay sample staleness unquantified
-
-**See:** `planning/DSP Chain SNR Loss Budget.md` §4.
+**Retitled/repointed 2026-07-11:** originally filed against
+`frontend_buf_ctrl.v`, which is dead code — not instantiated in
+`trouper_top.v`, replaced by `psram_buf_ctrl.v` (see CLAUDE.md system
+summary). The underlying question is still real and still unanswered: does
+same-packet PSRAM replay (`psram_buf_ctrl.v` `S_REPLAY`, `rpl_i*/rpl_q*`
+feeding the combiner) introduce measurable sample staleness relative to the
+live path, and has that been quantified? Not yet investigated against the
+current PSRAM-based architecture — this entry just points at the right
+module now instead of the removed one.
+**See:** `planning/DSP Chain SNR Loss Budget.md` §4 (still titled/framed
+around the old `frontend_buf_ctrl.v`, needs the same retarget).
 
 ### 19. `tb_mrc_fw_precision.v` testbench has a pre-existing DUT/testbench mismatch
 
@@ -677,6 +681,91 @@ up:
   (`sf` in 7-12, `sample_shift` in {1,2}, `iq_valid` periodic every 64
   cycles) — without those, the solver finds "valid" counterexamples using
   input combinations the real chip can never produce.
+
+### 28. No signoff run uses the fixed / PCB pin order — DRT-0073 hazard — CLOSED 2026-07-05
+
+`config_current_signoff.json` set no fixed pin-order config, so every signoff and
+experiment to date (B1 −16.08 ns, the buffering study, the 5 V-rail runs) placed the
+block port pins **automatically** — the router put them wherever was convenient. A
+tapeout-ready macro needed to instead pin the ports where the padring/PCB expects
+them, and forcing a fixed order had previously tripped DRT-0073 (`IQ_CLK` clkbuf
+pin-access) on tighter baselines.
+
+**Fix:** `io_placement_bl.cfg` — a fixed, PCB-realistic pin order (all real board pads
+on S+W edges: `IQ_DATA[3:0]` I/Q + `IQ_CLK` + `PSRAM_*` on S; `RESETB`/`HOST_CS`/SPI/
+`IRQ_OUT`/`REMOD_A_I/Q` on W; Grouper's inter-project bus, which carries no package
+pads, pushed to E+N) — routes DRT=0 with **zero** board pads on the Grouper-only
+edges. Confirmed across the full post-B1 die-width sweep with fixed pins (jobs
+3250–3253): 1200×1100 is the fixed-pin routable floor (DRT/magic/LVS=0), one 50 µm
+step above the 1150×1100 auto-pin floor — fixing pads to board-friendly edges costs
+the router some congestion headroom, but 1200×1100 absorbs it cleanly.
+
+`config_current_signoff.json` was updated the same day to `DIE_AREA=1200×1100`,
+`IO_PIN_ORDER_CFG=dir::io_placement_bl.cfg` and remains the active signoff config —
+this is the same run (`RUN_2026-07-05_00-56-34`, DRC=0/LVS=0) item 1 already cites as
+the current chip-wide signoff baseline, so this item was effectively resolved the day
+after it was opened; the Open Risks entry itself just hadn't been updated to reflect
+it until now.
+
+**Verified:** SGE jobs 3241 (1380×1100 fixed-pin confirmation) and 3250–3253 (fixed-pin
+width sweep); `config_current_signoff.json` still carries `IO_PIN_ORDER_CFG` today.
+**See:** `planning/die-shrink-routability-floor.md` §6–8 (`io_placement_bl.cfg` is the
+"PCB-realistic" pin order referenced there); `rtl-test/ol_trouper_top/io_placement_bl.cfg`.
+
+### 10. DC Removal: documented spec figures contradicted by verified sim results — CLOSED 2026-07-11
+
+`planning/blocks/DC Removal.md`'s verification table claimed AC passband
+droop < 0.1 dB at a 1 kHz test point, and reset-recovery settling to < 1 LSB
+within 37 samples. `planning/DSP Chain SNR Loss Budget.md`'s bit-exact model
+measured −8.5 dB droop at 1 kHz and 119 samples to < 1 LSB (64-code offset)
+— both contradicting the doc. Flagged as an unreconciled doc-vs-sim
+mismatch, not (at the time) confirmed as either a real RTL defect or a
+doc-only error.
+
+**Root cause (not an RTL defect):** both numbers in the block doc were
+simply wrong test criteria, not RTL bugs:
+- 1 kHz sits *inside* the DC-removal filter's own transition band (α=1/32
+  gives a ~2.45 kHz corner) — droop there is legitimately large by design;
+  the doc's own `TRPR-DCR-010` requirement ("< 0.1 dB across the LoRa
+  signal band") was never actually violated, since the real LoRa signal
+  band sits well above the corner. The block doc's test table had just
+  picked an unrepresentative test frequency.
+- 37 samples only reaches ≈68% settled for τ=32 — nowhere near < 1 LSB.
+  The measured 119 samples (≈98.4% settled for a 64-code offset) is
+  consistent with, not contradictory to, the doc's own correct ~74-sample/
+  90%-settling figure elsewhere in the same file (`TRPR-DCR-005`/
+  `TRPR-DCR-013` in the Chip Specification carry the correct 74-sample/90%
+  number and were never wrong — only the block doc's separate verification-
+  table entry was).
+
+**Fix:** `planning/blocks/DC Removal.md` verification table corrected —
+AC passband test point moved to 50 kHz (clear of the transition band, still
+< 0.1 dB as designed); reset-recovery criterion corrected to 119 samples.
+Added a note in the doc so the 1 kHz transition-band behavior isn't
+rediscovered as a bug later.
+
+**See:** `planning/DSP Chain SNR Loss Budget.md` §2 (bit-exact measurements);
+`planning/blocks/DC Removal.md` (fixed verification table).
+
+### 17. Noise Estimation Manhattan-norm bias/variance not quantified — CLOSED (superseded) 2026-07-11
+
+`noise_est.v` used an L1 (Manhattan) approximation instead of an ideal L2
+norm for `energy_snap`; the resulting bias/variance was never measured
+against an ideal estimator.
+
+**Disposition:** not fixed — **moot**. `noise_est.v` is dead code: it is not
+instantiated in `trouper_top.v` (removed per the "Legacy energy-snapshot
+path removed" comment at the old instantiation site) and not referenced by
+the current signoff config. Noise qualification is now done entirely by
+`training_acc`'s firmware-triggered noise-mode window (`TACC_NOISE_TRIG`)
+plus the SC-contamination gate (`NOISE_READY` IRQ) — see CLAUDE.md's system
+summary and `planning/Remove Noise Floor Estimator Migration Plan.md`. There
+is no live Manhattan-norm estimate left to quantify. The source files
+(`rtl-test/rtl/noise_est.v`, `noise_est_bb.v`) are still physically present
+but orphaned — left in place for now rather than deleted; candidate for the
+same cleanup pass as the other dead-logic items in Open Risks #25.
+
+**See:** `planning/DSP Chain SNR Loss Budget.md` §5 (updated to match).
 
 ### 4. Bypass-antenna mux skips antenna 0 — CLOSED 2026-07-05
 

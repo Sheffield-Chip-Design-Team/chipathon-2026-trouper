@@ -90,13 +90,20 @@ Ports removed from earlier planning: `dc_alpha_shift`, `dc_bypass`, `dc_est_i/q`
 |---|---|---|
 | Step DC — I branch | cocotb: inject constant `raw_i0 = +64` for 1024 samples | `mean(out_i0)` over last 512 samples < 1 LSB |
 | Step DC — all branches | Inject different constant DC per branch (+32, −48, +10, −5) | Each `out_k` converges independently; no cross-branch leakage |
-| AC passband | Inject complex sine at 1 kHz; compare RMS in vs out | Droop < 0.1 dB |
+| AC passband | Inject complex sine at 50 kHz (well within the LoRa signal band for both 125/250 kHz BW, clear of the ~2.45 kHz α=1/32 corner); compare RMS in vs out | Droop < 0.1 dB |
 | AC stopband | Inject DC (constant) | Output < 1 LSB after 256 samples |
 | Accumulator max | Inject +127 for 10⁶ samples | No overflow; `out` remains valid |
 | Accumulator min | Inject −128 for 10⁶ samples | No overflow; `out` remains valid |
-| Reset recovery | Assert `rst_n` mid-stream with +64 DC present; release | `out` < 1 LSB DC within 37 samples of re-enable |
+| Reset recovery | Assert `rst_n` mid-stream with +64 DC present; release | `out` < 1 LSB DC within 119 samples of re-enable (a 64-code offset settling to < 1 LSB is ≈98.4% settled — tighter than, and consistent with, the ~74-sample 90%-settling figure above) |
 | Pipeline delay | Compare `out_valid` edge relative to `raw_valid` | Exactly 1 `clk_32m` cycle |
 | Bit-exact vs Python | cocotb: inject real decimated samples; compare to `sim/models/receiver.py` DC removal | Bit-exact match |
+
+**Reconciled 2026-07-11 (Open Risks #10):** the two rows above previously read
+"1 kHz / < 0.1 dB" and "37 samples", which didn't match the design's own
+parameters — droop at 1 kHz (inside the ~2.45 kHz α=1/32 transition band) is
+legitimately ≈ −8.5 dB, not a bug, and 37 samples only reaches ~68% settled,
+nowhere near < 1 LSB. Bit-exact model results:
+`planning/DSP Chain SNR Loss Budget.md` §2.
 
 ---
 

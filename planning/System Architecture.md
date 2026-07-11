@@ -6,6 +6,8 @@
 
 Related prototype hardware note: [AFE Characterisation Board](AFE%20Characterisation%20Board.md)
 
+Bring-up / integration procedure: [System and Integration Guide](../docs/System%20and%20Integration%20Guide.md)
+
 Full pad list: [Pinout](Pinout.md)
 
 Deployment configurations: [Applications](Applications.md)
