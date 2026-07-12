@@ -273,6 +273,7 @@ module trouper_top (
     wire              psram_del_valid;               // pulses when cur/del pair ready
     wire        buf_freeze;  // driven by packet_ctrl_fsm (unused without fbuf, kept for FSM)
     wire        sc_lock;    // declared here to avoid forward-reference; driven by u_sc
+    wire        rb_sc_force_lock; // manual SC lock override (SC_FORCE_LOCK 0x19); declared here to avoid forward-reference
 
     // =========================================================================
     // Stage 3b: Schmidl-Cox preamble detector
@@ -298,6 +299,7 @@ module trouper_top (
         .sc_thr         (rb_sc_thr),
         .sc_hits_req    (rb_sc_hits_req),
         .sc_clr         (packet_done_pulse),  // re-arm detector when packet FSM returns to IDLE
+        .sc_lock_force  (rb_sc_force_lock),
         .sc_lock        (sc_lock),
         .timing_ref     (timing_ref),
         .c_i0 (), .c_q0 (),
@@ -403,9 +405,8 @@ module trouper_top (
     // =========================================================================
     // Stage 7: Packet Control FSM
     // =========================================================================
-    wire        safe_switch, W_valid_set, W_missed_packet;
+    wire        W_valid_set, W_missed_packet;
     wire        W_missed_q;   // sticky per-packet readback mirror of the pulse
-    wire        combiner_source;
     wire [2:0]  packet_phase;
     wire        packet_active;
     wire [1:0]  active_mode;
@@ -428,7 +429,6 @@ module trouper_top (
     packet_ctrl_fsm u_pcfsm (
         .clk             (clk),
         .rst_n           (rst_n),
-        .iq_valid        (dcr_valid),
         .sample_count    (iq_samp_cnt),
         .sf              (rb_sf_cfg),
         .sample_shift    (rb_sample_shift),
@@ -438,19 +438,11 @@ module trouper_top (
         .W_commit        (W_commit_hw),
         .mode_shadow     (rb_mimo_mode),
         .antenna_en_shadow (rb_antenna_en),
-        .psram_en        (rb_psram_ctrl[0]),
-        .psram_replay_active (psram_replay_active_w),
         .pkt_timeout_syms (rb_pkt_timeout_syms),
         .tacc_window_syms (rb_tacc_window_syms),
-        .safe_switch     (safe_switch),
         .W_valid_set     (W_valid_set),
         .W_missed_packet (W_missed_packet),
         .W_missed_q      (W_missed_q),
-        .combiner_source (combiner_source),
-        .psram_packet_arm  (),
-        .psram_replay_start(),
-        .psram_abort       (),
-        .payload_rd_base   (),
         .buf_freeze        (buf_freeze),
         .packet_phase      (packet_phase),
         .packet_active     (packet_active),
@@ -775,6 +767,7 @@ module trouper_top (
         .psram_dbg_addr  (rb_psram_dbg_addr),
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
+        .sc_force_lock   (rb_sc_force_lock),
         .noise_trig      (rb_noise_trig),
         .tacc_window_syms (rb_tacc_window_syms),
         .replay_delay_samples (rb_replay_delay_samples)

@@ -155,9 +155,10 @@ link as nominally "32 MHz," but a shared nominal frequency does not mean a
 shared clock tree — two independently hardened macros typically have
 different PLLs/insertion delay/skew even at the same target frequency. By
 contrast, the genuinely external SPI interface *does* get proper CDC:
-`spi_slave.v:159-202` implements a 3-stage pulse synchronizer, explicitly
-commented "Register writes cross into `clk_32m` via a pulse synchroniser."
-No equivalent exists for `GRP_*`. Open Risk #16 already documents the
+`spi_slave.v` implements a persistent toggle + bundled-data mailbox
+synchronizer (fixed 2026-07-12, commit `2b6af0f`, see Open Risk #15),
+explicitly commented "Register writes cross into `clk_32m` via a toggle
+synchroniser and bundled-data mailbox." No equivalent exists for `GRP_*`. Open Risk #16 already documents the
 downstream *symptom* (SPI writes silently dropped if `GRP_WE`/`GRP_RE`
 overlaps the SPI write window, plus an undocumented "hold `GRP_WE` ≥ 2
 clocks" contract); this entry is the underlying root cause — if Grouper's
@@ -177,7 +178,16 @@ synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
 `spi_slave.v:159-202`; `planning/Pinout.md` (inter-project wire note).
 **Found:** 2026-07-05 (Grouper bus clocking review).
 
-### 38. Host SPI 10 MHz timing is not constrained or signed off
+### 38. Host SPI 10 MHz timing is not constrained or signed off — CDC portion FIXED, SDC portion open
+
+**Partially fixed 2026-07-12:** the persistent toggle/mailbox CDC (commits
+`2b6af0f`, `fef30de`) closes the RTL half of this risk's Action item and
+Open Risk #15 outright — see above. The SDC half (declaring `SPI_SCK`,
+SCK-relative MOSI/MISO I/O delays, `SPI_SCK`/`IQ_CLK` asynchronous-clock
+exceptions, mailbox settling constraint) is still open:
+`src/config/pnr_32m_scoped_v20.sdc` is unchanged. Remaining scope tracked as
+Implementation order steps 6-8 in
+`planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
 The production SDC declares only `IQ_CLK` and globally false-paths
 `SPI_SCK`. It also constrains `SPI_MOSI` relative to `IQ_CLK`, even though MOSI
@@ -240,6 +250,23 @@ the one in deep fade. It only means firmware can route around a
 known-bad branch (e.g. after a noise-mode `Z_kk` energy scan) instead of
 being permanently stuck on antenna 0. Firmware-side selection policy is not
 yet designed. See `planning/Register Map.md` `0x0A`.
+
+**Related mitigation added 2026-07-12 (different failure mode):**
+`SC_FORCE_LOCK` (`reg_bank` 0x19[0], W1P) manually asserts `sc_lock`,
+bypassing the correlator's hit-count logic entirely. This does not address
+the ant0-fade diversity gap above — it is a bring-up / catastrophic
+correlator-failure escape hatch for the case where `sc_detector` itself is
+suspected non-functional (not just fed a faded antenna), so the rest of the
+chain (`packet_ctrl_fsm` → PSRAM → combiner → IRQ) can still be exercised.
+A forced lock has no verified preamble edge to anchor `timing_ref` on, so it
+is not useful for recovering a real packet, only for proving downstream
+logic is alive. Register-only for now; a physical `sc_lock_in` pin (the
+NR2/3 cascade OR-lock scheme, `planning/NR2-multi-ASIC-cascade.md`) is
+deliberately deferred — the pinout is at its 26-pad budget
+(`planning/Pinout.md`) with no spare pad to bond. See `planning/Register
+Map.md` `0x19`; regression `cocotb/sc_force_lock/test_sc_force_lock.py`
+(SGE job 3356, 2/2 PASS: forced entry into `ST_PREAMBLE_ACQ` from IDLE, and
+the `PACKET_ACTIVE` write-gate confirmed to block a second force mid-packet).
 
 **Does not block tapeout** — silicon works correctly whenever the selected
 antenna is not the faded branch; this is a robustness/diversity gap, not a
@@ -312,7 +339,17 @@ replay-drain-then-exit condition.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
-### 15. Final SPI write lost if host raises CS too soon after last SCK edge
+### 15. Final SPI write lost if host raises CS too soon after last SCK edge — FIXED
+
+**FIXED 2026-07-12** (`spi_slave.v`, commit `2b6af0f`). The one-SCK pulse
+request (`spi_reg_we_req`) is replaced by a persistent toggle + bundled-data
+mailbox (`spi_we_toggle`/`spi_wr_addr_lat`/`spi_wdata_lat`), reset only by
+chip reset, not `HOST_CS`. A completed write byte now survives CS
+deassertion indefinitely until the 32 MHz domain's two-FF synchronizer
+observes the toggle change, removing the CS-hold-time dependency entirely.
+Covered by `cocotb/spi_cdc/` (8 scenarios, SGE job 3352, all PASS), including
+randomized clock-phase sweep and immediate-CS-deassertion back-to-back
+writes. See `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
 `spi_reg_we_req` (`spi_slave.v:70-118`) is cleared asynchronously by
 `HOST_CS` rising; the 2-FF synchronizer needs ~3 × 31.25 ns of request
@@ -450,25 +487,43 @@ C_POOL double-booking. Stale R=128 comments remain in
 **Doc gap — risk is firmware/bring-up written against the spec, not the map.**
 **Found:** 2026-07-02 trouper_top RTL review.
 
-### 25. trouper_top dead logic + minor RTL hygiene
+### 25. trouper_top dead logic + minor RTL hygiene — packet_ctrl_fsm portion RESOLVED 2026-07-12
 
-`packet_ctrl_fsm` outputs `psram_packet_arm`/`psram_replay_start`/
-`psram_abort`/`payload_rd_base` are unconnected (`trouper_top.v:387-390`) and
-`safe_switch`/`combiner_source` are unused — notably `psram_abort` is *not*
-wired into `psram_buf_ctrl`, so a re-lock during replay relies solely on
-`packet_end` (verify that path or wire/delete). Also: `mimo_mode[1]` never
-writable (`reg_bank.v:191`) yet read back and forwarded; a `noise_trig`
-written while a live training is armed is silently swallowed (top opens
-`noise_window_active`, `training_acc` ignores the arm — TODO at
-`trouper_top.v:257`); `mrc_combiner.v:126` assigns `26'sd0` to an 18-bit reg;
+**Resolved (dead FSM signals):** all dead `packet_ctrl_fsm` outputs and
+inputs deleted from the RTL — `psram_packet_arm`, `psram_replay_start`,
+`payload_rd_base`, `safe_switch`, `combiner_source` (superseded by the
+continuous-delay replay redesign, commit `46e1cdf`), plus the now-unused
+inputs `iq_valid`, `psram_en`, `psram_replay_active`. `buf_freeze` was
+KEPT: it is regression-covered (TRPR-PCF-002/008, `test_w_missed_packet.py`)
+even though it drives nothing in `trouper_top` yet.
+
+**Resolved (`psram_abort` — the "verify that path or wire/delete" item):
+verified UNREACHABLE, branch deleted.** The mid-payload re-lock scenario
+`psram_abort` guarded (a second `sc_lock` arriving while a replay is still
+in flight, with `packet_active` never dropping so `packet_end` never fires)
+is structurally impossible in the current design: `sc_detector` holds
+`sc_lock` high until `sc_clr` (= `packet_done_pulse`, the falling edge of
+`packet_active`), both the hit-count and `SC_FORCE_LOCK` lock paths are
+gated `!sc_lock`, and the `SC_FORCE_LOCK` register write is additionally
+blocked by `PACKET_ACTIVE`. Every packet acquisition therefore passes
+through `ST_IDLE`/`packet_end` first — `psram_buf_ctrl`'s `packet_end` exit
+from `S_REPLAY` is sufficient. The entire `ST_PAYLOAD_ACTIVE` re-lock branch
+(and `psram_abort` with it) was deleted; a why-comment in
+`packet_ctrl_fsm.v` and `psram_buf_ctrl.v` records the reasoning.
+**Guard-rail for future work:** if `sc_detector` ever gains a mid-packet
+re-arm path (e.g. an NR2/3 cascade `sc_lock_in` wired without the
+`!sc_lock` gate), re-lock handling AND a replay-abort path must be
+reintroduced in both `packet_ctrl_fsm` and `psram_buf_ctrl` — see the note
+in `planning/NR2-multi-ASIC-cascade.md`.
+Verified: 7 cocotb suites + `sc_force_lock` + `tb_trouper_two_packet`
+regression after the deletions (SGE jobs 3359/3360).
+
+**Still open (non-FSM items):** `mimo_mode[1]` never writable
+(`reg_bank.v`) yet read back and forwarded; a `noise_trig` written while a
+live training is armed is silently swallowed (top opens
+`noise_window_active`, `training_acc` ignores the arm — TODO in
+`trouper_top.v`); `mrc_combiner.v:126` assigns `26'sd0` to an 18-bit reg;
 `mrc_combiner` port `clk_16m` is actually driven at 32 MHz.
-
-2026-07-06 addition: `buf_freeze` joins the list — now *verified* to follow
-the FSM contract (asserted at packet start, dropped at IDLE;
-`test_w_missed_packet.py`, job 3310) but it drives nothing in `trouper_top`
-(declared "unused without fbuf"); dead since the PSRAM delay-line migration
-replaced `frontend_buf_ctrl`. Candidate for removal or re-purposing along
-with the other dead FSM outputs above.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
