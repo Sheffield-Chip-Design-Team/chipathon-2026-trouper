@@ -46,6 +46,11 @@ directly. This is a corner-*policy* question (how much margin above
 official `ss_125C_3v00` signoff number (−25.39 ns at this die size) still
 stands as the blocking metric until that policy is decided.
 
+2026-07-12 update: on the latest v20 runs the worst SS paths are **not**
+`u_psram` but three quasi-static `rb_*` cones the scoped SDC's `-through`
+wildcards miss (worst: `rb_sf_cfg → u_pcfsm.pkt_end_q`, −20.4 ns) — see
+item 39 for the breakdown and the v21 fix plan.
+
 **See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items),
 `planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation).
 
@@ -219,6 +224,39 @@ and GF180 pad timing rather than guessing them.
 `src/config/pnr_32m_scoped_v20.sdc`;
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 **Found:** 2026-07-11 (10 MHz SPI implementation/constraint research).
+
+### 39. Scoped-MCP SDC (v20) still leaks: three unrelaxed rb_* cones (SS WNS −20.4), plus one dishonest relaxation on the `timing_ref` write arc
+
+The v20 SDC's `-through` net wildcards miss three quasi-static
+`rb_*` → derived-register cones (same bug class the v18/v20 headers document):
+`rb_sf_cfg → u_pcfsm.pkt_end_q` (**−20.4 ns**, current worst SS path),
+`rb_sc_hits_req → timing_ref` (−17.7 ns; endpoint net keeps the top-level
+name, not `u_sc.*`), and `rb_tacc_window_syms → u_tacc.acc_end` (−16.6 ns;
+arriving cone fully anonymized). Confirmed on the latest v20 signoff runs
+(`ol_trouper_top` `RUN_2026-07-05_00-56-3x`, SS WNS −20.4 to −25.4) — these,
+not `u_psram`, are the current residual SS wall (item 1's −25.39 figure).
+
+Separately, the v20 `MCP=3 -to acq_timeout_q/wpend_timeout_q` fix is
+**dishonest on the write side**: `sc_detector` sets `timing_ref` on the same
+edge as `sc_lock` (`sc_detector.v:441/450`), and `packet_ctrl_fsm.v:112-116`
+latches the timeout registers one cycle later — the
+`timing_ref` → 32-bit-adder arc has **1 real cycle** but a 3-cycle STA budget
+(the v20 header's justification covers only the read side). Since sibling
+rb→adder cones measure ~48 ns at SS, this arc very likely also misses
+31.25 ns: silicon could latch a corrupt per-packet timeout (worst case the
+FSM hangs in `PREAMBLE_ACQ` until `iq_samp_cnt` passes a garbage threshold).
+
+**Action (v21):** scope the three missed cones by `-to` register endpoints
+(quasi-static sources, same justification as v18/v20); make the pcfsm
+relaxation honest by delaying the timeout-register latch ≥2 cycles after
+`sc_lock` (compute from `lat_timing_ref` on `ST_PREAMBLE_ACQ` entry — first
+compared much later) or scoping `-from` only the quasi-static sources.
+Tooling note: the NFS `ol_mimo_rx_top/runs` symlink is a self-loop (rsync
+copied the local symlink); real runs live in `ol_trouper_top/runs/`.
+
+**See:** `src/config/pnr_32m_scoped_v20.sdc` (v18/v20 headers);
+`src/control/packet_ctrl_fsm.v`; item 1.
+**Found:** 2026-07-12 (SDC-vs-`src/` MCP audit + NFS STA cross-check).
 
 ---
 
