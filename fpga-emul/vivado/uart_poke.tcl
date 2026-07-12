@@ -13,8 +13,15 @@ targets -set -filter {name =~ "xc7a100t*"}
 fpga $bit_file
 after 5000
 
+# Release the processor/AXI reset fabric after configuration. Without this,
+# MDM data reads can overrun before they ever reach UARTLite.
+targets -set -filter {name =~ "MicroBlaze Debug Module*"}
+rst
+after 1000
 targets -set -filter {name =~ "MicroBlaze #0*"}
-stop
+con
+after 1000
+catch {stop}
 
 # Sanity: read UART status (expect TXEMPTY bit). A sane, stable value here means
 # the 32 MHz clock, reset fabric, and AXI peripheral bus are all alive.
