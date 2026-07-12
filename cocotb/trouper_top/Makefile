@@ -1,7 +1,11 @@
 # cocotb/trouper_top/Makefile
-# All SF7-SF12 × BW250/125 integration tests via cocotb + Icarus Verilog.
+# All SF7-SF12 × BW250/125 integration tests via cocotb + Verilator.
 # Production trouper_top: HB decimator chain (sd_decimator_poly, R=64, 500 kS/s).
 # test_startup.py adds power-on/reset-ordering coverage (Open Risks item 27).
+#
+# Default switched icarus -> verilator 2026-07-12: full 18-test sweep runs in
+# ~73 s compiled vs 1 h+ interpreted (SF11/SF12 dominate). SIM=icarus still
+# works if an event-driven cross-check is ever wanted.
 #
 # Usage:
 #   make                                          # run all tests (sweep + startup)
@@ -12,10 +16,16 @@
 # Inside the chipathon26 Docker container the repo root is mounted at
 # /foss/designs/lora-mimo; DESIGN_ROOT points there.
 
-SIM           ?= icarus
+SIM           ?= verilator
 TOPLEVEL_LANG  = verilog
 TOPLEVEL            = tb_trouper_cocotb
 COCOTB_TEST_MODULES = test_trouper_top,test_startup
+
+# --timing: Timer()-based SPI bit-bang in the tests
+# --public-flat-rw: hierarchical dut.u_dut.* reads
+ifeq ($(SIM),verilator)
+EXTRA_ARGS += --timing -Wno-fatal --public-flat-rw
+endif
 
 DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src

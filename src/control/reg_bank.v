@@ -98,6 +98,8 @@ module reg_bank (
     output reg [22:0]  psram_dbg_addr,
     output reg         psram_dbg_auto_inc,
     output reg         psram_dbg_rd_trig, // W1P
+    // Manual SC lock override (bring-up / catastrophic-detector-failure escape hatch)
+    output reg         sc_force_lock,  // 0x19[0]: W1P — blocked while packet_active
     // Training accumulator
     output reg         noise_trig,     // 0x1F[0]: W1P — firmware-triggered noise measurement
     output reg [3:0]   tacc_window_syms, // 0x27[3:0]: accumulation endpoint in symbols from timing_ref
@@ -176,6 +178,7 @@ module reg_bank (
             psram_dbg_addr   <= 23'h0;
             psram_dbg_auto_inc <= 1'b0;
             psram_dbg_rd_trig <= 1'b0;
+            sc_force_lock    <= 1'b0;
             noise_trig       <= 1'b0;
             tacc_window_syms <= 4'd8;
             replay_delay_samples <= 16'd1500; // ≈3 ms: measured Grouper rv32emc
@@ -189,6 +192,7 @@ module reg_bank (
             w_commit_pulse  <= 1'b0;
             psram_ctrl[1]   <= 1'b0;
             psram_dbg_rd_trig <= 1'b0;
+            sc_force_lock   <= 1'b0;
             noise_trig      <= 1'b0;
 
             if (we) begin
@@ -217,6 +221,7 @@ module reg_bank (
                     8'h12: rx_gain_shadow_2 <= wdata;
                     8'h13: rx_gain_shadow_3 <= wdata;
                     8'h18: rx_gain_commit   <= wdata[0];
+                    8'h19: if (!packet_active) sc_force_lock <= wdata[0]; // blocked during active packet
                     // --- Packet / weight / training control ---
                     8'h1E: w_commit_pulse   <= wdata[0];
                     8'h1F: noise_trig       <= wdata[0];
@@ -307,6 +312,7 @@ module reg_bank (
             // lasts one CE period and the shadow→active latch completes within
             // one clock — there is no observable "pending" state over SPI.
             8'h18: rdata_next = 8'h00;
+            8'h19: rdata_next = 8'h00;                              // SC_FORCE_LOCK (WO)
             // --- Packet / weight / training control ---
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,
                             training_done_rb, packet_phase, packet_active};

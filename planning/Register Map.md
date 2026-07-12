@@ -49,7 +49,8 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x16` | `RX_GAIN_ACTIVE_2` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_3 |
 | `0x17` | `RX_GAIN_ACTIVE_3` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_4 |
 | `0x18` | `RX_GAIN_CTRL` | R/W | `0x00` | AGC | [0] `RX_GAIN_COMMIT` (W1P: latches shadow→active, auto-clears; reads 0 — commit completes within one clock, there is no observable pending state) |
-| `0x19`–`0x1B` | — | — | — | — | Reserved for gain/AGC growth |
+| `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`) |
+| `0x1A`–`0x1B` | — | — | — | — | Reserved for gain/AGC growth |
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
@@ -265,6 +266,20 @@ Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
 
 ---
 
+### `0x19` — SC_FORCE_LOCK (write-only, W1P)
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [0] | `SC_FORCE_LOCK` | W1P: asserts `sc_lock` directly in `sc_detector`, bypassing the correlator's hit-count logic. Ignored while `PACKET_ACTIVE=1`. |
+
+**Purpose:** a bring-up / catastrophic-detector-failure escape hatch, not a packet-recovery mechanism. `sc_detector` has no other firmware-triggerable path into `ST_PREAMBLE_ACQ` — only a genuine hit-count-qualified correlator lock reaches it otherwise. If the correlator itself is suspected non-functional on silicon (as opposed to a merely faded antenna — see `sc_ant_sel`, `0x0A`), this proves the rest of the chain (`packet_ctrl_fsm` → PSRAM buffering → combiner → IRQ) is alive without depending on the correlator.
+
+**Not a valid timing reference.** A forced lock latches `timing_ref` from the free-running `sample_count` at the moment of the write, not a symbol-boundary-corrected value derived from a real preamble edge. MRC training off a forced lock is not meaningful — treat the resulting `Z` values as noise, not a channel estimate.
+
+**Register-only today; pin variant deferred.** This is the SPI/GRP half of the OR-lock scheme sketched for the NR2/3 multi-ASIC cascade (`planning/NR2-multi-ASIC-cascade.md`, `sc_lock_in`/`sc_lock_out` pins) — that scheme's `effective_lock = sc_lock_detected || sc_lock_in` is the same shape as this register's OR into `sc_lock`. Wiring an actual `sc_lock_in` pad is not done yet: the current pinout is at its 26-pad budget (`planning/Pinout.md`), so there is no spare pad to bond. If one becomes available, OR it into the same internal force signal (`sc_detector.sc_lock_force`) documented here rather than building a second mechanism.
+
+---
+
 ### `0x1C` — PACKET_STATUS (read-only)
 
 | Bits | Field | Description |
@@ -463,7 +478,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed; no TAP in RTL, GPIO never wired out of macro. Addresses now reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x79`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x1A`–`0x1B`, `0x79`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -473,7 +488,7 @@ If a future revision reinstates any of these features, allocate addresses from t
 | --- | --- |
 | `0x00`–`0x07` | Global / IRQ (`0x04`–`0x07` reserved; former JTAG/GPIO) |
 | `0x08`–`0x0F` | RX / modem configuration |
-| `0x10`–`0x1B` | Gain / AGC / SX1257 live RX control (`0x19`–`0x1B` reserved) |
+| `0x10`–`0x1B` | Gain / AGC / SX1257 live RX control (`0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A`–`0x1B` reserved) |
 | `0x1C`–`0x23` | Packet / weight-path / training control |
 | `0x24`–`0x2F` | SC status, `TACC_WINDOW_SYMS`, and bring-up debug |
 | `0x30`–`0x3F` | W shadow bank |

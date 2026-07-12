@@ -207,6 +207,28 @@ Each chip exposes two pins:
 
 Internally: `effective_lock = sc_lock_detected || sc_lock_in`
 
+**Implementation note (2026-07-12):** the internal OR half of this scheme
+already exists on single-chip NR=1 Trouper, as a register instead of a pin —
+`SC_FORCE_LOCK` (`reg_bank` 0x19, `sc_detector.sc_lock_force`) asserts
+`sc_lock` directly, bypassing the correlator's hit-count logic (see
+`planning/Register Map.md` `0x19`; added as a bring-up / catastrophic-
+correlator-failure escape hatch, not for this cascade use case). If/when a
+spare pad becomes available for `sc_lock_in`, OR it into the same internal
+`sc_lock_force` signal rather than building a second force-lock path.
+
+**⚠ Constraint any future `sc_lock_in` implementation must respect:** the
+current Trouper RTL assumes `sc_lock` cannot re-assert mid-packet — it is
+level-held until `sc_clr` (packet done), and both lock paths are gated
+`!sc_lock`. `packet_ctrl_fsm` and `psram_buf_ctrl` had their mid-payload
+re-lock / replay-abort handling *deleted* on 2026-07-12 because that
+assumption makes it unreachable (Open Risks #25). The OR-lock scheme as
+specified here fires only during acquisition-from-idle (both chips at
+`packet_active=0` racing for the same preamble), which is compatible. But
+if `sc_lock_in` is ever wired so it can pulse *during* an active packet,
+the deleted re-lock + replay-abort handling must be reintroduced in both
+modules, or a stale in-flight PSRAM replay will be combined against the new
+packet.
+
 When `effective_lock` rises and the chip has not already latched `timing_ref`, it latches the current sample counter as `timing_ref`. Chip C gets `sc_lock_in` from the same OR, so all three chips synchronise to the same packet-detect event.
 
 On the PCB: `sc_lock_out` from A and B wired to each other's `sc_lock_in` and to Chip C's `sc_lock_in`. Open-drain drivers with a pull-up give a wired-OR with no contention.

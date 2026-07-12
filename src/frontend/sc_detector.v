@@ -97,6 +97,7 @@ module sc_detector (
     input  wire [15:0] sc_thr,
     input  wire [1:0]  sc_hits_req,
     input  wire        sc_clr,     // re-arm: clear lock + detection state (packet done)
+    input  wire        sc_lock_force, // manual override (reg_bank SC_FORCE_LOCK 0x19, W1P)
     output reg         sc_lock,
     output reg  [31:0] timing_ref,
     output reg  signed [31:0] c_i0, c_q0,
@@ -459,6 +460,24 @@ module sc_detector (
                     hit_count <= 2'd0;
                 end
                 sc_hit_count_dbg <= hit_count;
+            end
+
+            // -----------------------------------------------------------------
+            // Manual force-lock: bring-up / catastrophic-detector-failure
+            // escape hatch (reg_bank SC_FORCE_LOCK 0x19, W1P; blocked upstream
+            // while PACKET_ACTIVE, so this only fires from IDLE). Unlike a
+            // real hit there is no verified preamble edge to anchor on, so
+            // timing_ref is best-effort: it latches the raw free-running
+            // sample_count rather than a symbol-boundary-corrected value.
+            // Downstream MRC training on a forced lock is not expected to
+            // produce a meaningful channel estimate -- this exists to prove
+            // the FSM/PSRAM/combiner chain is alive when the correlator
+            // itself is suspected broken, not to recover a real packet.
+            // -----------------------------------------------------------------
+            if (sc_lock_force && !sc_lock) begin
+                sc_lock            <= 1'b1;
+                timing_ref         <= sample_count;
+                sc_lock_sample_dbg <= sample_count;
             end
 
             sc_stat <= {sym_mag_sc[27:13], 1'b0}; // top 15 useful bits, zero-padded LSB

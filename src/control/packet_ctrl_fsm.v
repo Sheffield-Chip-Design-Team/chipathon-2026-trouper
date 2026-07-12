@@ -5,7 +5,6 @@
 module packet_ctrl_fsm (
     input  wire        clk,
     input  wire        rst_n,
-    input  wire        iq_valid,
     input  wire [31:0] sample_count,
     input  wire [3:0]  sf,
     input  wire [1:0]  sample_shift,
@@ -15,11 +14,8 @@ module packet_ctrl_fsm (
     input  wire        W_commit,
     input  wire [1:0]  mode_shadow,
     input  wire [3:0]  antenna_en_shadow,
-    input  wire        psram_en,
-    input  wire        psram_replay_active,
     input  wire [7:0]  pkt_timeout_syms,
     input  wire [3:0]  tacc_window_syms,
-    output reg         safe_switch,
     output reg         W_valid_set,
     output reg         W_missed_packet,
     // Sticky per-packet mirror of W_missed_packet for register readback
@@ -27,11 +23,6 @@ module packet_ctrl_fsm (
     // consumed by the IRQ path and is firmware-invisible if wired to
     // reg_bank directly. Held through IDLE, cleared at the next packet start.
     output reg         W_missed_q,
-    output reg         combiner_source,
-    output reg         psram_packet_arm,
-    output reg         psram_replay_start,
-    output reg         psram_abort,
-    output reg  [23:0] payload_rd_base,
     output reg         buf_freeze,
     output reg  [2:0]  packet_phase,
     output reg         packet_active,
@@ -87,15 +78,9 @@ module packet_ctrl_fsm (
             pkt_end_q        <= 32'd0;
             W_commit_pending <= 1'b0;
             W_valid          <= 1'b0;
-            safe_switch      <= 1'b1;
             W_valid_set      <= 1'b0;
             W_missed_packet  <= 1'b0;
             W_missed_q       <= 1'b0;
-            combiner_source  <= 1'b0;
-            psram_packet_arm <= 1'b0;
-            psram_replay_start <= 1'b0;
-            psram_abort      <= 1'b0;
-            payload_rd_base  <= 24'd0;
             buf_freeze       <= 1'b0;
             packet_phase     <= 3'd0;
             packet_active    <= 1'b0;
@@ -105,8 +90,6 @@ module packet_ctrl_fsm (
             sc_lock_prev    <= sc_lock;
             W_valid_set     <= 1'b0;
             W_missed_packet <= 1'b0;
-            psram_abort     <= 1'b0;
-            psram_replay_start <= 1'b0;
 
             // Track W_commit from weight_gen (sticky pending)
             if (W_commit)
@@ -114,8 +97,6 @@ module packet_ctrl_fsm (
 
             case (state)
                 ST_IDLE: begin
-                    safe_switch     <= 1'b1;
-                    combiner_source <= 1'b0;
                     buf_freeze      <= 1'b0;
                     packet_active   <= 1'b0;
                     packet_phase    <= 3'd0;
@@ -137,18 +118,14 @@ module packet_ctrl_fsm (
                         active_mode       <= mode_shadow;
                         active_antenna_en <= antenna_en_shadow;
                         buf_freeze        <= 1'b1;
-                        safe_switch       <= 1'b0;
                         packet_active     <= 1'b1;
                         packet_phase      <= 3'd1;
-                        if (psram_en) psram_packet_arm <= 1'b1;
                         state <= ST_PREAMBLE_ACQ;
                     end
                 end
 
                 ST_PREAMBLE_ACQ: begin
-                    combiner_source <= 1'b0; // bypass during acquisition
                     packet_phase    <= 3'd1;
-                    psram_packet_arm <= 1'b0;
 
                     if (training_done) begin
                         state        <= ST_W_PENDING;
@@ -169,7 +146,6 @@ module packet_ctrl_fsm (
                         W_valid          <= 1'b1;
                         W_valid_set      <= 1'b1;
                         W_commit_pending <= 1'b0;
-                        combiner_source  <= 1'b1;
                         state            <= ST_PAYLOAD_ACTIVE;
                         packet_phase     <= 3'd3;
                     end else if (sample_count > wpend_timeout_q) begin
@@ -178,7 +154,6 @@ module packet_ctrl_fsm (
                             W_missed_packet <= 1'b1;
                             W_missed_q      <= 1'b1;
                         end
-                        if (W_valid) combiner_source <= 1'b1;
                         state        <= ST_PAYLOAD_ACTIVE;
                         packet_phase <= 3'd3;
                     end
@@ -186,41 +161,33 @@ module packet_ctrl_fsm (
 
                 ST_PAYLOAD_ACTIVE: begin
                     packet_phase    <= 3'd3;
-                    combiner_source <= W_valid ? 1'b1 : 1'b0;
 
                     // Apply any pending W immediately during payload
                     if (W_commit_pending) begin
                         W_valid          <= 1'b1;
                         W_valid_set      <= 1'b1;
                         W_commit_pending <= 1'b0;
-                        combiner_source  <= 1'b1;
                     end
 
-                    // New sc_lock -> start next packet
-                    if (sc_lock && !sc_lock_prev) begin
-                        W_missed_q  <= 1'b0;
-                        psram_abort <= psram_replay_active;
-                        lat_timing_ref    <= timing_ref;
-                        acq_timeout_q     <= acq_timeout_next;
-                        wpend_timeout_q   <= wpend_timeout_next;
-                        pkt_end_q         <= timing_ref + pkt_span_next;
-                        active_mode       <= mode_shadow;
-                        active_antenna_en <= antenna_en_shadow;
-                        buf_freeze        <= 1'b1;
-                        W_valid           <= 1'b0;
-                        combiner_source   <= 1'b0;
-                        packet_phase      <= 3'd1;
-                        if (psram_en) psram_packet_arm <= 1'b1;
-                        state <= ST_PREAMBLE_ACQ;
-                    end else if (sample_count > pkt_end_q) begin
+                    // No mid-payload re-lock handling: deliberate, not an
+                    // oversight. sc_lock is level-held by sc_detector until
+                    // sc_clr (= packet_done_pulse, the falling edge of
+                    // packet_active), so a second sc_lock rising edge cannot
+                    // occur while this state is active -- every new packet
+                    // acquisition necessarily passes through ST_IDLE. A
+                    // former re-lock branch here (with a psram_abort output
+                    // to bail psram_buf_ctrl out of a stale replay) was
+                    // verified unreachable and removed 2026-07-12 (Open
+                    // Risks #25). If sc_detector ever gains a mid-packet
+                    // re-arm path (e.g. a cascade sc_lock_in without the
+                    // !sc_lock gate), re-lock handling and a replay abort
+                    // must be reintroduced here AND in psram_buf_ctrl.
+                    if (sample_count > pkt_end_q) begin
                         // Packet timeout -> IDLE
                         buf_freeze      <= 1'b0;
-                        safe_switch     <= 1'b1;
-                        combiner_source <= 1'b0;
                         W_valid         <= 1'b0;
                         packet_active   <= 1'b0;
                         packet_phase    <= 3'd0;
-                        psram_abort     <= psram_replay_active;
                         state           <= ST_IDLE;
                     end
                 end

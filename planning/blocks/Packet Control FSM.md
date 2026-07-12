@@ -155,6 +155,20 @@ Unlike the baseline live path, PSRAM replay does **not** require `W_commit` befo
 
 ## Interface
 
+> **RTL status (2026-07-12):** the implemented `packet_ctrl_fsm.v` interface
+> is a subset of this table. The PSRAM command outputs (`psram_packet_arm`,
+> `psram_replay_start`, `psram_abort`, `payload_rd_base`) were superseded by
+> the continuous-delay replay redesign — `psram_buf_ctrl` self-sequences
+> from `training_done`/`W_commit`/`packet_end` directly — and, with
+> `safe_switch`/`combiner_source` (top-level derives these from
+> `W_valid`/`packet_active`) and the unused `iq_valid`/`psram_en`/
+> `psram_replay_active` inputs, were **deleted from the RTL** (Open Risks
+> #25). `psram_abort`'s mid-payload re-lock scenario was verified
+> structurally unreachable (`sc_lock` is level-held until packet done).
+> `noise_sample_en`/`noise_thresh` were removed with the noise-estimator
+> migration. The clock is 32 MHz, not 16. Rows below are kept for design
+> history; consult the RTL for the live port list.
+
 | Port | Dir | Width | Description |
 |---|---|---|---|
 | `clk` | in | 1 | 16 MHz system clock |

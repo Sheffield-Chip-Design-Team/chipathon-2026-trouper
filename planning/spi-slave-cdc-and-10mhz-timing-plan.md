@@ -1,5 +1,22 @@
 # SPI Slave CDC and 10 MHz Timing Plan
 
+## Status (2026-07-12)
+
+**RTL redesign IMPLEMENTED** (`src/control/spi_slave.v`, `rtl-test/rtl/spi_slave.v`,
+commit `2b6af0f`): persistent toggle/mailbox CDC replaces the one-SCK pulse
+request scheme exactly as specified in "RTL redesign" §1-4 below. This closes
+Open Risk #15 (final SPI write lost on early CS deassertion). Regression suite
+`cocotb/spi_cdc/` (commit `fef30de`) covers "Randomized CDC tests" and most of
+"Directed RTL tests"/"Assertions" below (`test_randomized_clock_phase`,
+`test_back_to_back_min_cs`, `test_continuous_burst`, `test_read_side_effect`,
+`test_reset_interruption`, `test_aborted_frame`, `test_clock_limit_sweep`,
+`test_w1p_exactly_once`) — all 8 scenarios PASS (SGE job 3352).
+
+**Still open:** the "Static-timing constraints" section (SDC changes) and
+"Gate-level/signoff checks" are not done — `src/config/pnr_32m_scoped_v20.sdc`
+is unchanged, so SPI paths remain false-pathed/unconstrained. This is the
+residual scope of Open Risk #38; see Implementation order steps 6-8 below.
+
 ## Purpose
 
 Make the host SPI register interface reliable with a Raspberry Pi master at

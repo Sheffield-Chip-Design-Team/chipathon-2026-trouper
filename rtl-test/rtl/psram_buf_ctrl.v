@@ -645,7 +645,11 @@ module psram_buf_ctrl (
                 // S_REPLAY — interleaved write (live) + read (from buf_base).
                 // Sub 0..24:  QPI write 8 bytes at wr_ptr
                 // Sub 25..55: QPI read 8 bytes from rd_ptr → rpl_*
-                // packet_end → back to S_WRITE.
+                // packet_end → back to S_WRITE. It is the ONLY exit needed:
+                // sc_lock is level-held until sc_clr (= packet_end), so a new
+                // packet cannot re-lock while a replay is in flight — every
+                // acquisition passes through packet_end first (verified
+                // 2026-07-12, Open Risks #25).
                 // ------------------------------------------------------------
                 S_REPLAY: begin
                     if (packet_end) begin
