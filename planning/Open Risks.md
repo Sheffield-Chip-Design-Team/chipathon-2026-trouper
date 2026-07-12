@@ -175,6 +175,39 @@ synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
 `spi_slave.v:159-202`; `planning/Pinout.md` (inter-project wire note).
 **Found:** 2026-07-05 (Grouper bus clocking review).
 
+### 38. Host SPI 10 MHz timing is not constrained or signed off
+
+The production SDC declares only `IQ_CLK` and globally false-paths
+`SPI_SCK`. It also constrains `SPI_MOSI` relative to `IQ_CLK`, even though MOSI
+is captured by `SPI_SCK`-clocked flops. Consequently, STA does not prove the
+advertised 10 MHz SPI interface: SCK-domain register paths, MOSI setup/hold,
+and the falling-edge `SPI_MISO` output timing are either hidden or referenced
+to the wrong clock.
+
+The most critical read path has only half an SCK period: the command address
+completes on its eighth rising edge, the asynchronous `reg_bank` peek decode
+must settle, and the MISO shifter loads on the following falling edge (50 ns at
+10 MHz, before pad/PCB/host margin). Separately, Open Risk #15 shows that the
+current pulse CDC can lose the final write when normal Raspberry Pi CS timing
+clears the request before the 32 MHz synchronizer observes it.
+
+**Risk:** a design that passes the current top-level timing reports can still
+fail register reads or writes at the specified 10 MHz on silicon. Slowing SCK
+may not cure the final-write CS race because it is caused by event lifetime,
+not serial shift timing.
+
+**Action:** implement the persistent toggle/mailbox CDC; declare a 100 ns
+`SPI_SCK` clock; add SCK-relative MOSI and MISO I/O delays; declare SCK and
+`IQ_CLK` asynchronous while excepting only the intentional synchronizer paths;
+constrain the bundled mailbox crossing; and run all-corner setup/hold plus
+unconstrained-path review. Derive board I/O delays from the Raspberry Pi, PCB,
+and GF180 pad timing rather than guessing them.
+
+**See:** Open Risk #15; `src/control/spi_slave.v`;
+`src/config/pnr_32m_scoped_v20.sdc`;
+`planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
+**Found:** 2026-07-11 (10 MHz SPI implementation/constraint research).
+
 ---
 
 ## Moderate
