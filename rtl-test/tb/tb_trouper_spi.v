@@ -12,7 +12,7 @@
 //   7. W1P self-clear: WGT_CTRL.W_COMMIT readback shows bit 0 low
 //   8. COMB_CFG reset value 0x10 (REMOD_BACKOFF_SHIFT=1)
 //
-// SPI master model: Mode 0, MSB first, 8 MHz (under the 10 MHz max).
+// SPI master model: Mode 0, MSB first, 10 MHz.
 //
 // Run:
 //   iverilog -g2005 -o tb_trouper_spi.vvp tb/tb_trouper_spi.v rtl/trouper_top.v \
@@ -30,7 +30,7 @@ module tb_trouper_spi;
     reg clk = 1'b0;
     always #15.625 clk = ~clk;        // 32 MHz
 
-    reg resetb = 1'b0;
+    reg resetb = 1'b1;
 
     // ---- DUT pads ----
     reg  [3:0] iq_i = 4'h0, iq_q = 4'h0;
@@ -111,7 +111,7 @@ module tb_trouper_spi;
     );
 
     // ---- SPI master model (Mode 0, MSB first) ----
-    localparam real SCK_HALF = 62.5;  // 8 MHz
+    localparam real SCK_HALF = 50.0;  // 10 MHz
 
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
@@ -140,6 +140,20 @@ module tb_trouper_spi;
         end
     endtask
 
+    // Raspberry Pi permits CS to deassert shortly after the final falling SCK
+    // edge.  Do not add the normal extra half-cycle hold here: the completed
+    // write event must survive CS resetting the SPI frame immediately.
+    task spi_write_min_cs_hold(input [6:0] a, input [7:0] d);
+        reg [7:0] dump;
+        begin
+            spi_start;
+            spi_byte({1'b0, a}, dump);
+            spi_byte(d, dump);
+            spi_cs = 1'b1;
+            #500;
+        end
+    endtask
+
     task spi_read(input [6:0] a, output [7:0] d);
         reg [7:0] dump;
         begin
@@ -152,6 +166,15 @@ module tb_trouper_spi;
 
     // ---- Scoreboard ----
     integer errors = 0;
+    integer reg_we_events = 0;
+    integer reg_we_before;
+    reg reg_we_prev = 1'b0;
+
+    always @(posedge clk) begin
+        reg_we_prev <= dut.u_spi.reg_we;
+        if (dut.u_spi.reg_we && !reg_we_prev)
+            reg_we_events <= reg_we_events + 1;
+    end
 
     task check(input [127:0] name, input [7:0] got, input [7:0] exp);
         begin
@@ -172,18 +195,35 @@ module tb_trouper_spi;
         $dumpfile("tb_trouper_spi.vcd");
         $dumpvars(1, tb_trouper_spi);
 
+        // Create an explicit reset assertion edge.  SPI-domain flops see no
+        // SCK while idle, so starting simulation with reset already low would
+        // not exercise their edge-sensitive Verilog async-reset event.
+        // Hold CS low across the reset assertion so spi_frame_arst transitions
+        // low->high in simulation; return CS high before the first frame.
+        spi_cs = 1'b0;
+        #1 resetb = 1'b0;
         repeat (4) @(posedge clk);
         resetb = 1'b1;
+        #1 spi_cs = 1'b1;
         repeat (8) @(posedge clk);
 
         // 1. CHIP_ID / CHIP_REV — 2-byte read frames (TRPR-SPS-006/009)
         spi_read(7'h00, rd); check("CHIP_ID",        rd, 8'hA7);
         spi_read(7'h01, rd); check("CHIP_REV",       rd, 8'h01);
 
-        // 2. Write + readback: SF_CFG (reset 0x07 -> 0x0A)
+        // 2. Write + readback: SF_CFG (reset 0x07 -> 0x0A).  First use the
+        // minimum-CS-hold path that exposed the old final-write CDC race.
         spi_read (7'h09, rd); check("SF_CFG reset",  rd, 8'h07);
-        spi_write(7'h09, 8'h0A);
-        spi_read (7'h09, rd); check("SF_CFG wr/rd",  rd, 8'h0A);
+        reg_we_before = reg_we_events;
+        spi_write_min_cs_hold(7'h09, 8'h0A);
+        spi_read (7'h09, rd); check("SF_CFG min-CS wr", rd, 8'h0A);
+        if (reg_we_events !== reg_we_before + 1) begin
+            $display("FAIL  min-CS reg_we events    got %0d expected %0d",
+                     reg_we_events - reg_we_before, 1);
+            errors = errors + 1;
+        end else begin
+            $display("pass  min-CS reg_we exactly once");
+        end
         spi_write(7'h09, 8'h07);
 
         // 3. Reset values: MIMO_CTRL 0xF0, COMB_CFG 0x10, gain shadow 0x3E

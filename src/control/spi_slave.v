@@ -15,7 +15,9 @@
 // following half SCK period and read data is valid for every bit of the data byte.
 //
 // Clock domains: shift/frame logic runs in the SPI clock domain (async reset on
-// HOST_CS deassert).  Register writes cross into clk_32m via a pulse synchroniser.
+// HOST_CS deassert).  Register writes cross into clk_32m via a toggle
+// synchroniser and bundled-data mailbox; completed events therefore survive
+// HOST_CS deassertion.
 // Register reads use an asynchronous address tap into the reg_bank combinational
 // peek port, plus a synchronised read pulse (reg_re) for read side effects such as
 // the PSRAM debug-data pop on 0x76.  reg_re fires at the START of each read data
@@ -38,7 +40,7 @@ module spi_slave (
     // Register bank interface
     output reg  [7:0]  reg_wr_addr,  // clk_32m domain, valid with reg_we
     output reg  [7:0]  reg_wdata,
-    output reg         reg_we,       // one-cycle write strobe (clk_32m)
+    output reg         reg_we,       // two-cycle write strobe (clk_32m)
     output wire [7:0]  reg_rd_addr,  // asynchronous read-address tap (SPI domain)
     output reg  [7:0]  reg_re_addr,  // clk_32m domain, valid with reg_re
     output reg         reg_re,       // one-cycle read-side-effect strobe (clk_32m)
@@ -57,9 +59,11 @@ module spi_slave (
     reg       fp_rw;         // 1 = read transaction, 0 = write
     reg [6:0] cur_addr;      // current register address (auto-increments in burst)
 
-    // Requests to clk_32m domain (one-SCK-period pulses, ≥3 clk_32m at 10 MHz)
-    reg       spi_reg_we_req;
-    reg       spi_reg_re_req;
+    // Persistent event toggles and bundled-data mailboxes.  Unlike frame state,
+    // these are reset only by rst_n so a completed event cannot be erased when
+    // HOST_CS rises immediately after the final SCK edge.
+    reg       spi_we_toggle;
+    reg       spi_re_toggle;
     reg [6:0] spi_wr_addr_lat;
     reg [7:0] spi_wdata_lat;
     reg [6:0] spi_re_addr_lat;
@@ -85,24 +89,8 @@ module spi_slave (
             have_cmd        <= 1'b0;
             fp_rw           <= 1'b0;
             cur_addr        <= 7'd0;
-            spi_reg_we_req  <= 1'b0;
-            spi_reg_re_req  <= 1'b0;
-            spi_wr_addr_lat <= 7'd0;
-            spi_wdata_lat   <= 8'd0;
-            spi_re_addr_lat <= 7'd0;
         end else begin
-            spi_reg_we_req <= 1'b0;
-            spi_reg_re_req <= 1'b0;
-
             spi_shreg <= byte_now;
-
-            // Read side effect: pulse once at the first bit of each read data
-            // byte.  The byte being shifted out was loaded at the preceding
-            // falling edge, so the pop ordering is load-then-advance.
-            if (spi_bit_cnt == 3'd0 && have_cmd && fp_rw) begin
-                spi_re_addr_lat <= cur_addr;
-                spi_reg_re_req  <= 1'b1;
-            end
 
             if (spi_bit_cnt == 3'd7) begin
                 spi_bit_cnt <= 3'd0;
@@ -113,17 +101,41 @@ module spi_slave (
                     have_cmd <= 1'b1;
                 end else begin
                     // Data byte completes
-                    if (!fp_rw) begin
-                        spi_wr_addr_lat <= cur_addr;
-                        spi_wdata_lat   <= byte_now;
-                        spi_reg_we_req  <= 1'b1;
-                    end
                     // Burst auto-increment (7-bit wrap); 0x76 holds
                     if (cur_addr != NO_INC_ADDR)
                         cur_addr <= cur_addr + 7'd1;
                 end
             end else begin
                 spi_bit_cnt <= spi_bit_cnt + 3'd1;
+            end
+        end
+    end
+
+    // Completed-byte events must outlive the SPI frame.  This block observes
+    // the pre-edge frame state above, latches the bundled payload, and toggles
+    // one bit per event.  At 10 MHz consecutive events are at least one byte
+    // (800 ns) apart, leaving >25 clk_32m cycles for the destination to observe
+    // each toggle.  Guard with HOST_CS in case SCK toggles while deselected.
+    always @(posedge SPI_SCK or negedge rst_n) begin
+        if (!rst_n) begin
+            spi_we_toggle   <= 1'b0;
+            spi_re_toggle   <= 1'b0;
+            spi_wr_addr_lat <= 7'd0;
+            spi_wdata_lat   <= 8'd0;
+            spi_re_addr_lat <= 7'd0;
+        end else if (!HOST_CS) begin
+            // Read side effect: event once at the first bit of each read data
+            // byte.  The returned byte was loaded at the preceding falling
+            // edge, so the ordering remains load-then-advance.
+            if (spi_bit_cnt == 3'd0 && have_cmd && fp_rw) begin
+                spi_re_addr_lat <= cur_addr;
+                spi_re_toggle   <= ~spi_re_toggle;
+            end
+
+            if (spi_bit_cnt == 3'd7 && have_cmd && !fp_rw) begin
+                spi_wr_addr_lat <= cur_addr;
+                spi_wdata_lat   <= byte_now;
+                spi_we_toggle   <= ~spi_we_toggle;
             end
         end
     end
@@ -155,9 +167,9 @@ module spi_slave (
     end
 
     // -----------------------------------------------------------------------
-    // Clock-domain crossing: SPI → clk_32m request pulses.
-    // Two-FF sync plus edge detect; the latched address/data are stable for the
-    // full byte period (≥800 ns at 10 MHz) around each request.
+    // Clock-domain crossing: SPI → clk_32m persistent event toggles.
+    // Two-FF sync plus change detect; the bundled address/data are stable for
+    // the full byte period (≥800 ns at 10 MHz) around each event.
     // -----------------------------------------------------------------------
     reg spi_we_sync0, spi_we_sync1, spi_we_sync2;
     reg spi_re_sync0, spi_re_sync1, spi_re_sync2;
@@ -183,23 +195,23 @@ module spi_slave (
             reg_re_addr  <= 8'd0;
             reg_re       <= 1'b0;
         end else begin
-            spi_we_sync0 <= spi_reg_we_req;
+            spi_we_sync0 <= spi_we_toggle;
             spi_we_sync1 <= spi_we_sync0;
             spi_we_sync2 <= spi_we_sync1;
-            spi_re_sync0 <= spi_reg_re_req;
+            spi_re_sync0 <= spi_re_toggle;
             spi_re_sync1 <= spi_re_sync0;
             spi_re_sync2 <= spi_re_sync1;
 
             // 2-cycle-wide write strobe (edge pulse OR its 1-cycle delay)
-            reg_we_p <= spi_we_sync1 && !spi_we_sync2;
-            reg_we <= (spi_we_sync1 && !spi_we_sync2) || reg_we_p;
-            reg_re <= spi_re_sync1 && !spi_re_sync2;
+            reg_we_p <= spi_we_sync1 ^ spi_we_sync2;
+            reg_we <= (spi_we_sync1 ^ spi_we_sync2) || reg_we_p;
+            reg_re <= spi_re_sync1 ^ spi_re_sync2;
 
-            if (spi_we_sync1 && !spi_we_sync2) begin
+            if (spi_we_sync1 ^ spi_we_sync2) begin
                 reg_wr_addr <= {1'b0, spi_wr_addr_lat};
                 reg_wdata   <= spi_wdata_lat;
             end
-            if (spi_re_sync1 && !spi_re_sync2) begin
+            if (spi_re_sync1 ^ spi_re_sync2) begin
                 reg_re_addr <= {1'b0, spi_re_addr_lat};
             end
         end
