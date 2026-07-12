@@ -134,7 +134,7 @@ The ASIC digital signal chain (all synchronous at 32 MHz):
 1. **ΣΔ Decimator** (`sd_decimator_poly.v`) — half-band chain R=64 (CIC-3 R=16 → HB1 ÷2 → HB2 ÷2), polyphase HB delay lines + 14-bit CIC, 1-bit → int8 at 500 kS/s, ×4 branches (TDM)
 2. **DC Removal** (`dc_removal.v`) — IIR leaky integrator, α=2^{−5} (13-bit Q8.5 acc), ×4
 3. **Schmidl-Cox Detector** (`sc_detector.v`) — sliding autocorr, produces `sc_lock` + `timing_ref`
-4. **PSRAM Buffer Controller** (`psram_buf_ctrl.v`) — APS6404L QPI controller: circular capture, SC delay-line reads at `write_ptr − M`, same-packet replay on `W_COMMIT` (replaces the removed `frontend_buf_ctrl.v`/on-chip SRAM)
+4. **PSRAM Buffer Controller** (`psram_buf_ctrl.v`) — APS6404L QPI controller: circular capture, SC delay-line reads at `write_ptr − M`, same-packet replay as a never-rewinding delay line starting at `training_done + REPLAY_DELAY_SAMPLES` (regs 0x77/0x78; `W_COMMIT` only gates weights — late/never commits degrade to bypass) (replaces the removed `frontend_buf_ctrl.v`/on-chip SRAM)
 5. **Noise Estimation** — `noise_est.v` removed; firmware-triggered `training_acc` noise mode (`TACC_NOISE_TRIG`) + SC-contamination gate (`NOISE_READY` IRQ) replace it
 6. **Training Accumulator** (`training_acc.v`) — all-pairs cross-correlator: 6 Z_kl pairs (C(4,2)) + 4 Z_kk diagonal. Z_kl pairs → firmware weight computation (MRC row-sum or eigenvector) via reg_bank 0x40–0x63 (24-bit [31:8] readback; Zdiag at 0x64–0x6F). Noise mode: firmware write to TACC_NOISE_TRIG (0x1F) arms accumulator without sc_lock; Z_kk ≈ σ²_k·n_acc for noise EMA. Register map is 7-bit (0x00–0x7F) — see planning/Register Map.md.
 7. **Packet Control FSM** (`packet_ctrl_fsm.v`) — controls buf_freeze, W gating, safe_switch

@@ -56,19 +56,21 @@ were fixed and verified; see Closed.)
 
 ## High
 
-### 5. "Silence during PSRAM buffering" actually emits a ΣΔ-modulated DC tone
+### 5. ~~"Silence during PSRAM buffering" actually emits a ΣΔ-modulated DC tone~~ FIXED 2026-07-12
 
-`trouper_top.v:511-518` zeroes `remod_in_*` but also forces `in_valid=0`;
-`sd_remod.v:85` then *holds the last pre-lock sample* in `in_i_lat/in_q_lat`,
-so the SX1302 receives a constant DC tone for the whole BUFFERING phase
-instead of silence. Minimal fix: keep `in_valid` asserted and feed zeros.
+**Both halves fixed by the continuous-delay replay implementation**
+(`planning/psram-replay-continuous-delay-redesign.md`, now IMPLEMENTED):
+`trouper_top.v` keeps `in_valid` asserted and feeds zeros during buffering
+(real modulated silence, asserted bit-exact by the updated
+`_watch_bypass`), and the `W_COMMIT` rewind-to-`buf_base` jump is replaced
+by a margin-gated delay line that never rewinds (`TRPR-RMD-009` met;
+monotonicity watched at `rd_ptr` in `cocotb/tests/test_replay_delay.py`).
+New registers `REPLAY_DELAY_SAMPLES` (0x77/0x78) + `WGT_CTRL[4]`
+`W_COMMIT_LATE`.
 
-**Scope expanded 2026-07-11:** the minimal fix alone doesn't satisfy the new
-`TRPR-RMD-009` (no time-index jump in normal operation) — the replay
-rewind to `buf_base` at `W_COMMIT` is itself a jump. Redesign proposed:
-`planning/psram-replay-continuous-delay-redesign.md` (not yet implemented).
-
-**Found:** 2026-07-02 trouper_top RTL review.
+**Found:** 2026-07-02 trouper_top RTL review. **Fixed:** 2026-07-12
+(replay-delay regression + bypass_e2e/w_missed/psram_ops/qspi_owner/
+reg-reset-sweep suites, SGE jobs 3347/3350).
 
 ### 6. DRT-1231 clkbuf CTS pin-access failure is recurring, not proven robust
 
@@ -295,13 +297,18 @@ latches an active bank on `W_valid_set`.
 
 ### 14. PSRAM replay is truncated at packet timeout
 
-In `S_REPLAY` the read pointer trails the write pointer by the
-training+commit latency and never catches up (one read per `iq_valid`);
-`packet_end` — a live-time timeout — kills replay immediately
-(`psram_buf_ctrl.v:563`), dropping the packet tail unless `PKT_TIMEOUT_SYMS`
-always exceeds actual packet length **plus** replay lag. Needs a directed
-test and either a documented timeout-margin rule or a replay-drain-then-exit
-condition (`rd_ptr` reaching the `wr_ptr` snapshot).
+In `S_REPLAY` the read pointer trails the write pointer and `packet_end` —
+a live-time timeout — kills replay immediately, dropping the packet tail
+unless `PKT_TIMEOUT_SYMS` exceeds actual packet length **plus** replay lag.
+
+**Reduced 2026-07-12 by the continuous-delay replay implementation:** the
+trailing gap is no longer unbounded-until-`W_COMMIT`; it is per-packet
+deterministic — `TACC_WINDOW_SYMS·M + REPLAY_DELAY_SAMPLES` (≈ 8 symbols +
+~6 symbols at SF7/default margin) — so firmware can budget
+`PKT_TIMEOUT_SYMS` against a known quantity. Residual: still SF-dependent
+via the training-window term, and no drain-then-exit exists; needs either
+the documented timeout-margin rule in the firmware spec or a
+replay-drain-then-exit condition.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 

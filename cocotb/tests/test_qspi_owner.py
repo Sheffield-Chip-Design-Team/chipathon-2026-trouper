@@ -120,6 +120,12 @@ async def test_qspi_owner_handover(dut):
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)
 
+    # Small replay margin so REPLAY_ACTIVE lands inside the phase-3 polling
+    # window (replay starts at training_done + REPLAY_DELAY_SAMPLES now, not
+    # at W_COMMIT; the silicon default is ~1500 samples)
+    await spi_write(dut, 0x77, 32)
+    await spi_write(dut, 0x78, 0)
+
     await spi_write(dut, 0x70, 0x01)
     init_ok = False
     for _ in range(500):

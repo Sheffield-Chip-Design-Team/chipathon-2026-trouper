@@ -53,7 +53,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
-| `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [7:4] reserved |
+| `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [4] `W_COMMIT_LATE` (RO); [7:5] reserved |
 | `0x1F` | `TACC_NOISE_TRIG` | W | `0x00` | Training Accumulator | [0] W1P: arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`) |
 | `0x20` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
 | `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [17:16] (bits [1:0]; [7:2] read 0) |
@@ -95,7 +95,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x67`–`0x69` | `ZDIAG_1` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:8] |
 | `0x6A`–`0x6C` | `ZDIAG_2` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:8] |
 | `0x6D`–`0x6F` | `ZDIAG_3` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:8] |
-| **External Memory (PSRAM)** (`0x70`–`0x76`) | | | | | |
+| **External Memory (PSRAM)** (`0x70`–`0x78`) | | | | | |
 | `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] `SAMPLE_WIDTH`; [3] `QSPI_OWNER`; [7:4] reserved |
 | `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [1:0] state; [2] `SAMPLE_SKIP`; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
 | `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [7:0] |
@@ -103,8 +103,10 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x74` | `PSRAM_DBG_ADDR_HI` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [22:16] (bit [7] reserved) |
 | `0x75` | `PSRAM_DBG_CTRL` | R/W | `0x80` | PSRAM Buffer | [0] `RD_TRIG` (strobe, self-clears); [1] `AUTO_INC` (re-arm after 8-byte drain); [7] `DBG_BUSY` (R only — held during fetch, while `packet_active=1` or `QSPI_OWNER=1`, and before `qe_init_done`; reads `1` at power-on since PSRAM init has not run yet) |
 | `0x76` | `PSRAM_DBG_DATA` | R | `0x00` | PSRAM Buffer | Byte window into last fetched 8-byte IQ sample; 8 consecutive reads drain one sample (byte order: i0,q0,i1,q1,i2,q2,i3,q3); address advances by 8 after the eighth read when `AUTO_INC=1`. Never auto-increments the SPI burst address. |
-| **Reserved** (`0x77`–`0x7F`) | | | | | |
-| `0x77`–`0x7E` | — | — | — | — | Reserved for future growth |
+| `0x77` | `REPLAY_DELAY_LO` | R/W | `0xDC` | PSRAM Buffer | `REPLAY_DELAY_SAMPLES[7:0]` — samples to wait after `TRAINING_DONE` before the delay-line replay starts; write-gated `!packet_active`. Default 1500 (`0x05DC`) ≈ 3 ms covers the measured Grouper rv32emc 8-iteration weight compute plus readout/IRQ overhead |
+| `0x78` | `REPLAY_DELAY_HI` | R/W | `0x05` | PSRAM Buffer | `REPLAY_DELAY_SAMPLES[15:8]`; write-gated `!packet_active` |
+| **Reserved** (`0x79`–`0x7F`) | | | | | |
+| `0x79`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
 **Occupancy:** 110 implemented + 18 reserved = 128.
@@ -294,7 +296,8 @@ Weight-path commit control and status. Firmware is the sole weight source (there
 | [1] | `W_VALID` | Read-only: active W bank is valid for the current packet |
 | [2] | `W_PENDING` | Read-only: training done but W commit not yet received |
 | [3] | `W_MISSED_PACKET` | Read-only: W was not committed before safe-switch; current packet stayed bypass. Sticky: held through IDLE, cleared at the next packet start |
-| [7:4] | — | Reserved |
+| [4] | `W_COMMIT_LATE` | Read-only: `W_COMMIT` arrived after the PSRAM delay-line replay had already started, so a prefix of the packet was combined in bypass before the mid-stream MRC upgrade (partial diversity loss, not a whole-packet miss). Sticky: held through IDLE, cleared at the next packet start or by `PSRAM_CLR_ERR` |
+| [7:5] | — | Reserved |
 
 ### `0x1F` — TACC_NOISE_TRIG (write-only, W1P)
 
@@ -460,7 +463,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed; no TAP in RTL, GPIO never wired out of macro. Addresses now reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x77`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x19`–`0x1B`, `0x79`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -476,6 +479,6 @@ If a future revision reinstates any of these features, allocate addresses from t
 | `0x30`–`0x3F` | W shadow bank |
 | `0x40`–`0x63` | Z_kl pair readback (24-bit) |
 | `0x64`–`0x6F` | Z_kk diagonal (24-bit) |
-| `0x70`–`0x76` | External memory (PSRAM) control and debug |
-| `0x77`–`0x7E` | Reserved (future growth) |
+| `0x70`–`0x78` | External memory (PSRAM) control, debug, and replay margin |
+| `0x79`–`0x7E` | Reserved (future growth) |
 | `0x7F` | Permanently reserved (SPI protocol escape) |

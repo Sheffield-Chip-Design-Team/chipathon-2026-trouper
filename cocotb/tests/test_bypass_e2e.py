@@ -113,14 +113,22 @@ async def sdm_driver_multi(dut, amps=ANT_AMPS):
             sine_ptr = (sine_ptr + 1) % P
 
 
-async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None):
+async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
+                          replay_delay=32):
     """Reset, configure (MIMO_CTRL before lock so the FSM latches it),
     bring up PSRAM, and poll to sc_lock. Returns sym_ns.
 
     pkt_timeout_syms, if given, is written to PKT_TIMEOUT_SYMS (0x0B)
     BEFORE lock -- the FSM latches pkt_end at the sc_lock edge, so writing
     it later has no effect on the current packet (used by
-    test_w_missed_packet.py to shorten the packet window)."""
+    test_w_missed_packet.py to shorten the packet window).
+
+    replay_delay is written to REPLAY_DELAY_SAMPLES (0x77/0x78): the margin
+    after training_done before the PSRAM delay-line replay starts
+    (continuous-delay redesign -- replay is no longer W_COMMIT-triggered).
+    Default 32 keeps the silicon default's ~1500-sample wait out of these
+    tests' polling windows; pass 0xFFFF to hold a packet in the silence
+    phase for its whole (shortened) duration."""
     sf, bw_khz = 7, 250
     sample_shift = 1
     M = 1 << (sf + sample_shift)
@@ -164,6 +172,10 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None):
     # shift 0, remod_in must EQUAL comb_y, so the phase-B remod check is a
     # literal bit-compare. pgs only matters for the mode-0 MRC phase.
     await spi_write(dut, 0x0F, 0x01)
+
+    # Replay margin (must land before lock: write-gated !packet_active)
+    await spi_write(dut, 0x77, replay_delay & 0xFF)
+    await spi_write(dut, 0x78, (replay_delay >> 8) & 0xFF)
 
     # PSRAM up (required: it is the SC detector's delay line)
     await spi_write(dut, 0x70, 0x01)
@@ -209,7 +221,11 @@ async def _watch_bypass(dut, ant, n, *, tag, expect_silenced, check_remod,
     expect_bypass=False: count how many clean pairings DIFFER instead
                          (returned as 'diffs'; used by the mode-0 case to
                          show weights took effect after W_COMMIT).
-    expect_silenced    : True  -> u_remod.in_valid must never pulse;
+    expect_silenced    : True  -> whenever u_remod.in_valid pulses, the remod
+                                  input must be exactly (0,0) -- true silence
+                                  is MODULATED zero, not a gated-off in_valid
+                                  holding the last sample as a DC tone
+                                  (Open Risks #5 fix);
                          False -> psram_silence must be 0 at every y_valid.
     check_remod        : also require remod_in_i/q == comb_y_i/q (backoff
                          shift is 0) and count REMOD_A_I toggles.
@@ -232,8 +248,12 @@ async def _watch_bypass(dut, ant, n, *, tag, expect_silenced, check_remod,
             caps_since_y += 1
 
         if expect_silenced:
-            assert int(dut.u_dut.u_remod.in_valid.value) == 0, \
-                f"{tag}: remod in_valid pulsed while PSRAM BUFFERING should silence it"
+            if int(dut.u_dut.u_remod.in_valid.value):
+                ri = int(dut.u_dut.remod_in_i.value.signed_integer)
+                rq = int(dut.u_dut.remod_in_q.value.signed_integer)
+                assert (ri, rq) == (0, 0), \
+                    f"{tag}: remod input ({ri},{rq}) != (0,0) while PSRAM " \
+                    f"BUFFERING should modulate silence"
 
         if check_remod:
             out = int(dut.REMOD_A_I.value) & 1
@@ -282,7 +302,9 @@ async def _watch_bypass(dut, ant, n, *, tag, expect_silenced, check_remod,
 
 async def _train_commit_replay(dut, sym_ns, *, tag):
     """Wait training_done, commit deliberately non-trivial weights, then
-    poll PSRAM_STATUS[4] REPLAY_ACTIVE over SPI."""
+    poll PSRAM_STATUS[4] REPLAY_ACTIVE over SPI. (Continuous-delay redesign:
+    replay starts at training_done + REPLAY_DELAY_SAMPLES regardless of the
+    commit; the commit only latches W_valid for the combiner.)"""
     train_ok = False
     for _ in range(40):
         await Timer(sym_ns, unit="ns")

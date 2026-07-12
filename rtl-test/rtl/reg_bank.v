@@ -39,6 +39,7 @@ module reg_bank (
     input  wire        w_pending_rb,
     input  wire        w_valid_rb,
     input  wire        w_missed_rb,
+    input  wire        w_commit_late_rb,  // WGT_CTRL[4]: commit landed after replay start
     // IRQ status (sticky bits set by hardware events)
     input  wire [7:0]  irq_set,     // one-cycle pulse per IRQ source to set sticky bits
     // SC detection statistic [15:0]
@@ -100,6 +101,9 @@ module reg_bank (
     // Training accumulator
     output reg         noise_trig,     // 0x1F[0]: W1P — firmware-triggered noise measurement
     output reg [3:0]   tacc_window_syms, // 0x27[3:0]: accumulation endpoint in symbols from timing_ref
+    // Same-packet replay margin: samples to wait after training_done before the
+    // PSRAM delay-line replay starts (bounds host response only; SF-independent)
+    output reg [15:0]  replay_delay_samples, // 0x77 LO / 0x78 HI
     // Aggregated sticky interrupt output (mirrors IRQ_STATUS OR)
     output wire        irq_out
 );
@@ -174,6 +178,8 @@ module reg_bank (
             psram_dbg_rd_trig <= 1'b0;
             noise_trig       <= 1'b0;
             tacc_window_syms <= 4'd8;
+            replay_delay_samples <= 16'd1500; // ≈3 ms: measured Grouper rv32emc
+                                              // 8-it compute (~1140) + readout/IRQ
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
         end else if (clk_en) begin
             // Auto-clear write-1-pulse outputs (held one CE period = 2 clocks,
@@ -246,6 +252,8 @@ module reg_bank (
                                psram_dbg_rd_trig  <= wdata[0];
                                psram_dbg_auto_inc <= wdata[1];
                            end
+                    8'h77: if (!packet_active) replay_delay_samples[7:0]  <= wdata; // blocked during active packet
+                    8'h78: if (!packet_active) replay_delay_samples[15:8] <= wdata; // blocked during active packet
                     default: ;
                 endcase
             end
@@ -303,7 +311,7 @@ module reg_bank (
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,
                             training_done_rb, packet_phase, packet_active};
             8'h1D: rdata_next = {active_antenna_en_rb, 2'h0, active_mode_rb};
-            8'h1E: rdata_next = {4'h0, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
+            8'h1E: rdata_next = {3'h0, w_commit_late_rb, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
             8'h1F: rdata_next = 8'h00;                              // TACC_NOISE_TRIG (WO)
             8'h20: rdata_next = {6'h0, training_armed, training_done_rb};
             8'h21: rdata_next = {6'h0, n_acc[17:16]};  // N_ACC[17:16] (big-endian byte 0)
@@ -406,7 +414,9 @@ module reg_bank (
             8'h74: rdata_next = {1'b0, psram_dbg_addr[22:16]};
             8'h75: rdata_next = {psram_dbg_busy, 5'h0, psram_dbg_auto_inc, 1'b0};
             8'h76: rdata_next = psram_dbg_busy ? 8'h00 : psram_dbg_data;
-            // 0x77–0x7E reserved; 0x7F permanently reserved (protocol escape)
+            8'h77: rdata_next = replay_delay_samples[7:0];
+            8'h78: rdata_next = replay_delay_samples[15:8];
+            // 0x79–0x7E reserved; 0x7F permanently reserved (protocol escape)
             default: rdata_next = 8'h00;
         endcase
     end

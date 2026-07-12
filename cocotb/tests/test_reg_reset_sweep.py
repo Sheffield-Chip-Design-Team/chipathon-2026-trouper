@@ -72,6 +72,8 @@ REG_RESET.update({
     0x1D: 0x10,  # ACTIVE_STATUS (mode=0, antenna_en=0x1)
     0x27: 0x08,  # TACC_WINDOW_SYMS
     0x75: 0x80,  # PSRAM_DBG_CTRL: DBG_BUSY held until qe_init_done, unset at reset
+    0x77: 0xDC,  # REPLAY_DELAY_LO  (default 1500 = 0x05DC samples ≈ 3 ms)
+    0x78: 0x05,  # REPLAY_DELAY_HI
 })
 
 # Safely-writable data registers to dirty in the second pass -- excludes
@@ -83,6 +85,7 @@ DIRTY_ADDRS = (
     + [0x27]
     + list(range(0x30, 0x40))     # W shadow bank
     + [0x72, 0x73, 0x74]          # PSRAM_DBG_ADDR_{LO,MID,HI}
+    + [0x77, 0x78]                # REPLAY_DELAY_{LO,HI}
 )
 
 

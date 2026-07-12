@@ -177,6 +177,7 @@ module trouper_top (
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
     wire [3:0]  rb_tacc_window_syms;
+    wire [15:0] rb_replay_delay_samples;
     wire [7:0]  rb_rx_gain_shadow_0, rb_rx_gain_shadow_1,
                 rb_rx_gain_shadow_2, rb_rx_gain_shadow_3;
     wire        rb_rx_gain_commit;
@@ -465,6 +466,7 @@ module trouper_top (
     wire              rpl_valid;
     wire              psram_buf_active;
     wire              psram_qe_init_done, psram_replay_missed, psram_overflow;
+    wire              psram_w_commit_late;
     wire              psram_sample_skip;
     wire [2:0]        psram_state_dbg;
 
@@ -486,6 +488,8 @@ module trouper_top (
         .sc_lock      (sc_lock),
         .timing_ref   (timing_ref),
         .iq_sample_cnt(iq_samp_cnt),
+        .training_done(training_done),
+        .replay_delay_samples(rb_replay_delay_samples),
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
         .clr_err      (rb_psram_ctrl[1]),
@@ -510,6 +514,7 @@ module trouper_top (
         .replay_active(psram_replay_active_w),
         .qe_init_done (psram_qe_init_done),
         .replay_missed(psram_replay_missed),
+        .w_commit_late(psram_w_commit_late),
         .overflow     (psram_overflow),
         .sample_skip  (psram_sample_skip),
         .state_dbg    (psram_state_dbg),
@@ -571,7 +576,9 @@ module trouper_top (
 
     // =========================================================================
     // Stage 9: ΣΔ Re-modulator → SX1302 Radio A
-    // During PSRAM BUFFERING (buf_active && !replay_active): silence output.
+    // During PSRAM BUFFERING (buf_active && !replay_active): modulate zero —
+    // in_valid keeps pulsing so sd_remod latches actual silence rather than
+    // holding the last pre-lock sample as a DC tone (Open Risks #5 fix).
     // During REPLAY: combiner processes PSRAM replay IQ → normal remod path.
     // =========================================================================
     wire psram_silence = psram_buf_active && !psram_replay_active_w;
@@ -582,7 +589,7 @@ module trouper_top (
         .rst_n    (rst_n),
         .in_i     (remod_in_i),
         .in_q     (remod_in_q),
-        .in_valid (psram_silence ? 1'b0  : comb_y_valid),
+        .in_valid (comb_y_valid),
         .en       (1'b1),
         .out_i    (REMOD_A_I),
         .out_q    (REMOD_A_Q)
@@ -720,6 +727,7 @@ module trouper_top (
         .w_pending_rb     (w_pending),
         .w_valid_rb       (W_valid),
         .w_missed_rb      (W_missed_q),
+        .w_commit_late_rb (psram_w_commit_late),
         .irq_set          (rb_irq_set),
         .sc_stat         (sc_stat),
         .training_armed  (training_armed),
@@ -768,7 +776,8 @@ module trouper_top (
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
         .noise_trig      (rb_noise_trig),
-        .tacc_window_syms (rb_tacc_window_syms)
+        .tacc_window_syms (rb_tacc_window_syms),
+        .replay_delay_samples (rb_replay_delay_samples)
     );
 
 endmodule
