@@ -11,9 +11,8 @@ set_property PACKAGE_PIN E3  [get_ports clk100mhz]
 set_property IOSTANDARD  LVCMOS33 [get_ports clk100mhz]
 create_clock -add -period 10.000 -name sys_clk_pin [get_ports clk100mhz]
 
-# Active-low reset (BTN0)
-set_property PACKAGE_PIN C2  [get_ports ext_resetn]
-set_property IOSTANDARD  LVCMOS33 [get_ports ext_resetn]
+# C2 is ChipKit ck_rst, not BTN0, and is intentionally unused. The MMCM reset
+# is tied inactive inside the block design; JTAG provides MicroBlaze reset.
 
 # ============================================================================
 # DSP clock (32 MHz = 100 MHz * 8 / 25, derived from MMCM — internal)

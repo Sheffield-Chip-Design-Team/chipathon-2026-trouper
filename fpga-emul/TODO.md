@@ -18,11 +18,14 @@ The MISO front-end test board (AFE) design is at
 - [x] On `IRQ_TRAINING_DONE`, read the 48-byte matrix over the real internal SPI
   path, compute, write Q1.15 weights, commit, clear the IRQ, and calculate
   compute-only plus end-to-end cycle counts.
-- [x] Rebuild/P&R: all constraints met (overall WNS +1.414 ns, WHS +0.011 ns),
+- [x] Rebuild/P&R: all constraints met (overall WNS +1.341 ns, WHS +0.051 ns),
   bitstream and 28,192-byte ELF generated and programmed successfully.
-- [ ] Fix the regenerated build's UARTLite stall/no-output condition. Correct
-  host port is confirmed as `/dev/ttyUSB1` (Digilent interface 01); XSDB sees
-  the CPU at `XUartLite_SendByte`, PC `0x00004978`.
+- [x] Fix the regenerated build's UARTLite AXI stall. Root cause was FPGA AXI
+  helper slaves clocked from absent-at-boot SX1257 `CLK_OUT`, which deadlocked
+  shared SmartConnect traffic. They now use free-running MMCM `clk_out2`.
+  `/dev/ttyUSB1` was verified with continuous `U` output from `uart_smoke`.
+- [ ] Trace why the full firmware still emits no captured boot text after the
+  UART/AXI fix; it no longer stops in `XUartLite_SendByte`.
 - [ ] Trigger training and capture the first measured `compute` and `total`
   latency figures; add the result to the SF timing table.
 
@@ -36,9 +39,12 @@ The MISO front-end test board (AFE) design is at
   `psram_sck=D12, psram_ce_n=D13, SIO0=A11, SIO1=G13, SIO2=B11, SIO3=K16`.
 - [x] **CLK_OUT sampling clock.** DONE. The DSP domain is now clocked from the
   SX1257 CLK_OUT (matching silicon, where IQ_CLK *is* CLK_OUT), not the MMCM.
-  `sx_clk_out` port (**F4, CLK_OUT_2**) → BUFG → `dsp_clk`, feeding fpga_dsp_wrap,
-  axi_inj_ctrl, and rst_32m. XDC has the 32 MHz `create_clock` + async
-  `set_clock_groups` vs the MMCM domain. MMCM clk_out2 is now unused.
+  `sx_clk_out` port (**F4, CLK_OUT_2**) → BUFG → `dsp_clk`, feeding
+  `fpga_dsp_wrap` and `rst_32m`. XDC has the 32 MHz `create_clock` + async
+  `set_clock_groups` vs the MMCM domain. MMCM `clk_out2` clocks the FPGA-only
+  AXI control helpers so the bus remains usable before `CLK_OUT` starts.
+  - [ ] Add/audit explicit CDC for `axi_inj_ctrl` outputs crossing from MMCM
+    `clk_out2` into the SX1257-driven DSP domain.
   - Design intent: the ASIC needs only ONE clock. The board exposes all four
     CLK_OUTs so the other three can be measured against this one to prove they
     are phase-locked before committing the single-clock design to silicon. A
@@ -140,7 +146,7 @@ The MISO front-end test board (AFE) design is at
 - [x] **BD builds + validates.** `make vivado_project` (Vivado 2025.2) runs clean:
   `validate_bd_design` passes, 0 errors, 0 critical warnings. The `util_ds_buf`
   BUFG, the `USE_EXT_PSRAM=1` param, the inout `psram_sio` port, and the
-  `axi_inj_ctrl` AXI-CDC automation (Clk_slave `/sx_clk_bufg/BUFG_O (32 MHz)`)
+  `axi_inj_ctrl` AXI-CDC automation (Clk_slave `/clk_wiz_0/clk_out2 (32 MHz)`)
   all resolved without error. Remaining warnings are pre-existing/benign.
 - [x] **Synthesis + timing.** DONE. `make vivado_synth` (Vivado 2025.2) runs
   synth → impl → bitstream clean, **all timing met**. Sample clock `sx_clk_out`

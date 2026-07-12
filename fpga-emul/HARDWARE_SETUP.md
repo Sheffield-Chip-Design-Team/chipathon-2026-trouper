@@ -27,31 +27,32 @@ Ethernet note below.
 |----------------|---------|-----------|------------------------------------------------------------|
 | `clk_in1`      | 100 MHz | (input)   | board oscillator, pin **E3**                               |
 | `clk_out1`     | 100 MHz | 800/8     | MicroBlaze + AXI bus: EmacLite, Quad SPI, UARTLite, timer, MDM |
-| `clk_out2`     | 32 MHz  | 800/25    | DSP chain (`axi_dsp_ctrl` → `fpga_dsp_wrap`)               |
+| `clk_out2`     | 32 MHz  | 800/25    | Free-running FPGA control domain (`axi_inj_ctrl`, clock monitor) |
 | `clk_out3`     | 25 MHz  | 800/32    | Ethernet PHY reference clock → `eth_ref_clk` (pin **G18**) |
 
-Reset input `ext_resetn` on pin **C2** (active-low) feeds `clk_wiz` and two
-`proc_sys_reset` blocks (`rst_100m`, `rst_32m`).
+The MMCM reset is held inactive. Pin **C2** is the Arty's `ck_rst` signal, not
+BTN0, and is deliberately not constrained as an external reset input.
 
 **Two clock domains:**
 - **100 MHz** — MicroBlaze and all standard AXI peripherals.
-- **32 MHz** — the DSP chain. The MicroBlaze peripheral bus (100 MHz) reaches the
-  32 MHz `axi_dsp_ctrl` through the **AXI SmartConnect**, which performs the
-  100→32 MHz clock-domain crossing. No manual `axi_clock_converter` is needed.
+- **32 MHz MMCM control** — FPGA-only AXI helpers. SmartConnect performs the
+  100→32 MHz clock-domain crossing.
+- **32 MHz SX1257 sample clock** — the Trouper DSP chain. This clock may be absent
+  until the radios are configured and therefore must not clock an AXI slave
+  needed during boot.
 
-The DSP chain is internally synchronous to `clk_out2` only (32 MHz); `axi_dsp_ctrl`
-uses it for both `dsp_clk` and `s_axi_aclk`.
+The DSP chain is synchronous to `sx_clk_out` on F4. `axi_inj_ctrl` and
+`axi_clk_sync_mon` use free-running `clk_out2`; injection outputs cross into the
+sample-clock domain and still require an explicit CDC audit.
 
 **MicroBlaze arithmetic configuration:** hardware integer multiply, integer
 divide, and barrel shifting are enabled; FPU and instruction/data caches remain
 disabled. Code and data use the deterministic 64 KiB LMB BRAM. `axi_timer_0`
 runs at 100 MHz (10 ns/tick) for kernel, SPI, and end-to-end latency benchmarks.
 
-**Post-route result (Vivado 2025.2, 2026-07-11):** all timing constraints pass.
-Overall WNS is +1.414 ns and WHS is +0.011 ns; the 100 MHz MicroBlaze/AXI domain
-has +1.414 ns setup slack and the 32 MHz DSP domain has +10.376 ns. Utilisation
-is 10,546 LUTs (16.63%), 10,917 registers (8.61%), 20 BRAM tiles (14.81%), and
-28 DSP48E1s (11.67%). The generated bitstream is `fpga-emul/arty_dsp_emul.bit`.
+**Post-route result (Vivado 2025.2, 2026-07-12):** all timing constraints pass.
+Overall WNS is +1.341 ns, WHS is +0.051 ns, and pulse-width slack is +3.000 ns.
+The generated bitstream is `fpga-emul/arty_dsp_emul.bit`.
 
 ---
 
@@ -269,8 +270,8 @@ Notes:
 
 | Peripheral | IP / module | Base | Clock |
 |------------|-------------|------|-------|
-| Injection FIFO/pacer | `axi_inj_ctrl` (custom) | 0x0001_0000 | dsp_clk (F4) |
-| CLK_OUT phase-lock monitor | `axi_clk_sync_mon` (custom) | 0x0002_0000 | dsp_clk (F4) |
+| Injection FIFO/pacer | `axi_inj_ctrl` (custom) | 0x0001_0000 | MMCM `clk_out2` (32 MHz) |
+| CLK_OUT phase-lock monitor | `axi_clk_sync_mon` (custom) | 0x0002_0000 | MMCM `clk_out2` (32 MHz) |
 | RFFE Quad SPI (→ SX1257) | `axi_quad_spi_0` | 0x44A0_0000 | 100 MHz |
 
 > After any BD change, regenerate the XSA (`vivado/gen_xsa.tcl`) and rebuild the
@@ -300,20 +301,28 @@ bytes including BSS and contains native MicroBlaze `mul`, `idiv`, and `idivu`
 instructions. The FPGA was programmed successfully over JTAG and the ELF was
 downloaded; XSDB observed the MicroBlaze running.
 
-### Current blocker
+### UART investigation and remaining blocker
 
-No dynamic MRC latency has been captured yet. The current regenerated build
-emits no bytes on the USB-UART startup console, and repeated XSDB samples place
-the CPU at `XUartLite_SendByte` (`PC=0x00004978`), consistent with firmware
-waiting for UARTLite TX space. Host enumeration confirms `/dev/ttyUSB1` is the
-correct Digilent interface (`ID_USB_INTERFACE_NUM=01`, serial
-`210319BE7543`); there are no alternative ttyUSB/ttyACM ports.
+The UART hardware issue was resolved on 2026-07-12. It was not the tty or UART
+pins: `/dev/ttyUSB1` is the Digilent interface 01, and continuous `U` bytes from
+`sw/uart_smoke.c` were captured at 115200 8N1. The deadlock occurred because
+`axi_inj_ctrl` and `axi_clk_sync_mon` were AXI slaves clocked by the external
+SX1257 `CLK_OUT`. Before radio configuration that clock is absent, so the shared
+SmartConnect could stall an unrelated UART transaction and leave the CPU in
+`XUartLite_SendByte`. Both control slaves now use free-running MMCM `clk_out2`.
+A bare-metal test then completed UART and SPI accesses (terminal-loop PC
+`0x0000024c`), and the full ELF no longer stops in `XUartLite_SendByte`.
+
+No dynamic MRC latency has been captured yet. A post-fix capture of the full
+firmware contained no boot text, so its later bring-up path and training trigger
+still need investigation independently of the now-verified UART datapath.
 
 Next steps:
 
-1. Debug UARTLite clock/reset/addressing in the regenerated block design, or
-   expose benchmark counters through UDP/JTAG so measurement does not depend on
-   UART.
-2. Trigger a real or injected `TRAINING_DONE` event.
-3. Record compute-only and end-to-end latency and compare it with the SF7–SF12
+1. Trace full-firmware bring-up and determine why it emits no boot text despite
+   the verified UART datapath; expose benchmark counters through UDP/JTAG if useful.
+2. Audit/synchronize the injection-control crossing from MMCM `clk_out2` into
+   the SX1257 sample-clock domain.
+3. Trigger a real or injected `TRAINING_DONE` event.
+4. Record compute-only and end-to-end latency and compare it with the SF7–SF12
    live windows.

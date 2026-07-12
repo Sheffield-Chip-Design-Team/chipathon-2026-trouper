@@ -121,8 +121,14 @@ set_property -dict [list \
 # Connect external 100 MHz board clock to clk_wiz primary input
 create_bd_port -dir I -type clk -freq_hz 100000000 clk100mhz
 connect_bd_net [get_bd_ports clk100mhz] [get_bd_pins clk_wiz_0/clk_in1]
-create_bd_port -dir I -type rst ext_resetn
-connect_bd_net [get_bd_ports ext_resetn] [get_bd_pins clk_wiz_0/resetn]
+
+# Keep reset inputs inactive by default. C2 is the ChipKit ck_rst net, not an
+# Arty pushbutton, and can be held low by attached hardware; using it as the
+# MMCM reset prevents LOCKED and leaves the entire AXI fabric in reset. JTAG
+# supplies the MicroBlaze debug reset used during firmware download.
+set rst_const [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant xlconstant_1]
+set_property -dict [list CONFIG.CONST_VAL {1} CONFIG.CONST_WIDTH {1}] $rst_const
+connect_bd_net [get_bd_pins xlconstant_1/dout] [get_bd_pins clk_wiz_0/resetn]
 
 # --- SX1257 CLK_OUT — the DSP-domain sample clock ---------------------------
 # On silicon there is NO MMCM 32 MHz: trouper_top's IQ_CLK is the SX1257
@@ -133,8 +139,8 @@ connect_bd_net [get_bd_ports ext_resetn] [get_bd_pins clk_wiz_0/resetn]
 # four radios share one TCXO (coherent), so any CLK_OUT works electrically; the
 # XDC picks CLK_OUT_2 on JD F4 — the only one of the four on a P-side MRCC pin,
 # i.e. the only pin usable as a single-ended clock input (F3/D3/C15 are N-side
-# and the placer rejects them, Place 30-876). The MMCM's own 32 MHz output
-# (clk_wiz clk_out2) is intentionally left unused after this.
+# and the placer rejects them, Place 30-876). The MMCM's own 32 MHz output is
+# retained as a free-running FPGA control clock; it does not clock Trouper DSP.
 #
 # Bring-up ordering (same as the real chip): CLK_OUT only appears once the
 # SX1257 is configured, and that config goes over the RFFE SPI (axi_quad_spi_0,
@@ -147,11 +153,7 @@ set_property CONFIG.C_BUF_TYPE {BUFG} $clkbuf
 connect_bd_net [get_bd_ports sx_clk_out] [get_bd_pins sx_clk_bufg/BUFG_I]
 # dsp_clk: the 32 MHz sample-clock net used across the whole DSP domain.
 set dsp_clk [get_bd_pins sx_clk_bufg/BUFG_O]
-
-# Keep the MicroBlaze reset fabric inactive by default, matching the working
-# fpga-eth bring-up flow. The board reset still resets the clock wizard.
-set rst_const [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant xlconstant_1]
-set_property -dict [list CONFIG.CONST_VAL {1} CONFIG.CONST_WIDTH {1}] $rst_const
+set ctrl_clk [get_bd_pins clk_wiz_0/clk_out2]
 
 # proc_sys_reset for the 100 MHz AXI bus domain
 set psr100 [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100m]
@@ -168,6 +170,16 @@ connect_bd_net $dsp_clk                          [get_bd_pins rst_32m/slowest_sy
 connect_bd_net [get_bd_pins clk_wiz_0/locked]   [get_bd_pins rst_32m/dcm_locked]
 connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_32m/ext_reset_in]
 connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_32m/aux_reset_in]
+
+# Free-running 32 MHz reset domain for FPGA-only AXI helpers. These peripherals
+# must be reachable before SX1257 CLK_OUT exists, otherwise their clock
+# converters stall the shared SmartConnect and firmware cannot configure the
+# radios that generate CLK_OUT.
+set psrctrl [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ctrl32m]
+connect_bd_net $ctrl_clk                        [get_bd_pins rst_ctrl32m/slowest_sync_clk]
+connect_bd_net [get_bd_pins clk_wiz_0/locked]   [get_bd_pins rst_ctrl32m/dcm_locked]
+connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_ctrl32m/ext_reset_in]
+connect_bd_net [get_bd_pins xlconstant_1/dout]  [get_bd_pins rst_ctrl32m/aux_reset_in]
 
 # --- MicroBlaze — created after clock wizard so automation can resolve the clock
 set mb [create_bd_cell -type ip -vlnv xilinx.com:ip:microblaze:11.0 microblaze_0]
@@ -297,23 +309,16 @@ connect_bd_net [get_bd_pins fpga_dsp_wrap_0/ext_irq]      [get_bd_ports ext_irq]
 # int8 I/Q over Ethernet; this peripheral paces samples out at the
 # decimator's R=64 output rate for fpga_dsp_wrap to ΣΔ-modulate back onto
 # hw_iq_i/hw_iq_q.
-# axi_inj_ctrl shares the DSP-domain sample clock (dsp_clk) with fpga_dsp_wrap so
-# the paced inj_* handoff stays single-clock (no CDC on those nets). Its AXI-Lite
-# slave crosses from the 100 MHz MicroBlaze bus into dsp_clk via the clock
-# converter that the axi4 automation inserts; the Clk_slave below must therefore
-# name the sample clock, not the (now unused) MMCM clk_out2.
-# NOTE: apply_bd_automation resolves Clk_slave by the exact clock label. The BUFG
-# output on the 32 MHz input reads "/sx_clk_bufg/BUFG_O (32 MHz)" — verified to
-# validate clean in Vivado 2025.2. If a future Vivado rejects the string, run the
-# automation with Clk_slave "Auto" and verify the converter's slave clock is
-# dsp_clk (sx_clk_bufg/BUFG_O), not clk_out2.
+# Keep this FPGA-only AXI helper on free-running MMCM 32 MHz so it is reachable
+# before the SX1257 sample clock starts. Its inj_* outputs cross into dsp_clk;
+# they are only enabled after front-end bring-up and require explicit CDC review.
 set inj_ctrl [create_bd_cell -type module -reference axi_inj_ctrl axi_inj_ctrl_0]
-connect_bd_net $dsp_clk [get_bd_pins axi_inj_ctrl_0/s_axi_aclk]
-connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
+connect_bd_net $ctrl_clk [get_bd_pins axi_inj_ctrl_0/s_axi_aclk]
+connect_bd_net [get_bd_pins rst_ctrl32m/peripheral_aresetn] \
                [get_bd_pins axi_inj_ctrl_0/s_axi_aresetn]
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
     -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
-              Clk_slave  "/sx_clk_bufg/BUFG_O (32 MHz)" \
+              Clk_slave  "/clk_wiz_0/clk_out2 (32 MHz)" \
               Master "/microblaze_0 (Periph)" intc_ip "Auto" master_apm "0" } \
     [get_bd_intf_pins axi_inj_ctrl_0/s_axi]
 
@@ -333,15 +338,15 @@ connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q3] [get_bd_pins fpga_dsp_wrap_0/
 # CLK_OUT (F4). This peripheral samples the OTHER three CLK_OUTs against that
 # clock and counts toggles over a window — ~0 toggles => frequency-locked,
 # large => not locked. Runs on dsp_clk (same domain), so the measured clocks are
-# sampled directly by the DSP sample clock; the AXI slave crosses 100 MHz->dsp_clk
-# via the same clock-converter automation pattern as axi_inj_ctrl.
+# sampled by the free-running FPGA control clock. It still detects frequency
+# lock and exposes a coarse sampled phase, without blocking pre-clock boot.
 set clksync [create_bd_cell -type module -reference axi_clk_sync_mon axi_clk_sync_mon_0]
-connect_bd_net $dsp_clk [get_bd_pins axi_clk_sync_mon_0/s_axi_aclk]
-connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
+connect_bd_net $ctrl_clk [get_bd_pins axi_clk_sync_mon_0/s_axi_aclk]
+connect_bd_net [get_bd_pins rst_ctrl32m/peripheral_aresetn] \
                [get_bd_pins axi_clk_sync_mon_0/s_axi_aresetn]
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
     -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
-              Clk_slave  "/sx_clk_bufg/BUFG_O (32 MHz)" \
+              Clk_slave  "/clk_wiz_0/clk_out2 (32 MHz)" \
               Master "/microblaze_0 (Periph)" intc_ip "Auto" master_apm "0" } \
     [get_bd_intf_pins axi_clk_sync_mon_0/s_axi]
 
@@ -375,8 +380,7 @@ make_bd_intf_pins_external [get_bd_intf_pins axi_uartlite_0/UART]
 
 # --- AXI Timer (100 MHz benchmark timebase) ---------------------------------
 # Provides a deterministic cycle counter for separating eigenvector-kernel,
-# SPI-transfer, and end-to-end TRAINING_DONE -> W_COMMIT latency.  Keep this on
-# the MicroBlaze clock so one timer tick is exactly 10 ns.
+# SPI-transfer, and end-to-end TRAINING_DONE -> W_COMMIT latency.
 set timer [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_timer:2.0 axi_timer_0]
 set_property CONFIG.enable_timer2 {0} $timer
 apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
@@ -407,6 +411,24 @@ create_bd_port -dir IO -from 3 -to 0 psram_sio
 connect_bd_net [get_bd_pins fpga_dsp_wrap_0/psram_sck]  [get_bd_ports psram_sck]
 connect_bd_net [get_bd_pins fpga_dsp_wrap_0/psram_ce_n] [get_bd_ports psram_ce_n]
 connect_bd_net [get_bd_pins fpga_dsp_wrap_0/psram_sio]  [get_bd_ports psram_sio]
+
+# The 100 MHz peripherals are configuration-initialized and must remain
+# accessible while MDM resets/halts MicroBlaze. proc_sys_reset's peripheral
+# output was observed stuck low on hardware, stalling the CPU on its first AXI
+# write. Detach the AXI fabric/peripherals from that output and hold their
+# active-low resets deasserted. CPU/LMB reset remains under rst_100m + MDM.
+foreach pin [list \
+    axi_smc/aresetn \
+    axi_ethernetlite_0/s_axi_aresetn \
+    axi_quad_spi_0/s_axi_aresetn \
+    axi_quad_spi_1/s_axi_aresetn \
+    axi_gpio_irq/s_axi_aresetn \
+    axi_uartlite_0/s_axi_aresetn \
+    axi_timer_0/s_axi_aresetn \
+] {
+    disconnect_bd_net [get_bd_nets rst_100m_peripheral_aresetn] [get_bd_pins $pin]
+    connect_bd_net [get_bd_pins xlconstant_1/dout] [get_bd_pins $pin]
+}
 
 # --- Validate and save --------------------------------------------------------
 validate_bd_design
