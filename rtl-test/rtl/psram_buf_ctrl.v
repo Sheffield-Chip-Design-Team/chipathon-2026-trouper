@@ -9,8 +9,17 @@
 //       0x0A[2:1]) — the SC correlator itself is still single-antenna, this
 //       just lets firmware route it away from a known-bad branch instead of
 //       always hardcoding antenna 0 (Open Risk #9).
-//   (b) Same-packet MRC replay — at W_commit, switch to S_REPLAY: interleaved
-//       write (live) + 8-byte read (from buf_base), feeding rpl_* to the combiner.
+//   (b) Same-packet MRC replay — continuous-delay redesign (TRPR-RMD-009, see
+//       planning/psram-replay-continuous-delay-redesign.md): at the
+//       training_done rising edge a margin wait of replay_delay_samples
+//       captured samples is armed; when it expires, switch to S_REPLAY:
+//       interleaved write (live) + 8-byte read starting at buf_base and
+//       advancing in lockstep with the writes — a fixed-depth delay line that
+//       never rewinds, feeding rpl_* to the combiner.  W_commit no longer
+//       starts replay (it only gates W_valid in the combiner); the margin
+//       expiry doubles as a weight-arrival timeout — replay runs in combiner
+//       bypass until weights land, and a commit arriving after replay has
+//       started sets the sticky w_commit_late flag (WGT_CTRL[4]).
 //
 // Sub-cycle budget (32 MHz, CIC R=128 → iq_valid every 128 cycles):
 //   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (84 spare)  ✓
@@ -75,6 +84,8 @@ module psram_buf_ctrl (
     input  wire        sc_lock,
     input  wire [31:0] timing_ref,    // preamble-start sample index from sc_detector
     input  wire [31:0] iq_sample_cnt, // free-running iq_valid counter from trouper_top
+    input  wire        training_done, // level from training_acc; rising edge arms the margin wait
+    input  wire [15:0] replay_delay_samples, // margin: samples after training_done before replay starts
     input  wire        W_commit,
     input  wire        packet_end,
     input  wire        packet_active,
@@ -101,7 +112,8 @@ module psram_buf_ctrl (
     output reg         buf_active,    // sc_lock → packet_end
     output reg         replay_active, // W_commit → packet_end
     output reg         qe_init_done,
-    output reg         replay_missed, // sticky: packet_end before W_commit
+    output reg         replay_missed, // sticky: packet_end before replay started (margin never met)
+    output reg         w_commit_late, // sticky per-packet: W_commit landed after replay start
     output reg         overflow,      // sticky: wr_ptr lapped rd_ptr
     output reg         sample_skip,   // sticky: iq_valid arrived while QPI busy (sample lost)
     output reg  [2:0]  state_dbg,
@@ -133,6 +145,14 @@ module psram_buf_ctrl (
     reg [ABITS-1:0] buf_base;
     reg             buf_base_valid;
     reg             sc_lock_prev;
+
+    // Replay margin wait (continuous-delay redesign): armed at the
+    // training_done rising edge, counts replay_delay_samples captured
+    // samples (down-counter decremented at each write-done), then enters
+    // S_REPLAY at rd_ptr = buf_base independent of W_commit.
+    reg             training_done_prev;
+    reg             wait_armed;
+    reg [15:0]      wait_cnt;
 
     // del address = wr_ptr − N×8, latched at iq_valid trigger
     // del_offset = 8 << (sf+sample_shift)  (= N × 8 = 2^(SF+sample_shift) × 8)
@@ -224,6 +244,9 @@ module psram_buf_ctrl (
             buf_base       <= {ABITS{1'b0}};
             buf_base_valid <= 1'b0;
             sc_lock_prev   <= 1'b0;
+            training_done_prev <= 1'b0;
+            wait_armed     <= 1'b0;
+            wait_cnt       <= 16'd0;
             del_addr       <= {ABITS{1'b0}};
             del_offset_r   <= {ABITS{1'b0}};
             del_n_r        <= 15'd1;
@@ -260,11 +283,13 @@ module psram_buf_ctrl (
             replay_active  <= 1'b0;
             qe_init_done   <= 1'b0;
             replay_missed  <= 1'b0;
+            w_commit_late  <= 1'b0;
             overflow       <= 1'b0;
             sample_skip    <= 1'b0;
             state_dbg      <= 3'd0;
         end else begin
             sc_lock_prev      <= sc_lock;
+            training_done_prev <= training_done;
             sf_prev           <= sf;
             sample_shift_prev <= sample_shift;
             // Registered barrel-shift outputs (quasi-static; off the per-cycle
@@ -291,8 +316,18 @@ module psram_buf_ctrl (
             if (clr_err) begin
                 overflow      <= 1'b0;
                 replay_missed <= 1'b0;
+                w_commit_late <= 1'b0;
                 sample_skip   <= 1'b0;
             end
+
+            // Late-commit detection: W_commit landing while the delay-line
+            // replay is already running means some prefix of the packet was
+            // combined in bypass (partial MRC loss) — flag it for firmware.
+            // replay_active (not a rd_ptr != buf_base compare) is the
+            // replay-started marker: registered, cleared at packet_end, and
+            // immune to stale pointer values from a previous packet.
+            if (W_commit && replay_active)
+                w_commit_late <= 1'b1;
 
             // Sample-skip detection: a live sample arrived while the QPI engine was
             // still busy with a prior transaction, so it could not be captured.
@@ -408,7 +443,9 @@ module psram_buf_ctrl (
                 // Sub 0..24:  QPI write 8 bytes at wr_ptr
                 // Sub 25..43: QPI read 2 bytes (del_i0/del_q0) from del_addr
                 // sc_lock rising edge: snapshot buf_base.
-                // W_commit: → S_REPLAY.
+                // training_done rising edge: arm the margin wait; when
+                // wait_cnt captured samples have elapsed → S_REPLAY at
+                // buf_base, independent of W_commit.
                 // ------------------------------------------------------------
                 S_WRITE: begin
                     if (sc_lock && !sc_lock_prev && psram_en) begin : blk_bufbase_w
@@ -417,18 +454,40 @@ module psram_buf_ctrl (
                         buf_base       <= (wr_ptr - back_bytes) & AMASK;
                         buf_base_valid <= 1'b1;
                         buf_active     <= 1'b1;
+                        w_commit_late  <= 1'b0;  // per-packet sticky, cleared at packet start
                     end
 
-                    if (W_commit && buf_base_valid && psram_en) begin
+                    // Arm the replay margin wait at the training_done rising
+                    // edge.  buf_base_valid gates out noise-mode training runs
+                    // (TACC_NOISE_TRIG fires training_done without sc_lock).
+                    if (training_done && !training_done_prev &&
+                        buf_base_valid && psram_en && !packet_end) begin
+                        wait_armed <= 1'b1;
+                        wait_cnt   <= replay_delay_samples;
+                    end
+
+                    // Margin met → start the delay-line replay.  Gated on
+                    // !qpi_busy so the state switch lands between QPI bursts
+                    // (the del-read and rpl-read sub-cycle sequences differ),
+                    // and on !packet_end so a same-cycle packet end wins —
+                    // entering S_REPLAY on the packet_end pulse would miss its
+                    // own exit condition and zombie into the idle period.
+                    if (wait_armed && wait_cnt == 16'd0 && !qpi_busy &&
+                        psram_en && !packet_end) begin
                         rd_ptr        <= buf_base;
+                        wait_armed    <= 1'b0;
                         replay_active <= 1'b1;
                         state         <= S_REPLAY;
                     end
 
                     if (packet_end) begin
+                        // Replay never started this packet: margin never met
+                        // (short packet / training_done never fired) — clean
+                        // fallback, flagged for firmware via REPLAY_MISSED.
                         if (buf_base_valid) replay_missed <= 1'b1;
                         buf_base_valid <= 1'b0;
                         buf_active     <= 1'b0;
+                        wait_armed     <= 1'b0;
                     end
 
                     if (!qpi_busy) begin
@@ -535,6 +594,12 @@ module psram_buf_ctrl (
                                 wr_ptr  <= (wr_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
                                 cur_i0  <= $signed(wr_data_ant_i);
                                 cur_q0  <= $signed(wr_data_ant_q);
+                                // Margin down-count: one captured sample =
+                                // wr_ptr advanced 8 bytes past the wait
+                                // reference.  wait_armed is registered, so an
+                                // arm landing this same cycle is not eaten.
+                                if (wait_armed && wait_cnt != 16'd0)
+                                    wait_cnt <= wait_cnt - 16'd1;
                                 sub     <= 6'd25;
                             end
                             // ---- DEL READ: CMD 0xEB ----

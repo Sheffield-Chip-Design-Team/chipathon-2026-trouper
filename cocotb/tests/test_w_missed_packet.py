@@ -46,8 +46,13 @@ PKT_TIMEOUT_SYMS = 20
 @cocotb.test()
 async def test_w_missed_on_wpend_timeout(dut):
     tag = "w_missed"
+    # replay_delay=0xFFFF: margin never met inside the 20-sym packet, so the
+    # PSRAM delay-line replay never starts and the whole packet stays in the
+    # modulated-silence phase (the FSM miss path under test is orthogonal to
+    # the replay timeout ladder -- that lives in test_replay_delay.py).
     sym_ns = await _reset_and_lock(dut, mode=0, ant_mask=0xF, tag=tag,
-                                   pkt_timeout_syms=PKT_TIMEOUT_SYMS)
+                                   pkt_timeout_syms=PKT_TIMEOUT_SYMS,
+                                   replay_delay=0xFFFF)
 
     pkt_status = await spi_read(dut, 0x1C)
     assert pkt_status & 0x01, f"{tag}: PACKET_ACTIVE not set after sc_lock (0x{pkt_status:02X})"

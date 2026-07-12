@@ -11,14 +11,21 @@ functional half of `PSRAM_CLR_ERR` (TRPR-PSR-007 / REG-006 previously
 covered the W1P mechanics only).
 
 test_replay_missed_late_commit:
-  lock -> training_done -> W_COMMIT withheld -> packet timeout. PSRAM must
-  latch sticky REPLAY_MISSED (packet_end with a latched packet base but no
-  commit). A LATE commit sent while IDLE must NOT start a replay (the
-  packet base was invalidated at packet_end) -- the weights simply sit in
-  the shadow for the next packet, which is the documented fallback.
-  PSRAM_CLR_ERR then clears the sticky flag over SPI, and a second packet
-  with an in-time commit must replay normally (recovery) with
-  REPLAY_MISSED staying clear.
+  Continuous-delay redesign semantics: replay starts at training_done +
+  REPLAY_DELAY_SAMPLES, independent of W_COMMIT. With replay_delay=0xFFFF
+  the margin is never met inside a 20-sym packet, so REPLAY_ACTIVE must
+  stay 0 for the whole packet and packet_end must latch sticky
+  REPLAY_MISSED (the "packet_end before the margin is met" clean fallback,
+  redesign doc §6). A commit sent while IDLE must NOT start a replay
+  (commits never start replay any more, and the packet base was
+  invalidated at packet_end) -- the weights simply sit in the shadow for
+  the next packet. PSRAM_CLR_ERR then clears the sticky flag over SPI.
+  (Recovery -- a packet with a met margin enters REPLAY with REPLAY_MISSED
+  staying clear -- is covered by test_replay_delay.py, which configures a
+  small margin before the first lock; re-writing REPLAY_DELAY mid-test is
+  racy against the back-to-back auto re-locks the CW driver causes, since
+  the write is !packet_active-gated and the idle gap is a handful of
+  samples.)
 
 test_dbg_readback_content:
   No packet at all (low-amplitude independent noise -> no SC hits). After
@@ -46,8 +53,11 @@ PKT_TIMEOUT_SYMS = 20
 @cocotb.test()
 async def test_replay_missed_late_commit(dut):
     tag = "replay_missed"
+    # replay_delay=0xFFFF: margin never met inside the 20-sym packet -> the
+    # delay-line replay never starts and packet_end must flag REPLAY_MISSED.
     sym_ns = await _reset_and_lock(dut, mode=0, ant_mask=0xF, tag=tag,
-                                   pkt_timeout_syms=PKT_TIMEOUT_SYMS)
+                                   pkt_timeout_syms=PKT_TIMEOUT_SYMS,
+                                   replay_delay=0xFFFF)
 
     # -- training done, but never commit ------------------------------------
     train_ok = False
@@ -60,8 +70,10 @@ async def test_replay_missed_late_commit(dut):
 
     st = await spi_read(dut, 0x71)
     assert not (st & 0x20), f"{tag}: REPLAY_MISSED set before packet end (0x{st:02X})"
+    assert not (st & 0x10), \
+        f"{tag}: REPLAY_ACTIVE set before the 0xFFFF margin could expire (0x{st:02X})"
 
-    # -- packet timeout -> packet_end with no W_COMMIT -----------------------
+    # -- packet timeout -> packet_end with the margin never met --------------
     done_ok = False
     for _ in range(PKT_TIMEOUT_SYMS + 10):
         await Timer(sym_ns, unit="ns")
@@ -72,59 +84,28 @@ async def test_replay_missed_late_commit(dut):
 
     st = await spi_read(dut, 0x71)
     assert st & 0x20, \
-        f"{tag}: REPLAY_MISSED not latched after packet_end without W_COMMIT (0x{st:02X})"
+        f"{tag}: REPLAY_MISSED not latched after packet_end with the margin unmet (0x{st:02X})"
     assert not (st & 0x10), f"{tag}: REPLAY_ACTIVE set on a missed packet (0x{st:02X})"
     dut._log.info(f"{tag}: REPLAY_MISSED latched (PSRAM_STATUS=0x{st:02X})")
 
-    # -- LATE commit while IDLE: must NOT start a zombie replay --------------
+    # -- commit while IDLE: must NOT start a zombie replay -------------------
+    # (Commits never start replay in the continuous-delay design, and the
+    # packet base was invalidated at packet_end anyway.)
     await spi_write(dut, 0x1E, 0x01)
     for _ in range(3):
         await Timer(sym_ns, unit="ns")
         st = await spi_read(dut, 0x71)
         assert not (st & 0x10), \
-            f"{tag}: late W_COMMIT started a replay after packet_end (0x{st:02X}) -- " \
-            f"packet base should have been invalidated"
+            f"{tag}: W_COMMIT while IDLE started a replay after packet_end (0x{st:02X})"
     assert st & 0x20, f"{tag}: REPLAY_MISSED lost without PSRAM_CLR_ERR (0x{st:02X})"
 
     # -- PSRAM_CLR_ERR clears the sticky flag (functional, not just W1P) -----
     await spi_write(dut, 0x70, 0x03)   # PSRAM_EN | CLR_ERR
     st = await spi_read(dut, 0x71)
     assert not (st & 0x20), f"{tag}: REPLAY_MISSED not cleared by PSRAM_CLR_ERR (0x{st:02X})"
-
-    # -- recovery: commit in time on a live packet ---------------------------
-    # SC re-arms the instant the FSM returns to IDLE, so with the CW driver
-    # running packets keep auto-starting -- one may already be mid-flight
-    # after the late-commit checks above, and any packet that completes
-    # uncommitted (correctly!) re-latches REPLAY_MISSED. (The first draft of
-    # this test waited on IRQ *edges* whose events had already been consumed,
-    # slept through an entire packet, and then flagged that correct re-latch
-    # as a failure -- job 3312.) So instead: catch whatever packet is live by
-    # polling PACKET_STATUS for W_PENDING, clear any interim re-latch, and
-    # commit inside that same packet's window.
-    caught = False
-    for _ in range(60):
-        await Timer(sym_ns, unit="ns")
-        ps = await spi_read(dut, 0x1C)
-        if (ps & 0x01) and ((ps >> 1) & 0x7) == 2:   # PACKET_ACTIVE, phase W_PENDING
-            caught = True
-            break
-    assert caught, f"{tag}: no packet reached W_PENDING for the recovery commit"
-
-    await spi_write(dut, 0x70, 0x03)   # clear any miss re-latched meanwhile
-    await spi_write(dut, 0x1E, 0x01)   # in-time commit (W_PENDING lasts ~5 syms)
-
-    replay_ok = False
-    for _ in range(200):
-        await Timer(64 * CLK_NS, unit="ns")
-        st = await spi_read(dut, 0x71)
-        if st & 0x10:
-            replay_ok = True
-            break
-    assert replay_ok, f"{tag}: recovery packet never entered REPLAY (0x{st:02X})"
-    assert not (st & 0x20), \
-        f"{tag}: REPLAY_MISSED re-latched on a successfully-committed packet (0x{st:02X})"
-    dut._log.info(f"{tag}: PASS -- miss latched, late commit inert, CLR_ERR works, "
-                  f"committed packet replays clean (PSRAM_STATUS=0x{st:02X})")
+    dut._log.info(f"{tag}: PASS -- miss latched, idle commit inert, CLR_ERR works "
+                  f"(PSRAM_STATUS=0x{st:02X}; margin-met recovery covered by "
+                  f"test_replay_delay)")
 
 
 async def _model_byte(dut, byte_addr):

@@ -327,7 +327,7 @@ Third-order ΣΔ modulator. Converts int8 combined output back to 1-bit I+Q stre
 | TRPR-RMD-006 | H | F | The re-modulator output SHALL be stable (no integrator divergence) for any int8 input within [−90, +90]. | T |
 | TRPR-RMD-007 | H | P | Re-demodulated output (Python decimation of 1-bit stream) SHALL match int8 input to within ±1 LSB RMS at −6 dBFS. | T |
 | TRPR-RMD-008 | M | F | When Mode 1 (passthrough) is active, the re-modulator SHALL receive the single-antenna int8 stream directly. | T |
-| TRPR-RMD-009 | C | F | Except at first-ever lock after `RESETB`, the re-modulator's input SHALL NOT jump backward in signal time-index during normal operation (silence→signal and mid-stream weight changes are fine; replaying already-sent time-index is not). Not yet met — see Open Risks #5 and `planning/psram-replay-continuous-delay-redesign.md`. | T |
+| TRPR-RMD-009 | C | F | Except at first-ever lock after `RESETB`, the re-modulator's input SHALL NOT jump backward in signal time-index during normal operation (silence→signal and mid-stream weight changes are fine; replaying already-sent time-index is not). Met 2026-07-12 by the continuous-delay replay (`planning/psram-replay-continuous-delay-redesign.md`, implemented; monotonic-`rd_ptr` check in `cocotb/tests/test_replay_delay.py`). | T |
 
 ---
 

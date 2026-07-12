@@ -1,8 +1,12 @@
 # Same-Packet PSRAM Replay: Continuous-Delay Redesign Proposal
 
-**Status:** PROPOSED — not implemented. Written 2026-07-11; revised same day
-(margin anchor moved from `buf_base` to `training_done`, mux keyed on
-`replay_active`, timeout benefit added — see §2/§3/§4a).
+**Status:** IMPLEMENTED 2026-07-12 (branch `psram-replay-continuous-delay`).
+Written 2026-07-11; revised same day (margin anchor moved from `buf_base`
+to `training_done`, mux keyed on `replay_active`, timeout benefit added —
+see §2/§3/§4a). Verified: new `cocotb/tests/test_replay_delay.py` (3-rung
+timeout ladder, monotonic `rd_ptr`, slot handback) plus updated
+psram_ops/bypass_e2e/w_missed/reg-reset-sweep/qspi_owner suites — SGE jobs
+3347/3350, all PASS.
 **Motivated by:** `TRPR-RMD-009` (Trouper Chip Specification §4.9 — no
 time-index jump in the re-modulator's input during normal operation).
 **Touches:** `psram_buf_ctrl.v`, `trouper_top.v`, `reg_bank.v`, Register Map,
@@ -51,8 +55,12 @@ shrinks `n_acc`, a separate Z-quality issue.)
 1. **New register**, `REPLAY_DELAY_SAMPLES` (raw sample count, not
    symbols — it bounds only host response time, which is SF-independent).
    Firmware sizes it to its worst-case IRQ + readout + compute + commit
-   latency (see Open Risks #7 for the compute portion: ~750–1000 samples
-   for 8 iterations; add readout/IRQ overhead on top).
+   latency. The compute portion is now measured (Open Risks #7, 2026-07-11,
+   jobs 3333–3335): 2.28 ms on the Grouper rv32emc core for 8 iterations =
+   **~1,140 samples** at 500 kS/s (~2,140 for 16 iterations); add GRP-bus
+   Z-readout + IRQ overhead on top — a default of **~1,500 samples (3 ms)**
+   covers the 8-iteration Grouper path with margin. The RPi host path is
+   jitter-bound and still unmeasured.
 2. At `sc_lock`, `buf_base` is latched exactly as today.
 3. At `training_done`, latch a wait reference (`wr_ptr` at that instant).
    Output stays silent until `wr_ptr` has advanced
@@ -152,20 +160,28 @@ starts without weights and accepts them whenever they show up (exactly what
 
 - Remove the `W_commit`-gated trigger: `if (W_commit && buf_base_valid &&
   psram_en) begin rd_ptr <= buf_base; ... state <= S_REPLAY; end`.
-- Add a margin-gated trigger instead: at `training_done` (new input from
-  `training_acc`), latch a wait reference `wait_base <= wr_ptr`; once
-  `(wr_ptr − wait_base) >= replay_delay_bytes` (a registered comparison,
-  `replay_delay_bytes` derived from the new register), latch
-  `rd_ptr <= buf_base` and enter `S_REPLAY` — independent of `W_commit`.
+- Add a margin-gated trigger instead (as built): at the `training_done`
+  rising edge (new level input from `training_acc`, edge-detected locally;
+  gated on `buf_base_valid` so noise-mode `TACC_NOISE_TRIG` runs can't arm
+  it), load a down-counter `wait_cnt <= replay_delay_samples` and set
+  `wait_armed`; decrement at each write-done (one captured sample =
+  `wr_ptr` advanced 8 bytes — same meaning as the pointer compare, without
+  the wrap arithmetic); at zero, latch `rd_ptr <= buf_base` and enter
+  `S_REPLAY` — independent of `W_commit`. The transition is additionally
+  gated on `!qpi_busy` (lands between QPI bursts; the del-read and
+  rpl-read sub-cycle sequences differ) and `!packet_end` (a same-cycle
+  packet end wins, otherwise `S_REPLAY` would miss its own exit pulse).
 - `W_commit` no longer starts replay; it only gates `W_valid` in the
   combiner (already decoupled — `mrc_combiner` already auto-falls-back to
   bypass when `!W_valid`, no change needed there).
 - Add `W_COMMIT_LATE` detection: sticky bit set when `W_commit` pulses
-  while replay is already running. Use a `replay_started` flag (set on the
-  `S_REPLAY` entry, cleared at `packet_end`) rather than a
+  while replay is already running — implemented as `W_commit &&
+  replay_active` (`replay_active` is exactly the replay-started flag: set
+  on `S_REPLAY` entry, cleared at `packet_end`), rather than a
   `rd_ptr != buf_base` comparison — the pointer compare is true from the
   second replay cycle onward anyway, and would read a stale `rd_ptr` from
-  the previous packet if a commit lands during the margin wait.
+  the previous packet if a commit lands during the margin wait. Cleared at
+  the next packet's `sc_lock` rising edge and by `PSRAM_CLR_ERR`.
 - Read-address mux: keyed on `replay_active`/`state == S_REPLAY`, not raw
   `sc_lock` (§3). `del_addr` (SC path) used outside replay; the same read
   sub-cycle slot computes the replay address inside it.
@@ -227,11 +243,25 @@ at `training_done` + the configured register value, timeout behaviour
 confirming the `replay_active`-keyed read mux hands the slot back to the
 SC delay-read for the second packet's search.
 
-## 10. Next steps
+## 10. Implementation record (2026-07-12)
 
-Not yet implemented. Before starting: `Open Risks #7`'s cycle-accurate
-verification should land first, since it directly informs the default
-`REPLAY_DELAY_SAMPLES` value firmware would actually use. Implementation
-order: register map + `reg_bank.v` field, `psram_buf_ctrl.v` state-machine
-change, `trouper_top.v` mux/`psram_silence` removal, new cocotb regression,
-then update `TRPR-RMD-009`'s "not yet met" note and Open Risks #5/#14.
+Implemented as specced, in the §10 order originally planned: `reg_bank.v`
+(`REPLAY_DELAY_SAMPLES` 0x77/0x78, reset 1500, `!packet_active`-gated;
+`WGT_CTRL[4]` readback), `psram_buf_ctrl.v` (margin-gated `S_REPLAY`
+trigger per §5 as-built notes, `w_commit_late` sticky), `trouper_top.v`
+(silence now modulated zeros — `in_valid` stays asserted; new wiring),
+mirrored to `rtl-test/rtl/`. Default margin per Open Risks #7's measured
+2.28 ms rv32emc compute (~1,140 samples) + readout/IRQ headroom. The RPi
+host-response path remains unmeasured; firmware programs a larger value
+there once measured. `TRPR-RMD-009` marked met; Open Risks #5 closed, #14
+reduced (gap now per-packet deterministic).
+
+Remaining follow-ups (verification items are planned in detail in
+`planning/psram-replay-verification-plan.md`, RPV-1..9 / RPV-F1..F6):
+- `formal/psram_buf_ctrl_formal.sv` still encodes the W_COMMIT-triggered
+  contract (and its `ifdef FORMAL` instantiation is currently missing from
+  `psram_buf_ctrl.v` entirely — pre-existing drift); the harness needs a
+  rewrite against the margin-gated trigger before the k-induction proof is
+  meaningful again.
+- Open Risks #14 residual: documented `PKT_TIMEOUT_SYMS` budgeting rule or
+  a drain-then-exit.
