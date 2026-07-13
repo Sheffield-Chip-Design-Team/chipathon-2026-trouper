@@ -25,7 +25,13 @@ The `gf180mcu_fd_sc_mcu7t5v0` FD cells fail 32 MHz timing at the slow corner —
 worst-case blanket-`MCP=3` SS setup WNS was **−11.95 ns**. The decimator's
 share of that has been honestly closed (pure 3-cycle pacing + fanout fix, SS
 WNS **+8.0 ns MET**, SGE job 2149), and sc_detector/training_acc have paced
-fixes too, but **all of this lives on branch `ss-mcp-pacing`, not merged**.
+fixes too. **Correction 2026-07-12: `ss-mcp-pacing` IS merged into `main`**
+(`git log main..ss-mcp-pacing` is empty; the decimator 3-cycle HB pacing,
+sc_detector's MCP=3 budget, and training_acc's dual-multiplier 16-step walk
+are all present in current `src/`) — the previous "lives on a branch, not
+merged" framing was stale. This does not close item 1: the same SS gap this
+entry is about is exactly what items 39/40 are still chasing on the *merged*
+RTL (cone-scoping + the newly-found `sc_detector`/`packet_active` wall).
 The one remaining genuine (non-paceable) residual, the `u_psram` QSPI control
 decode (≈ −10 to −13 ns, throughput-bound — needs a 1-cycle-ahead pipeline of
 the `state`/`sub` → `sio_out`/address cone), is analyzed but not implemented.
@@ -51,8 +57,27 @@ stands as the blocking metric until that policy is decided.
 wildcards miss (worst: `rb_sf_cfg → u_pcfsm.pkt_end_q`, −20.4 ns) — see
 item 39 for the breakdown and the v21 fix plan.
 
+**2026-07-13 re-confirmation on the item-39-fixed netlist (job 3407):**
+post-hoc OpenSTA reload of the job 3404 routed netlist (mainline, item 39's
+`packet_ctrl_fsm` write-arc fix + `M_val` cone, `config_current_signoff.json`,
+1200×1100/87.09% achieved util) — same netlist/SPEF/SDC, only the liberty
+corner swapped `ss_125C_3v00` → `ss_125C_4v50`: worst slack **−12.11 ns →
++1.96 ns**, **TNS 0**. Zero re-optimization. Same voltage-closes-it result as
+the 2026-07-05 confirmation and the item-27 SS@4.5V precedent (+1.40 ns,
+jobs 3231/3237), now reproduced on top of the item-39 fix specifically — the
+honest single-cycle fixes and the voltage lever are independent and additive,
+not alternatives. Per the roadmap's established caveat (`area-reduction-
+roadmap.md`), this is a **reload**, not a full re-PnR *targeting* 4.5V — a
+real 4.5V-targeted signoff needs a setup-slack margin fed to the resizer or
+it under-drives (job 3235 landed −8.31 ns on a bare corner swap vs. the
+reload's +1.17 ns on the older B1 netlist); the reload only proves the
+design is closeable at 4.5V, not that a naive 4.5V P&R run will land there
+for free. `ss_125C_5v00` is not a characterized liberty corner in this PDK
+(only 1.62V/3.0V/4.5V exist for SS at both 125°C and −40°C).
+
 **See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items),
-`planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation).
+`planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation),
+`planning/area-reduction-roadmap.md` (§"RAISE SS ONLY" voltage probe).
 
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
@@ -88,27 +113,6 @@ floorplan tried since (jobs 2165–2168). Described in the source doc as
 **Blocks:** further die-shrink; the honest-MCP signoff configuration (item 1).
 **See:** `planning/area-reduction-roadmap.md` §4 (Gate 0 blocker);
 `planning/ss-corner-decimator-pacing-closure.md`.
-
-### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode)
-
-**Cycle-accurate measurement 2026-07-11 (SGE jobs 3333–3335) — worse than estimated.**
-The weight kernel run on the real `picorv32.v` (slow non-`FAST_MUL` multiplier,
-corrected 7-bit-map kernel with faithful MMIO ingest) costs **33,283 cyc = 2.08 ms
-@16 MHz** for the 8-iteration default on rv32im (36,458 cyc = 2.28 ms on the
-Grouper's rv32emc/RV32E core, ~+10% from 16-register spilling), SF-independent —
-**~2× the old ~1.0–1.1 ms back-of-envelope**, which had wrongly assumed ~1 cyc/instr
-for the non-multiply work (real CPI ≈ 10). Against the live-mode deadline
-(`4·M/500 kHz`): **SF7 (~1.02 ms) and SF8 (~2.05 ms) both miss on both ISAs; only
-SF9+ fits.** 16 iterations (~3.88/4.28 ms) needs SF9+ (rv32im) or SF10+ (rv32emc).
-The 24-bit ZDIAG widening is timing-neutral (−30/−54 cyc). PSRAM replay mode
-sidesteps the deadline entirely (`W_COMMIT` can arrive any time up to `packet_end`)
-and is therefore **mandatory for SF7/SF8 MRC gain, not optional**; this risk is
-specifically about the live-mode (no same-packet replay) path.
-
-**Risk:** silently missing the weight-computation deadline at SF7/SF8 in live
-mode, producing stale/garbage MRC weights with no error indication.
-**See:** `planning/blocks/Eigenvector Weight Computation.md` (Timing
-Budget); `planning/DSP Chain SNR Loss Budget.md` §6.
 
 ### 8. AGC calibration and edge-case behavior are unverified on silicon
 
@@ -225,7 +229,7 @@ and GF180 pad timing rather than guessing them.
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 **Found:** 2026-07-11 (10 MHz SPI implementation/constraint research).
 
-### 39. Scoped-MCP SDC (v20) still leaks: three unrelaxed rb_* cones (SS WNS −20.4), plus one dishonest relaxation on the `timing_ref` write arc
+### 39. Scoped-MCP SDC (v20) still leaks: three unrelaxed rb_* cones (SS WNS −20.4), plus one dishonest relaxation on the `timing_ref` write arc — cone-scoping FIXED 2026-07-12 (v21), write-arc dishonesty FIXED 2026-07-13 (RTL restructure + honest v24 SDC exception)
 
 The v20 SDC's `-through` net wildcards miss three quasi-static
 `rb_*` → derived-register cones (same bug class the v18/v20 headers document):
@@ -257,6 +261,239 @@ copied the local symlink); real runs live in `ol_trouper_top/runs/`.
 **See:** `src/config/pnr_32m_scoped_v20.sdc` (v18/v20 headers);
 `src/control/packet_ctrl_fsm.v`; item 1.
 **Found:** 2026-07-12 (SDC-vs-`src/` MCP audit + NFS STA cross-check).
+
+**v21 update 2026-07-12:** the three missed cones are scoped via `-through
+<quasi-static rb_* net> -to <register>` (not `-from` — OpenSTA's
+`set_multicycle_path -from` rejects `Net` objects; caught as a hard STA error
+in job 3365 and fixed before job 3366/3367). Scoping the intended sources
+(`rb_sf_cfg`, `rb_sample_shift`, `rb_pkt_timeout_syms`, `rb_tacc_window_syms`,
+`rb_sc_hits_req`) wasn't enough on its own: the worst path in job 3366
+(SS WNS −27.19 ns, config `config_current_signoff.json`, 1200×1100/88%) still
+routed through `u_pcfsm.wpend_timeout_q[31]` because synthesis merged the
+`rb_sample_shift = rb_bw_sel ? 2'd2 : 2'd1` ternary straight into `rb_bw_sel`'s
+fanout — `rb_sample_shift` never survives as its own net on that path, same
+"-through wildcard misses an optimized-away net" failure class as every prior
+bug in this file's history. Fix: added `rb_bw_sel` to the `-through` source
+list for both the pcfsm and `u_tacc` blocks (job 3367).
+
+**Verified CLOSED (cone-scoping only):** job 3367 (SGE, `RUN_2026-07-12_21-56-16`)
+— cross-checked every violator against the synthesis netlist
+(`06-yosys-synthesis/trouper_top.nl.v`): none of `u_pcfsm.pkt_end_q`,
+`u_pcfsm.acq_timeout_q`/`wpend_timeout_q`, `u_tacc.acc_start`/`acc_end`, or the
+`timing_ref` write arc still violate when driven from a genuine quasi-static
+source (`rb_sf_cfg`/`rb_bw_sel`/`rb_pkt_timeout_syms`/`rb_tacc_window_syms`/
+`rb_sc_hits_req`). SS WNS at this die/density improved −25.39 ns (July 5
+baseline, same config) → **−16.01 ns** (job 3367), despite RTL growth in
+between.
+
+**Write-arc dishonesty (former "Action" item 2) is CONFIRMED REAL, still
+open:** with the three cones no longer masking it, STA now shows genuine
+single-cycle violations from `timing_ref` itself into `u_pcfsm.acq_timeout_q`
+(e.g. `timing_ref[7] → acq_timeout_q[31]`, −15.69 ns; `→ acq_timeout_q[30]`,
+−15.00 ns) — exactly the arc flagged as dishonest, now honestly exposed
+instead of hidden under a false 3-cycle budget. Closing this still needs the
+RTL fix described above (delay the timeout-register latch ≥2 cycles after
+`sc_lock`, computed from `lat_timing_ref` on `ST_PREAMBLE_ACQ` entry) — not
+implemented yet.
+
+**CLOSED 2026-07-13 (RTL fix + v24 SDC).** `packet_ctrl_fsm.v` now has a
+dedicated `ST_ACQ_SETUP` state between `ST_IDLE` and `ST_PREAMBLE_ACQ`: the
+`sc_lock` rising edge only latches `lat_timing_ref <= timing_ref` (a plain
+register copy); `acq_timeout_q`/`wpend_timeout_q`/`pkt_end_q` are computed one
+cycle later, in `ST_ACQ_SETUP`, from `lat_timing_ref` — which cannot change
+again until the next `sc_lock` edge (thousands of cycles later). That makes
+the `lat_timing_ref → {acq_timeout_q, wpend_timeout_q, pkt_end_q}` arc
+genuinely tolerant of a multicycle exception, unlike the old same-edge
+combinational compute from the live `timing_ref` input. Added as a new v24
+`set_multicycle_path -through u_pcfsm.lat_timing_ref[*] -to
+$pcfsm_timeout_regs` exception in `src/config/pnr_32m_scoped_v20.sdc`
+(mirrored to `rtl-test/ol_trouper_top/`).
+
+While verifying, closing this arc exposed `u_pcfsm.M_val` (Open Risk #40's
+"M_val not itself explicitly scoped" residual) as the new worst path
+(−5.15 ns) — `packet_ctrl_fsm.v:46-49` has its own redundant `M_val` register,
+separately derived from `sf`/`sample_shift` and never covered by the existing
+`$pcfsm_qs_srcs` (rb_*-net) `-through` list, because the path from M_val's own
+Q pin into the timeout registers never touches those rb_* nets. Folded into
+the same v24 SDC change (`-through u_pcfsm.M_val[*] -to $pcfsm_timeout_regs`).
+
+**Verified:** functional regression job 3402 (trouper_top 18-test SF/BW+startup
+sweep, sc_force_lock, sc_dbg, sc_ant_sel, w_missed, replay_delay, psram_ops,
+reg_reset_sweep, bypass_e2e, qspi_owner, spi_cdc, noise_trig, directed
+two-packet re-arm) — all PASS, rc=0; two-packet re-arm cycle counts (PK1-1,
+ARM-1, ARM-1b, PK2-1) unchanged, confirming the extra `ST_ACQ_SETUP` cycle
+doesn't disturb functional timing. P&R signoff jobs 3403 (lat_timing_ref fix
+only, worst path `packet_active → u_psram.sub[0]`, item 1's pre-existing
+QSPI-decode residual) then 3404 (+ M_val fix, worst path moves to `sc_lock →
+timing_ref[6]`, see new finding below — M_val cone itself confirmed closed, 0
+remaining `u_pcfsm.M_val` violators), both `config_current_signoff.json`
+(1200×1100/88%): DRC=0/LVS=0 clean both runs; SS WNS **−12.11 ns** (3403) and
+**−12.11 ns** (3404, essentially flat — the M_val fix removed that specific
+cone but the overall wall is now bounded by two other, already-present
+residuals of similar magnitude). This is the best SS WNS in this item's
+entire history (previous best was the CE-retimer's −14.71 ns, job 3400 in
+`planning/ce-gated-quasi-static-retimer-experiment.md`, which never touched
+this arc since it's not one of the CE-retimer's quasi-static `reg_bank`
+sources). Netlist cross-check confirms the old `timing_ref → acq_timeout_q`
+arc no longer appears anywhere in either run's violator list.
+
+**New finding surfaced by this fix, NOT yet characterized or fixed:** with
+the pcfsm write-arc and M_val cones both closed, `sc_lock → timing_ref[*]`
+(inside `sc_detector`, 131 violators in job 3404, worst −12.11 ns — tied with
+the `u_psram` residual) is now the dominant violator cluster. Traced
+structurally: `sc_lock` and `timing_ref` are written in the same
+`sc_detector.v` always-block guarded by `if (metric_valid_pulse && !sc_lock)`
+— synthesis likely turns the `!sc_lock` qualifier into a mux-select feeding
+`timing_ref`'s D input, making `sc_lock`'s own Q a genuine same-cycle input to
+`timing_ref`'s compute. This is a different module and a different arc than
+this item's `packet_ctrl_fsm` write-arc, was masked by larger violators until
+now, and has never been traced before. Out of scope for this item — needs its
+own root-cause pass before deciding an RTL or SDC fix, same as the
+`Zpair_i/Zpair_q`, `ce_16m`, `dcr_valid` clusters item 40 already lists as
+uncharacterized.
+
+**Ported 2026-07-13** to `worktree-ce-gated-quasi-static-retimer`
+(`planning/ce-gated-quasi-static-retimer-experiment.md`): same RTL change plus
+both SDC exceptions (that branch was independently missing the
+`M_val → timeout_regs` cone too, on top of the write-arc). Functional
+regression (job 3405) all PASS, cycle-identical to mainline. P&R signoff
+(job 3406) confirms the port itself is correct — neither `acq_timeout_q` nor
+`M_val` appears in the violator list, and it even improved that branch's
+separate `u_psram` residual (−14.71 → −6.08 ns) — but overall SS WNS
+regressed to −17.97 ns because `training_armed` (training_acc's live,
+packet-rate `armed` flag) and an internal `sd_remod` NTF-arithmetic cone both
+got worse. Root-caused (see experiment doc): both clusters pre-date the port
+(present already in job 3400, smaller) and are substantially worse on the
+CE-retimer branch than on mainline even before the port — most likely the
+retimer's own extra RTL (six retimed registers + free-running divider)
+costing physical margin on unrelated paths, with the port's two closed cones
+freeing up P&R repair effort that landed on `u_psram` but not on these. Not
+caused by, but exposed alongside, the port. CE-retimer's merge recommendation
+is downgraded pending this.
+
+**New finding, out of scope for this item — see #40:** the dominant residual
+SS wall (most of job 3367's 1206 violators, worst −16.01 ns) is now rooted in
+`u_sc.*` (sc_detector) internals plus `packet_active`/`u_remod`/`u_psram`
+fanout from `rb_bw_sel`/`rb_sf_cfg` — pre-existing (33 violators, −22.1 ns in
+the July 5 baseline at the same die/density) but roughly 4× wider now.
+
+### 40. SS wall (job 3367, 1000 violators, worst −16.01 ns) is FIVE stacked problems, not one — root-caused 2026-07-12 by direct netlist/STA cross-check
+
+**Root-cause pass complete.** Traced every major violator cluster in job
+3367's `max_ss_125C_3v00/max.rpt` (`RUN_2026-07-12_21-56-16`) against
+`final/nl/trouper_top.nl.v` (Q-net names of each startpoint/endpoint flop).
+The original framing of this item ("`rb_bw_sel`/`rb_sf_cfg` fanout into
+`sc_detector`") was directionally right but incomplete — the wall is
+actually five distinct, separately-caused clusters:
+
+| Startpoint (traced) | Violator count | Destination (traced) | What it is |
+|---|---|---|---|
+| `u_psram.state[0:1]` | 273 | `rpl_valid`, `u_psram.sub`, `u_psram.dbg_buf` | **the pre-existing `u_psram` QSPI decode residual item 1 has cited since before #39/#40 existed** — `u_psram` was never in `paced_nets`; the fix has always been a 1-cycle-ahead pipeline (item 1), not an MCP relaxation, and it's still not implemented |
+| `rb_bw_sel` | 200 | `u_sc.eval_step`, `u_sc.mul_start` | config reg → sc_detector's serialized eval FSM. Wildcard-miss (see below) |
+| `Zpair_i[*]/Zpair_q[*]` | 135 | (training_acc) | not previously characterized at all |
+| `ce_16m` | 64 | — | 16 MHz clock-enable, broad fanout; not previously characterized |
+| `packet_active` | 54 | `u_sc.acc_ci0` | **the single worst path, −16.01 ns — fully traced below** |
+| `timing_ref[7]` | 46 | `u_pcfsm.acq_timeout_q` | this is the write-arc dishonesty item 39 already flagged as "confirmed real, not yet fixed" — showing up in the raw violator count too |
+| `dcr_valid` | 26 | — | dc_removal; not previously characterized |
+
+**The worst path, fully traced:** `_61285_` (`.Q(packet_active)`, the
+`packet_ctrl_fsm` top-level flop) → net `packet_active` → 4 more hops,
+2 of which survive named (`packet_done_pulse`) and the rest anonymized
+(`_05436_`, `_06213_`, `_22787_`, `_23679_`, `_03962_`) → `_62498_`
+(`.D(_03962_)`, `.Q(u_sc.acc_ci0[19])`). **Confirmed root cause:** the
+`paced_nets` MCP=3 relaxation (`pnr_32m_scoped_v20.sdc:184-187`, `-through
+[get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]`) never touches
+this path — every intermediate net between the two registers is either a
+**top-level** net (`packet_active`/`packet_done_pulse` are declared in
+`trouper_top.v`, sourced from `packet_ctrl_fsm`, not `u_sc.*`-prefixed) or
+fully anonymized by synthesis. The endpoint register's own *output* net
+happens to be named `u_sc.acc_ci0[19]`, but that's downstream of the
+violating arc, not part of it — the D-pin's driving net (`_03962_`) has no
+`u_sc.` name to match. **This confirms hypothesis 1 from the original #40
+write-up** (wildcard silently not applying), not hypothesis 2 (budget too
+small) — same "-through wildcard misses a cross-boundary/optimized-away net"
+bug class as v8, v19, and the v20 `rb_sc_hits_req → timing_ref` miss (item
+39's history). The `rb_bw_sel → u_sc.eval_step/mul_start` cluster (200
+violators) is the same failure mode: `rb_bw_sel` itself is a top-level net,
+not `u_sc.*`-prefixed, so `-through u_sc.*` never matches it either.
+
+Not a new bug in the RTL sense for the `u_psram`/`rb_bw_sel`/`packet_active`
+clusters (33 violators at −22.1 ns existed in the July 5 baseline,
+`RUN_2026-07-05_00-56-34`, same 1200×1100/88% config) — but the violator
+count has grown to 1000+ at −16.01 ns (job 3367, 2026-07-12) with the same
+die/density, most plausibly from RTL added since (the PSRAM continuous-delay
+replay redesign touches `sample_shift`/`packet_active` consumption heavily).
+
+**Action:** generalize the fix pattern that already worked for item 39 (job
+3367): replace the blanket `-through <hierarchy-wildcard>` with `-to
+<get_cells -of_objects [surviving Q-nets] -filter {ref_name =~ *dff*}>`,
+scoped per real quasi-static source, for each of: `rb_bw_sel →
+u_sc.eval_step/mul_start`, `packet_active → u_sc.acc_ci0/acc_cq0` (and
+siblings). The `u_psram.state` cluster is out of scope for an SDC fix — it's
+item 1's original pipeline-fix residual. `Zpair_*`/`ce_16m`/`dcr_valid`
+clusters are uncharacterized — need their own trace pass before deciding
+MCP-relaxation vs. real RTL fix.
+
+**2026-07-13 update — jobs 3370/3371 back; CE-retimer wins this round, v23
+found an 8th cone:**
+
+(1) v23 (job 3370, SDC-only fix for `rb_sf_cfg`/`rb_bw_sel` →
+`u_sc.timing_ref`, the fifth missed cone) **made WNS worse: −17.16 ns**
+(vs job 3368's −16.60 ns), DRC=0/LVS=0 clean. Closing `timing_ref` unmasked
+a **sixth** missed cone nobody had traced before: `packet_ctrl_fsm.v:46-49`
+has its own separate `M_val` register (`M_val <= 1 << (sf+sample_shift)`),
+computed redundantly from the same `sf`/`sample_shift` operands as
+`sc_detector`'s `M_val`, recomputed unconditionally every cycle, and never
+covered by any of v21/v22/v23's scoping (`rb_sf_cfg → u_pcfsm.M_val[15]` is
+now the worst path). Same whack-a-mole pattern as every prior round — one
+more per-consumer SDC gap found only after the previous one stopped masking
+it.
+
+(2) The CE-retimer (job 3371, branch
+`worktree-ce-gated-quasi-static-retimer`, independent div-4 enable — see
+`planning/ce-gated-quasi-static-retimer-experiment.md`) **clearly wins**:
+WNS **−16.07 ns**, essentially back to the original unfixed baseline
+(−16.01 ns, job 3367), and — the important part — its worst path is `u_psram.sub[3] → ...`, the
+**already-known, already-characterized** item-1 QSPI-decode residual, not a
+newly-exposed cone. Retiming the source once absorbed the `rb_sf_cfg`/
+`rb_bw_sel`-driven violators (including the `M_val` one that just hit v23,
+since `packet_ctrl_fsm` in this branch reads the retimed `rb_sf_cfg_q`)
+without needing to individually re-scope every consumer. **Job 3371 finished
+DRC=0/LVS=0 clean** (elapsed 00:31:14) — same signoff bar as every other run
+this session; the timing result is confirmed, not provisional.
+
+**Recommendation:** adopt the CE-retimer
+approach over continued per-consumer SDC patching, and extend it to
+`rb_pkt_timeout_syms`/`rb_tacc_window_syms`/`rb_sc_hits_req` (same shape:
+quasi-static `reg_bank` source, multiple consumers, same wildcard-miss risk
+class). The `u_psram` residual remains the real, harder, separately-tracked
+problem (item 1) — a throughput-bound pipeline fix, not an MCP/retiming
+question.
+
+**2026-07-13 update — extension CONFIRMED (jobs 3387–3400): recommendation
+adopted and verified, still unmerged.** Folded `rb_sc_hits_req`,
+`rb_pkt_timeout_syms`, `rb_tacc_window_syms` into the same `ce_8m`-gated
+retimed bus and added an explicit `u_pcfsm.M_val` SDC endpoint (the cone that
+broke v23). Full 12-suite cocotb regression (jobs 3388–3399) all PASS, plus
+the SF/BW startup sweep (job 3387, 18/18 PASS) — no functional regression.
+P&R signoff (job 3400, `ol_trouper_top/runs/RUN_2026-07-13_01-57-28`):
+**DRC=0/LVS=0 clean, post-PNR SS WNS = −14.71 ns** — the best number in this
+item's entire history (better than the base retimer's −16.07 ns/job 3371,
+both SDC-only attempts −16.60/−17.16 ns, and the original unfixed baseline
+−16.01 ns/job 3367). Worst path startpoint is `psram_qe_init_done`, still the
+same already-characterized `u_psram` QSPI-decode residual (item 1) — closing
+the extra three sources did not expose a ninth cone. The whack-a-mole class
+of bug this item documents is fully absorbed by the retimer for every
+`reg_bank` quasi-static source now in scope; only `u_psram`'s throughput-bound
+pipeline fix remains.
+
+**See:** `src/frontend/sc_detector.v`; `src/config/pnr_32m_scoped_v20.sdc`
+(`paced_nets` wildcard); item 39; item 1;
+`planning/ce-gated-quasi-static-retimer-experiment.md`.
+**Found:** 2026-07-12 (v21 SDC signoff run, job 3367).
+**Root-caused:** 2026-07-12 (direct netlist + STA violator-report
+cross-check, `RUN_2026-07-12_21-56-16`).
+**Extension verified:** 2026-07-13 (jobs 3387–3400).
 
 ---
 
@@ -434,6 +671,54 @@ fetch finishes*, but the 31-cycle fetch itself does not fit inside the
 next write regardless of latency budget.
 
 **Found:** 2026-07-05, deriving formal bounds for `formal/psram_buf_ctrl_formal.sv`.
+
+---
+
+### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode) — MITIGATED, downgraded from High 2026-07-12
+
+**Cycle-accurate measurement 2026-07-11 (SGE jobs 3333–3335).** The weight
+kernel run on the real `picorv32.v` (slow non-`FAST_MUL` multiplier, corrected
+7-bit-map kernel with faithful MMIO ingest) costs **33,283 cyc = 2.08 ms @16 MHz**
+for the 8-iteration default on rv32im (36,458 cyc = 2.28 ms on the Grouper's
+rv32emc/RV32E core, ~+10% from 16-register spilling), SF-independent. Against
+the live-mode deadline (`4·M/500 kHz`): **SF7 (~1.02 ms) and SF8 (~2.05 ms) both
+miss on both ISAs; only SF9+ fits.** 16 iterations (~3.88/4.28 ms) needs SF9+
+(rv32im) or SF10+ (rv32emc). The 24-bit ZDIAG widening is timing-neutral
+(−30/−54 cyc).
+
+**Follow-up measurement 2026-07-12 (FPGA-emul, synthetic matrix).** The
+MicroBlaze self-trigger benchmark on the Arty board, using a deterministic
+4×4 synthetic matrix and `n_acc=1024`, reports `compute=3768 cyc` and
+`total=3792 cyc` at 100 MHz (`37.68 us` / `37.92 us`) — a firmware-path sanity
+check, not a live-mode deadline figure; it does not change the SF7/SF8 numbers
+above.
+
+**Why downgraded, not just documented:** the mitigation this entry always
+pointed to — PSRAM replay mode, which relaxes the deadline from
+`payload_start_estimate` to `packet_end_estimate − TACC_GUARD` and sidesteps
+the live-mode race entirely — is no longer a plan, it's shipped: the
+continuous-delay replay redesign is IMPLEMENTED and verified (all suites
+PASS, SGE jobs 3347/3350/3354/3355; see item 5's fix and
+`planning/psram-replay-continuous-delay-redesign.md`). With that mitigation in
+place, "live-mode firmware weight compute needs SF9+" is a **known, quantified,
+accepted architectural constraint** — not an unaddressed failure mode — for
+any deployment that runs SF7/8 with MRC gain: replay mode is mandatory there,
+same as it always was, and it now actually exists and is tested. Nothing
+silently produces stale weights: a live-mode SF7/SF8 miss still degrades
+cleanly to bypass via `W_MISSED_PACKET` (item 34, CLOSED), same fallback as
+any other missed commit.
+
+**What's still open (kept as Moderate, not fully closed):** this only covers
+the on-chip PicoRV32 path. The unconstrained-host (RPi/Grouper SPI) live-mode
+case still has unmeasured host IRQ/scheduling jitter that could itself blow
+the SF7 window on a non-RT kernel — see
+`planning/blocks/Eigenvector Weight Computation.md` §Timing — the actual
+constraint. That residual is host-latency measurement work, not a firmware or
+RTL defect.
+
+**See:** `planning/blocks/Eigenvector Weight Computation.md` (Timing
+Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
+`planning/psram-replay-continuous-delay-redesign.md`.
 
 ---
 

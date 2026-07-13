@@ -284,6 +284,25 @@ corner names; without it STA fails "No SCL lib files found for max_ss_125C_4v50"
 - **General trap for the 5 V-rail signoff: always give the resizer a setup-slack margin
   matched to how much you need the milder corner to close — a bare corner swap under-drives.**
 
+**RE-CONFIRMED on the item-39-fixed netlist (2026-07-13, job 3407) — voltage
+and the honest write-arc fix are additive, not alternatives.** Open Risk #39's
+`packet_ctrl_fsm` write-arc dishonesty fix (new `ST_ACQ_SETUP` state +
+honest `lat_timing_ref`/`M_val` SDC exceptions) closed mainline's SS WNS to
+−12.11 ns at 3.0 V (jobs 3402–3404, `config_current_signoff.json`,
+1200×1100, **util 87.09%** achieved against an 88% target). Post-hoc reload
+of that exact routed netlist (same SPEF/SDC, only `ss_125C_3v00` →
+`ss_125C_4v50` liberty swap, job 3407): **worst slack −12.11 ns → +1.96 ns,
+TNS 0**. Same reload-only result shape as the B1-era +1.17 ns (job 3231) and
+the SS@4.5V-targeted-PnR +1.40 ns (jobs 3231/3237) — reproduced independent
+of which honest-timing RTL/SDC work has landed. In other words: closing the
+cheap, honest single-cycle bugs (item 39) and the voltage lever both help,
+and they stack — voltage isn't a substitute for finding real bugs, and
+finding real bugs doesn't remove the need for voltage to close the last
+~12–16 ns that's genuinely cell-delay-bound at 3.0 V. Same reload-vs-real-PnR
+caveat applies untested here: a full P&R *targeting* 4.5V on this netlist
+would still need the resizer margin fix (see "ROOT CAUSE" above) to actually
+land at the reload's number rather than under-driving.
+
 **Corrected-MCP is a DEAD END at 3.0 V (confirmed 2026-06-24, v18 job 2197).** With
 the MCP scope *actually hitting the registered barrel-shift endpoints* (v18 SDC fixes
 the STA-0361 silent no-op), SS WNS = **−17.017 ns** — bit-identical to the un-corrected
