@@ -35,6 +35,12 @@ module packet_ctrl_fsm (
     localparam ST_PREAMBLE_ACQ   = 3'd1;
     localparam ST_W_PENDING      = 3'd2;
     localparam ST_PAYLOAD_ACTIVE = 3'd3;
+    // One dedicated cycle between sc_lock and ST_PREAMBLE_ACQ that computes
+    // acq_timeout_q/wpend_timeout_q/pkt_end_q from the already-registered
+    // lat_timing_ref instead of combinationally from the live timing_ref
+    // input -- see Open Risk #39 (dishonest single-cycle timing_ref -> adder
+    // -> timeout-register arc).
+    localparam ST_ACQ_SETUP      = 3'd4;
 
     reg [2:0] state;
 
@@ -52,9 +58,12 @@ module packet_ctrl_fsm (
     wire [3:0] tacc_window_eff = (tacc_window_syms == 4'd0) ? 4'd1 : tacc_window_syms;
     wire [31:0] tacc_window_span = {28'd0, tacc_window_eff} << (sf + sample_shift);
 
-    // Timeout thresholds are registered at packet start to keep the FSM compare path short.
-    wire [31:0] acq_timeout_next  = timing_ref + tacc_window_span + (M_val << 1);
-    wire [31:0] wpend_timeout_next = timing_ref + tacc_window_span + (M_val << 2) + M_val;
+    // Timeout thresholds are computed from lat_timing_ref (registered on the
+    // sc_lock edge, ST_ACQ_SETUP below), not the live timing_ref input --
+    // lat_timing_ref is stable for the entire packet, so this arc can
+    // honestly carry a multicycle SDC exception (Open Risk #39).
+    wire [31:0] acq_timeout_next  = lat_timing_ref + tacc_window_span + (M_val << 1);
+    wire [31:0] wpend_timeout_next = lat_timing_ref + tacc_window_span + (M_val << 2) + M_val;
     reg  [31:0] pkt_span_next;
 
     always @(*) begin
@@ -108,20 +117,35 @@ module packet_ctrl_fsm (
                         W_commit_pending <= 1'b0;
                     end
 
-                    // SC lock rising edge -> start packet acquisition
+                    // SC lock rising edge -> start packet acquisition.
+                    // Only lat_timing_ref is latched here (a plain register
+                    // copy of the live timing_ref input); the timeout
+                    // thresholds are computed one cycle later in
+                    // ST_ACQ_SETUP from lat_timing_ref, not combinationally
+                    // from timing_ref itself (Open Risk #39).
                     if (sc_lock && !sc_lock_prev) begin
                         W_missed_q        <= 1'b0;
                         lat_timing_ref    <= timing_ref;
-                        acq_timeout_q     <= acq_timeout_next;
-                        wpend_timeout_q   <= wpend_timeout_next;
-                        pkt_end_q         <= timing_ref + pkt_span_next;
                         active_mode       <= mode_shadow;
                         active_antenna_en <= antenna_en_shadow;
                         buf_freeze        <= 1'b1;
                         packet_active     <= 1'b1;
                         packet_phase      <= 3'd1;
-                        state <= ST_PREAMBLE_ACQ;
+                        state <= ST_ACQ_SETUP;
                     end
+                end
+
+                ST_ACQ_SETUP: begin
+                    // lat_timing_ref was latched last cycle and will not
+                    // change again until the next sc_lock edge (many
+                    // thousands of cycles away) -- so this arc genuinely
+                    // tolerates a multicycle SDC exception, unlike the old
+                    // same-edge compute from live timing_ref.
+                    packet_phase    <= 3'd1;
+                    acq_timeout_q   <= acq_timeout_next;
+                    wpend_timeout_q <= wpend_timeout_next;
+                    pkt_end_q       <= lat_timing_ref + pkt_span_next;
+                    state           <= ST_PREAMBLE_ACQ;
                 end
 
                 ST_PREAMBLE_ACQ: begin
