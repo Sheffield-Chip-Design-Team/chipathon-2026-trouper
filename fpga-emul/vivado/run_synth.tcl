@@ -13,6 +13,9 @@ open_project [file normalize "[file dirname [info script]]/../vivado_proj/${proj
 # Synthesis (BD addresses already assigned by create_project.tcl)
 # Only re-run synthesis if not already complete.
 if {[get_property PROGRESS [get_runs synth_1]] != "100%"} {
+    # A terminated batch session can leave the run marked "Running" even
+    # though no worker exists; reset makes this entry point safely resumable.
+    reset_run synth_1
     launch_runs synth_1 -jobs 4
     wait_on_run synth_1
     if {[get_property PROGRESS [get_runs synth_1]] != "100%"} {

@@ -174,16 +174,21 @@ set_property IOSTANDARD LVCMOS33 [get_ports {psram_sio[*]}]
 #   CLK_OUT_2 = F4  (IO_L13P_T2_MRCC_35)  P  <- USE THIS
 #   CLK_OUT_3 = D3  (IO_L12N_T1_MRCC_35)  N  <- P partner is E3 = the Arty 100 MHz
 #                                              onboard oscillator (occupied) -> dead end
-#   CLK_OUT_4 = C15 (IO_L12N_T1_MRCC_15)  N  <- P partner is D15 = JB pin 3 (n/c)
-# The review preferred C15 for its 0-ohm edge, but C15 is an N pin and thus
-# electrically unusable as a clock. F4 sits behind JD's 200-ohm series R (softer
-# edge; measure it). F3/D3/C15 remain usable as ordinary SAMPLED inputs for the
-# clock-sync measurement above — they only fail AS clocks, which we don't want.
+#   CLK_OUT_4 = D15 (IO_L12P_T1_MRCC_15) P  <- was C15 pre-respin; P-partner of
+#                                             the same L12_15 pair, on the 0-ohm
+#                                             JB header (JB pin 3). C15 (JB pin 4,
+#                                             the old CLK_OUT_4 net) is now n/c.
+# The review preferred the old C15 net for its 0-ohm edge, but C15 is an N pin
+# and thus electrically unusable as a clock. F4 sits behind JD's 200-ohm series
+# R (softer edge; measure it). F3/D3/C15 remain usable as ordinary SAMPLED
+# inputs for the clock-sync measurement above — they only fail AS clocks, which
+# we don't want.
 #
-# BOARD RESPIN FIX: move the CLK_OUT_4 net one pin, C15 -> D15 (JB pin 3), the
-# P-partner of the same L12_15 pair. D15 is a P-side MRCC on the 0-ohm JB header,
-# giving a clock that is BOTH clock-legal AND clean-edged. (CLK_OUT_3 cannot be
-# rescued this way: its P partner E3 is the onboard oscillator, not on a header.)
+# BOARD RESPIN (done): the PCB moved the CLK_OUT_4 net one pin, C15 -> D15 (JB
+# pin 3), the P-partner of the same L12_15 pair. D15 is a P-side MRCC on the
+# 0-ohm JB header, giving a clock that is BOTH clock-legal AND clean-edged.
+# (CLK_OUT_3 cannot be rescued this way: its P partner E3 is the onboard
+# oscillator, not on a header.)
 set_property PACKAGE_PIN F4   [get_ports {sx_clk_out}]
 set_property IOSTANDARD LVCMOS33 [get_ports {sx_clk_out}]
 create_clock -period 31.250 -name sx_clk_out [get_ports {sx_clk_out}]
@@ -206,10 +211,10 @@ set_clock_groups -asynchronous \
 # note above and axi_clk_sync_mon.v.
 #   clk_meas[0] = CLK_OUT_1 (JD F3)
 #   clk_meas[1] = CLK_OUT_3 (JD D3)
-#   clk_meas[2] = CLK_OUT_4 (JB C15 now; -> D15 after the C15->D15 respin)
+#   clk_meas[2] = CLK_OUT_4 (JB D15, per the C15->D15 respin)
 set_property PACKAGE_PIN F3   [get_ports {clk_meas[0]}]
 set_property PACKAGE_PIN D3   [get_ports {clk_meas[1]}]
-set_property PACKAGE_PIN C15  [get_ports {clk_meas[2]}]   ;# respin: change to D15
+set_property PACKAGE_PIN D15  [get_ports {clk_meas[2]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {clk_meas[*]}]
 # These carry a ~32 MHz clock but are treated as async data (sampled + toggle-
 # counted in the dsp_clk domain); no create_clock. Exclude from clock-domain
