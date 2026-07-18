@@ -29,19 +29,23 @@ The bus fabric is designed for single-master operation with multiple slave perip
 
 ## Interface
 
-Top-level bus signals follow standard AHB-Lite naming:
+The inter-project connection SHALL use the `slave` modport of Grouper's
+`ahb3lite_intf` with `ADDR_WIDTH=32` and `DATA_WIDTH=32`. The complete
+contract is:
 
-- `HADDR`
-- `HWRITE`
-- `HTRANS`
-- `HSIZE`
-- `HBURST`
-- `HWDATA`
-- `HRDATA`
-- `HREADY`
-- `HRESP`
+- Slave inputs: `HADDR`, `HBURST`, `HMASTLOCK`, `HPROT`, `HSIZE`, `HTRANS`,
+  `HWDATA`, `HWRITE`, `HREADYIN`, and `HSEL`.
+- Slave outputs: `HRDATA`, `HREADYOUT`, and `HRESP`.
 
-Trouper's internal register bank and control sub-blocks are integrated as slaves on this fabric via a bridge/decoder that routes Grouper bus transactions to the appropriate Trouper peripheral.
+`HREADYIN` is the decoder/global input that qualifies the slave data phase;
+`HREADYOUT` is the selected slave's completion output. Do not use an
+ambiguous single signal named `HREADY` in this interface specification.
+
+Trouper's internal register bank and control sub-blocks are integrated as
+slaves on this fabric via a bridge/decoder that routes Grouper bus transactions
+to the appropriate Trouper peripheral. Trouper accepts byte transfers only
+(`HSIZE=3'b000`); its adapter accepts but ignores `HBURST`, `HMASTLOCK`, and
+`HPROT`.
 
 ---
 
@@ -53,7 +57,11 @@ Trouper's internal register bank and control sub-blocks are integrated as slaves
 
 **Shared Peripheral Access.** The bus allows the PicoRV32 to manage both Trouper-specific logic and Grouper-native peripherals (SRAM, timers, etc.) within a unified address space.
 
-**Wait states.** Slaves may assert `HREADY` low to stall the bus. Register-based slaves in Trouper are expected to respond with zero wait states. There is no active Trouper SPI-master subordinate in the current map.
+**Wait states.** A slave holds `HREADYOUT` low to stall completion; it observes
+`HREADYIN` before advancing its data phase. Register-based slaves in Trouper
+are expected to respond with zero wait states (`HREADYOUT=1` for normal
+transfers). There is no active Trouper SPI-master subordinate in the current
+map.
 
 ---
 

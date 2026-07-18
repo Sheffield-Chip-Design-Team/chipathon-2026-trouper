@@ -93,6 +93,7 @@ This board should be used to gather at least the following:
 - packet detect repeatability with shared-clock 4-channel capture
 - timing relationship between channels at the FPGA header
 - inter-channel CFO spread: measure CFO independently per channel on the same received packet and record the variation across channels, across packets, and across temperature/power-cycle conditions
+- **DC offset vs LNA gain, per channel:** mean I and mean Q at the decimator output (int8 counts, terminated antenna input) across the full SX1257 LNA gain range, plus the DC step size across each adjacent gain transition. Decides `dc_removal` output-clamp change R2 in `planning/dsp-block-review-changes-2026-07.md`: the DCR subtract wraps (full sign flip) whenever signal peak + |DC| > 127, a cliff at |DC| ≈ 38 counts with the −3 dBFS AGC contract. **Pass: |DC| < 20 counts on both I and Q at max gain on all 4 channels** (clamp unnecessary, TRPR-DCR-007 closed by measured margin); |DC| ≥ 20 counts anywhere → implement R2. Record alongside the noise-floor measurement (same captures usable: σ and mean of the same terminated-input record).
 
 Recommended early tests:
 

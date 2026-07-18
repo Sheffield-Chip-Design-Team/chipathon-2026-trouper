@@ -448,6 +448,11 @@ deadline is `payload_start_estimate = timing_ref + 12·M`
 | SF9 | 512 | ~4.10 ms | ✅ comfortable | ✅ comfortable |
 | SF10–12 | 1024+ | ≥8.19 ms | ✅ | ✅ |
 
+MicroBlaze FPGA-emul self-trigger benchmark on a synthetic 4x4 matrix
+(`n_acc=1024`, 100 MHz): `compute=3768 cyc` and `total=3792 cyc`, i.e.
+`37.68 us` and `37.92 us`. This is a firmware-path measurement, not an SF-
+scaling deadline.
+
 (SF6 is out of scope — `SF_CFG` valid range is 7–12 per `planning/Register Map.md`
 `0x09`.) 16-iteration runs push SF9 harder still: rv32im/16it (3.88 ms) clears SF9;
 rv32emc/16it (4.28 ms) *misses* SF9's 4.10 ms window — only SF10+ is safe at 16
