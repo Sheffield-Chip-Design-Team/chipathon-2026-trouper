@@ -430,6 +430,7 @@ module trouper_top (
         .clk             (clk),
         .rst_n           (rst_n),
         .sample_count    (iq_samp_cnt),
+        .iq_tick         (dcr_valid),
         .sf              (rb_sf_cfg),
         .sample_shift    (rb_sample_shift),
         .sc_lock         (sc_lock),
