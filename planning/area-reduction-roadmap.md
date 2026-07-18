@@ -1,6 +1,6 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-07-18 (§8 full `src/` re-review: B4/B5/B6 confirmed still open, new B7–B9 candidates added). Owner: timothyjabez.
+Status: 2026-07-18b (§8: B4 + B6 IMPLEMENTED + measured — both survive to placed area, −7.9K/−18.8K; branches unmerged). Owner: timothyjabez.
 
 Goal: shrink `trouper_top` from the current **1550 × 1150 µm** SS-closure
 floorplan toward the long-stated **1100 × 1100 µm** target, *without* losing the
@@ -679,6 +679,45 @@ it needs sign-off against firmware plans, not just RTL.
   rejected shared-counter idea; not worth it.
 - **training_acc** — B2 banked; 24-bit accumulators remain rejected
   (precision).
+
+### B4 + B6 measured 2026-07-18 (worktrees b4-mrc-w-latch / b6-pcfsm-relative-timeouts)
+
+Both implemented, functionally verified, and taken through full signoff PnR
+(1200×1100 / 88 % density, `config_current_signoff*.json`, plain max_ff corner
+set — the minff-corner variant CONGESTS at GRT on this floorplan, see Open
+Risk #41 note). Baseline = RUN_2026-07-18_17-02-25 on committed main
+(SS WNS −22.70, synth 990,966 µm² / 35,134 cells, placed 1,062,010 µm²).
+
+| | baseline | B4 | B6 (round-2) |
+|---|---:|---:|---:|
+| synth area µm² | 990,966 | **982,591 (−8.4K)** | **973,674 (−17.3K)** |
+| synth cells | 35,134 | 34,830 | 34,405 |
+| placed inst area µm² | 1,062,010 | **1,054,150 (−7.9K)** | **1,043,230 (−18.8K)** |
+| placed util | 84.0 % | 83.4 % | 82.5 % |
+| SS WNS ns | −22.70 | −13.04 | −25.52 |
+| SS TNS ns | −3,645 | −4,222 | −8,005 |
+| Magic DRC / LVS | 0 / 0 | 0 / 0 | 0 / 0 |
+
+**Both cuts SURVIVE to placed area** (unlike B2's reabsorption) — B4 beat its
+−6K estimate and B6 tripled its −5K estimate once round-2 narrowed the load
+arithmetic. Functional gates: 18/18 full-chip SF sweep both branches; B4
+weight-gen SPI flow bit-exact vs oracle (job 3462); B6 dual-instance
+equivalence TB `tb_pcfsm_b6_equiv.v` proves every output (incl. all three
+timeout-fire edges) bit-identical to the old absolute-compare FSM over 40
+randomized packets, re-run after round-2 (jobs 3463/3471). B6 round-2 =
+20-bit modular elapsed subtract (true elapsed ≤ ~2^17 structurally): the
+round-1 32-bit `iq_samp_cnt → counter-load` subtract was that run's SS worst
+path (−20.5); round-2 removed it from the violator list entirely.
+
+**Do NOT read the WNS column as the B-cuts' timing effect.** The worst paths
+are pre-existing quasi-static-class arcs that swing ±6–12 ns run-to-run by
+repair-effort reallocation at this density: baseline's worst is
+`rb_sf_cfg → u_pcfsm.M_val` (unscoped in the SDC), B4's and B6-r2's is
+`packet_active → u_psram.sub[*]` (−13.0 vs −25.5 for the SAME arc on nearly
+identical netlists). Follow-ups: (1) scope the quasi-static
+`rb_sf_cfg → M_val` arc in the SDC (same class as every other exception);
+(2) look at the `packet_active → u_psram.sub` cone — it is now the recurring
+top violator.
 
 ### Updated stack
 
