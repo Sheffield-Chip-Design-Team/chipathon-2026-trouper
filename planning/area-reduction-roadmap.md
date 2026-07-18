@@ -1,6 +1,6 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-07-04 (§7 per-block re-measure + ranked Lever-B candidates added). Owner: timothyjabez.
+Status: 2026-07-18 (§8 full `src/` re-review: B4/B5/B6 confirmed still open, new B7–B9 candidates added). Owner: timothyjabez.
 
 Goal: shrink `trouper_top` from the current **1550 × 1150 µm** SS-closure
 floorplan toward the long-stated **1100 × 1100 µm** target, *without* losing the
@@ -607,3 +607,84 @@ applies. Per §2 the −48K stack does not by itself unlock a die step below the
 1260–1380 signoff window (binding limit below 1380 is SS timing, and placed
 area is buffering-inflated), but it buys util headroom at 1380/1340 and
 shrinks the SS repair burden.
+
+---
+
+## 8. 2026-07-18 full `src/` re-review — B4/B5/B6 status + new candidates B7–B9
+
+Fresh line-by-line read of every module in `src/` against the current v51
+signoff run, specifically hunting for levers NOT already in §7. Confirmed
+first: **B4, B5, B6 are all still un-implemented in `src/`** (mrc W latches at
+`mrc_combiner.v:53-54`; sc dbg snapshot regs + reg_bank 0x28–0x2F decode;
+pcfsm still holds three 32-bit absolute-time registers + 32-bit comparators and
+a 32-bit `M_val` for a ≤15-bit value). They remain the top of the stack.
+
+Ranking rule carried over from §7 (B1/B2 lesson): at 3.0 V only
+**combinational-cone removals** reliably pay; pure flop cuts tend to be
+reabsorbed by SS repair buffering and must be gated on an SS PnR comparison.
+
+**B7. sd_remod: re-quantize CIFF coefficients to sparse CSD. est. −5–10K.
+Cone removal — SS-friendly. Needs SQNR sweep gate.**
+The 59K block is dominated by six 16×9 constant multipliers (A1=205, A2=74,
+A3=11, Q8) plus 27-bit summers. 205 costs ~5 CSD add terms; retuning toward
+adder-sparse coefficients (e.g. A1≈208=128+64+16, A2≈72=64+8, A3≈12=8+4)
+shrinks each multiplier to 2–3 adders. Unlike the rejected B3 order cut, this
+is a small NTF perturbation with real headroom: the B3 sweep measured 65.7 dB
+SQNR at the operating amplitude, ~16 dB over the int8 floor. Verification
+infrastructure already exists (`sim/tests/remod_order_sweep.py` +
+order-configurable `SigmaDeltaRemodulator` in `sim/models/converter.py`) —
+extend it to sweep quantized coefficient sets, then the standard cocotb
+loopback + SS PnR gate.
+
+**B8. psram_buf_ctrl: delete the 64-bit `wr_data` latch. ~−5K synth.
+Flop-only — B2-class, MUST be gated on SS PnR before banking.**
+`wr_data` (`psram_buf_ctrl.v:192`) re-latches the dc_removal outputs at
+iq_valid, but those outputs are themselves registered and stable for the full
+64-clock sample period while the QPI write burst consumes them within ~25
+cycles — the nibble mux can read the `iq_*` ports directly. Cheap to try;
+expect possible reabsorption at 3.0 V (same mechanism as B2's original
+rejection). Minor bonus in the same file: the 25-step QPI write sub-sequence
+is duplicated verbatim in `S_WRITE` and `S_REPLAY`; factoring one shared
+write-phase decode saves ~1–2K of control logic. Explicitly OUT of scope here:
+`dbg_buf` (firmware energy-measurement plan) and any pointer-width cut (the
+23-bit address space is genuinely needed at SF12·shift2 replay depth).
+
+**B9. RX gain ACTIVE bank deletion. ~−3K. Register-map change — team decision.**
+`RX_GAIN_ACTIVE_0-3` (32 flops in trouper_top, `rx_gain_active_r`) plus the
+commit plumbing and 0x14–0x17 decode drive no hardware: Register Map.md §0x18
+confirms they are only "a hardware-latched record of the last committed gain"
+— pure software bookkeeping the host/Grouper can track itself (Trouper has no
+SPI master; SX1257 programming is external, TRPR-SPM-001). Cutting them
+removes registers 0x14–0x17 and RX_GAIN_CTRL's latch action from the map, so
+it needs sign-off against firmware plans, not just RTL.
+
+**Zero-area RTL-hygiene cleanups (Yosys already strips these; no area claim):**
+- `trouper_top.v:152` free-running 32-bit `sample_count` is never read
+  (pcfsm consumes `iq_samp_cnt`) — dead counter + adder.
+- sc_detector `c_i0`/`c_q0` outputs are unconnected at the top level
+  (`trouper_top.v:305`), making their 64 output flops and the `sym_ci0`/
+  `sym_cq0` feeder registers dead logic. Delete the ports and registers, or
+  wire them to a consumer if the lock-instant correlation snapshot is still
+  wanted for bring-up.
+
+### Checked and found clean (no candidate)
+
+- **dc_removal** — already minimal (13-bit acc + 8-bit out per channel; the
+  8×4.7K is adder/flop floor).
+- **reg_bank** — leave per §7; hand-written by design.
+- **sc_detector residual 32-bit sample-index registers** (`sample_count`,
+  `first_hit_sample`, `eval_sample_mark`, `timing_ref`) — narrowing would need
+  wrap-safe compares across three blocks sharing the timing_ref domain;
+  32-bit wraps at 2.4 h @ 500 kS/s, 24-bit at 34 s. Same risk class as the
+  rejected shared-counter idea; not worth it.
+- **training_acc** — B2 banked; 24-bit accumulators remain rejected
+  (precision).
+
+### Updated stack
+
+B4+B5+B6 (§7 residue) ≈ −17K, plus B7 −5–10K and B8 ~−5K if they survive
+their gates, plus B9 ~−3K if the map change is accepted → realistic
+**~−25–30K (≈3% of stdcell)** on top of what is already banked. Same §2
+caveat as before: this does not unlock a die step by itself (binding limit
+below 1380 is SS timing), but B6/B7 shrink comparator/multiplier cones and so
+help the SS repair burden directly.
