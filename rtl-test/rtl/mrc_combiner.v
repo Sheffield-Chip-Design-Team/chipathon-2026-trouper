@@ -16,8 +16,9 @@
 // loss < 0.05 dB across all pgs tiers. pgs ∈ [0,7] → net shift ∈ [1,8].
 // post_gain_shift (0–7) is set per-packet by firmware from Zdiag to recover
 // output amplitude for weak signals without touching the weight encoding.
-// State count: 11. Budget at R=128: 128 cycles.
-// GF180MCU, 3.3V, 16 MHz DSP clock domain
+// State count: 11. Budget: 64-clock iq_valid window (R=64); paced burst = 31 clocks.
+// GF180MCU, 3.3V, 32 MHz IQ_CLK domain (the clk_16m port name is historical —
+// trouper_top wires it to the single 32 MHz clk; there is no 16 MHz clock net).
 
 `timescale 1ns/100ps
 
@@ -123,7 +124,7 @@ module mrc_combiner (
                     default: begin bypass_i_r<=x_i3; bypass_q_r<=x_q3; end
                 endcase
                 use_mrc_r <= W_valid && !mode;
-                acc_i <= 26'sd0; acc_q <= 26'sd0;
+                acc_i <= 18'sd0; acc_q <= 18'sd0;
                 w_r <= W_re0; xi_r <= x_i0; xq_r <= x_q0;
                 state <= 4'd1;
             end

@@ -36,7 +36,8 @@
 // training_done before reading — enforced by the training_done IRQ in reg_bank.
 //
 // Accumulators: 32-bit signed.
-// GF180MCU, 3.3V, 16 MHz clock domain.
+// GF180MCU, 3.3V, 32 MHz IQ_CLK domain (single clock net; activity is gated
+// by iq_valid, one 16-step paced burst per 64-clock sample period).
 
 module training_acc (
     input  wire        clk,
@@ -73,7 +74,13 @@ module training_acc (
     reg        noise_trig_r;    // previous-cycle noise_trig for edge detect
 
     wire noise_trig_rise = noise_trig && !noise_trig_r;
-    wire [3:0] tacc_window_eff = (tacc_window_syms == 4'd0) ? 4'd1 : tacc_window_syms;
+    // Clamp window to >= 8 symbols (same rule reg_bank applies to 0x27 writes).
+    // In live mode acc_start = timing_ref, which lies up to (sc_hits_req+1) <= 4
+    // symbols in the past at arm time; a window <= that latency puts acc_end
+    // before the lock instant, so no sample ever accumulates and training_done
+    // never fires (packet lost to PKT_TIMEOUT). The clamp keeps direct-drive
+    // integrations (unit TBs, FPGA wrapper, formal) out of that dead zone.
+    wire [3:0] tacc_window_eff = (tacc_window_syms < 4'd8) ? 4'd8 : tacc_window_syms;
 
     // TDM counters: pair (0–9) and sub-step.
     // DUAL-MULTIPLIER: two products per step halves the walk to 16 steps

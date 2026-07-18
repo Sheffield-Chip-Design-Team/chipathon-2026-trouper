@@ -86,14 +86,25 @@ module sd_remod (
                 in_i_lat <= in_i;
                 in_q_lat <= in_q;
             end
-            s1_i <= sat16(s1_i_next);
-            s1_q <= sat16(s1_q_next);
-            s2_i <= sat16(s2_i_next);
-            s2_q <= sat16(s2_q_next);
-            s3_i <= sat16(s3_i_next);
-            s3_q <= sat16(s3_q_next);
-            out_i <= en ? q_i : 1'b0;
-            out_q <= en ? q_q : 1'b0;
+            if (!en) begin
+                // Hold the loop at its reset state while disabled. If the
+                // integrators kept running, the gated-low output would feed
+                // back as a constant -127, railing all three stages within
+                // ~256 cycles and forcing a recovery transient on re-enable.
+                s1_i <= 16'sd0; s2_i <= 16'sd0; s3_i <= 16'sd0;
+                s1_q <= 16'sd0; s2_q <= 16'sd0; s3_q <= 16'sd0;
+                out_i <= 1'b0;
+                out_q <= 1'b0;
+            end else begin
+                s1_i <= sat16(s1_i_next);
+                s1_q <= sat16(s1_q_next);
+                s2_i <= sat16(s2_i_next);
+                s2_q <= sat16(s2_q_next);
+                s3_i <= sat16(s3_i_next);
+                s3_q <= sat16(s3_q_next);
+                out_i <= q_i;
+                out_q <= q_q;
+            end
         end
     end
 
