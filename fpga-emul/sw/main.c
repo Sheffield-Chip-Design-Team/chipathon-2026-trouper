@@ -52,6 +52,35 @@
 #include "sleep.h"
 #include <string.h>
 
+#ifndef MRC_BENCH_SELF_TRIGGER
+#define MRC_BENCH_SELF_TRIGGER 0
+#endif
+
+/* The directed benchmark also publishes its result in BRAM for JTAG capture,
+ * independent of UART bring-up. */
+volatile u32 mrc_bench_state;
+volatile u32 mrc_bench_n_acc;
+volatile u32 mrc_bench_compute_ticks;
+volatile u32 mrc_bench_total_ticks;
+
+#if MRC_BENCH_SELF_TRIGGER
+#define xil_printf(...) ((void)0)
+#endif
+
+/* UARTLite is not reset by an MDM processor reset.  A previous debug run can
+ * therefore leave TXFULL asserted and deadlock the very first xil_printf(). */
+#ifdef XPAR_AXI_UARTLITE_0_BASEADDR
+#define UART_BASE XPAR_AXI_UARTLITE_0_BASEADDR
+#else
+#define UART_BASE 0x40600000u
+#endif
+#define UART_CONTROL       (UART_BASE + 0x0cu)
+#define UART_RESET_FIFOS   0x03u
+
+static void uart_boot_init(void) {
+    Xil_Out32(UART_CONTROL, UART_RESET_FIFOS);
+}
+
 /* -----------------------------------------------------------------------
  * Network configuration
  * ----------------------------------------------------------------------- */
@@ -480,6 +509,8 @@ static void handle_training_done(void) {
     read_z_matrix(z);
     compute_start=timer_read();
     if (!compute_eigvec_weights(z,n_acc,weights)) {
+        mrc_bench_n_acc = n_acc;
+        mrc_bench_state = 2u; /* IRQ observed, but empty training matrix. */
         xil_printf("MRC: skipped (N_ACC=%u or empty Z)\r\n",(unsigned)n_acc);
         return;
     }
@@ -487,10 +518,46 @@ static void handle_training_done(void) {
     reg_write_burst(REG_W_BANK_BASE,weights,W_BANK_LEN);
     reg_write(REG_WGT_CTRL,0x01u);
     total_ticks=timer_read()-total_start;
+    mrc_bench_n_acc = n_acc;
+    mrc_bench_compute_ticks = compute_ticks;
+    mrc_bench_total_ticks = total_ticks;
+    mrc_bench_state = 1u;
     xil_printf("MRC: N_ACC=%u compute=%u cyc (%u us) total=%u cyc (%u us)\r\n",
                (unsigned)n_acc,(unsigned)compute_ticks,(unsigned)(compute_ticks/100u),
                (unsigned)total_ticks,(unsigned)(total_ticks/100u));
 }
+
+#if MRC_BENCH_SELF_TRIGGER
+static void run_mrc_bench_synthetic(void) {
+    /* Deterministic 4x4 Hermitian matrix with distinct diagonal terms. This
+     * exercises the exact MicroBlaze eigenvector code without depending on the
+     * host-SPI register transport or RF inputs. */
+    u8 z[Z_MATRIX_LEN] = {0};
+    u8 weights[W_BANK_LEN];
+    u32 total_start, compute_start, compute_ticks, total_ticks;
+    u32 n_acc = 1024u;
+
+    /* Diagonal terms: 0x001400, 0x001200, 0x001000, 0x000E00. */
+    z[0x24u] = 0x00u; z[0x25u] = 0x14u; z[0x26u] = 0x00u;
+    z[0x27u] = 0x00u; z[0x28u] = 0x12u; z[0x29u] = 0x00u;
+    z[0x2Au] = 0x00u; z[0x2Bu] = 0x10u; z[0x2Cu] = 0x00u;
+    z[0x2Du] = 0x00u; z[0x2Eu] = 0x0Eu; z[0x2Fu] = 0x00u;
+
+    total_start = timer_read();
+    compute_start = timer_read();
+    if (!compute_eigvec_weights(z, n_acc, weights)) {
+        mrc_bench_n_acc = 0u;
+        mrc_bench_state = 2u;
+        return;
+    }
+    compute_ticks = timer_read() - compute_start;
+    total_ticks = timer_read() - total_start;
+    mrc_bench_n_acc = n_acc;
+    mrc_bench_compute_ticks = compute_ticks;
+    mrc_bench_total_ticks = total_ticks;
+    mrc_bench_state = 1u;
+}
+#endif
 
 static void service_training_irq(void) {
     u8 irq=reg_read(REG_IRQ_STATUS);
@@ -764,9 +831,17 @@ static void clk_sync_measure(unsigned win_exp) {
  * main
  * ----------------------------------------------------------------------- */
 int main(void) {
+    uart_boot_init();
     xil_printf("\r\n===== LoRa MIMO DSP Emulation =====\r\n");
     xil_printf("FPGA 192.168.10.2  MAC 02:12:34:56:78:9B\r\n");
 
+#if MRC_BENCH_SELF_TRIGGER
+    timer_init();
+    run_mrc_bench_synthetic();
+    while (1) {
+        /* Idle while the result is captured over JTAG. */
+    }
+#else
     /* ---- Ethernet ---- */
     {
         XEmacLite_Config *ec = XEmacLite_LookupConfig(
@@ -835,7 +910,7 @@ int main(void) {
     reg_write(REG_SC_HITS_REQ, DEFAULT_SC_HITS);
     /* COMB_CFG left at its reset default (0x10). */
 
-#ifdef NO_SX1257
+#if MRC_BENCH_SELF_TRIGGER || defined(NO_SX1257)
     xil_printf("NO_SX1257: SX1257 init skipped (register-link bring-up only)\r\n");
 #else
     {
@@ -865,8 +940,10 @@ int main(void) {
          * internal SPI interface used by an external controller on silicon. */
         service_training_irq();
 
+#if !MRC_BENCH_SELF_TRIGGER
         unsigned rlen = XEmacLite_Recv(&EmacInst, RxBuf);
         if (rlen) process_rx(rlen);
+#endif
 
         /* Send a status snapshot roughly every ~50k loop iterations */
         loop_cnt++;
@@ -875,6 +952,7 @@ int main(void) {
             send_status_pkt();
         }
     }
+#endif
 
     return 0;
 }

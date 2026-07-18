@@ -148,6 +148,8 @@ ETH_LD   = $(SW)/vitis_ws/lora_mimo_fw/src/lscript.ld
 ETH_FLAGS = -Wall -O2 -g -mlittle-endian -mcpu=v11.0 \
             -mno-xl-soft-mul -mno-xl-soft-div -mxl-barrel-shift -Wl,--no-relax \
             -ffunction-sections -fdata-sections
+MRC_BENCH_SELF_TRIGGER ?= 0
+ETH_FLAGS += -DMRC_BENCH_SELF_TRIGGER=$(MRC_BENCH_SELF_TRIGGER)
 
 eth_fw: $(SW)/lora_mimo_fw.elf
 

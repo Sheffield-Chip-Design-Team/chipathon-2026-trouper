@@ -20,6 +20,233 @@ RX path stage 2. See [DSP Flow](../DSP%20Flow.md) for pipeline context.
 
 ---
 
+## CIC primer (Stage 1 of the current chain)
+
+A CIC (Cascaded Integrator-Comb) filter is a decimating low-pass filter built
+entirely from adders/accumulators — no multipliers. It's the standard
+front-end for converting a high-rate 1-bit ΣΔ bitstream down to a lower rate
+with modest hardware, and is exactly what Stage 1 of `sd_decimator_poly` does
+(`sd_decimator_poly_cic_comb` + the three integrators) before the HB1/HB2 FIR
+stages take over.
+
+### Two halves, two rates
+
+**Integrators** run at the fast input rate (32 MS/s). Each is a plain
+accumulator, `y[n] = y[n-1] + x[n]` — transfer function `1/(1-z⁻¹)`. Three are
+cascaded per channel:
+
+```verilog
+int_i1[ch] <= int_i1[ch] + (iq_in_i[ch] ? 14'sd1 : -14'sd1);  // integrator 1
+int_i2[ch] <= int_i2[ch] + int_i1[ch];                          // integrator 2
+int_i3[ch] <= int_i3[ch] + int_i2[ch];                          // integrator 3
+```
+
+The 1-bit ΣΔ stream is converted to ±1 first, then integrated three times in
+series.
+
+**Combs** run at the slow output rate (2 MS/s here — every 16th cycle). A
+comb is a differentiator, `y[n] = x[n] - x[n-R]` — transfer function
+`1 - z⁻ᴿ`, `R` = decimation ratio. Three are cascaded, evaluated only when the
+CIC strobe fires:
+
+```verilog
+assign comb1 = int3 - comb1_z;   // comb1_z = int3 delayed by one decimated sample
+assign comb2 = comb1 - comb2_z;
+assign comb3 = comb2 - comb3_z;
+```
+
+The key trick: because the combs only need to run at the decimated rate,
+decimation happens for free between the integrator cascade and the comb
+cascade — no separate anti-alias filter is needed before downsampling, since
+the integrators' own gain already provides the shaping.
+
+### Why 3 stages (N=3)
+
+Cascading N integrator/comb pairs raises the whole response to the Nth power:
+
+```
+H(z) = ( (1 - z⁻ᴿ) / (1 - z⁻¹) )^N
+```
+
+Each extra stage buys steeper rolloff and better alias rejection at the
+decimation point, at the cost of more registers and more passband droop near
+the band edge. N=3 is the conventional sweet spot for ΣΔ front-ends.
+
+### Bit growth and the final shift
+
+Worst-case DC input, the accumulator gain after decimation is `R^N`. For this
+stage's R=16, N=3, that's `16³ = 4096 = 2^12`. `int_i1/2/3` are sized 14-bit
+to hold that growth; after the 3 combs collapse it back down,
+`sample8 = (comb3 + 16) >>> 5` removes the residual gain and saturates to
+signed 8-bit.
+
+### Why no multipliers
+
+Every stage is a plain add/subtract on an accumulator. That's the appeal of
+CIC for this application: the SX1257 gives a 1-bit stream at 32 MS/s, and a
+naive FIR decimator at that rate would need a multiply-accumulate running at
+32 MHz — expensive in area and power. CIC replaces that with pure adders,
+which is why it's the standard choice ahead of the (multiplier-based)
+half-band FIRs in this chain — HB1/HB2 only need to run at 2 MS/s and 1 MS/s
+respectively, so multiply cost there is much cheaper.
+
+Note this CIC stage in the current chain is R=16 only, not the full R=64 —
+the remaining ÷4 comes from HB1 (÷2) and HB2 (÷2), which restore the passband
+flatness that a CIC-only design (the superseded R=128 design described below)
+would otherwise sacrifice.
+
+## HB1 and HB2 primer (Stages 2 and 3 of the current chain)
+
+Where the CIC stage above uses pure adders, HB1 and HB2 are proper FIR
+filters with multipliers — but a special class called **half-band filters**,
+chosen because a 2:1 decimating half-band throws away half its own
+arithmetic for free.
+
+### What makes a filter "half-band"
+
+A half-band FIR is a symmetric lowpass filter designed so its cutoff sits at
+exactly Fs/4 (half of Nyquist). That symmetry has a well-known side effect:
+**every even-indexed tap except the centre tap is exactly zero**. For a
+filter that's about to be evaluated only every 2nd input sample anyway (a
+decimate-by-2 filter), this is a huge win — roughly half the multiply-adds a
+same-length ordinary FIR would need are already zero, so they're never
+computed.
+
+### Polyphase split
+
+Because the decimating half-band only ever evaluates its output on every
+other input sample, and the odd taps are zero, the delay line naturally
+splits into two independent halves that shift at different times:
+
+- **Phase A** — the nonzero even-lag taps (HB1: lags 0,2,4,6,8,10; HB2: lags
+  0,2,...,14). This line shifts once per *input* sample.
+- **Phase B** — just the centre tap (HB1: lag 5; HB2: lag 7). This line
+  shifts on the alternating half.
+
+Each polyphase branch only holds ~N/2 registers instead of N, and the MAC
+still reads exactly the same sample values a direct-form implementation
+would — the output is bit-exact with a non-polyphase reference; it's just
+organized to avoid storing (and multiplying by) the taps that are always
+zero.
+
+In the RTL (`sd_decimator_poly.v`), each channel gets its own phase-A/phase-B
+storage arrays (`h1a_i/q`, `h1b_i/q` for HB1; `h2a_i/q`, `h2b_i/q` for HB2),
+and which phase gets written on a given strobe is tracked by `hb1_phase` /
+`hb2_phase` toggle bits.
+
+### HB1 — first ÷2 stage
+
+Takes the CIC output (2 MS/s) down to 1 MS/s. 6 nonzero even-lag coefficients
+plus the centre tap, folded by symmetry (`tap[k] == tap[10-k]`) so the MAC
+only needs 4 distinct multiplies:
+
+```verilog
+acc = 19  * (a0 + a5)     // lags 0,10
+    - 73  * (a1 + a4)     // lags 2,8
+    + 312 * (a2 + a3)     // lags 4,6
+    + 512 * centre;       // lag 5 (centre tap, always kept)
+scaled = (acc + 512) >>> 10;
+```
+
+The `+512 >>> 10` is rounding to nearest before truncating back to int8 —
+`512 = 2^9`, half an LSB at the `>>>10` scale.
+
+Because this MAC is a deep combinational cone (~40 logic levels) that can't
+settle in one 31.25 ns cycle at the SS timing corner, it's evaluated once per
+stream (8 streams: 4 channels × I/Q) with 3-cycle pacing
+(`hb1_wait`/`MAC_WAIT`), covered by a `set_multicycle_path 3` in the SDC —
+the same honest-multicycle fix applied to the CIC stage.
+
+**The `h1bc_snap` wrinkle:** the centre tap shifts every 16 clocks (CIC
+cadence), but a full 8-stream HB1 burst now takes 24 paced clocks — longer
+than the shift period. So the centre value is snapshotted (`h1bc_snap_i/q`)
+at the start of the burst and held fixed for all 8 streams, so a mid-burst
+shift can't corrupt the value partway through.
+
+### HB2 — second ÷2 stage
+
+Takes HB1's 1 MS/s output down to the final 500 kS/s. Same polyphase idea,
+one size up: 8 nonzero even-lag taps plus centre, folded to 4 distinct
+multiplies:
+
+```verilog
+acc = -27 * (a0 + a7)     // lags 0,14
+    + 45  * (a1 + a6)     // lags 2,12
+    - 96  * (a2 + a5)     // lags 4,10
+    + 321 * (a3 + a4)     // lags 6,8
+    + 512 * centre;       // lag 7
+scaled = (acc + 512) >>> 10;
+```
+
+The alternating sign pattern (−, +, −, +) in both HB1 and HB2 is a signature
+of a well-designed half-band lowpass: near taps reinforce and far taps
+partially cancel ringing, shaping a raised-cosine-like response.
+
+HB2 fires once per 64-clock window per stream, also 8 streams TDM'd, also
+3-cycle paced (`hb2_wait`). Feeding it: `insert_hb2_frame` shifts HB1's
+*already-decimated* output samples into HB2's own phase-A/phase-B lines — so
+HB2's delay line runs at 1 MS/s tap-spacing, one rate below HB1's.
+
+### Why droop nearly vanishes vs. CIC-only
+
+A pure 3rd-order CIC has significant passband droop that gets worse toward
+the band edge (that's the whole story of the superseded CIC-only R=128
+design below). HB1+HB2 exist specifically to claw that back: each half-band
+stage is designed with an optimized passband, so the cascade holds the LoRa
+passband to ≈ −0.17 dB instead of the CIC-only chain's −11.8 dB at 250 kHz
+BW — at the cost of two real multiplier MACs instead of zero.
+
+### Where the coefficient values came from
+
+The integer taps in `sd_decimator_poly_hb1_mac` / `_hb2_mac` (`19, -73, 312,
+512` and `-27, 45, -96, 321, 512`) are not hand-picked — they're a
+Parks-McClellan (Remez) equiripple half-band design, quantized to Q10
+fixed-point. Reproducible with `scipy.signal.remez`:
+
+```python
+import numpy as np
+from scipy.signal import remez
+
+# HB1: 11 taps, fs=2 MHz. Passband edge 300 kHz (guard above the 250 kHz
+# chirp edge), stopband edge 700 kHz -- both symmetric about Fs/4 = 500 kHz,
+# which is what makes this a half-band design (forces even taps to zero).
+h1 = remez(11, [0, 300e3, 700e3, 1e6], [1, 0], fs=2e6)
+q1 = np.round(h1 * 1024).astype(int)
+# -> [19, 0, -73, 0, 312, 512, 312, 0, -73, 0, 19]  (matches RTL exactly)
+
+# HB2: 15 taps, fs=1 MHz. Passband edge 200 kHz, stopband edge 300 kHz,
+# symmetric about Fs/4 = 250 kHz.
+h2 = remez(15, [0, 200e3, 300e3, 500e3], [1, 0], fs=1e6)
+q2 = np.round(h2 * 1024).astype(int)
+# -> [-27, 0, 45, 0, -96, 0, 321, 512, 321, 0, -96, 0, 45, 0, -27]  (matches RTL exactly)
+```
+
+Steps:
+
+1. **Set the spec from the band-edge requirements** in the table above (HB1:
+   pass 0–300 kHz / stop 700 kHz–1 MHz at fs=2 MHz; HB2: pass 0–200 kHz /
+   stop 300–500 kHz at fs=1 MHz). Both band pairs are symmetric about Fs/4 —
+   that symmetry is the half-band constraint, and it's what forces every
+   even-indexed tap except the centre to zero once Remez optimizes against
+   it (it isn't imposed separately; it falls out of the equiripple solution
+   for these particular edges).
+2. **Run Remez** to get the optimal equiripple floating-point taps for the
+   target tap count (11 / 15).
+3. **Quantize to Q10**: multiply by `1024 = 2^10` and round to nearest
+   integer. This is why the MAC does `>>>10` and why the centre tap is
+   exactly `512` (a half-band centre tap is always `0.5` in float, so
+   `0.5 × 1024 = 512` exactly).
+4. **Fold by linear-phase symmetry** (`tap[k] == tap[N-1-k]`) so the RTL only
+   stores and multiplies the distinct pairs (`a0+a5`, `a1+a4`, `a2+a3`,
+   `centre` for HB1; similarly 4 pairs for HB2) instead of all 11/15 taps —
+   this is why each MAC only needs 3–4 distinct multiply constants.
+
+Re-running this recipe reproduces the deployed RTL coefficients bit-for-bit,
+so it's the traceable source of truth if the passband/stopband spec ever
+needs to change.
+
+---
+
 ## Function
 
 Converts each SX1257 1-bit complex sigma-delta stream into signed 8-bit complex IQ samples for the on-chip receive chain. There is one identical decimator per antenna branch.

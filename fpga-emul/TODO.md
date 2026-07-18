@@ -23,11 +23,15 @@ The MISO front-end test board (AFE) design is at
 - [x] Fix the regenerated build's UARTLite AXI stall. Root cause was FPGA AXI
   helper slaves clocked from absent-at-boot SX1257 `CLK_OUT`, which deadlocked
   shared SmartConnect traffic. They now use free-running MMCM `clk_out2`.
-  `/dev/ttyUSB1` was verified with continuous `U` output from `uart_smoke`.
-- [ ] Trace why the full firmware still emits no captured boot text after the
-  UART/AXI fix; it no longer stops in `XUartLite_SendByte`.
-- [ ] Trigger training and capture the first measured `compute` and `total`
-  latency figures; add the result to the SF timing table.
+  Follow-up hardware tracing found a second cause: the 100 MHz AXI resets had
+  been tied permanently inactive, so UART/SPI/Ethernet IP never received a
+  configuration-time reset and powered up indeterminately. They are restored to
+  `rst_100m/peripheral_aresetn`; firmware also resets the UART FIFOs before boot
+  text so MDM-only processor resets remain deterministic.
+- [x] Trigger training and capture the first measured `compute` and `total`
+  latency figures. Self-trigger benchmark on the Arty reports
+  `n_acc=1024`, `compute=3768 cyc`, `total=3792 cyc` at 100 MHz
+  (`37.68 us` / `37.92 us`); result added to the SF timing note.
 
 ## Block design / firmware re-pin (from PCB review 2026-07-08)
 

@@ -412,23 +412,11 @@ connect_bd_net [get_bd_pins fpga_dsp_wrap_0/psram_sck]  [get_bd_ports psram_sck]
 connect_bd_net [get_bd_pins fpga_dsp_wrap_0/psram_ce_n] [get_bd_ports psram_ce_n]
 connect_bd_net [get_bd_pins fpga_dsp_wrap_0/psram_sio]  [get_bd_ports psram_sio]
 
-# The 100 MHz peripherals are configuration-initialized and must remain
-# accessible while MDM resets/halts MicroBlaze. proc_sys_reset's peripheral
-# output was observed stuck low on hardware, stalling the CPU on its first AXI
-# write. Detach the AXI fabric/peripherals from that output and hold their
-# active-low resets deasserted. CPU/LMB reset remains under rst_100m + MDM.
-foreach pin [list \
-    axi_smc/aresetn \
-    axi_ethernetlite_0/s_axi_aresetn \
-    axi_quad_spi_0/s_axi_aresetn \
-    axi_quad_spi_1/s_axi_aresetn \
-    axi_gpio_irq/s_axi_aresetn \
-    axi_uartlite_0/s_axi_aresetn \
-    axi_timer_0/s_axi_aresetn \
-] {
-    disconnect_bd_net [get_bd_nets rst_100m_peripheral_aresetn] [get_bd_pins $pin]
-    connect_bd_net [get_bd_pins xlconstant_1/dout] [get_bd_pins $pin]
-}
+# Keep the AXI fabric and peripherals on rst_100m/peripheral_aresetn as wired by
+# block automation. They need its configuration-time reset pulse for defined
+# FIFO and state-machine power-up. The earlier boot deadlock attributed to this
+# reset net was actually caused by clock converters whose slave clock came from
+# absent-at-boot SX1257 CLK_OUT; those helpers now use free-running ctrl_clk.
 
 # --- Validate and save --------------------------------------------------------
 validate_bd_design
