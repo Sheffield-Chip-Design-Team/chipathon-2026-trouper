@@ -85,11 +85,17 @@ module packet_ctrl_fsm (
     // (the counter decrement is not active during ST_ACQ_SETUP).  A clamped
     // load of 0 fires on the first evaluation in the consuming state --
     // identical to the old already-expired `>` compare.
-    wire [31:0] elapsed_c  = sample_count - lat_timing_ref;
-    wire [23:0] elapsed_24 = (|elapsed_c[31:24]) ? 24'hFFFFFF : elapsed_c[23:0];
-    wire [24:0] acq_rem_w   = {6'd0, acq_span}   + 25'd1 - {1'b0, elapsed_24} - {24'd0, iq_tick};
-    wire [24:0] wpend_rem_w = {6'd0, wpend_span} + 25'd1 - {1'b0, elapsed_24} - {24'd0, iq_tick};
-    wire [24:0] pkt_rem_w   = {3'd0, pkt_span}   + 25'd1 - {1'b0, elapsed_24} - {24'd0, iq_tick};
+    // Elapsed is computed MODULO 2^20 from the low counter bits: the true
+    // value is structurally bounded by (sc_hits_req+1)*M + pipeline lag
+    // <= ~2^17 (timing_ref is at most ~5 symbols in the past at lock), so a
+    // 20-bit subtract is exact in every reachable state and avoids putting a
+    // 32-bit carry chain on the live iq_samp_cnt -> counter-load arc (that
+    // full-width subtract WAS the post-PnR SS worst path, -20.5 ns, run
+    // 2026-07-18_21-45-53).
+    wire [19:0] elapsed_c   = sample_count[19:0] - lat_timing_ref[19:0];
+    wire [24:0] acq_rem_w   = {6'd0, acq_span}   + 25'd1 - {5'd0, elapsed_c} - {24'd0, iq_tick};
+    wire [24:0] wpend_rem_w = {6'd0, wpend_span} + 25'd1 - {5'd0, elapsed_c} - {24'd0, iq_tick};
+    wire [24:0] pkt_rem_w   = {3'd0, pkt_span}   + 25'd1 - {5'd0, elapsed_c} - {24'd0, iq_tick};
     wire [19:0] acq_load    = acq_rem_w[24]   ? 20'd0 : acq_rem_w[19:0];
     wire [19:0] wpend_load  = wpend_rem_w[24] ? 20'd0 : wpend_rem_w[19:0];
     wire [22:0] pkt_load    = pkt_rem_w[24]   ? 23'd0 : pkt_rem_w[22:0];
