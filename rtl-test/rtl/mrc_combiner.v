@@ -47,11 +47,15 @@ module mrc_combiner (
     localparam [1:0] MAC_WAIT = 2'd2;
     reg [1:0] mac_wait;
 
-    // Latched inputs
+    // Latched inputs.  B4 (area roadmap §7/§8): the per-burst weight latches
+    // were deleted — the W_re*/W_im* ports come from the reg_bank W-shadow,
+    // which is protocol-stable for the duration of a burst (firmware writes
+    // all 16 shadow bytes, then pulses W_COMMIT; the combiner consumes
+    // weights only under W_valid).  The xr_* input latches REMAIN: they guard
+    // against the live/replay source mux flipping mid-burst, which no
+    // upstream protocol prevents.
     reg signed [7:0]  xr_i [0:3];
     reg signed [7:0]  xr_q [0:3];
-    reg signed [7:0]  wr_re [0:3];
-    reg signed [7:0]  wr_im [0:3];
     reg signed [7:0]  bypass_i_r, bypass_q_r;
     reg               use_mrc_r;
 
@@ -96,8 +100,6 @@ module mrc_combiner (
             acc_i_final_r <= 18'sd0; acc_q_final_r <= 18'sd0;
             xr_i[0]<=8'sd0; xr_i[1]<=8'sd0; xr_i[2]<=8'sd0; xr_i[3]<=8'sd0;
             xr_q[0]<=8'sd0; xr_q[1]<=8'sd0; xr_q[2]<=8'sd0; xr_q[3]<=8'sd0;
-            wr_re[0]<=8'sd0; wr_re[1]<=8'sd0; wr_re[2]<=8'sd0; wr_re[3]<=8'sd0;
-            wr_im[0]<=8'sd0; wr_im[1]<=8'sd0; wr_im[2]<=8'sd0; wr_im[3]<=8'sd0;
             bypass_i_r<=8'sd0; bypass_q_r<=8'sd0; use_mrc_r<=1'b0;
             y_i<=8'sd0; y_q<=8'sd0; y_valid<=1'b0;
         end else begin
@@ -113,10 +115,10 @@ module mrc_combiner (
 
             // ── IDLE: latch inputs, prime ant0 sub1 ─────────────────────────
             4'd0: if (x_valid) begin
-                xr_i[0]<=x_i0; xr_q[0]<=x_q0; wr_re[0]<=W_re0; wr_im[0]<=W_im0;
-                xr_i[1]<=x_i1; xr_q[1]<=x_q1; wr_re[1]<=W_re1; wr_im[1]<=W_im1;
-                xr_i[2]<=x_i2; xr_q[2]<=x_q2; wr_re[2]<=W_re2; wr_im[2]<=W_im2;
-                xr_i[3]<=x_i3; xr_q[3]<=x_q3; wr_re[3]<=W_re3; wr_im[3]<=W_im3;
+                xr_i[0]<=x_i0; xr_q[0]<=x_q0;
+                xr_i[1]<=x_i1; xr_q[1]<=x_q1;
+                xr_i[2]<=x_i2; xr_q[2]<=x_q2;
+                xr_i[3]<=x_i3; xr_q[3]<=x_q3;
                 case (bypass_ant)
                     2'd0: begin bypass_i_r<=x_i0; bypass_q_r<=x_q0; end
                     2'd1: begin bypass_i_r<=x_i1; bypass_q_r<=x_q1; end
@@ -133,7 +135,7 @@ module mrc_combiner (
             4'd1: begin
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
-                w_r <= wr_im[0]; xi_r <= xr_q[0]; xq_r <= xr_i[0];
+                w_r <= W_im0; xi_r <= xr_q[0]; xq_r <= xr_i[0];
                 state <= 4'd2;
             end
 
@@ -141,7 +143,7 @@ module mrc_combiner (
             4'd2: begin
                 prod_i_r <= a_r - mul_i_next;
                 prod_q_r <= c_r + mul_q_next;
-                w_r <= wr_re[1]; xi_r <= xr_i[1]; xq_r <= xr_q[1];
+                w_r <= W_re1; xi_r <= xr_i[1]; xq_r <= xr_q[1];
                 state <= 4'd3;
             end
 
@@ -151,7 +153,7 @@ module mrc_combiner (
                 acc_q <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
-                w_r <= wr_im[1]; xi_r <= xr_q[1]; xq_r <= xr_i[1];
+                w_r <= W_im1; xi_r <= xr_q[1]; xq_r <= xr_i[1];
                 state <= 4'd4;
             end
 
@@ -159,7 +161,7 @@ module mrc_combiner (
             4'd4: begin
                 prod_i_r <= a_r - mul_i_next;
                 prod_q_r <= c_r + mul_q_next;
-                w_r <= wr_re[2]; xi_r <= xr_i[2]; xq_r <= xr_q[2];
+                w_r <= W_re2; xi_r <= xr_i[2]; xq_r <= xr_q[2];
                 state <= 4'd5;
             end
 
@@ -169,7 +171,7 @@ module mrc_combiner (
                 acc_q <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
-                w_r <= wr_im[2]; xi_r <= xr_q[2]; xq_r <= xr_i[2];
+                w_r <= W_im2; xi_r <= xr_q[2]; xq_r <= xr_i[2];
                 state <= 4'd6;
             end
 
@@ -177,7 +179,7 @@ module mrc_combiner (
             4'd6: begin
                 prod_i_r <= a_r - mul_i_next;
                 prod_q_r <= c_r + mul_q_next;
-                w_r <= wr_re[3]; xi_r <= xr_i[3]; xq_r <= xr_q[3];
+                w_r <= W_re3; xi_r <= xr_i[3]; xq_r <= xr_q[3];
                 state <= 4'd7;
             end
 
@@ -187,7 +189,7 @@ module mrc_combiner (
                 acc_q <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
-                w_r <= wr_im[3]; xi_r <= xr_q[3]; xq_r <= xr_i[3];
+                w_r <= W_im3; xi_r <= xr_q[3]; xq_r <= xr_i[3];
                 state <= 4'd8;
             end
 
