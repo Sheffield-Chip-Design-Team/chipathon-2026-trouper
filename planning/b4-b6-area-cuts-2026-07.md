@@ -97,7 +97,9 @@ config `config_current_signoff_b6.json`.
 | B4 (pre-lock) | 982,591 | 1,054,150 | −7.9 K | −13.04 | −4,222 |
 | B4 + per-byte lock (job 3475) | 987,736 | 1,058,230 | −3.8 K | −16.23 | −5,210 |
 | **B4 + recoded lock (job 3479, final)** | **977,303** | **1,047,910** | **−14.1 K** | −22.79 | −3,351 |
-| B6 round 2 | 973,674 | 1,043,230 | **−18.8 K** | −25.52 | −8,005 |
+| B6 round 2 | 973,674 | 1,043,230 | −18.8 K | −25.52 | −8,005 |
+| B6 + fanout split (job 3481) | 982,512 | 1,053,490 | −8.5 K | −15.95 | −4,650 |
+| **COMBINED B4+B6+split (job 3484, `b4-b6-integration` `f2e3ab1`)** | **974,329** | **1,044,720** | **−17.3 K** | **−14.91** | −5,747 |
 
 B4's final form is the *recoded* lock (branch head `f9ef89f`): the first-cut
 per-byte `if (!w_valid_rb)` guards cost +5.1 K synth (+397 cells, only 1 a
@@ -163,10 +165,25 @@ to any perturbation of this cone (third data point of the class after B4's two
 lock codings). A+B stands as the keeper; pulse-only branch retained for the
 record, not to be pursued.
 
+### 3.1 Combined integration run (2026-07-19)
+
+Branch `b4-b6-integration` = main + both branches (zero file overlap, clean
+ort merges). First netlist with both cuts + the fanout split:
+**placed −17.3 K** (vs −22.6 K arithmetic — composition costs ~5 K of remap
+churn), **SS WNS −14.91, best full-chip number of the current era**, DRC 0 /
+LVS 0, util 82.6 %. `packet_active → u_psram` clusters stay dead; top
+violators are the chronic `training_armed → Zdiag`/`Zpair` arcs and the
+internal `u_psram.sub/state → rd_data/wr_data` QSPI residual (Open Risk
+item 1). The `iq_samp_cnt → u_pcfsm.pkt_cnt` cluster persists (n=22, worst
+−9.61) — v25_b6 SDC load-arc exception partial miss, open follow-up.
+Functional gate: all 6 suites PASS on the merged RTL (jobs 3483/3485 — equiv
+TB, 18/18 sweep, w_shadow_lock, w_missed, replay_delay 8/8, weight-gen
+oracle bit-exact).
+
 ## 5. State / next steps
 
-- Both branches verified + measured, **unmerged** — merge decision open
-  (options: merge both; B4 only; more PnR seeds first).
+- Combined branch verified + measured; **merge to main not yet performed** —
+  user decision open.
 - If `packet_ctrl_fsm` port lists change again, `tb_pcfsm_b6_equiv.v` +
   `packet_ctrl_fsm_ref.v` need the same edit in both instances.
 - Per-branch NFS mirrors (`lora-mimo-b4/`, `-b6/`, `-base/`) dodge the shared
