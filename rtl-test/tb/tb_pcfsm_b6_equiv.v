@@ -64,6 +64,7 @@ module tb_pcfsm_b6_equiv;
     wire        d_W_valid_set, d_W_missed_packet, d_W_missed_q, d_buf_freeze;
     wire [2:0]  d_packet_phase;
     wire        d_packet_active;
+    wire        d_packet_active_ps;  // fanout-split duplicate: must mirror packet_active exactly
     wire [1:0]  d_active_mode;
     wire [3:0]  d_active_antenna_en;
 
@@ -75,6 +76,7 @@ module tb_pcfsm_b6_equiv;
         .training_done(training_done), .W_commit(W_commit),
         .mode_shadow(mode_shadow), .antenna_en_shadow(antenna_en_shadow),
         .pkt_timeout_syms(pkt_timeout_syms), .tacc_window_syms(tacc_window_syms),
+        .packet_active_ps(d_packet_active_ps),
         .W_valid_set(d_W_valid_set), .W_missed_packet(d_W_missed_packet),
         .W_missed_q(d_W_missed_q), .buf_freeze(d_buf_freeze),
         .packet_phase(d_packet_phase), .packet_active(d_packet_active),
@@ -108,9 +110,9 @@ module tb_pcfsm_b6_equiv;
     integer errors = 0;
     always @(posedge clk) if (rst_n) begin
         if ({r_W_valid_set, r_W_missed_packet, r_W_missed_q, r_buf_freeze,
-             r_packet_phase, r_packet_active, r_active_mode, r_active_antenna_en}
+             r_packet_phase, r_packet_active, r_packet_active, r_active_mode, r_active_antenna_en}
          !== {d_W_valid_set, d_W_missed_packet, d_W_missed_q, d_buf_freeze,
-             d_packet_phase, d_packet_active, d_active_mode, d_active_antenna_en}) begin
+             d_packet_phase, d_packet_active, d_packet_active_ps, d_active_mode, d_active_antenna_en}) begin
             errors = errors + 1;
             $display("MISMATCH @%0t sc=%0d ref{vs=%b mp=%b mq=%b bf=%b ph=%0d pa=%b} dut{vs=%b mp=%b mq=%b bf=%b ph=%0d pa=%b}",
                 $time, sample_count,

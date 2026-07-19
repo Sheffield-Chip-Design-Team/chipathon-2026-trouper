@@ -27,6 +27,11 @@ module packet_ctrl_fsm (
     output reg         buf_freeze,
     output reg  [2:0]  packet_phase,
     output reg         packet_active,
+    // Physical fanout split (2026-07-19): bit-identical duplicate of
+    // packet_active dedicated to u_psram's wide enable cone, so the repair
+    // lottery on one net cannot starve the other's buffer tree.  Mirrored at
+    // every packet_active assignment; (* keep *) stops opt_merge folding it.
+    (* keep *) output reg packet_active_ps,
     output reg  [1:0]  active_mode,
     output reg  [3:0]  active_antenna_en
 );
@@ -123,6 +128,7 @@ module packet_ctrl_fsm (
             buf_freeze       <= 1'b0;
             packet_phase     <= 3'd0;
             packet_active    <= 1'b0;
+            packet_active_ps <= 1'b0;
             active_mode      <= 2'd0;
             active_antenna_en <= 4'd1;
         end else begin
@@ -154,6 +160,7 @@ module packet_ctrl_fsm (
                 ST_IDLE: begin
                     buf_freeze      <= 1'b0;
                     packet_active   <= 1'b0;
+                    packet_active_ps <= 1'b0;
                     packet_phase    <= 3'd0;
 
                     // Apply pending W when idle
@@ -176,6 +183,7 @@ module packet_ctrl_fsm (
                         active_antenna_en <= antenna_en_shadow;
                         buf_freeze        <= 1'b1;
                         packet_active     <= 1'b1;
+                        packet_active_ps  <= 1'b1;
                         packet_phase      <= 3'd1;
                         state <= ST_ACQ_SETUP;
                     end
@@ -257,6 +265,7 @@ module packet_ctrl_fsm (
                         buf_freeze      <= 1'b0;
                         W_valid         <= 1'b0;
                         packet_active   <= 1'b0;
+                        packet_active_ps <= 1'b0;
                         packet_phase    <= 3'd0;
                         state           <= ST_IDLE;
                     end
