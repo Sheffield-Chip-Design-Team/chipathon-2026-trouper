@@ -139,7 +139,10 @@ module trouper_top (
     // ---- Forward declarations (declared before first use; iverilog requires
     //      nets to be declared ahead of references) ----
     wire        dcr_valid;          // dc_removal output valid; driven below
-    wire        packet_done_pulse;  // falling edge of packet_active; driven below
+    reg         packet_done_pulse;  // registered falling edge of packet_active
+                                    // (fanout split 2026-07-19: flop Q drives the
+                                    // 15-load done cone; 1-cycle-later pulse is
+                                    // tolerated by all consumers)
     wire        spi_reg_re;         // SPI read-side-effect strobe; driven below
     wire [7:0]  spi_reg_re_addr;
     wire        psram_dbg_busy_w;
@@ -409,6 +412,7 @@ module trouper_top (
     wire        W_missed_q;   // sticky per-packet readback mirror of the pulse
     wire [2:0]  packet_phase;
     wire        packet_active;
+    wire        packet_active_ps;   // fanout-split duplicate, u_psram only
     wire [1:0]  active_mode;
     wire [3:0]  active_antenna_en;
 
@@ -430,6 +434,7 @@ module trouper_top (
         .clk             (clk),
         .rst_n           (rst_n),
         .sample_count    (iq_samp_cnt),
+        .iq_tick         (dcr_valid),
         .sf              (rb_sf_cfg),
         .sample_shift    (rb_sample_shift),
         .sc_lock         (sc_lock),
@@ -446,6 +451,7 @@ module trouper_top (
         .buf_freeze        (buf_freeze),
         .packet_phase      (packet_phase),
         .packet_active     (packet_active),
+        .packet_active_ps  (packet_active_ps),
         .active_mode       (active_mode),
         .active_antenna_en (active_antenna_en)
     );
@@ -468,7 +474,7 @@ module trouper_top (
         .psram_en     (rb_psram_ctrl[0]),
         .init_start   (rb_psram_ctrl[0] & ~rb_psram_ctrl[3]),
         .qspi_owner   (rb_psram_ctrl[3]),
-        .packet_active(packet_active),
+        .packet_active(packet_active_ps),
         .sf           (rb_sf_cfg),
         .sample_shift (rb_sample_shift),
         .sc_ant_sel   (rb_sc_ant_sel),
@@ -596,7 +602,9 @@ module trouper_top (
     always @(posedge clk or negedge rst_n)
         if (!rst_n) packet_active_r <= 1'b0;
         else        packet_active_r <= packet_active;
-    assign packet_done_pulse = packet_active_r && !packet_active;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) packet_done_pulse <= 1'b0;
+        else        packet_done_pulse <= packet_active_r && !packet_active;
 
     // Edge-detect the level-driven IRQ sources.  reg_bank re-ORs irq_set into
     // IRQ_STATUS every CE (reg_bank.v:141), so a held level would immediately
