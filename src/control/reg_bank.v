@@ -119,6 +119,9 @@ module reg_bank (
     //  as a flat packed bus, big-endian: byte[0] at MSB)
     // -----------------------------------------------------------------------
     reg [7:0] w_shadow_r  [0:15];
+    // Sticky: a 0x30-0x3F write was dropped by the W_valid write-lock
+    // (WGT_CTRL[5] readback, W1C via WGT_CTRL write with bit[5] set)
+    reg w_wr_rejected;
 
     assign w_shadow[127:120] = w_shadow_r[0];  assign w_shadow[119:112] = w_shadow_r[1];
     assign w_shadow[111:104] = w_shadow_r[2];  assign w_shadow[103:96]  = w_shadow_r[3];
@@ -184,6 +187,7 @@ module reg_bank (
             replay_delay_samples <= 16'd1500; // ≈3 ms: measured Grouper rv32emc
                                               // 8-it compute (~1140) + readout/IRQ
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
+            w_wr_rejected    <= 1'b0;
         end else if (clk_en) begin
             // Auto-clear write-1-pulse outputs (held one CE period = 2 clocks,
             // safely caught by 32 MHz consumers; we is 2 cycles wide so each
@@ -194,6 +198,14 @@ module reg_bank (
             psram_dbg_rd_trig <= 1'b0;
             sc_force_lock   <= 1'b0;
             noise_trig      <= 1'b0;
+
+            // W-shadow write-lock flag: the combiner reads w_shadow live (no
+            // per-burst latch), so 0x30-0x3F writes are dropped while W_valid
+            // is high; latch the rejection so firmware can see it.
+            if (we && (addr[7:4] == 4'h3) && w_valid_rb)
+                w_wr_rejected <= 1'b1;
+            else if (we && addr == 8'h1E && wdata[5])
+                w_wr_rejected <= 1'b0;
 
             if (we) begin
                 case (addr)
@@ -226,23 +238,8 @@ module reg_bank (
                     8'h1E: w_commit_pulse   <= wdata[0];
                     8'h1F: noise_trig       <= wdata[0];
                     8'h27: tacc_window_syms <= (wdata[3:0] < 4'd8) ? 4'd8 : wdata[3:0];
-                    // --- W shadow bank 0x30–0x3F ---
-                    8'h30: w_shadow_r[0]  <= wdata;
-                    8'h31: w_shadow_r[1]  <= wdata;
-                    8'h32: w_shadow_r[2]  <= wdata;
-                    8'h33: w_shadow_r[3]  <= wdata;
-                    8'h34: w_shadow_r[4]  <= wdata;
-                    8'h35: w_shadow_r[5]  <= wdata;
-                    8'h36: w_shadow_r[6]  <= wdata;
-                    8'h37: w_shadow_r[7]  <= wdata;
-                    8'h38: w_shadow_r[8]  <= wdata;
-                    8'h39: w_shadow_r[9]  <= wdata;
-                    8'h3A: w_shadow_r[10] <= wdata;
-                    8'h3B: w_shadow_r[11] <= wdata;
-                    8'h3C: w_shadow_r[12] <= wdata;
-                    8'h3D: w_shadow_r[13] <= wdata;
-                    8'h3E: w_shadow_r[14] <= wdata;
-                    8'h3F: w_shadow_r[15] <= wdata;
+                    // --- W shadow bank 0x30–0x3F: indexed write below (outside
+                    //     the case) so the W_valid lock is one shared enable term ---
                     // --- PSRAM / debug window ---
                     8'h70: begin
                                if (!packet_active) psram_ctrl[0] <= wdata[0]; // PSRAM_EN: blocked during active packet
@@ -261,6 +258,8 @@ module reg_bank (
                     8'h78: if (!packet_active) replay_delay_samples[15:8] <= wdata; // blocked during active packet
                     default: ;
                 endcase
+                if (addr[7:4] == 4'h3 && !w_valid_rb)
+                    w_shadow_r[addr[3:0]] <= wdata;
             end
         end
     end
@@ -317,7 +316,7 @@ module reg_bank (
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,
                             training_done_rb, packet_phase, packet_active};
             8'h1D: rdata_next = {active_antenna_en_rb, 2'h0, active_mode_rb};
-            8'h1E: rdata_next = {3'h0, w_commit_late_rb, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
+            8'h1E: rdata_next = {2'h0, w_wr_rejected, w_commit_late_rb, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
             8'h1F: rdata_next = 8'h00;                              // TACC_NOISE_TRIG (WO)
             8'h20: rdata_next = {6'h0, training_armed, training_done_rb};
             8'h21: rdata_next = {6'h0, n_acc[17:16]};  // N_ACC[17:16] (big-endian byte 0)
