@@ -54,7 +54,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
-| `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [4] `W_COMMIT_LATE` (RO); [7:5] reserved |
+| `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [4] `W_COMMIT_LATE` (RO); [5] `W_WR_REJECTED` (RO sticky, W1C); [7:6] reserved |
 | `0x1F` | `TACC_NOISE_TRIG` | W | `0x00` | Training Accumulator | [0] W1P: arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`) |
 | `0x20` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
 | `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [17:16] (bits [1:0]; [7:2] read 0) |
@@ -312,7 +312,8 @@ Weight-path commit control and status. Firmware is the sole weight source (there
 | [2] | `W_PENDING` | Read-only: training done but W commit not yet received |
 | [3] | `W_MISSED_PACKET` | Read-only: W was not committed before safe-switch; current packet stayed bypass. Sticky: held through IDLE, cleared at the next packet start |
 | [4] | `W_COMMIT_LATE` | Read-only: `W_COMMIT` arrived after the PSRAM delay-line replay had already started, so a prefix of the packet was combined in bypass before the mid-stream MRC upgrade (partial diversity loss, not a whole-packet miss). Sticky: held through IDLE, cleared at the next packet start or by `PSRAM_CLR_ERR` |
-| [7:5] | — | Reserved |
+| [5] | `W_WR_REJECTED` | Read-only sticky: a `0x30`–`0x3F` write was dropped by the W-shadow write-lock (writes are blocked while `W_VALID` is high — the combiner reads the shadow live). W1C: write `WGT_CTRL` with bit 5 set to clear |
+| [7:6] | — | Reserved |
 
 ### `0x1F` — TACC_NOISE_TRIG (write-only, W1P)
 
@@ -360,9 +361,7 @@ These registers are debug aids, not part of the normal packet-processing control
 
 ### `0x30`–`0x3F` — W vector (read/write)
 
-MRC weight vector `w` (4 complex coefficients, int16 Q1.15). Written by software after computing weights from the Z_kl pairs. These locations hold the shadow bank; the live combiner reads only `W_ACTIVE`.
-
-`W_ACTIVE` updates atomically after `WGT_CTRL.W_COMMIT` is pulsed and the Packet Control FSM reaches an idle boundary.
+MRC weight vector `w` (4 complex coefficients, int16 Q1.15). Written by software after computing weights from the Z_kl pairs. The combiner reads this bank directly (no separate active copy); it consumes weights only while `W_VALID` is high, and the bank is **write-locked while `W_VALID` is high** — locked-out writes are dropped and flagged sticky in `WGT_CTRL[5] W_WR_REJECTED`. Sequence: write `0x30`–`0x3F`, then pulse `W_COMMIT`; a late commit after a W-pending timeout upgrades the packet from bypass to MRC at the next combiner burst boundary.
 
 A 17-byte SPI burst (command byte + 16 data bytes starting at `0x30`) loads the full bank in one transaction.
 
