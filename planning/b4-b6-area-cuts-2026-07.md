@@ -182,8 +182,15 @@ oracle bit-exact).
 
 ## 5. State / next steps
 
-- Combined branch verified + measured; **merge to main not yet performed** —
-  user decision open.
+- **MERGED TO MAIN 2026-07-19 (`b47474d`)** via the `b4-b6-integration`
+  branch. `config_current_signoff.json` re-pointed at
+  `pnr_32m_scoped_v25_b6.sdc` (the v20 SDC's timeout-register exceptions
+  named registers B6 deleted — silent no-op post-merge);
+  `config_current_signoff_b6.json` is now a duplicate kept for run history.
+  NOTE: `config_current_signoff_minff.json` still carries the stale
+  v20_baseline_minff SDC but is unusable anyway (GRT congestion, Open Risk
+  #41) — fix its SDC pointer when #41 is resolved
+  (`config_current_signoff_minff_b6.json` is the ready variant).
 - If `packet_ctrl_fsm` port lists change again, `tb_pcfsm_b6_equiv.v` +
   `packet_ctrl_fsm_ref.v` need the same edit in both instances.
 - Per-branch NFS mirrors (`lora-mimo-b4/`, `-b6/`, `-base/`) dodge the shared

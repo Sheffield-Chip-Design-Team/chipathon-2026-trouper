@@ -1,6 +1,6 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-07-19b (§8: B4 REINSTATED — atomicity hazard closed by a reg_bank W_valid write-lock (verified, job 3473; re-PnR pending job 3475); B6 measured at −18.8K placed; branches unmerged). Owner: timothyjabez.
+Status: 2026-07-19c (§8: B4+B6+fanout-split MERGED TO MAIN (b47474d) — combined measured −17.3K placed, SS WNS −14.91 best-of-era, all suites PASS; canonical signoff SDC now v25_b6). Owner: timothyjabez.
 
 Goal: shrink `trouper_top` from the current **1550 × 1150 µm** SS-closure
 floorplan toward the long-stated **1100 × 1100 µm** target, *without* losing the
@@ -625,7 +625,7 @@ shrinks the SS repair burden.
 
 ---
 
-## 8. 2026-07-18 full `src/` re-review — B4/B5/B6 status + new candidates B7–B9
+## 8. 2026-07-18/19 full `src/` re-review — B4/B5/B6 status + new candidates B7–B12
 
 Fresh line-by-line read of every module in `src/` against the current v51
 signoff run, specifically hunting for levers NOT already in §7. Confirmed
@@ -673,6 +673,44 @@ SPI master; SX1257 programming is external, TRPR-SPM-001). Cutting them
 removes registers 0x14–0x17 and RX_GAIN_CTRL's latch action from the map, so
 it needs sign-off against firmware plans, not just RTL.
 
+**B10. reg_bank dead control-state trim. Tiny, behaviour-preserving.**
+Two stored control bits have no consumer in current RTL:
+
+- `MIMO_CTRL.MODE[1]` is reset to zero, is never written (`reg_bank.v` writes
+  only `mimo_mode[0]`), and `mrc_combiner` consumes only `active_mode[0]`.
+  Narrow `mimo_mode` to one bit and tie the upper active-mode/readback bit low.
+- `PSRAM_CTRL.SAMPLE_WIDTH` (`0x70[2]`) is stored and read back but
+  `rb_psram_ctrl[2]` has no downstream reference. Remove that flop and return
+  zero for the reserved bit.
+
+This saves only two flops, so no placed-area claim is warranted; its value is
+eliminating false configuration surface. Update `Register Map.md` and the chip
+specification to call `0x70[2]` reserved before taking it.
+
+**B11. narrow the ineffective high nibble of `SC_THR`. Tiny ABI change.**
+`sc_detector` consumes only `sc_thr[11:0]`, while `reg_bank` stores and returns
+the full 16-bit `SC_THR` field. The upper nibble is functionally inert. Store a
+12-bit threshold, accept only `0x0C[3:0]`, and return zero in `0x0C[7:4]` to
+save four flops. This changes software-visible readback, so retain the current
+16-bit image unless the map is deliberately tightened for tapeout.
+
+**B12. discard unused W-shadow low bytes. 8 flops; firmware-ABI decision.**
+The combiner consumes only `W_0_RE_HI`, `W_0_IM_HI`, …, `W_3_IM_HI`
+(`rb_w_shadow[127:120]`, `[111:104]`, …, `[15:8]`). The eight corresponding
+low-byte registers at `0x31/33/35/37/39/3B/3D/3F` are stored and read back but
+cannot affect a sample. They may be made write-discard/read-zero, or the
+shadow interface may be narrowed to eight bytes, saving eight flops and some
+decode/mux logic. Do not take this silently: existing firmware uses a 16-byte
+burst and the current register map promises R/W readback for those bytes.
+
+**B5 scope clarification — optional additional SC telemetry trim.**
+The existing B5 snapshot cut remains the substantial debug-only candidate:
+`SC_FIRST_HIT`/`SC_LOCK_SNAP` (`0x28–0x2F`) are the sole consumers of the two
+32-bit detector snapshots. `SC_STAT` (`0x24–0x25`), `SC_DBG_FLAGS` (`0x26`),
+and its held hit/count state are also register-bank-only telemetry, but retain
+them for threshold tuning and first-silicon diagnosis unless the tapeout debug
+budget explicitly removes them.
+
 **Zero-area RTL-hygiene cleanups (Yosys already strips these; no area claim):**
 - `trouper_top.v:152` free-running 32-bit `sample_count` is never read
   (pcfsm consumes `iq_samp_cnt`) — dead counter + adder.
@@ -686,7 +724,9 @@ it needs sign-off against firmware plans, not just RTL.
 
 - **dc_removal** — already minimal (13-bit acc + 8-bit out per channel; the
   8×4.7K is adder/flop floor).
-- **reg_bank** — leave per §7; hand-written by design.
+- **reg_bank** — no broad structural rewrite: all normal controls, status,
+  IRQ, PSRAM-debug, and Z/ZDIAG readback paths are live. The bounded B10–B12
+  candidates above are the only identified dead or ineffective state.
 - **sc_detector residual 32-bit sample-index registers** (`sample_count`,
   `first_hit_sample`, `eval_sample_mark`, `timing_ref`) — narrowing would need
   wrap-safe compares across three blocks sharing the timing_ref domain;
