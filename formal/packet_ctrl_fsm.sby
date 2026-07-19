@@ -1,0 +1,14 @@
+[options]
+mode prove
+depth 40
+
+[engines]
+smtbmc
+
+[script]
+read_verilog -sv -formal packet_ctrl_fsm.v packet_ctrl_fsm_formal.sv
+prep -top packet_ctrl_fsm
+
+[files]
+../rtl-test/rtl/packet_ctrl_fsm.v
+packet_ctrl_fsm_formal.sv
