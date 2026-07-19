@@ -1,6 +1,6 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-07-18b (§8: B4 + B6 IMPLEMENTED + measured — both survive to placed area, −7.9K/−18.8K; branches unmerged). Owner: timothyjabez.
+Status: 2026-07-19b (§8: B4 REINSTATED — atomicity hazard closed by a reg_bank W_valid write-lock (verified, job 3473; re-PnR pending job 3475); B6 measured at −18.8K placed; branches unmerged). Owner: timothyjabez.
 
 Goal: shrink `trouper_top` from the current **1550 × 1150 µm** SS-closure
 floorplan toward the long-stated **1100 × 1100 µm** target, *without* losing the
@@ -569,11 +569,21 @@ operating amplitude toward the 2nd-order cliff — which itself erodes the
 safety margin `sim/notebooks/14_sd_remod.ipynb` §4 relies on. Sweep debt (§9)
 is now paid either way.
 
-**B4. mrc_combiner: delete local W latches. −6K.**
-`wr_re/wr_im[0:3]` (64 flops + enable muxes) re-latch reg_bank W-shadow values
-that are static during a burst (firmware commit protocol + safe_switch already
-guarantee stability). Mux the W ports directly. Do NOT fold the two multipliers
-into one: the 16 MHz burst is 31 of 32 available clocks — no headroom.
+**B4. mrc_combiner: delete local W latches. REINSTATED 2026-07-19 with write-lock (measured −7.9K placed).**
+The 2026-07-19 rejection stands as a *hazard finding*: `W_valid` selects
+MRC/bypass only at burst start and does not freeze the weight ports, so with
+the latches gone a 0x30–0x3F write while `W_valid` is high could tear one
+complex output. The chosen fix is the interlock variant: reg_bank now DROPS
+W-shadow writes while `W_valid` is high and latches the rejection sticky in
+`WGT_CTRL[5] W_WR_REJECTED` (W1C) — ~16 gated write-enables, no flops,
+strictly stronger than the deleted latch (which never protected against
+per-sample tearing during a 16-byte rewrite anyway). Late-commit-after-timeout
+traced safe (writes land while `W_valid=0`; bypass→MRC switch is burst-atomic).
+Timeout policy stays **bypass**, not old-weights (old-weights needs a
+commit-latched active bank, ~64 flops, re-spending the cut — rejected).
+Verified: new `cocotb/w_shadow_lock` (job 3473) + full sweep/oracle re-pass
+(job 3474). See `b4-b6-area-cuts-2026-07.md`. Do NOT fold the two
+multipliers into one: the 16 MHz burst is 31 of 32 available clocks — no headroom.
 
 **B5. Debug register trim. −6K. Tapeout decision.**
 `sc_first_hit_dbg` + `sc_lock_sample_dbg` (64 flops) + reg_bank 0x28–0x2B
@@ -598,12 +608,17 @@ zero-checks. `M_val` needs only 15 bits (M ≤ 16,384).
 - **Shared global sample_count** (sc/tacc/pcfsm each hold 32-bit): saves ~5K but
   the counters have deliberately different increment timing after the pacing
   deferred-increment fix — exactly where the timing_ref class of bug lives.
+- **B4 old-weights-on-timeout fallback**: keeping the previous packet's W on a
+  W_PENDING timeout needs a commit-latched active bank (~64 flops) to avoid
+  latching a half-rewritten shadow, and stale weights can combine
+  destructively — bypass degrade retained by decision 2026-07-19. (B4 itself
+  is reinstated with the reg_bank write-lock; see §7/§8.)
 - **Decimator anything** (width, storage, reset style): CLOSED per §1.
 
-Stack estimate: B1+B2+B4+B5+B6 ≈ **−48K** with no algorithmic change; synth
+Stack estimate: B1+B2+B5+B6 ≈ **−42K** with no algorithmic change; synth
 ~892K. **B3 is now closed (rejected, see above) and does not add to this
 stack** — the ≈−65K figure that assumed B3 clearing the sweep no longer
-applies. Per §2 the −48K stack does not by itself unlock a die step below the
+applies. Per §2 the −42K stack does not by itself unlock a die step below the
 1260–1380 signoff window (binding limit below 1380 is SS timing, and placed
 area is buffering-inflated), but it buys util headroom at 1380/1340 and
 shrinks the SS repair burden.
@@ -680,9 +695,9 @@ it needs sign-off against firmware plans, not just RTL.
 - **training_acc** — B2 banked; 24-bit accumulators remain rejected
   (precision).
 
-### B4 + B6 measured 2026-07-18 (worktrees b4-mrc-w-latch / b6-pcfsm-relative-timeouts)
+### B4 assessment + B6 measured 2026-07-18/19 (worktrees b4-mrc-w-latch / b6-pcfsm-relative-timeouts)
 
-Both implemented, functionally verified, and taken through full signoff PnR
+Both branches were implemented, functionally tested, and taken through full signoff PnR
 (1200×1100 / 88 % density, `config_current_signoff*.json`, plain max_ff corner
 set — the minff-corner variant CONGESTS at GRT on this floorplan, see Open
 Risk #41 note). Baseline = RUN_2026-07-18_17-02-25 on committed main
@@ -698,16 +713,30 @@ Risk #41 note). Baseline = RUN_2026-07-18_17-02-25 on committed main
 | SS TNS ns | −3,645 | −4,222 | −8,005 |
 | Magic DRC / LVS | 0 / 0 | 0 / 0 | 0 / 0 |
 
-**Both cuts SURVIVE to placed area** (unlike B2's reabsorption) — B4 beat its
-−6K estimate and B6 tripled its −5K estimate once round-2 narrowed the load
-arithmetic. Functional gates: 18/18 full-chip SF sweep both branches; B4
-weight-gen SPI flow bit-exact vs oracle (job 3462); B6 dual-instance
+**Both cuts survive to placed area and both are mergeable.** B4 beat its −6K
+estimate; its 2026-07-19 hazard finding (live W-shadow ports observable
+mid-burst; a 0x30–0x3F write while `W_valid` is high can tear one output —
+not covered by job 3462) was **closed the same day** with a reg_bank
+write-lock: shadow writes are dropped while `W_valid` is high, flagged sticky
+in `WGT_CTRL[5]` (W1C). Verified by new `cocotb/w_shadow_lock` (job 3473) and
+sweep/oracle re-pass (job 3474); re-PnR with the lock = job 3475 (see
+`b4-b6-area-cuts-2026-07.md` for the full record). B6 tripled
+its −5K estimate once round-2 narrowed the load arithmetic; its dual-instance
 equivalence TB `tb_pcfsm_b6_equiv.v` proves every output (incl. all three
 timeout-fire edges) bit-identical to the old absolute-compare FSM over 40
 randomized packets, re-run after round-2 (jobs 3463/3471). B6 round-2 =
 20-bit modular elapsed subtract (true elapsed ≤ ~2^17 structurally): the
 round-1 32-bit `iq_samp_cnt → counter-load` subtract was that run's SS worst
 path (−20.5); round-2 removed it from the violator list entirely.
+
+**B6 follow-up is PSRAM timing, not another packet-FSM rewrite.** Its round-2
+counter-load path is removed. The B6 run instead exposes the pre-existing live
+QSPI-control residual (`packet_active → u_psram.sub[*]`; earlier netlist traces
+also name the `u_psram.state/sub` decode cone). The correct fix is a one-cycle-
+ahead registered QSPI micro-operation, not a multicycle exception or CE pacing:
+replay already spends 56 of each 64-clock sample window. The exact verification
+contract is in `ss-corner-decimator-pacing-closure.md` (QSPI pipeline subsection)
+and must precede any claim of timing closure.
 
 **Do NOT read the WNS column as the B-cuts' timing effect.** The worst paths
 are pre-existing quasi-static-class arcs that swing ±6–12 ns run-to-run by
@@ -721,9 +750,9 @@ top violator.
 
 ### Updated stack
 
-B4+B5+B6 (§7 residue) ≈ −17K, plus B7 −5–10K and B8 ~−5K if they survive
-their gates, plus B9 ~−3K if the map change is accepted → realistic
-**~−25–30K (≈3% of stdcell)** on top of what is already banked. Same §2
+B5+B6 (§7 residue) ≈ −11K, plus B7 −5–10K and B8 ~−5K if they survive their
+gates, plus B9 ~−3K if the map change is accepted → realistic
+**~−19–24K (≈2–2.5% of stdcell)** on top of what is already banked. Same §2
 caveat as before: this does not unlock a die step by itself (binding limit
 below 1380 is SS timing), but B6/B7 shrink comparator/multiplier cones and so
 help the SS repair burden directly.

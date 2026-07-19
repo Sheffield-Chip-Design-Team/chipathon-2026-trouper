@@ -35,6 +35,11 @@ RTL (cone-scoping + the newly-found `sc_detector`/`packet_active` wall).
 The one remaining genuine (non-paceable) residual, the `u_psram` QSPI control
 decode (≈ −10 to −13 ns, throughput-bound — needs a 1-cycle-ahead pipeline of
 the `state`/`sub` → `sio_out`/address cone), is analyzed but not implemented.
+The QSPI-pipeline verification contract (transaction equivalence after the
+one-`sck` displacement, handover/pad safety, sustained no-skip, and replay
+ordering) is defined in `ss-corner-decimator-pacing-closure.md` under "The
+genuine residual: `u_psram` QSPI engine"; it is required before this path can
+be treated as fixed.
 The config-relaxed netlist needed to carry this fix currently **fails
 detailed routing** (DRT-1231 / DRT-0073) on every floorplan tried — the
 current floorplan has no routability headroom to absorb the SDC change.
@@ -377,6 +382,13 @@ SS wall (most of job 3367's 1206 violators, worst −16.01 ns) is now rooted in
 fanout from `rb_bw_sel`/`rb_sf_cfg` — pre-existing (33 violators, −22.1 ns in
 the July 5 baseline at the same die/density) but roughly 4× wider now.
 
+**2026-07-18 addendum (B4/B6 measurement runs):** the v20-SDC signoff config
+(`config_current_signoff.json`) still carries this leak class on mainline —
+the 1200×1100/88 % baseline's worst path is `rb_sf_cfg → u_pcfsm.M_val[*]`
+(unscoped quasi-static arc, −22.70 ns). The CE-retimer branch's explicit
+`M_val` endpoint covers it; whichever SDC generation ships needs that
+exception. See `planning/b4-b6-area-cuts-2026-07.md` §4.
+
 ### 40. SS wall (job 3367, 1000 violators, worst −16.01 ns) is FIVE stacked problems, not one — root-caused 2026-07-12 by direct netlist/STA cross-check
 
 **Root-cause pass complete.** Traced every major violator cluster in job
@@ -494,6 +506,32 @@ pipeline fix remains.
 **Root-caused:** 2026-07-12 (direct netlist + STA violator-report
 cross-check, `RUN_2026-07-12_21-56-16`).
 **Extension verified:** 2026-07-13 (jobs 3387–3400).
+
+**2026-07-18 addendum:** across the B4/B6 area-cut signoff runs the
+`packet_active → u_psram.sub[*]` cone is now the recurring worst violator,
+swinging −13.0 → −25.5 ns for the *same arc* between runs — run-to-run
+repair-effort reallocation noise of ±6–12 ns at 88 % util, so single-run WNS
+deltas at this density are not attributable to RTL changes. Reinforces item 1
+(QSPI 1-cycle-ahead pipeline) as the real fix. See
+`planning/b4-b6-area-cuts-2026-07.md` §4.
+
+---
+
+### 41. Hold signoff corner pulls the wrong RCX deck; the corrected (min_ff) config fails routing at signoff density
+
+`max_ff_n40C_3v60` extracts with a `.max` RCX ruleset, so hold is checked
+against pessimistic-setup RC, not true min-RC. The working fix is an
+`RCX_RULESETS` override to add a real `min_ff_n40C_3v60` corner — renaming
+the corner instead breaks P&R (jobs 3423/3426). **New 2026-07-18:** the
+carrier config (`config_current_signoff_minff.json`) **fails GRT-0116
+congestion** at 1200×1100/88 % (job 3464) — min_ff hold buffering pushes the
+design past routability, while the plain max_ff config routes clean. The RCX
+fix is therefore currently unusable at signoff density; needs either lower
+util, a smaller hold-fix scope, or die growth.
+
+**See:** `rtl-test/ol_trouper_top/config_current_signoff_minff.json`;
+`planning/b4-b6-area-cuts-2026-07.md` §4.
+**Found:** 2026-07-15 (ruleset), 2026-07-18 (congestion, job 3464).
 
 ---
 
