@@ -140,6 +140,26 @@ shapes (B4 is flops+muxes, B6 is comparator-cone removal).
   GRT-0116 congestion at this density (job 3464); plain max_ff config routes
   clean. → Open Risk #41.
 
+### 4.1 Fanout split RESULT (2026-07-19, b6 commit `3af9619`, jobs 3480/3481)
+
+Implemented on the b6 branch: `(* keep *)` duplicate `packet_active_ps`
+(mirrored at all four pcfsm assignment sites, wired only to `u_psram`) +
+`packet_done_pulse` registered in `trouper_top` (1-cycle-later pulse; sc_clr /
+psram `packet_end` / IRQ all tolerant — proven by equiv TB with a
+`packet_active_ps ≡ packet_active` check, 18/18 sweep, w_missed, replay_delay,
+job 3480). Signoff `RUN_2026-07-19_17-10-59` (job 3481): **DRC 0 / LVS 0,
+SS WNS −15.95 (was −25.52), TNS −4,650 (was −8,005)** — every
+`packet_active → u_psram` cluster vanished from the violator list; the worst
+clusters are now the chronic `training_armed → Zdiag` / `Zpair` arcs
+(−12.6 worst). New small cluster `iq_samp_cnt → u_pcfsm.pkt_cnt` (n=22,
+worst −6.65) suggests the v25_b6 SDC load-arc exception partially misses —
+follow-up. **Cost:** synth +8.8 K / placed +10.3 K vs B6 round-2 (+374 comb
+cells, only +1 flop net — the same ABC remap-churn class as B4's per-byte
+lock), so B6+split nets −8.5 K placed vs baseline. Possible refinement: the
+worst path ran *through* `packet_done_pulse`, so a pulse-register-only variant
+(drop the `(* keep *)` duplicate) may keep most of the timing win at a
+fraction of the churn — untested.
+
 ## 5. State / next steps
 
 - Both branches verified + measured, **unmerged** — merge decision open
