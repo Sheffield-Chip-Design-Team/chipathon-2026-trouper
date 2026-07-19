@@ -155,10 +155,13 @@ clusters are now the chronic `training_armed → Zdiag` / `Zpair` arcs
 worst −6.65) suggests the v25_b6 SDC load-arc exception partially misses —
 follow-up. **Cost:** synth +8.8 K / placed +10.3 K vs B6 round-2 (+374 comb
 cells, only +1 flop net — the same ABC remap-churn class as B4's per-byte
-lock), so B6+split nets −8.5 K placed vs baseline. Possible refinement: the
-worst path ran *through* `packet_done_pulse`, so a pulse-register-only variant
-(drop the `(* keep *)` duplicate) may keep most of the timing win at a
-fraction of the churn — untested.
+lock), so B6+split nets −8.5 K placed vs baseline. Refinement A/B TESTED
+(branch `b6-split-pulseonly` `5f534de`, synth job 3482): the pulse-register-only
+variant is *worse* — 984,442 µm² / +588 comb cells vs A+B's 982,512 — so the
+churn is not the `(* keep *)` duplicate; it is intrinsic ABC remap sensitivity
+to any perturbation of this cone (third data point of the class after B4's two
+lock codings). A+B stands as the keeper; pulse-only branch retained for the
+record, not to be pursued.
 
 ## 5. State / next steps
 
