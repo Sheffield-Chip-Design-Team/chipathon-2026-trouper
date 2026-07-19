@@ -49,9 +49,10 @@ module mrc_combiner (
 
     // Latched inputs.  B4 (area roadmap §7/§8): the per-burst weight latches
     // were deleted — the W_re*/W_im* ports come from the reg_bank W-shadow,
-    // which is protocol-stable for the duration of a burst (firmware writes
-    // all 16 shadow bytes, then pulses W_COMMIT; the combiner consumes
-    // weights only under W_valid).  The xr_* input latches REMAIN: they guard
+    // which is hardware-stable whenever W_valid is high: reg_bank drops
+    // 0x30-0x3F writes while W_valid (sticky WGT_CTRL[5] flags the attempt),
+    // and the combiner consumes weights only under W_valid (sampled at burst
+    // start into use_mrc_r).  The xr_* input latches REMAIN: they guard
     // against the live/replay source mux flipping mid-burst, which no
     // upstream protocol prevents.
     reg signed [7:0]  xr_i [0:3];
