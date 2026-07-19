@@ -507,12 +507,18 @@ pipeline fix remains.
 cross-check, `RUN_2026-07-12_21-56-16`).
 **Extension verified:** 2026-07-13 (jobs 3387–3400).
 
-**2026-07-18 addendum:** across the B4/B6 area-cut signoff runs the
-`packet_active → u_psram.sub[*]` cone is now the recurring worst violator,
-swinging −13.0 → −25.5 ns for the *same arc* between runs — run-to-run
-repair-effort reallocation noise of ±6–12 ns at 88 % util, so single-run WNS
-deltas at this density are not attributable to RTL changes. Reinforces item 1
-(QSPI 1-cycle-ahead pipeline) as the real fix. See
+**2026-07-18/19 addendum (mechanism found):** across the B4/B6 area-cut
+signoff runs the `packet_active → packet_done_pulse → u_psram.*` cone swings
+−3…−8 ns ↔ −22 ns for the same arcs between runs. Stage detail of the bad
+run: 45 of 60 ns in four under-driven stages (x1 cells left at fanout 25–39,
+slews 8–17 ns) — repair_design's DRC-driven upsizing is a cap-threshold knife
+edge at the repair corner, so any nearby placement perturbation flips it.
+Three consecutive runs produced three different chronic worst cones
+(`rb_sf_cfg → M_val` / `packet_active → psram` / `u_remod.s3`): single-run
+WNS at 88 % util measures the repair lottery, not the RTL delta. Fix
+direction = deterministic fanout treatment (RTL split per the
+sc_lock → timing_ref pattern, or max_transition SDC) on the chronic nets;
+`u_psram` endpoints remain item 1's pipeline. See
 `planning/b4-b6-area-cuts-2026-07.md` §4.
 
 ---

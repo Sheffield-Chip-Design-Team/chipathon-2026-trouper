@@ -7,7 +7,7 @@ unmerged branches pending the merge decision:
 
 | Branch | Worktree | Head |
 |---|---|---|
-| `b4-mrc-w-latch` | `.claude/worktrees/b4-mrc-w-latch` | `9b275ea` (B4 `29fbe79` + write-lock hardening) |
+| `b4-mrc-w-latch` | `.claude/worktrees/b4-mrc-w-latch` | `f9ef89f` (B4 `29fbe79` + write-lock `9b275ea` + indexed-write recode) |
 | `b6-pcfsm-relative-timeouts` | `.claude/worktrees/b6-pcfsm-relative-timeouts` | `7fb4228` |
 
 Baseline for all comparisons: mainline `9d22bfe` (includes the 2026-07 DSP-review
@@ -46,7 +46,8 @@ complex weight (new `re`, old `im`). Findings from the trace:
 **Hardening (chosen over documentation-only and over a commit-latched active
 bank):** reg_bank drops 0x30–0x3F writes while `w_valid_rb` is high and latches
 the rejection sticky in `WGT_CTRL[5] W_WR_REJECTED` (W1C via `WGT_CTRL` write
-with bit 5 set). ~16 gated write-enables, no flops beyond the flag; stronger
+with bit 5 set). One shared lock term on a single indexed bank write (see §3
+recode note), no flops beyond the flag; stronger
 than the deleted latch (also removes the pre-existing per-sample tear).
 Register Map 0x1E / 0x30–0x3F sections updated (including removal of the stale
 "`W_ACTIVE` separate copy" language — no such copy ever existed).
@@ -93,20 +94,46 @@ config `config_current_signoff_b6.json`.
 | Run | Synth area (µm²) | Placed area (µm²) | Δ placed | SS WNS (ns) | SS TNS |
 |---|---|---|---|---|---|
 | Baseline `RUN_2026-07-18_17-02-25` | 990,966 | 1,062,010 | — | −22.70 | −3,645 |
-| B4 (pre-lock) | 982,591 | 1,054,150 | **−7.9 K** | −13.04 | −4,222 |
-| B4 + write-lock (job 3475) | *pending* | *pending* | | | |
+| B4 (pre-lock) | 982,591 | 1,054,150 | −7.9 K | −13.04 | −4,222 |
+| B4 + per-byte lock (job 3475) | 987,736 | 1,058,230 | −3.8 K | −16.23 | −5,210 |
+| **B4 + recoded lock (job 3479, final)** | **977,303** | **1,047,910** | **−14.1 K** | −22.79 | −3,351 |
 | B6 round 2 | 973,674 | 1,043,230 | **−18.8 K** | −25.52 | −8,005 |
 
-Combined ≈ −27 K placed if both merge. Both cuts **survive to placed area**,
+B4's final form is the *recoded* lock (branch head `f9ef89f`): the first-cut
+per-byte `if (!w_valid_rb)` guards cost +5.1 K synth (+397 cells, only 1 a
+flop — ABC remapped the 128-flop enable cone). Recoding the shadow bank as a
+single indexed write (`w_shadow_r[addr[3:0]]`, one shared lock term) removed
+the original 16-way case decode as well, ending up 5.3 K *below* pre-lock B4.
+Full re-verification on the recode: `w_shadow_lock` (job 3477), 18/18 sweep +
+weight-gen oracle (job 3478), signoff DRC 0 / LVS 0 (job 3479).
+Combined B4+B6 stack ≈ **−33 K placed**.
+
+Both cuts **survive to placed area**,
 disproving the B2-era "pure flop cuts get reabsorbed at 3.0 V" rule for these
 shapes (B4 is flops+muxes, B6 is comparator-cone removal).
 
 ## 4. Timing findings from the measurement runs (tracked in Open Risks)
 
-- **WNS deltas above are NOT attributable to the RTL cuts.** Worst paths are
-  pre-existing quasi-static arcs; the same `packet_active → u_psram.sub[*]`
-  arc swings −13.0 → −25.5 ns between runs (±6–12 ns repair-effort-allocation
-  noise at 88 % util). → Open Risk #40 addendum.
+- **WNS deltas above are NOT attributable to the RTL cuts — root-caused
+  2026-07-19** by clustering all reported violators (netlist-mapped names)
+  across four runs. B6's extra −4.4 K TNS is almost entirely the
+  `packet_active → packet_done_pulse → u_psram.{wr_data,rpl_i/q,cur_wr,
+  wait_cnt,sub}` cone being left unrepaired in that one run: its worst path
+  spends **45 of 60 ns in four under-driven stages** (x1 inverter at fanout
+  39 / 15.7 ns slew, nand2_1 at fanout 25, x1 inverter into
+  `packet_done_pulse`). The identical cone is buffered to −3…−8 ns in the
+  baseline and B4 runs. None of B6's new logic (counters, `iq_tick`, load
+  subtract) appears anywhere in its violator list. Mechanism: repair_design
+  is DRC-driven, so upsizing depends on caps crossing a threshold at the
+  repair corner — B6 deleted ~19 K µm² of pcfsm logic adjacent to the cone,
+  the neighborhood re-placed, and the caps landed under threshold. Clincher:
+  three runs, three different worst cones, all chronic — baseline
+  `rb_sf_cfg → M_val` (−22.7), B6 `packet_active → psram` (−25.5), B4+lock
+  `u_remod.s3_i` (−22.8, with its packet_active clusters quiet at −6). At
+  88 % util, single-run WNS measures which chronic fanout cone lost the
+  repair lottery, not the RTL delta. → Open Risk #40 addendum. Fix direction:
+  RTL fanout split of `packet_active`/`packet_done_pulse` (the sc_lock →
+  timing_ref pattern, job 3415) and/or max_transition SDC (job 3417 line).
 - Baseline worst path `rb_sf_cfg → u_pcfsm.M_val[*]` is an unscoped
   quasi-static arc in the v20 SDC. → Open Risk #39 addendum.
 - `config_current_signoff_minff.json` (Open Risk #41 RCX-fix carrier) fails
