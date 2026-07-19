@@ -238,23 +238,8 @@ module reg_bank (
                     8'h1E: w_commit_pulse   <= wdata[0];
                     8'h1F: noise_trig       <= wdata[0];
                     8'h27: tacc_window_syms <= (wdata[3:0] < 4'd8) ? 4'd8 : wdata[3:0];
-                    // --- W shadow bank 0x30–0x3F ---
-                    8'h30: if (!w_valid_rb) w_shadow_r[0]  <= wdata;
-                    8'h31: if (!w_valid_rb) w_shadow_r[1]  <= wdata;
-                    8'h32: if (!w_valid_rb) w_shadow_r[2]  <= wdata;
-                    8'h33: if (!w_valid_rb) w_shadow_r[3]  <= wdata;
-                    8'h34: if (!w_valid_rb) w_shadow_r[4]  <= wdata;
-                    8'h35: if (!w_valid_rb) w_shadow_r[5]  <= wdata;
-                    8'h36: if (!w_valid_rb) w_shadow_r[6]  <= wdata;
-                    8'h37: if (!w_valid_rb) w_shadow_r[7]  <= wdata;
-                    8'h38: if (!w_valid_rb) w_shadow_r[8]  <= wdata;
-                    8'h39: if (!w_valid_rb) w_shadow_r[9]  <= wdata;
-                    8'h3A: if (!w_valid_rb) w_shadow_r[10] <= wdata;
-                    8'h3B: if (!w_valid_rb) w_shadow_r[11] <= wdata;
-                    8'h3C: if (!w_valid_rb) w_shadow_r[12] <= wdata;
-                    8'h3D: if (!w_valid_rb) w_shadow_r[13] <= wdata;
-                    8'h3E: if (!w_valid_rb) w_shadow_r[14] <= wdata;
-                    8'h3F: if (!w_valid_rb) w_shadow_r[15] <= wdata;
+                    // --- W shadow bank 0x30–0x3F: indexed write below (outside
+                    //     the case) so the W_valid lock is one shared enable term ---
                     // --- PSRAM / debug window ---
                     8'h70: begin
                                if (!packet_active) psram_ctrl[0] <= wdata[0]; // PSRAM_EN: blocked during active packet
@@ -273,6 +258,8 @@ module reg_bank (
                     8'h78: if (!packet_active) replay_delay_samples[15:8] <= wdata; // blocked during active packet
                     default: ;
                 endcase
+                if (addr[7:4] == 4'h3 && !w_valid_rb)
+                    w_shadow_r[addr[3:0]] <= wdata;
             end
         end
     end
