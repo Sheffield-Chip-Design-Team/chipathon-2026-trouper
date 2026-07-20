@@ -81,8 +81,8 @@ construction or register mechanics per `Traceability.md`'s own `Verif` column.
 | 11 | Sustained `SAMPLE_SKIP` clean under normal packet-active load | SPEC-SIM | `cocotb/trouper_top` → `test_trouper_top.py` SF7 BW250/BW125 | TRPR-PSR-020 | ✅ done (job 3310) — packet-active case only, see #16 |
 | 12 | 0x77/0x78 reset values + dirty/reset sweep | SPEC-SIM | `cocotb/reg_reset_sweep` → `test_reg_reset_sweep.py` | TRPR-PSR-022 (register defaults) | ✅ done |
 | 13 | Noise-mode (`TACC_NOISE_TRIG`) must not arm replay | SPEC-SIM | `cocotb/noise_trig` → `test_noise_trig.py` | replay margin gating | ✅ done |
-| 14 | All k-induction properties (pointer/gap invariants, sticky-flag causality, legal-state transitions) | FORMAL | `formal/psram_buf_ctrl_formal.sv` + `.sby` | TRPR-PSR-002/003/004/007/009/014/015/016 (formal halves) | ❌ **dead** — `ifdef FORMAL` not instantiated (G1). Fix before trusting any "formal ✅" elsewhere in this table |
-| 15 | `PSRAM_EN=0` idle: no QSPI pad assertion | FORMAL only today | `formal/psram_buf_ctrl_formal.sv` (`a_buf_active_needs_en`) | TRPR-PSR-009 | ❌ **no running coverage at all** — sole claim is #14, which is dead. Highest-priority new test (below) |
+| 14 | All k-induction properties (pointer/gap invariants, sticky-flag causality, legal-state transitions) | FORMAL | `formal/psram_buf_ctrl_formal.sv` + `.sby` | TRPR-PSR-002/003/004/007/009/014/015/016 (formal halves) | ✅ **done** — G1 fixed: `ifdef FORMAL` instantiation wired into `psram_buf_ctrl.v` (both `src/control/` and `rtl-test/rtl/`); `sby -f psram_buf_ctrl.sby` k-induction depth 90 PASS (job 3494), confirmed non-vacuous (checker cells merged into design in prep log, not dropped) |
+| 15 | `PSRAM_EN=0` idle: no QSPI pad assertion | FORMAL only today | `formal/psram_buf_ctrl_formal.sv` (`a_buf_active_needs_en`) | TRPR-PSR-009 | ✅ **done** — covered via #14, now alive (job 3494) |
 | 16 | Debug-fetch vs. capture-write collision at the real R=64 rate | — (new) | not written | Open Risks #30; extends TRPR-PSR-020 | ⬜ **to write** — RTL header comment still budgets against the old R=128 rate; #11 only tests the packet-active case, not idle-mode debug reads against the tighter ~20-cycle margin |
 | 17 | Warm-up re-arm when `sf`/`sample_shift` changes mid-session | — (new) | not written | TRPR-PSR-019 (untested clause) | ⬜ **to write** — only fixed-config warm-up latency is tested today; formal assumes SF/shift constant so can't cover this either |
 | 18 | `AUTO_INC` multi-sample streaming drain (3+ samples back-to-back) | — (new) | not written | TRPR-PSR-017 (deepens #7) | ⬜ **to write** — `dbg_idx==7`→refetch is a distinct path from the initial `RD_TRIG` latch, untested in isolation |
@@ -95,12 +95,12 @@ construction or register mechanics per `Traceability.md`'s own `Verif` column.
 
 ### Run order for the 8 new tests (16–21 primarily; 22 depends on 14; 23/24 opportunistic)
 
-1. Fix #14 (formal re-wire) — free, unblocks #15/22 and revalidates 8 other requirement IDs.
-2. Write #19 — #15 currently has zero running coverage, the single biggest hole in this table.
+1. ~~Fix #14 (formal re-wire)~~ — ✅ done, unblocked #15/22 and revalidated 8 other requirement IDs.
+2. Write #19 — closes the last gap #15 had before #14 came alive.
 3. Write #16 — resolves whether Open Risks #30 is a live bug.
 4. Write #17, #21 — one job, no new infrastructure.
 5. Write #18, #20 — second job, reuses #7/#5 infrastructure.
-6. Write #22 — once #14 is alive.
+6. Write #22 — #14 is alive, unblocked.
 7. #23/#24 — opportunistic, next capture-harness or FPGA session.
 
 ---
