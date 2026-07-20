@@ -22,10 +22,16 @@ class SchmidlCoxDetector:
     """
     Stage 3 — Schmidl-Cox preamble trigger.
 
-    The detector dechirps the input, forms the magnitude-squared SC statistic,
-    and asserts `sc_lock` once `hits_req` consecutive symbol-pair checks pass
-    threshold. The reported `timing_ref` is back-calculated to the candidate
-    preamble start; SC phase is retained only as a diagnostic.
+    The detector dechirps the selected input branch, forms the
+    magnitude-squared SC statistic, and asserts `sc_lock` once `hits_req`
+    consecutive symbol-pair checks pass threshold. The reported `timing_ref`
+    is back-calculated to the candidate preamble start; SC phase is retained
+    only as a diagnostic.
+
+    `sc_ant_sel` mirrors BW_CFG[2:1] / `psram_buf_ctrl.v`: current RTL is a
+    deliberately single-branch detector, not a diversity combiner. The
+    selected branch is held stable during a packet by reg_bank. This model
+    accepts an NR×N input for system studies but only consumes that branch.
 
     Implementation note — dechirp-cancel equivalence
     -------------------------------------------------
@@ -60,9 +66,12 @@ class SchmidlCoxDetector:
         energy_gate: bool = False,
         energy_threshold: float = 0.0,
         e_slice_floor: float = 0.0,
+        sc_ant_sel: int = 0,
     ):
         if hits_req < 1:
             raise ValueError("hits_req must be >= 1")
+        if not 0 <= int(sc_ant_sel) <= 3:
+            raise ValueError("sc_ant_sel must be in range 0..3")
 
         self.M = M
         self.threshold = threshold
@@ -70,6 +79,7 @@ class SchmidlCoxDetector:
         self.energy_gate = energy_gate
         self.energy_threshold = energy_threshold
         self.e_slice_floor = e_slice_floor
+        self.sc_ant_sel = int(sc_ant_sel)
 
     def detect(self, rx_signal: np.ndarray) -> SchmidlCoxResult:
         """
@@ -77,6 +87,11 @@ class SchmidlCoxDetector:
         """
         NR, L = rx_signal.shape
         M = self.M
+        if self.sc_ant_sel >= NR:
+            raise ValueError(
+                f"sc_ant_sel={self.sc_ant_sel} requires at least "
+                f"{self.sc_ant_sel + 1} branches; got {NR}"
+            )
 
         max_start = L - 2 * M + 1
         if max_start <= 0:
@@ -103,32 +118,15 @@ class SchmidlCoxDetector:
         threshold_sq = self.threshold ** 2
 
         for d in range(max_start):
-            mag_sc_sum = 0.0
-            energy_ref_sum = 0.0
-            energy_sum = 0.0
-            best_branch_mag = -1.0
-            best_branch_sc = 0j
+            seg1 = dechirped[self.sc_ant_sel, d:d + M]
+            seg2 = dechirped[self.sc_ant_sel, d + M:d + 2 * M]
+            sc = np.sum(seg1 * np.conj(seg2))
+            e1 = np.sum(np.abs(seg1) ** 2)
+            e2 = np.sum(np.abs(seg2) ** 2)
 
-            for j in range(NR):
-                seg1 = dechirped[j, d:d + M]
-                seg2 = dechirped[j, d + M:d + 2 * M]
-
-                sc_j = np.sum(seg1 * np.conj(seg2))
-                e1_j = np.sum(np.abs(seg1) ** 2)
-                e2_j = np.sum(np.abs(seg2) ** 2)
-
-                sc_abs_sq = np.abs(sc_j) ** 2
-                mag_sc_sum += sc_abs_sq
-                energy_ref_sum += e1_j * e2_j
-                energy_sum += e1_j + e2_j
-
-                if sc_abs_sq > best_branch_mag:
-                    best_branch_mag = sc_abs_sq
-                    best_branch_sc = sc_j
-
-            mag_sc[d] = mag_sc_sum
-            energy_ref[d] = energy_ref_sum
-            phase_diag_sc[d] = best_branch_sc
+            mag_sc[d] = np.abs(sc) ** 2
+            energy_ref[d] = e1 * e2
+            phase_diag_sc[d] = sc
 
             if energy_ref[d] == 0.0:
                 continue
