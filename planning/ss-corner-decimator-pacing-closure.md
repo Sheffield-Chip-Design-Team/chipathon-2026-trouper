@@ -236,6 +236,40 @@ while `qpi_busy`. So it is **throughput-bound** — CE-gating (2× → 112 clock
 the QSPI control/`sio_out`/address decode one cycle ahead (shifts the stream by
 1 `sck`, throughput-transparent), *not* pacing/CE. This is the last honest RTL fix.
 
+#### Required verification contract for the QSPI pipeline
+
+This is a timing-only microarchitecture change, not a permission to change the
+external protocol or relax a live path. Before it can replace the current
+decode, first extract the exact post-route startpoint/endpoint from the target
+netlist: B6 PnR exposed `packet_active → u_psram.sub[*]`, while earlier runs
+also identify the same residual as `u_psram.state/sub →` QSPI-control decode.
+The trace determines which local control decision is registered; do not add an
+SDC exception for either form.
+
+The implementation must pre-register the complete next QSPI micro-operation
+(SIO value/drive-enable, CE#, read/write phase, and address/data-nibble select)
+one IQ_CLK before it reaches the pads. The byte/nibble order and the number of
+QSPI clocks per transaction must remain unchanged; the permitted observable
+difference is a uniform one-`sck` displacement of the entire burst.
+
+Verification MUST establish all of the following at the supported 125 and
+250 kHz sample rates:
+
+- cycle/nibble-accurate old-versus-new QSPI transaction equivalence after the
+  allowed one-clock alignment, for init, capture+delay-read, replay, and debug
+  readback;
+- QSPI-owner handover still occurs only at a completed burst boundary, with no
+  CE#-low/SCK-stopped or driven-SIO pad glitch;
+- `SAMPLE_SKIP` remains clear under sustained capture and replay, proving the
+  56-of-64-cycle replay budget remains intact; and
+- replay payload order/alignment, `rpl_valid`, `del_valid`, late-commit, and
+  packet-end/two-packet re-arm behavior remain unchanged.
+
+Only after those functional gates pass should multi-seed SS PnR assess whether
+the pipeline closes the live control cone. Buffer/repair variation can change
+WNS, but is not a substitute for removing this roughly 25 ns combinational
+decode path.
+
 The PSRAM debug-readback path (`dbg_*`, regs 0x72–0x76) is genuinely quasi-static
 (host reads at kHz, hard-gated to idle by `dbg_busy`) → `false_path`. The SF/BW
 config (`sf_cfg`/`bw_sel`/`sample_shift`) is write-locked during a packet → its

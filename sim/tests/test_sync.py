@@ -92,6 +92,20 @@ def test_short_input():
     assert result.metric.size == 0
 
 
+def test_sc_antenna_selection_matches_single_branch_rtl():
+    """BW_CFG.sc_ant_sel selects one detector branch; it is not MRC."""
+    prefix_len = 23
+    rx = make_rx(prefix_len=prefix_len, n_preamble=8)
+    # A deep fade on branch 0 must fail with reset-default SC selection.
+    rx[0] = 0.0
+    assert not SchmidlCoxDetector(M, threshold=0.9, hits_req=2, sc_ant_sel=0).detect(rx).lock
+
+    # Selecting a healthy branch recovers the same timing reference.
+    result = SchmidlCoxDetector(M, threshold=0.9, hits_req=2, sc_ant_sel=1).detect(rx)
+    assert result.lock
+    assert result.timing_ref == prefix_len
+
+
 # ---------------------------------------------------------------------------
 # SF sweep — SF=7..12
 # ---------------------------------------------------------------------------

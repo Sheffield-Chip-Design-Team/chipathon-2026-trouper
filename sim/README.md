@@ -194,6 +194,10 @@ Interpret these as regression baselines, not as final product claims. Packet cou
 
 ## Design Notes
 
+`MODEL_RTL_AUDIT.md` records the current source-of-truth comparison for each
+modelled RTL block, including the deliberate boundary between DSP models and
+the cocotb-verified packet-control/PSRAM logic.
+
 - **Bit-True Modeling:** The simulation employs bit-true modeling to reflect ASIC hardware constraints:
   - **Fixed-Point Library:** Found in `sim/models/fixed.py`, providing primitives for quantization (`quantize`), saturation, and `Q1.15` format support.
   - **Stage-Specific Precision:** Components enforce hardware-appropriate bit-widths and handle intermediate bit-growth and truncation. The current RTL decimator saturates to 8-bit output samples; some model internals remain higher-precision or floating-point for convenience unless a dedicated RTL model is used.
