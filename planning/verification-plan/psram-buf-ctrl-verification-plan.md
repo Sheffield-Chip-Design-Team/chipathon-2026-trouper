@@ -96,7 +96,7 @@ construction or register mechanics per `Traceability.md`'s own `Verif` column.
 ### Run order for the 8 new tests (16–21 primarily; 22 depends on 14; 23/24 opportunistic)
 
 1. ~~Fix #14 (formal re-wire)~~ — ✅ done, unblocked #15/22 and revalidated 8 other requirement IDs.
-2. Write #19 — closes the last gap #15 had before #14 came alive.
+2. ~~Write #19~~ — ✅ done (cocotb EDGE-SIM, job 3500; formal reachability probe first showed the scenario unreachable via firmware, so covered as a port-level fault-injection test instead).
 3. Write #16 — resolves whether Open Risks #30 is a live bug.
 4. Write #17, #21 — one job, no new infrastructure.
 5. Write #18, #20 — second job, reuses #7/#5 infrastructure.
