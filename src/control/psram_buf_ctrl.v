@@ -21,9 +21,21 @@
 //       bypass until weights land, and a commit arriving after replay has
 //       started sets the sticky w_commit_late flag (WGT_CTRL[4]).
 //
-// Sub-cycle budget (32 MHz, CIC R=128 → iq_valid every 128 cycles):
-//   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (84 spare)  ✓
-//   S_REPLAY : 25 write + 31 rpl-read  = 56 sub-cycles  (72 spare)  ✓
+// Sub-cycle budget (32 MHz, fixed half-band decimator R=64 → iq_valid every
+// 64 cycles — CLAUDE.md; this comment previously (and incorrectly) budgeted
+// against the old CIC-only R=128 chain):
+//   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (20 spare)  ✓
+//   S_REPLAY : 25 write + 31 rpl-read  = 56 sub-cycles  ( 8 spare)  ✓
+// Debug fetch (below) is a FIXED 31 sub-cycles once launched and does not
+// abort/restart on an arriving iq_valid — that does not fit inside the
+// 20-cycle idle margin above, so any debug read triggered in idle mode
+// collides with the very next capture write, every time (Open Risks #30).
+// This is a confirmed, deterministic, and harmless tradeoff, not a bug:
+// sample_skip correctly flags the dropped write (silently and cleanly
+// skipped, not partially executed/corrupted), the debug fetch itself still
+// returns correct data, and normal capture resumes right after — verified
+// cycle-accurately by cocotb/dbg_write_collision/test_dbg_write_collision.py
+// (verification-plan row #16, SGE jobs 3548-3550).
 //
 // QPI init sequence (SPI serial mode on SIO[0]):
 //   RSTEN(0x66) → RST(0x99) → tRST wait → Enter QPI(0x35)
@@ -396,9 +408,49 @@ module psram_buf_ctrl (
                 end
 
                 // ------------------------------------------------------------
+                // S_QE_INIT — one-time PSRAM software-reset + QPI-mode-entry
+                // handshake (APS6404L datasheet §12 "Reset Operation" + §11.3
+                // "QPI Quad Mode Exit/Entry"). Bit-banged over legacy 1-wire
+                // SPI mode (sio_oe=4'b0001, SIO[0] only) because the PSRAM
+                // does not understand QPI-encoded commands until after the
+                // Enter-QPI command below has been sent the slow way — none
+                // of these three commands has a data phase, the PSRAM sends
+                // nothing back, each is command-byte-only, MSB-first, one bit
+                // per sub-cycle.
+                //
+                //   1. RSTEN (0x66), sub 0-8   — "Reset Enable": arms the
+                //      device for a reset. By itself does nothing; datasheet:
+                //      "Reset command has to immediately follow the
+                //      Reset-Enable command... any command other than Reset
+                //      after RSTEN will cause the device to exit Reset-Enable
+                //      state and abandon reset" — a two-step arm/fire
+                //      interlock so a stray bus glitch can't reset the PSRAM.
+                //   2. RST (0x99), sub 9-19    — "Reset": actually fires the
+                //      reset, returning the PSRAM to default SPI-mode
+                //      standby. Must follow RSTEN with no other command in
+                //      between (see above). CE# is then held high for one
+                //      idle sub-cycle (sub 19) before the next command is
+                //      allowed, satisfying the datasheet's tRST spec ("Time
+                //      between end of RST CMD to next valid CMD, min 50 ns")
+                //      — sub 18->21 is ~3 cycles at 32 MHz (~94 ns) of CE#
+                //      high time, comfortably over the 50 ns minimum.
+                //   3. Enter QPI (0x35), sub 20-28 — switches the PSRAM from
+                //      1-wire SPI mode into 4-wire QPI mode. Only after this
+                //      completes (sub 29) does the PSRAM accept the QPI
+                //      commands (0x02 write, 0xEB fast quad read) used by
+                //      every S_WRITE/S_REPLAY transaction for the rest of
+                //      chip operation.
+                //
+                // Not handled here: the datasheet's separate power-up
+                // self-init (§7) — 150 us with CE# held high after VDD first
+                // stabilizes, before ANY command is valid. That is a
+                // board/power-sequencing concern outside this FSM; S_QE_INIT
+                // only implements the software reset triggered by init_start.
+                // ------------------------------------------------------------
                 S_QE_INIT: begin
                     sio_oe <= 4'b0001;
                     case (init_sub)
+                        // ---- RSTEN (0x66): 8 bits MSB-first on SIO[0] ----
                         6'd0:  begin ce_n <= 1'b0; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd1; end
                         6'd1:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd2; end
                         6'd2:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd3; end
@@ -407,7 +459,9 @@ module psram_buf_ctrl (
                         6'd5:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd6; end
                         6'd6:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd7; end
                         6'd7:  begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd8; end
+                        // ---- RSTEN done: CE# high, no data phase, no response expected ----
                         6'd8:  begin ce_n <= 1'b1; sio_oe <= 4'd0; init_sub <= 6'd9; end
+                        // ---- RST (0x99): 8 bits MSB-first, must follow RSTEN immediately ----
                         6'd9:  begin init_sr <= 8'h99; init_sub <= 6'd10; end
                         6'd10: begin ce_n <= 1'b0; sio_oe <= 4'b0001; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd11; end
                         6'd11: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd12; end
@@ -417,8 +471,10 @@ module psram_buf_ctrl (
                         6'd15: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd16; end
                         6'd16: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd17; end
                         6'd17: begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd18; end
+                        // ---- RST done: CE# high, then hold >=tRST (50 ns min) before next CMD ----
                         6'd18: begin ce_n <= 1'b1; sio_oe <= 4'd0; init_sub <= 6'd19; end
-                        6'd19: init_sub <= 6'd20;
+                        6'd19: init_sub <= 6'd20; // idle sub-cycle — the tRST gap
+                        // ---- Enter QPI (0x35): 8 bits MSB-first, switches SIO bus to 4-wire ----
                         6'd20: begin init_sr <= 8'h35; init_sub <= 6'd21; end
                         6'd21: begin ce_n <= 1'b0; sio_oe <= 4'b0001; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd22; end
                         6'd22: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd23; end
@@ -428,6 +484,7 @@ module psram_buf_ctrl (
                         6'd26: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd27; end
                         6'd27: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd28; end
                         6'd28: begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd29; end
+                        // ---- Enter QPI done: CE# high, PSRAM now in 4-wire QPI mode ----
                         6'd29: begin
                             ce_n         <= 1'b1;
                             sio_oe       <= 4'd0;

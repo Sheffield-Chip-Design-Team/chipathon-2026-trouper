@@ -21,9 +21,21 @@
 //       bypass until weights land, and a commit arriving after replay has
 //       started sets the sticky w_commit_late flag (WGT_CTRL[4]).
 //
-// Sub-cycle budget (32 MHz, CIC R=128 → iq_valid every 128 cycles):
-//   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (84 spare)  ✓
-//   S_REPLAY : 25 write + 31 rpl-read  = 56 sub-cycles  (72 spare)  ✓
+// Sub-cycle budget (32 MHz, fixed half-band decimator R=64 → iq_valid every
+// 64 cycles — CLAUDE.md; this comment previously (and incorrectly) budgeted
+// against the old CIC-only R=128 chain):
+//   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (20 spare)  ✓
+//   S_REPLAY : 25 write + 31 rpl-read  = 56 sub-cycles  ( 8 spare)  ✓
+// Debug fetch (below) is a FIXED 31 sub-cycles once launched and does not
+// abort/restart on an arriving iq_valid — that does not fit inside the
+// 20-cycle idle margin above, so any debug read triggered in idle mode
+// collides with the very next capture write, every time (Open Risks #30).
+// This is a confirmed, deterministic, and harmless tradeoff, not a bug:
+// sample_skip correctly flags the dropped write (silently and cleanly
+// skipped, not partially executed/corrupted), the debug fetch itself still
+// returns correct data, and normal capture resumes right after — verified
+// cycle-accurately by cocotb/dbg_write_collision/test_dbg_write_collision.py
+// (verification-plan row #16, SGE jobs 3548-3550).
 //
 // QPI init sequence (SPI serial mode on SIO[0]):
 //   RSTEN(0x66) → RST(0x99) → tRST wait → Enter QPI(0x35)
