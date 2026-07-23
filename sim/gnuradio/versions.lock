@@ -1,0 +1,19 @@
+# GNU Radio flowgraph environment lock (Linux / Ubuntu 24.04)
+#
+# This file records the known-good binary environment used by the flowgraphs
+# in this directory.  It is intentionally separate from a pip requirements
+# file: GNU Radio and its OOT modules include compiled C++/Python ABI pieces
+# and must be installed together by apt or built together from source.
+
+python=3.12.3
+gnuradio_apt=3.10.12.0-2~noble1
+numpy_apt=1:1.26.4+ds-6ubuntu1
+scipy_apt=1.11.4-6build1
+
+# gr-lora_sdr has no installed package metadata/version.  The generated
+# hier-block wrappers declare GNU Radio 3.10.3.0, so pin the actual deployed
+# ABI artifact rather than inventing an upstream version number.
+gr_lora_sdr_generated_gnuradio=3.10.3.0
+gr_lora_sdr_python_sha256=33e2da7e9e6421abe6b5966d26a8f6a6d735b218440e15182b7a7bfc10088ff0
+gr_lora_sdr_rx_wrapper_sha256=2c3624fbe9e385cc25e2c08485c8f367f2cd8933c5b953fa5a72f40a61141d1e
+gr_lora_sdr_tx_wrapper_sha256=10a43e728e7ab5ba5521f899bd308900a1fe8086ef8b6f0a0e3894544984d5b5

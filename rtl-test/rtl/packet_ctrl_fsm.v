@@ -276,4 +276,42 @@ module packet_ctrl_fsm (
         end
     end
 
+`ifdef FORMAL
+    // Formal-only checker instantiation (see formal/packet_ctrl_fsm_formal.sv).
+    // Dead code in every real build: read_verilog defines FORMAL only when
+    // passed `-formal` (yosys's sby-driven proof flow); LibreLane synthesis
+    // and cocotb (Icarus/Verilator) never pass that flag and get SYNTHESIS
+    // instead. Deliberately NOT a `bind` — this yosys version silently drops
+    // `bind` statements (confirmed 2026-07-05 on psram_buf_ctrl), which makes
+    // bind-based proofs vacuous. Do not delete: without this instance `sby`
+    // still reports PASS but checks zero assertions.
+    packet_ctrl_fsm_formal u_pcfsm_formal (
+        .clk              (clk),
+        .rst_n            (rst_n),
+        .sample_count     (sample_count),
+        .iq_tick          (iq_tick),
+        .sf               (sf),
+        .sample_shift     (sample_shift),
+        .sc_lock          (sc_lock),
+        .timing_ref       (timing_ref),
+        .training_done    (training_done),
+        .W_commit         (W_commit),
+        .W_valid_set      (W_valid_set),
+        .W_missed_packet  (W_missed_packet),
+        .W_missed_q       (W_missed_q),
+        .buf_freeze       (buf_freeze),
+        .packet_phase     (packet_phase),
+        .packet_active    (packet_active),
+        .packet_active_ps (packet_active_ps),
+        .state            (state),
+        .sc_lock_prev     (sc_lock_prev),
+        .lat_timing_ref   (lat_timing_ref),
+        .acq_cnt          (acq_cnt),
+        .wpend_cnt        (wpend_cnt),
+        .pkt_cnt          (pkt_cnt),
+        .W_commit_pending (W_commit_pending),
+        .W_valid          (W_valid)
+    );
+`endif
+
 endmodule

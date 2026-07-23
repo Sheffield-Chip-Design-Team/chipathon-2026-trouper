@@ -829,11 +829,16 @@ module psram_buf_ctrl (
     end
 
 `ifdef FORMAL
-    // See formal/psram_buf_ctrl_formal.sv header: not bound via `bind` (this
-    // yosys version silently drops it), instantiated directly in-scope
-    // instead. `FORMAL` is only defined by `read_verilog -formal` (sby flow);
-    // dead code under plain synthesis/cocotb builds.
-    psram_buf_ctrl_formal formal_i (
+    // Formal-only checker instantiation (see formal/psram_buf_ctrl_formal.sv).
+    // Dead code in every real build: read_verilog defines FORMAL only when
+    // passed `-formal` (yosys's sby-driven proof flow); LibreLane synthesis
+    // and cocotb (Icarus/Verilator) never pass that flag and get SYNTHESIS
+    // instead, so this instantiation never exists outside `sby`. Deliberately
+    // NOT a `bind` — this yosys version silently drops `bind` statements
+    // (confirmed 2026-07-05), which made every bind-based proof vacuous.
+    // Do NOT delete this block (commit 0c0171a did, silently making the sby
+    // proof prove nothing while still reporting PASS).
+    psram_buf_ctrl_formal u_psram_formal (
         .clk_32m        (clk_32m),
         .rst_n          (rst_n),
         .psram_en       (psram_en),
@@ -849,15 +854,19 @@ module psram_buf_ctrl (
         .sc_lock_prev   (sc_lock_prev),
         .iq_sample_cnt  (iq_sample_cnt),
         .timing_ref     (timing_ref),
+        .training_done  (training_done),
         .state          (state),
         .wr_ptr         (wr_ptr),
         .rd_ptr         (rd_ptr),
         .buf_base       (buf_base),
         .buf_base_valid (buf_base_valid),
+        .wait_armed     (wait_armed),
+        .wait_cnt       (wait_cnt),
         .buf_active     (buf_active),
         .replay_active  (replay_active),
         .qe_init_done   (qe_init_done),
         .replay_missed  (replay_missed),
+        .w_commit_late  (w_commit_late),
         .overflow       (overflow),
         .sample_skip    (sample_skip),
         .dbg_busy       (dbg_busy),

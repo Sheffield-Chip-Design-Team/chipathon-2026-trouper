@@ -62,12 +62,18 @@ replay resumed after release, pre-pause prefix bit-exact, no
 | RPV-6 | Second packet's replay is fresh | Extend rung-3 test past re-lock: wait packet 2's `REPLAY_ACTIVE` | Packet 2 replays; its first `rpl_*` samples match packet 2's recorded stream (RPV-5 compare), not packet 1's (stale `buf_base` detector) |
 | RPV-7 | `QSPI_OWNER` across the margin wait | owner=1 after `training_done`, hold ≳ margin, release | No replay start while owner=1 (`wait_cnt` frozen — writes suspended); replay starts after release; RPV-5-style data compare still passes |
 
-## 4. Planned — formal (`formal/psram_buf_ctrl_formal.sv` rewrite)
+## 4. Formal (`formal/psram_buf_ctrl_formal.sv` rewrite) — **DONE 2026-07-19**
 
-The existing harness encodes the removed W_COMMIT-triggered contract, and
-its `ifdef FORMAL` instantiation is **missing from `psram_buf_ctrl.v`**
-(pre-existing drift) — the k-induction proof is currently dead. Rewrite
-against the margin-gated FSM; reinstate the instantiation.
+RPV-F1..F6 all PASS (k-induction depth 90, SGE job 3487; 33 assertions in the
+elaborated model — non-vacuous). Harness rewritten for the margin-gated FSM;
+`ifdef FORMAL` instantiation reinstated in `psram_buf_ctrl.v` (it had been
+deleted by 0c0171a, making any sby run vacuous). New load-bearing environment
+assumption `m_sc_lock_level_held` (sc_lock cannot re-edge while
+`buf_base_valid` — Open Risks #25 contract). RPV-F5's overflow-unreachability,
+parked in the old harness, is now proven via two-phase transaction gap
+invariants. Bonus: new `formal/packet_ctrl_fsm.sby` proof (26 assertions,
+PASS same job): B6 20-bit modular-subtract exactness, #39 single-cycle
+ST_ACQ_SETUP structure, packet_active_ps mirror, W_missed protocol.
 
 | ID | Property |
 |---|---|

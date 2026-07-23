@@ -29,6 +29,19 @@ Matches the ASIC pipeline in `planning/blocks/Training Accumulator.md` and
 export PYTHONPATH=/usr/lib/python3/dist-packages:/usr/lib/python3.12/site-packages:$PYTHONPATH
 ```
 
+The known-good runtime is pinned in [`versions.lock`](versions.lock): GNU
+Radio 3.10.12.0 on Python 3.12.3, including a SHA-256 pin of the locally
+installed `gr-lora_sdr` ABI artifact. Verify it before running flowgraphs:
+
+```bash
+python3 sim/gnuradio/check_environment.py
+```
+
+`gr-lora_sdr` does not publish installed package metadata, so its generated
+wrapper's GNU Radio 3.10.3.0 label is recorded separately from the runtime
+version. Do not upgrade GNU Radio or rebuild the OOT module independently;
+update this lock only after rerunning the flowgraphs.
+
 ## Usage
 
 ```bash
