@@ -17,33 +17,45 @@ This document supersedes `psram-replay-verification-plan.md` as the block-level 
 
 ## 1. Current methodology, and the path to constrained random
 
-**Today:** two methods, both fully directed.
+**Today:** the directed pass is essentially closed out. All 22 numbered tests in §2 are
+`✅ done` except #23/#24 (system-level corroboration, opportunistic/blocked — not gaps in this
+block's own verification). Both methods below remain fully directed; the open work is no longer
+"write more directed tests," it's building the coverage/randomization layer described below.
 
 - **cocotb simulation** — every suite instantiates the full `trouper_top.v` (not
   `psram_buf_ctrl.v` standalone) via the shared harness `cocotb/hdl/tb_trouper_cocotb.v` and
   behavioural model `cocotb/hdl/psram_model.v`. Each test is a hand-picked scenario with a
   fixed SF/BW/margin/timing, asserted bit-exact against a Python or model reference. No
-  randomization of any kind.
-- **Formal (SymbiYosys k-induction)** — `formal/psram_buf_ctrl_formal.sv`, a curated set of
-  hand-written safety/liveness properties, depth 90. Currently **not wired into the RTL**
-  (`ifdef FORMAL` instantiation missing from `psram_buf_ctrl.v` — G1 below), so it is producing a
-  vacuous pass, not real coverage, until that's fixed.
+  randomization of any kind. 13 suites, all passing (§3).
+- **Formal (SymbiYosys k-induction)** — `formal/psram_buf_ctrl_formal.sv`, depth 90. **Wired in
+  and non-vacuous** (#14 fixed the `ifdef FORMAL` instantiation gap, job 3494; #22 rewrote the
+  replay-FSM entry/exit properties for the margin-gated design and confirmed non-vacuity again,
+  job 3567). Two properties remain parked, not counted as coverage: `a_overflow_unreachable`
+  (pre-existing, unrelated induction-regression issue, not root-caused) and RPV-F5.
 
-There is no code coverage (no `verilator --coverage`), no functional-coverage model (no
+There is still no code coverage (no `verilator --coverage`), no functional-coverage model (no
 `cocotb-coverage`, no SVA `covergroup`/`cover`), and no constrained-random stimulus anywhere in
-this flow. Confidence today comes entirely from the tests below actually existing and passing,
-not from any measurement of how much of the design's state space they exercise.
+this flow. Confidence today comes from 22 named directed tests + a non-vacuous formal model, not
+from any measurement of how much of the design's state space they jointly exercise — with all
+directed rows closed, that measurement gap is now the limiting factor on further confidence, so
+this plan's active scope moves to §1a below.
 
-**Steps to move toward constrained random (future, not in this plan's scope):**
+### 1a. Coverage / constrained-random work plan (active — see run order in §1b)
 
 1. **Instrument coverage first** — add `--coverage` to the Verilator suites' `EXTRA_ARGS`
-   (`cocotb/*/Makefile`) and merge `.dat` files across suites. Without this, constrained-random
-   has no closure signal and just becomes "run longer and hope."
-2. **Define a coverage model off §2** — turn each requirement row below into one or more
-   coverpoints/crosses (e.g. `{state, sub, dbg_mode, qspi_owner_eff}`, `{sf, sample_shift}` pairs,
-   debug-fetch phase relative to `iq_valid`) using `cocotb-coverage`. PBV-1's "sweep all 64 phase
-   offsets" (§3) is exactly the kind of thing a `phase` coverpoint would close automatically
-   instead of by hand.
+   (`cocotb/*/Makefile`) and merge `.dat` files across all 13 suites. Without this,
+   constrained-random has no closure signal and just becomes "run longer and hope." Do this
+   before writing any new randomized test so the baseline (coverage from the *existing* 22
+   directed tests) is measured first — it may already reveal gaps §2 didn't anticipate.
+2. **Define a coverage model off §2** — turn each requirement row into one or more
+   coverpoints/crosses using `cocotb-coverage`, e.g.:
+   - `{state, sub, dbg_mode, qspi_owner_eff}` — FSM × debug-fetch × ownership cross (rows #7/#8/#9/#18)
+   - `{sf, sample_shift}` pairs across a session, including mid-session transitions (row #17)
+   - debug-fetch phase relative to `iq_valid` / capture-write collision timing (row #16) — PBV-1's
+     "sweep all 64 phase offsets" is exactly what this coverpoint closes automatically instead of
+     by hand
+   - `REPLAY_DELAY_SAMPLES` value bucketed low/mid/high-near-0xFFFF (row #20 only hit one extreme)
+   - debug address relative to the 8 MB `AMASK` boundary (row #21 only hit one wrap point)
 3. **Randomize the highest-value axes first**: `sf`/`sample_shift` per session, `REPLAY_DELAY_SAMPLES`,
    injection timing of `sc_lock`/`training_done`/`W_commit`/`qspi_owner` relative to QPI burst
    phase, and stimulus amplitude/pattern (the existing CW-stimulus limitation noted in
@@ -93,7 +105,9 @@ construction or register mechanics per `Traceability.md`'s own `Verif` column.
 | 23 | Real-capture replay at SF12/BW125 (deep address, ~1 MB depth) | SPEC-SIM | `cocotb/trouper_capture` | system-level corroboration | ⬜ planned |
 | 24 | FPGA emulation bring-up re-check | — | `fpga-emul/` `sim_inject` | system-level corroboration | ⬜ planned, blocked on Vivado regen |
 
-### Run order for the 8 new tests (16–21 primarily; 22 depends on 14; 23/24 opportunistic)
+### 1b. Run order — completed directed pass, then coverage/constrained-random (active)
+
+**Directed pass (closed):**
 
 1. ~~Fix #14 (formal re-wire)~~ — ✅ done, unblocked #15/22 and revalidated 8 other requirement IDs.
 2. ~~Write #19~~ — ✅ done (cocotb EDGE-SIM, job 3500; formal reachability probe first showed the scenario unreachable via firmware, so covered as a port-level fault-injection test instead).
@@ -101,7 +115,24 @@ construction or register mechanics per `Traceability.md`'s own `Verif` column.
 4. ~~Write #17, #21~~ — ✅ done (cocotb EDGE-SIM/SPEC-SIM, jobs 3560/3561; full 13-suite block regression clean, job 3563). #17: two new-infrastructure cases (`cocotb/warmup_rearm`) proving the SF-only and sample_shift-only re-arm disjuncts independently. #21: one new-infrastructure case (`cocotb/dbg_amask_wrap`) proving the debug-fetch `AUTO_INC` address wraps cleanly at the 8 MB `AMASK` boundary. No RTL bugs found in either; also flagged that the row's "Open Risks #25" citation looks stale (the actual 2^23-wraparound material is under Open Risks #32, not #25).
 5. ~~Write #18, #20~~ — ✅ done (cocotb SPEC-SIM/EDGE-SIM, job 3558; full 11-suite block regression clean, job 3562). #18 reused #7's `test_psram_ops.py` infra (streamed 4 samples/3 refetch wraps over one `RD_TRIG`+`AUTO_INC` arm); #20 reused #5's `test_replay_data.py` infra (`_StreamRecorder`/`_compare_anchored`) at SF12/BW125 + max `REPLAY_DELAY_SAMPLES`, confirming `OVERFLOW` unreachability in sim. No RTL bugs found in either.
 6. ~~Write #22~~ — ✅ done (formal rewrite, job 3567 PASS depth 90, confirmed non-vacuous; full 10-suite block regression clean, jobs 3568/3569). Rekeyed the one real stale piece (the group-A pointer-gap assumption, previously keyed off `W_commit`) to the actual margin-expiry trigger, and added RPV-F1..F4 as new properties; RPV-F5 stays parked (pre-existing, unrelated), RPV-F6's carry-over confirmed.
-7. #23/#24 — opportunistic, next capture-harness or FPGA session.
+7. ~~Improve #9~~ — ✅ done (`state`/`OVERFLOW`/`BUF_ACTIVE` closed, jobs 3570/3571; full 9-suite block regression clean).
+8. #23/#24 — opportunistic, next capture-harness or FPGA session (not blocking the coverage work below).
+
+**Coverage / constrained-random (next, per §1a):**
+
+9. **Instrument coverage** (§1a step 1) — add `--coverage` to `cocotb/*/Makefile` `EXTRA_ARGS` for
+   all 13 suites, merge `.dat` output, and run the existing directed regression once under
+   instrumentation to get a *baseline* coverage number before any new test is written. This baseline
+   is the first real evidence of how much of the state space 22 directed tests actually reach.
+10. **Build the coverage model** (§1a step 2) — implement the coverpoints/crosses listed there with
+    `cocotb-coverage`, scored against the baseline from step 9. Treat any coverpoint the directed
+    suite already hits at ~100% as evidence that axis doesn't need randomization; prioritize the
+    ones the baseline shows as sparse (expected candidates: `REPLAY_DELAY_SAMPLES` bucket coverage,
+    `AMASK`-boundary proximity, mid-session `sf`/`sample_shift` transition coverage).
+11. **Randomize the sparse axes** (§1a step 3) — write constrained-random layers on top of the
+    highest-value axes identified in step 10, gated by the coverage model, not a fixed seed count.
+12. **Re-run full regression + coverage merge** after each new randomized layer lands, and update
+    this section with the resulting coverage percentage and any newly-found gaps or bugs.
 
 ---
 
