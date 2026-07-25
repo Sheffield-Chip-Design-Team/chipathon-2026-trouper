@@ -26,19 +26,31 @@ RPV-7: QSPI_OWNER asserted across the margin wait freezes the wait
        256 replayed samples (all captured BEFORE the pause -- the training
        window is 2048 samples) still compare bit-exact. Samples arriving
        during owner=1 are legitimately lost and are not compared.
+
+test_overflow_unreachable_stress_sf12_bw125 (verif plan #20): corroborates
+       test #14's formal OVERFLOW/pointer-gap k-induction invariants under a
+       real simulated worst-case stimulus -- SF12/BW125 (deepest symbol
+       period, M = 1<<(12+2) = 16384) plus REPLAY_DELAY_SAMPLES at its
+       16-bit register maximum (0xFFFF), the largest wr_ptr/rd_ptr gap the
+       RTL can produce (8*M training-window samples + 65535-sample margin =
+       196607 samples = 1,572,856 bytes) -- still well under the 8 MB
+       (2^23-byte = 1,048,576-sample) circular buffer, so OVERFLOW must
+       stay clear and the gap must stay perfectly constant throughout
+       replay (both pointers advance +8 bytes per iq_valid in lockstep).
 """
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver
 from test_bypass_e2e import _reset_and_lock
 from test_replay_delay import (PKT_TIMEOUT_SYMS, _wait_irq,
                                _wait_replay_active, _watch_monotonic_replay)
 
 CALIB = 32     # samples used to lock the alignment offset
 BAND = 3       # allowed |offset| between timing_ref and the first replayed sample
+AMASK23 = (1 << 23) - 1   # 8 MB circular buffer address mask
 
 
 class _StreamRecorder:
@@ -224,3 +236,177 @@ async def test_owner_across_margin_wait(dut):
     dut._log.info(f"{tag}: PASS -- wait frozen under owner, replay resumed "
                   f"({skip_found} samples consumed before collection), "
                   f"pre-pause data bit-exact")
+
+
+async def _reset_and_lock_sfbw(dut, sf, bw_khz, tag, *, replay_delay):
+    """Like test_bypass_e2e._reset_and_lock, generalized to arbitrary SF/BW
+    -- that helper hardcodes SF7/BW250. Needed here for the SF12/BW125
+    worst-case symbol period (largest M, and therefore the largest possible
+    training-window + REPLAY_DELAY_SAMPLES byte gap between wr_ptr/rd_ptr)
+    that test #20 stresses."""
+    sample_shift = 1 if bw_khz == 250 else 2
+    M = 1 << (sf + sample_shift)
+    clk_per_iq = 64
+
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value   = 1
+    dut.SPI_MOSI.value  = 0
+    dut.SPI_SCK.value   = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value    = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    cocotb.start_soon(sdm_driver(dut, sf, bw_khz))
+
+    await spi_read(dut, 0x00)
+    await spi_read(dut, 0x09)
+    await spi_write(dut, 0x09, sf & 0x0F)
+    await spi_write(dut, 0x0A, 0 if bw_khz == 250 else 1)   # BW_CFG bw_sel
+    await spi_write(dut, 0x0C, 0x01)   # sc_thr[15:8] -- 1 hit fires lock
+    await spi_write(dut, 0x0D, 0x00)
+    await spi_write(dut, 0x0E, 0x00)   # sc_hits_req = 0
+
+    # Replay margin (must land before lock: write-gated !packet_active)
+    await spi_write(dut, 0x77, replay_delay & 0xFF)
+    await spi_write(dut, 0x78, (replay_delay >> 8) & 0xFF)
+
+    await spi_write(dut, 0x70, 0x01)   # PSRAM up
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    sym_ns = M * clk_per_iq * CLK_NS
+    lock_ok = False
+    for _ in range(20):
+        await Timer(sym_ns, unit="ns")
+        if (await spi_read(dut, 0x02)) & 0x01:
+            lock_ok = True
+            break
+    assert lock_ok, f"{tag}: sc_lock never fired"
+    return sym_ns, M
+
+
+@cocotb.test()
+async def test_overflow_unreachable_stress_sf12_bw125(dut):
+    """#20 (verif plan): SF12/BW125 (deepest symbol period, M=1<<14=16384)
+    with REPLAY_DELAY_SAMPLES at its register maximum (0xFFFF) -- pushes
+    the wr_ptr/rd_ptr gap the RTL will ever produce to its worst realistic
+    case (8*M=131072-sample training window + 65535-sample margin =
+    196607 samples = 1,572,856 bytes), still under 1/5th of the 8 MB
+    (2^23-byte = 1,048,576-sample) circular buffer. Corroborates test #14's
+    formal OVERFLOW/pointer-gap k-induction invariants (m_* properties in
+    formal/psram_buf_ctrl_formal.sv) under a real simulated worst-case
+    stimulus rather than only formally: OVERFLOW must stay clear and the
+    wr_ptr/rd_ptr gap must stay perfectly constant (both pointers advance
+    +8 bytes per iq_valid in lockstep during S_REPLAY) for the whole
+    observation window, and the replayed payload must still be bit-exact
+    at this extreme config (reuses #5's _StreamRecorder/_compare_anchored
+    infrastructure)."""
+    tag = "overflow_stress_sf12"
+    sf, bw_khz = 12, 125
+    replay_delay = 0xFFFF
+    N_WATCH = 300   # rpl_valid pulses watched for gap-constancy/OVERFLOW
+
+    rec = _StreamRecorder(dut)
+    rec.start()
+
+    sym_ns, M = await _reset_and_lock_sfbw(dut, sf, bw_khz, tag,
+                                           replay_delay=replay_delay)
+    tref = int(dut.u_dut.u_psram.timing_ref.value)
+
+    await _wait_irq(dut, 0x02, 15, sym_ns, tag, "training_done")
+    st = await spi_read(dut, 0x71)
+    assert not (st & 0x40), \
+        f"{tag}: OVERFLOW set before replay even started (0x{st:02X})"
+
+    # Margin = 0xFFFF samples = 65535/16384 ~= 4.0 symbols -- poll well past it,
+    # checking OVERFLOW stays clear at every step of the wait too.
+    replay_ok = False
+    for _ in range(80):
+        await Timer(sym_ns // 8, unit="ns")
+        st = await spi_read(dut, 0x71)
+        assert not (st & 0x40), \
+            f"{tag}: OVERFLOW set while waiting for the max-margin replay " \
+            f"to start (0x{st:02X})"
+        if st & 0x10:
+            replay_ok = True
+            break
+    assert replay_ok, \
+        f"{tag}: REPLAY_ACTIVE never set at the max REPLAY_DELAY_SAMPLES margin"
+
+    wr0 = int(dut.u_dut.u_psram.wr_ptr.value)
+    rd0 = int(dut.u_dut.u_psram.rd_ptr.value)
+    gap0 = (wr0 - rd0) & AMASK23
+    assert 0 < gap0 < (1 << 23), \
+        f"{tag}: wr_ptr/rd_ptr gap 0x{gap0:06X} at replay start is degenerate " \
+        f"(0 or the whole 8 MB address space) -- the worst-case gap this test " \
+        f"is meant to stress didn't actually materialize"
+    dut._log.info(f"{tag}: replay started, wr_ptr=0x{wr0:06X} rd_ptr=0x{rd0:06X} "
+                  f"gap=0x{gap0:06X} ({gap0} bytes of {1 << 23} buffer depth)")
+
+    # Constant-gap + OVERFLOW-stays-clear watch across a real replay run:
+    # wr_ptr and rd_ptr both advance +8 bytes per iq_valid in lockstep once
+    # replay starts, so the gap must never change and rd_ptr must never
+    # catch wr_ptr (the OVERFLOW condition) at this gap size.
+    prev_rd = None
+    pulses = 0
+    p = dut.u_dut.u_psram
+    for _ in range(N_WATCH * 100):
+        await RisingEdge(dut.IQ_CLK)
+        if int(p.rpl_valid.value):
+            cur_wr = int(p.wr_ptr.value)
+            cur_rd = int(p.rd_ptr.value)
+            gap = (cur_wr - cur_rd) & AMASK23
+            assert gap == gap0, \
+                f"{tag}: wr_ptr/rd_ptr gap drifted from 0x{gap0:06X} to " \
+                f"0x{gap:06X} at pulse {pulses} -- replay pointers not in lockstep"
+            if prev_rd is not None:
+                assert cur_rd == ((prev_rd + 8) & AMASK23), \
+                    f"{tag}: rd_ptr jumped 0x{prev_rd:06X}->0x{cur_rd:06X} " \
+                    f"(expected +8) at pulse {pulses}"
+            prev_rd = cur_rd
+            pulses += 1
+            if pulses >= N_WATCH:
+                break
+    assert pulses >= N_WATCH, \
+        f"{tag}: only {pulses}/{N_WATCH} rpl_valid pulses observed"
+
+    st = await spi_read(dut, 0x71)
+    assert not (st & 0x40), \
+        f"{tag}: OVERFLOW set after {N_WATCH} replayed samples at the " \
+        f"max gap (0x{st:02X})"
+
+    # Reuse #5's payload-correctness infra: the replayed stream itself must
+    # still be bit-exact at this extreme config, not just the pointers.
+    # Collection starts well after the packet's own first rpl_valid (the
+    # margin-wait poll + N_WATCH pulses above), so the alignment skip is
+    # unknown a priori -- search for it the same way test_owner_across_
+    # margin_wait does.
+    got = await _collect_replay(dut, 64, tag)
+    skip_found = None
+    for skip in range(0, N_WATCH + 400):
+        hits = max(
+            sum(1 for k in range(min(CALIB, len(got)))
+                if rec.samples.get(tref + o + skip + k) == got[k])
+            for o in range(-BAND, BAND + 1))
+        if hits == min(CALIB, len(got)):
+            skip_found = skip
+            break
+    assert skip_found is not None, \
+        f"{tag}: post-watch replay stream does not align anywhere in the " \
+        f"expected skip range -- payload corrupted at this extreme config"
+    off = _compare_anchored(rec, got, tref, tag, skip=skip_found)
+
+    dut._log.info(f"{tag}: PASS -- OVERFLOW stayed clear and the wr/rd gap "
+                  f"(0x{gap0:06X} bytes) stayed constant across {N_WATCH} "
+                  f"replayed samples at SF12/BW125 + max REPLAY_DELAY_SAMPLES "
+                  f"(skip={skip_found}, off={off}); formal OVERFLOW-"
+                  f"unreachability corroborated in sim at the deepest "
+                  f"realistic stress point")
