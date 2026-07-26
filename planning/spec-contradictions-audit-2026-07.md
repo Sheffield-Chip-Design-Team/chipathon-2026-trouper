@@ -213,12 +213,22 @@ change** — worth re-deriving, not just re-wording.
 
 | # | Status | Item |
 |---|---|---|
-| 16 | open | **`System Architecture.md` block diagram shows deleted hardware** |
+| 16 | closed 2026-07-26 | **`System Architecture.md` block diagram showed deleted hardware** |
 
-`:124-125` instantiates "Frontend Buffer Controller / 1 kB rolling SRAM" and wires
-PSRAM through it (`:170-172`). Spec §4.4 deletes that block; TRPR-PHY-006 removes all
-on-chip SRAM. The replay path into the combiner — the *primary* operating mode per
-TRPR-SYS-017 — is absent from the diagram entirely.
+Before resolution, `:124-125` instantiated "Frontend Buffer Controller / 1 kB rolling
+SRAM" and wired PSRAM through it (`:170-172`). Spec §4.4 deletes that block;
+TRPR-PHY-006 removes all on-chip SRAM. The replay path into the combiner — the
+*primary* operating mode per TRPR-SYS-017 — was absent from the diagram entirely.
+
+*Resolution (2026-07-26):* the `FBUF` node is replaced by `psram_buf_ctrl` (QPI circular
+capture, SC delay reads at `write_ptr − M`, same-packet replay delay line) wired
+directly to the external APS6404L. The replay path is now drawn: a `replay_active` mux
+at the combiner input selects `rpl_*` from the PSRAM controller over the live `dc_removal`
+output, matching `trouper_top.v:534-537`. Signal names were re-checked against RTL while
+redrawing, which corrected three further diagram errors: `buf_freeze` is shown no longer
+(the `packet_ctrl_fsm` output is deliberately dangling — `trouper_top.v:277`, "unused
+without fbuf"), `safe_switch` no longer exists as a `packet_ctrl_fsm` output at all, and
+an edge pointed at an undeclared `IRQC` node instead of `IRQO`.
 
 | # | Status | Item |
 |---|---|---|
@@ -301,10 +311,9 @@ utilisation figure (~38%) that doesn't match TRPR-PSR-014's cycle budget.
 1. **Items 1–6 and 27–28** — unambiguous. Items 1–4 and 27–28 are settled by RTL,
    arithmetic, or cycle-accurate measurement; item 6 by `blocks/PSRAM Buffer Controller.md`.
    Item 5's `+1` convention is now confirmed in `sc_detector.v`.
-2. ~~**Item 17**~~ (closed 2026-07-26), then **16** — `System Architecture.md` is the doc
-   most likely to be read by someone writing SDC or a new block. Item 16 (the block
-   diagram still showing the deleted frontend buffer, and omitting the PSRAM replay
-   path) is now the remaining defect in that document.
+2. ~~**Item 17**, then 16~~ — both closed 2026-07-26. `System Architecture.md` was the doc
+   most likely to be read by someone writing SDC or a new block; its clocking section and
+   block diagram now match RTL.
 3. **Item 15** — re-derive the SNR loss budget's truncation term rather than reword it.
 4. **Items 7–14** — spec/map reconciliation pass.
 5. **Items 18–21** — bulk staleness; cheapest as one "delete the CPU-era sections" pass.

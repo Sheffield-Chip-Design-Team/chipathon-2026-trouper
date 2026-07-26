@@ -121,20 +121,24 @@ Z_kl → FW channel estimates
 Z_kk (auto) → FW energy/noise
 noise_mode · training_done"]
             PCFSM["Packet Control FSM
-packet phase · safe_switch
-buf_freeze · W gating"]
-            FBUF["Frontend Buffer Controller
-1 kB rolling SRAM
-8-bit saturated"]
+packet_phase · packet_active
+W gating · active mode/antenna"]
+            PSBUF["PSRAM Buffer Controller
+QPI circular capture
+SC delay reads at write_ptr − M
+same-packet replay delay line"]
         end
 
         subgraph combining["MRC Combining"]
             direction LR
+            XMUX{"replay_active
+mux"}
             COMB["MRC Combiner
 ŷ[n] = w^H·x[n] per sample
 time domain · int32→int8 (÷2)"]
             REMOD_A["ΣΔ Re-mod
 3rd order · int8 → 1-bit"]
+            XMUX --> COMB
             COMB --> REMOD_A
         end
 
@@ -150,19 +154,27 @@ IRQ_OUT plus register-visible status"]
         D1 & D2 & D3 & D4 --> DCR
         DCR --> SC
         DCR --> TACC
-        DCR --> COMB
-        DCR -->|"8-bit saturated"| FBUF
+        DCR -->|"live path"| XMUX
+        DCR -->|"int8 I/Q ×4 · iq_valid"| PSBUF
         SC -->|"sc_lock · timing_ref"| PCFSM
         SC -->|"sc_lock · timing_ref"| TACC
-        FBUF -->|"current · delayed samples"| SC
-        PCFSM -->|"buf_freeze"| FBUF
+        SC -->|"sc_lock · timing_ref"| PSBUF
+        PSBUF -->|"cur / del sample pair
+branch 0, N = 2^(SF+sample_shift) ago"| SC
+        PSBUF -->|"replay path (primary)
+rpl I/Q ×4 · rpl_valid"| XMUX
+        PSBUF -->|"replay_active"| XMUX
+        PCFSM -->|"packet_active · packet_end"| PSBUF
         TACC -->|"training_done"| PCFSM
-        TACC -->|"training_done"| IRQC
-        REGBANK -->|"W_SHADOW write
+        TACC -->|"training_done"| IRQO
+        REGBANK -->|"W bank write
 W_COMMIT"| PCFSM
-        SC -->|"corr_lock"| IRQO
+        REGBANK -->|"W_COMMIT starts replay"| PSBUF
+        SC -->|"sc_lock"| IRQO
         PCFSM -->|"mode status · packet_done"| IRQO
-        PCFSM -->|"safe_switch · W_valid
+        PSBUF -->|"overflow · replay_missed
+sample_skip (sticky)"| IRQO
+        PCFSM -->|"W_valid
 active mode/antenna"| COMB
     end
 
@@ -170,9 +182,8 @@ active mode/antenna"| COMB
 
     PSRAM["APS6404L PSRAM
 8 MB ext QSPI · 32 MHz
-decimated IQ replay buffer"]
-    FBUF -->|"QSPI burst"| PSRAM
-    PSRAM -->|"replay"| FBUF
+decimated IQ capture + replay buffer"]
+    PSBUF <-->|"QPI burst write / read"| PSRAM
 ```
 
 ---
