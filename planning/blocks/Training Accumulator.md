@@ -308,7 +308,15 @@ SC lock is not guaranteed at the first opportunity. At low SNR the Schmidl-Cox m
 | 6 dB | ~24% | High miss rate; when lock occurs it is often late |
 | ≤ 3 dB | < 1% | Essentially no lock |
 
-Training loss vs lock delay (SF6, N_acc referenced to ideal 5-symbol window):
+Training loss vs lock delay (SF6, N_acc referenced to the ideal 5-symbol
+baseline window). These are **training-SNR ratios** — `10·log₁₀(N_acc / 5M)` —
+i.e. how much noisier the channel *estimate* becomes, not SNR the demodulator
+loses. The post-combining cost is substantially smaller, because MRC is only
+weakly sensitive to estimate quality; see `DSP Chain SNR Loss Budget.md` §6.
+Note also that the `5M → 3M` entry below (−2.2 dB) was for a period
+mis-transcribed into that budget as the loss for the `8M → 5M` *baseline*
+truncation, which is −2.04 dB as a ratio and ≤ −0.5 dB after combining
+(audit item 15, re-derived 2026-07-26).
 
 | Lock time | N_acc | Training loss |
 |---|---|---|
@@ -322,7 +330,7 @@ Training loss vs lock delay (SF6, N_acc referenced to ideal 5-symbol window):
 
 ### 2. Short preamble
 
-LoRa allows preamble lengths shorter than the default 8 upchirps (minimum configurable). In the baseline live path, if a transmitter uses a 6-symbol preamble, `acc_end = timing_ref + 6M − 1` and `N_acc ≤ 3M` even with an ideal early lock — a −2.2 dB training loss from the baseline. The live-path accumulator spec therefore needs `PREAMBLE_LEN` tracking. In PSRAM mode, this constraint is relaxed because accumulation may continue beyond the preamble if desired.
+LoRa allows preamble lengths shorter than the default 8 upchirps (minimum configurable). In the baseline live path, if a transmitter uses a 6-symbol preamble, `acc_end = timing_ref + 6M − 1` and `N_acc ≤ 3M` even with an ideal early lock — a −2.2 dB training-SNR ratio relative to the baseline (again a ratio, not a chain SNR loss). The live-path accumulator spec therefore needs `PREAMBLE_LEN` tracking. In PSRAM mode, this constraint is relaxed because accumulation may continue beyond the preamble if desired.
 
 **Mitigation:** make `TACC_PREAMBLE_LEN` a configurable register (range 6–16 symbols) so baseline-mode `acc_end` tracks the actual preamble length rather than assuming 8. For the demo deployment, preamble length is set to 16 symbols, giving up to 13 symbols of training accumulation with `SC_HITS_REQ=2` — approximately +4 dB vs the 5-symbol baseline. In PSRAM mode, optionally replace the preamble-bounded stop with `packet_end_estimate - TACC_GUARD` to trade added latency for higher estimate SNR.
 

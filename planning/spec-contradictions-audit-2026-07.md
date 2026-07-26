@@ -232,7 +232,7 @@ SPI".
 
 | # | Status | Item |
 |---|---|---|
-| 15 | open | **Preamble length / training-window length** |
+| 15 | closed 2026-07-26 | **Preamble length / training-window length** |
 
 TRPR-WGN-004 (`:259`) assumes a 12.25-symbol preamble with 8 consumed by training.
 `blocks/Correlator Bank.md:126` and `DSP Chain SNR Loss Budget.md:78` assume an
@@ -243,6 +243,64 @@ window (`timing_ref + TACC_WINDOW_SYMS × M`, default 8) gives 8 symbols.
 
 **The −2.2 dB line item in the SNR loss budget may be stale by an entire design
 change** — worth re-deriving, not just re-wording.
+
+*Resolution (2026-07-26):* re-derived, not reworded. The item turned out to be two
+separate things, and the "12.25 vs 8 symbols" half was **not** a contradiction.
+
+**The 12.25/8 conflict dissolves.** `blocks/Weight Generation.md:256` already
+documents 12.25M as *total pre-payload* overhead — 8 upchirps + 2 sync words +
+2.25 downchirps — of which only the 8 upchirps are usable for symbol-period
+autocorrelation. TRPR-WGN-004's "training window consumes 8 of the 12.25 preamble
+symbols" and the block docs' "8-symbol preamble" are the same design stated at
+different scopes. TRPR-WGN-004 now spells the 8 + 2 + 2.25 breakdown out, since it
+had also called the residual 4.25 symbols "preamble symbols" when they are the sync
+words and downchirps.
+
+**The window arithmetic settles at `5M − 1`, and the 5-of-8 docs were right.**
+`training_acc.v:247-249` places the window at `[timing_ref, timing_ref +
+TACC_WINDOW_SYMS·M − 1]` but accumulates forward from arming at `sc_lock`, which
+is already `(SC_HITS_REQ + 1)·M` past `timing_ref`. With the reset defaults
+(`reg_bank.v:170` `sc_hits_req = 2`, `:186` `tacc_window_syms = 8`, clamped ≥ 8 on
+write at `:240`) that is `n_acc = 5M − 1`. `Test Plan.md`'s
+`(8 − SC_HITS_REQ − 1) × M` was right to within the one sample the RTL actually
+drops; the criterion now carries the `−1`, which `cocotb/tests/test_trouper_top.py`
+already asserts (as `7M − 1`, in its `SC_HITS_REQ = 0` configuration).
+
+**The −2.2 dB was wrong twice over.** First it was the wrong ratio: it is the
+`5M → 3M` entry of the late-lock table in `blocks/Training Accumulator.md`
+(`10·log₁₀(3/5) = −2.2 dB`), mis-transcribed onto the `8M → 5M` baseline step,
+which is `10·log₁₀(5/8) = −2.04 dB`. Second, and the reason re-deriving mattered
+rather than correcting 2.2 to 2.04: **a training-SNR ratio is not a chain SNR
+loss.** Every other line in that budget is SNR the demodulator loses. A shorter
+window does not attenuate anything — it makes the channel *estimate* noisier, and
+MRC is only weakly sensitive to that. Truncating 8M → 5M multiplies the
+estimate-error term by 8/5, so it scales an already-small full-window estimation
+loss by ≈1.6 instead of subtracting 2 dB from the link.
+
+Measured (4000 Rayleigh trials/point, new script
+`sim/sims/truncation_loss_rederive.py`): the post-combining increment is
+**−0.46 dB worst case at SF7 / −16 dB per antenna**, −0.14 dB at SF9, −0.03 dB at
+SF12, and under 0.02 dB above −10 dB per antenna. On the *shipped* fixed-point
+firmware path it is smaller still (**−0.21 dB** worst case), because the
+8-iteration power-method residual already dominates the estimate error. So the
+budget was overstating this term by roughly 1.7 dB — the largest single error
+found in the whole audit. **Book −0.5 dB.**
+
+Landed in all three required places plus two more: the budget row and a new
+derivation note (`DSP Chain SNR Loss Budget.md` §6), `blocks/Correlator Bank.md`
+(which additionally claimed the accumulator uses "all 8 preamble symbols" — it
+uses 5), `Test Plan.md` Block 4, the late-lock table in
+`blocks/Training Accumulator.md` (now explicitly labelled as training-SNR ratios,
+with the mis-transcription recorded so it cannot recur), and
+`sim/notebooks/11_training_accumulator.ipynb` §2.
+
+**Also found**, while in `Test Plan.md` Block 3/4 — the two items flagged in
+passing when 18-21 closed, fixed here since they sit in the same criterion:
+Block 3 was still titled "Correlator Bank ×8" (there is one shared correlator
+time-multiplexed over 4 branches), and Block 4's firmware criterion demanded
+`W_COMMIT` "within the SF5/SF6 timing budget" — SF5/SF6 are out of scope
+(`SF_CFG` range 7–12), and the real constraint is that live mode only fits SF9+,
+so SF7/SF8 must be tested in PSRAM replay mode (TRPR-WGN-004).
 
 ---
 
@@ -519,9 +577,9 @@ unenforced.
 2. ~~**Item 17**, then 16~~ — both closed 2026-07-26. `System Architecture.md` was the doc
    most likely to be read by someone writing SDC or a new block; its clocking section and
    block diagram now match RTL.
-3. **Item 15** — re-derive the SNR loss budget's truncation term rather than reword it.
-   **Item 31** is a one-line comment fix, but its second half (unclamped `SF_CFG`) needs a
-   design decision and an `Open Risks.md` entry first.
+3. ~~**Item 15**~~ — closed 2026-07-26. Re-derived: the term is **−0.5 dB**, not −2.2 dB.
+   ~~**Item 31**~~ — closed 2026-07-26; the unclamped `SF_CFG` half is accepted as a
+   firmware responsibility (no hardware clamp, no `Open Risks.md` entry — user decision).
 4. ~~**Items 7–14**~~ — all closed 2026-07-26 (item 8 on branch `feat/noise-weighted-mrc`).
 5. ~~**Items 18–21**~~ — all closed 2026-07-26, as one pass. Each turned out to be wider than its recorded line range; see the individual entries.
 6. **Tier 4** — sweep up alongside the next spec revision.

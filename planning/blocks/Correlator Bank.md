@@ -123,7 +123,9 @@ This is exported as a diagnostic only. It is not used in weight computation — 
 timing_ref = lock_sample_count - (N_hit + 1) · M + 1
 ```
 
-With a fixed 8-symbol preamble and `SC_HITS_REQ = 2`, SC locks after seeing symbols 2–3. `timing_ref` points to symbol 0. The training accumulator uses `timing_ref` to identify symbol boundaries for all 8 preamble symbols.
+With a fixed 8-symbol preamble and `SC_HITS_REQ = 2`, SC locks after seeing symbols 2–3. `timing_ref` points to symbol 0.
+
+The training accumulator uses `timing_ref` to place the *window* — `acc_start = timing_ref`, `acc_end = timing_ref + TACC_WINDOW_SYMS·M − 1` (`training_acc.v:247-249`) — but it accumulates **forward from arming**, and arming happens at `sc_lock`, which is already `(SC_HITS_REQ + 1)·M` samples past `timing_ref`. The first 3 symbols of the window are therefore in the past and are never accumulated: with the defaults (`SC_HITS_REQ = 2`, `TACC_WINDOW_SYMS = 8`) the accumulator sees **`n_acc = 5M − 1`, i.e. 5 of the 8 preamble symbols**, not all 8. Firmware normalises `Z` by the `n_acc` readback, so the partial window is functionally correct; its cost is quantified in `DSP Chain SNR Loss Budget.md` §6 (≤ −0.5 dB post-combining, re-derived under audit item 15).
 
 **Timing accuracy:** ±2–3 samples at SF6 (M=64). No downstream refiner corrects this — it is a known limitation of the non-FFT path. For next-packet weight application this is acceptable; the SX1302 performs its own fine timing recovery on the combined output stream.
 

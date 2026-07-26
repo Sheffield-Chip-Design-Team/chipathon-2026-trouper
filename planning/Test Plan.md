@@ -62,7 +62,7 @@ mode, `ZDIAG_k ≈ σ²_k × n_acc` with `NOISE_READY` gating out SC-contaminate
 
 ---
 
-### Block 3 — Correlator Bank ×8
+### Block 3 — Correlator Bank (single shared correlator, ×4 branches)
 
 **Pass criterion:** `|H_j,k|` magnitude matches Python correlator reference to within ±2 LSB after 8-symbol integration. `lock` flag asserts within ±1 symbol of Python model prediction. Cross-correlator term (wrong Δf bin) < −20 dB relative to on-bin term.
 
@@ -88,9 +88,9 @@ mode, `ZDIAG_k ≈ σ²_k × n_acc` with `NOISE_READY` gating out SC-contaminate
 
 > **Non-FFT path:** FFT Engine test is not applicable. This block is now split between the Trouper Training Accumulator RTL and firmware weight generation. See [Training Accumulator](blocks/Training%20Accumulator.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md), and [Firmware Spec](Firmware%20Spec.md).
 
-**Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(8 - SC_HITS_REQ - 1) × M`.
+**Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(TACC_WINDOW_SYMS - SC_HITS_REQ - 1) × M - 1` — with the reset defaults (`TACC_WINDOW_SYMS = 8`, `SC_HITS_REQ = 2`) that is `5M - 1`; the `-1` is real and is asserted by `cocotb/tests/test_trouper_top.py` (`7M - 1` in its `SC_HITS_REQ = 0` configuration). `TACC_WINDOW_SYMS` is clamped to ≥ 8 on write (`reg_bank.v:240`), so windows below 8 cannot be tested from the register interface. In noise mode the window is forward-only from the trigger and `n_acc == 8M` exactly (`cocotb/tests/test_noise_trig.py`).
 
-**Pass criterion (Firmware Weight Generation):** Firmware-computed weights match the Python reference for the selected algorithm (row-sum MRC or eigenvector power iteration) to within the expected Q1.15 rounding error. `W_COMMIT` is issued within the SF5/SF6 timing budget after `training_done`. Full same-packet delivery is proven with PSRAM replay tests, not by a standalone hardware weight FSM latency check.
+**Pass criterion (Firmware Weight Generation):** Firmware-computed weights match the Python reference for the selected algorithm (row-sum MRC or eigenvector power iteration) to within the expected Q1.15 rounding error. `W_COMMIT` is issued within the timing budget for the SF under test after `training_done` (`SF_CFG` valid range is 7–12; SF5/SF6 are out of scope). The measured 8-iteration eigenvector kernel costs 2.08 ms (rv32im) / 2.28 ms (rv32emc) at 16 MHz independent of SF, so in **live** mode only SF9+ meets the `4·M / 500 kHz` deadline — SF7 and SF8 must be tested in **PSRAM replay** mode, where the deadline scales with payload length (TRPR-WGN-004). Full same-packet delivery is proven with PSRAM replay tests, not by a standalone hardware weight FSM latency check.
 
 **End-to-end SPI weight flow:** `rtl-test/tb/test_weight_gen_spi_flow.py` drives the full off-chip-MCU loop against real captured IQ data (4 antennas at distinct gains) — `sc_lock` → `training_done` IRQ → SPI-read `Z_kl`/`Zdiag` (`0x40`–`0x6F`) → firmware-accurate eigenvector computation → SPI-write `W_SHADOW` (`0x30`–`0x3F`) → `W_COMMIT` → combiner output, compared bit-exact against an independent oracle model (`sim/models/receiver.py`). Passing (SGE job 3286, `max_err=0.00`); see `planning/Open Risks.md` #33 for findings surfaced while building it (undocumented Q0.7 combiner weight precision, now in the Register Map's `0x30`–`0x3F` section).
 
