@@ -825,10 +825,12 @@ multi-ASIC cascade topology.
 product ships.
 **See:** `planning/NR2-multi-ASIC-cascade.md`, `planning/cascade-beamsteering.md`.
 
-### 23. Weight Generation: noise-whitening (NW-MRC) not implemented
+### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware open
 
-Feature gap in both firmware and the Python reference model.
-**See:** `planning/blocks/Weight Generation.md`.
+Float and fixed-point SNR-weighted eigenvector paths implemented and verified
+end-to-end over SPI (jobs 3596/3598, combiner bit-exact); residual risk is the
+unported firmware C and the absence of a runtime gating policy.
+**See:** `planning/noise-weighted-mrc-2026-07.md`.
 
 ### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)
 

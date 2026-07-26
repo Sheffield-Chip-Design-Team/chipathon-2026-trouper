@@ -390,7 +390,7 @@ This is the key boundary between the live and replay architectures:
 
 - **ALMMSE is software-only.** Matrix inversion for a 4×2 system is not hardened. `WGT_SRC` must be SW for ALMMSE. The hardware FSM still runs and writes W_HW (MRC result) as a diagnostic.
 - **No exact divide normalization in hardware path.** The hardware FSM uses proportional shift-MRC. Exact normalized MRC and NW-MRC are available via the SW path when firmware can spend the cycles.
-- **No per-branch noise weighting in hardware path.** The hardware FSM uses an equal per-branch noise assumption. NW-MRC (`w_j = conj(Z_j) / σ²_j`) is available via the SW path using estimates from the Noise Floor Estimator block. See noise floor estimation section below.
+- **No per-branch noise weighting in hardware path.** The hardware FSM uses an equal per-branch noise assumption. NW-MRC (`w_j = conj(Z_j) / σ²_j`) is a software path only. *(2026-07-26: the "Noise Floor Estimator block" referenced below is no longer RTL — it went away with `noise_est.v`. σ² now comes from the firmware-triggered TACC noise window, `TACC_NOISE_TRIG` `0x1F` → `ZDIAG_k` `0x64`–`0x6F`.)*
 - **Calibration is static.** Per-branch coefficients do not update at runtime. Temperature drift requires manual SPI recalibration.
 - **EMA smoothing is firmware responsibility.** Hardware computes fresh per-packet weights only. Cross-packet smoothing (EMA) must be implemented in firmware using the W_HW readback path.
 - **Same-packet application requires WGT_AUTO_COMMIT=1.** If firmware scheduling is delayed (e.g. busy with AGC), the hardware path fires deterministically but the software path may miss the payload window.
@@ -399,7 +399,7 @@ This is the key boundary between the live and replay architectures:
 
 ## Per-branch noise floor estimation
 
-Per-branch noise power estimates `σ²_j` are produced by the **Noise Floor Estimator** RTL block. The block runs a per-branch EMA on idle symbol-window energies gated by the Packet Control FSM (`noise_sample_en`).
+Per-branch noise power estimates `σ²_j` are produced **in firmware**, not RTL — the standalone Noise Floor Estimator block was removed with `noise_est.v`. Firmware arms a TACC noise window (`TACC_NOISE_TRIG` `0x1F`), waits for `NOISE_READY` (`IRQ_STATUS[4]`), reads `ZDIAG_k`/`N_ACC`, and runs a per-branch integer EMA. Policy model: `NoiseFloorEstimator` in `sim/models/weight_generation.py`.
 
 See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the full block spec including interface, fixed-point format, and verification plan.
 
@@ -439,7 +439,9 @@ where σ²_est is the per-sample noise power estimate and n_acc is the number of
 
 ### Noise power source
 
-The TACC noise mode (register 0x6C, `TACC_NOISE_TRIG`) provides a firmware-triggered accumulation without sc_lock. During a noise window (no signal), Z_kl ≈ 0 for k≠l and Z_kk ≈ σ²_k · n_acc. The diagonal readback at 0xE8–0xEF gives per-branch σ²_k · n_acc; summing and dividing by n_acc yields σ²_k per branch. A scalar estimate `σ² = mean(σ²_k)` is sufficient for whitening.
+The TACC noise mode (register **`0x1F`**, `TACC_NOISE_TRIG`) provides a firmware-triggered accumulation without sc_lock. During a noise window (no signal), Z_kl ≈ 0 for k≠l and Z_kk ≈ σ²_k · n_acc. The diagonal readback at **`0x64`–`0x6F`** gives per-branch σ²_k · n_acc; dividing by `N_ACC` (`0x21`–`0x23`) yields σ²_k per branch.
+
+> **Corrected 2026-07-26.** A scalar `σ² = mean(σ²_k)` is **not** sufficient. A scalar pedestal is a multiple of I, which cannot rotate an eigenvector at all — it only corrects the low-SNR magnitude bias, never branch-noise imbalance, which is the case whitening exists for. Use the **per-branch** form. Firmware-side estimator: `NoiseFloorEstimator` in `sim/models/weight_generation.py` (integer Q16 EMA fed from ZDIAG). Full record: `planning/noise-weighted-mrc-2026-07.md`.
 
 ### Python simulation results (SF=7, NR=4, 2000 packets/point)
 
@@ -457,24 +459,56 @@ All eigvec paths use Q1.15 weights. Float vs Q1.15 shows zero quantization cost 
 | −10 dB | 0.4% | **0.4%** | 0.9% | 20.3% |
 | −8 dB | ~0% | ~0% | 0.2% | 12.8% |
 
-PSRAM accumulation closes 1–4 dB of the estimation gap. At −10 dB the PSRAM eigvec matches oracle exactly. Noise whitening (oracle σ²) adds nothing on top of PSRAM at SF=7 with 7424 samples — the noise floor bias is negligible at that accumulation depth.
+PSRAM accumulation closes 1–4 dB of the estimation gap. At −10 dB the PSRAM eigvec matches oracle exactly.
+
+> **Superseded 2026-07-26 — "noise whitening adds nothing" no longer holds.** That conclusion rests on two load-bearing conditions, both since invalidated:
+> 1. it used a **scalar** `σ²·I` pedestal, which provably cannot change the eigenvector direction, so it could never have shown a benefit;
+> 2. it assumed **7424 accumulated samples**, which is not reachable — `TACC_WINDOW_SYMS` (`0x27`) is 4 bits, clamped 8–15 symbols, giving at most 15 × M = 3840 samples at SF7/BW250 (`training_acc.v:83`).
+>
+> Re-measured with per-branch whitening under 10 dB branch-noise imbalance, the SNR-weighted eigenvector is **5–10× better in BER** than the unwhitened path. Numbers and method: `planning/noise-weighted-mrc-2026-07.md` §3.
 
 Generated by `sim/sims/compare_mrc_methods.py` (SGE jobs 1370–1371).
 
 Interpretation note: the apparent robustness of the PSRAM eigenvector path is mainly an estimation effect, not a proof that the architecture corrects I/Q imbalance. `eigvec_psram` uses the full Hermitian `Z` matrix and 7.2× more accumulation than the preamble-only path, so it estimates the dominant linear spatial mode much more reliably than the `W_k` row-sum shortcut. It still cannot cancel the widely-linear image term introduced by true branch-dependent I/Q imbalance; it only loses less combining gain than `W_k` under the same impairment.
 
-### Implementation cost on PicoRV32
+### Implementation cost on PicoRV32 (revised 2026-07-26)
 
-1. Read Zdiag from 0xE8–0xEF (4 × 32-bit reads, split into top/bottom 16-bit pairs)
-2. Divide by n_acc to get σ²_k; average → scalar σ²_est
-3. Subtract σ²_est × n_acc from each Z_kk diagonal entry before eigenvector power iteration
-4. No change to off-diagonal entries
+1. Read `ZDIAG_k` from **`0x64`–`0x6F`** (4 × 24-bit, bits [31:8]) and `N_ACC` from `0x21`–`0x23`
+2. Per-branch `σ²_k = ZDIAG_k / n_acc` in Q16 — **per branch, not a scalar mean**
+3. Subtract `σ²_k · n_acc` from each `Z_kk` before the power iteration (4 mul + 4 sub)
+4. For full SNR weighting, additionally scale the normalised matrix by
+   `gg_kl = (g_k·g_l) >> 15`, `g_k ∝ 1/√σ²_k`, and map the result back through `G`
+5. No change to off-diagonal entries beyond (4)
 
-The subtraction is 4 additions; the main cost is in the power iteration itself, which is already required for eigenvec MRC. Total firmware overhead is negligible.
+**Multiply cost is not negligible on this core.** picorv32 with
+`ENABLE_MUL=1, ENABLE_FAST_MUL=0` takes **40 cycles for `MUL` and 72 for
+`MULH`** (`ip/picorv32/README.md`). Applying the scale *after* the `>>sh`
+normalisation keeps every product inside int32 (≤ 2^12 × 2^15 = 2^27), so only
+`MUL` is needed: ~26 multiplies, ~1040 cycles, one-time. Scaling the raw matrix
+instead would need 32×32→64 products (~2190 cycles); folding the scale into each
+power-iteration step would cost ~5440. Derivation and the measured
+accuracy-equivalence: `planning/noise-weighted-mrc-2026-07.md` §4.
 
-### Status
+> Those cycle figures are README per-instruction costs × multiply counts, not
+> measured. Note also that the ~31 cycles/MUL used elsewhere in this document
+> set (`Eigenvector Weight Computation.md`, Open Risks #7) disagrees with the
+> vendor's 40 — which makes the SF7 timing margin worse than currently written.
 
-Not yet implemented in firmware. The Python model (`compute_eigvec_weights` in `sim/models/training_accumulator.py`) does not yet include noise whitening — a future `compute_eigvec_nw_weights(Z_matrix, sigma2, n_acc)` helper should be added alongside the firmware implementation. See `sim/sims/compare_mrc_methods.py` for the simulation benchmark.
+### Status (2026-07-26)
+
+**Models: done.** Three levels now exist in both float and fixed-point —
+
+| level | float | fixed-point (RV32IM-accurate) | returns |
+|---|---|---|---|
+| raw | `compute_eigvec_weights` | `compute_eigvec_fw` | `conj(h)` from biased Z |
+| de-biased | `compute_eigvec_nw_weights` | `compute_eigvec_nw_fw` | `conj(h)`, equal-noise optimum |
+| SNR-weighted | `compute_eigvec_snr_weights` | `compute_eigvec_snrw_fw` | `conj(D⁻¹h)`, unequal-noise optimum |
+
+Note de-biasing (subtracting the diagonal pedestal) is **not** SNR weighting: it removes the bias that pulls the eigenvector toward the noisiest branch, but stops at the equal-noise optimum. The `D^-1/2` similarity transform is what applies `1/σ²_k`.
+
+**RTL: verified.** `rtl-test/tb/test_weight_gen_spi_flow.py` drives both the de-biased and SNR-weighted paths end-to-end over SPI against a real capture (jobs 3596/3598), combiner bit-exact vs oracle.
+
+**Firmware: open.** `firmware/picorv32/main.c::compute_eigvec_weights_fw()` has no σ² handling. Also open: a runtime gating policy. See `planning/noise-weighted-mrc-2026-07.md` §7.
 
 ---
 
