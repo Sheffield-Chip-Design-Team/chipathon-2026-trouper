@@ -187,6 +187,21 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
             break
     assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
 
+    # TRPR-PSR-006 / verification-plan row 9: PSRAM_STATUS.state ([1:0]) and
+    # .BUF_ACTIVE ([7]) at their register bit positions. Right after
+    # INIT_DONE the FSM has already fallen through to S_WRITE on the same
+    # cycle (psram_buf_ctrl.v: qe_init_done and state<=S_WRITE are set
+    # together, RTL ~line 488-493) and sc_lock hasn't fired yet, so this is
+    # the S_WRITE / BUF_ACTIVE=0 half of the state-field + BUF_ACTIVE check
+    # (the S_REPLAY / BUF_ACTIVE=1 half is checked in _train_commit_replay).
+    status_pre_lock = await spi_read(dut, 0x71)
+    assert (status_pre_lock & 0x03) == 0x02, \
+        f"{tag}: PSRAM_STATUS.state=0x{status_pre_lock & 0x3:X} expected 2 " \
+        f"(S_WRITE) right after INIT_DONE (status=0x{status_pre_lock:02X})"
+    assert not (status_pre_lock & 0x80), \
+        f"{tag}: PSRAM_STATUS.BUF_ACTIVE already set before sc_lock " \
+        f"(status=0x{status_pre_lock:02X})"
+
     # Poll sc_lock (IRQ_STATUS[0])
     sym_ns = M * clk_per_iq * CLK_NS
     lock_ok = False
@@ -196,6 +211,18 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
             lock_ok = True
             break
     assert lock_ok, f"{tag}: sc_lock never fired"
+
+    # BUF_ACTIVE must have gone 0->1 on the sc_lock edge (psram_buf_ctrl.v
+    # sets it in the same S_WRITE block that snapshots buf_base); state
+    # stays S_WRITE -- replay hasn't started yet.
+    status_post_lock = await spi_read(dut, 0x71)
+    assert (status_post_lock & 0x03) == 0x02, \
+        f"{tag}: PSRAM_STATUS.state=0x{status_post_lock & 0x3:X} expected 2 " \
+        f"(S_WRITE) at sc_lock (status=0x{status_post_lock:02X})"
+    assert status_post_lock & 0x80, \
+        f"{tag}: PSRAM_STATUS.BUF_ACTIVE not set after sc_lock " \
+        f"(status=0x{status_post_lock:02X})"
+    dut._log.info(f"{tag}: PSRAM_STATUS state=S_WRITE, BUF_ACTIVE 0->1 on sc_lock OK")
 
     # FSM must have latched the shadow config at the lock edge
     am = int(dut.u_dut.active_mode.value)
@@ -320,13 +347,30 @@ async def _train_commit_replay(dut, sym_ns, *, tag):
     await spi_write(dut, 0x1E, 0x01)   # W_COMMIT (W1P)
 
     replay_ok = False
+    status = 0
     for _ in range(200):
         await Timer(64 * CLK_NS, unit="ns")
-        if (await spi_read(dut, 0x71)) & 0x10:
+        status = await spi_read(dut, 0x71)
+        if status & 0x10:
             replay_ok = True
             break
     assert replay_ok, f"{tag}: PSRAM_STATUS.REPLAY_ACTIVE never set after W_COMMIT"
-    dut._log.info(f"{tag}: replay active")
+
+    # TRPR-PSR-006 / verification-plan row 9: the S_REPLAY half of the
+    # state-field check (the S_WRITE half is in _reset_and_lock), plus
+    # BUF_ACTIVE staying set through replay (it only clears at packet_end,
+    # well after this point) and OVERFLOW staying clear -- normal replay
+    # never gets the wr_ptr/rd_ptr gap anywhere near lapping (test #20
+    # measured a >1.5 MB margin even at the deepest SF12/BW125 config).
+    assert (status & 0x03) == 0x03, \
+        f"{tag}: PSRAM_STATUS.state=0x{status & 0x3:X} expected 3 (S_REPLAY) " \
+        f"alongside REPLAY_ACTIVE (status=0x{status:02X})"
+    assert status & 0x80, \
+        f"{tag}: PSRAM_STATUS.BUF_ACTIVE not set during replay (status=0x{status:02X})"
+    assert not (status & 0x40), \
+        f"{tag}: PSRAM_STATUS.OVERFLOW unexpectedly set during normal replay " \
+        f"(status=0x{status:02X})"
+    dut._log.info(f"{tag}: replay active, state=S_REPLAY, BUF_ACTIVE=1, OVERFLOW=0")
 
 
 async def _mode1_case(dut, ant_mask, ant):
@@ -455,3 +499,85 @@ async def test_mode0_pretraining_auto_bypass(dut):
         f"{tag}: only {diffs}/{PHASE_B_SAMPLES} MRC outputs differ from the raw " \
         f"ant0 sample -- weights do not appear to be applied after W_COMMIT"
     dut._log.info(f"{tag}: PASS (auto-bypass pre-commit, MRC after commit, {diffs} diffs)")
+
+
+@cocotb.test()
+async def test_psram_status_overflow_bit_wiring(dut):
+    """TRPR-PSR-006 / verification-plan row 9: OVERFLOW (PSRAM_STATUS[6])
+    readback at its register bit position -- the last of the three bits
+    (`state`, `OVERFLOW`, `BUF_ACTIVE`) this row previously left uncovered
+    in sim (`state`/`BUF_ACTIVE` are now covered in `_reset_and_lock`/
+    `_train_commit_replay` above).
+
+    Test #20 (test_replay_data.py::test_overflow_unreachable_stress_sf12_bw125)
+    already established that a genuine `wr_ptr==rd_ptr` overflow condition is
+    unreachable from cocotb -- even the deepest SF12/BW125 config with the
+    max REPLAY_DELAY_SAMPLES leaves a >1.5 MB pointer gap, and formal's
+    `a_overflow_unreachable` (group A) stays PARKED for unrelated reasons
+    (row 22 notes). So this test does not attempt to cause a real overflow;
+    it instead proves the register WIRING is correct -- that
+    psram_buf_ctrl's internal `overflow` sticky register (set only by
+    `if (rd_ptr==wr_ptr) overflow <= 1'b1;`, RTL psram_buf_ctrl.v ~line 819)
+    really does appear at PSRAM_STATUS bit[6] over SPI, and that
+    PSRAM_CLR_ERR (0x70[1]) clears it back through the same path.
+
+    Same direct-hierarchical-force technique as test_psram_en_glitch.py's
+    PSRAM_EN fault injection (verification-plan row 19): forces the actual
+    register, not a continuously re-driven port net. `overflow` is
+    `output reg overflow` written only inside psram_buf_ctrl's main FSM
+    always block (never re-driven combinationally), so unlike the row-19
+    PSRAM_EN case a single `.value` poke here persists on its own without
+    needing to be re-applied every cycle -- exactly like a real stuck-bit
+    fault would."""
+    tag = "overflow_bit_wiring"
+
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value   = 1
+    dut.SPI_MOSI.value  = 0
+    dut.SPI_SCK.value   = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value    = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    await spi_read(dut, 0x00)   # CHIP_ID (discard, SPI settle)
+
+    await spi_write(dut, 0x70, 0x01)   # PSRAM_EN=1
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    status = await spi_read(dut, 0x71)
+    assert not (status & 0x40), \
+        f"{tag}: OVERFLOW already set before injection (status=0x{status:02X})"
+
+    # Force the sticky overflow register directly -- bypasses the real
+    # rd_ptr==wr_ptr cause entirely, proving only the bit-position wiring.
+    dut.u_dut.u_psram.overflow.value = 1
+    await Timer(200, unit="ns")
+
+    status = await spi_read(dut, 0x71)
+    assert status & 0x40, \
+        f"{tag}: PSRAM_STATUS[6] did not reflect forced OVERFLOW=1 (status=0x{status:02X})"
+    # state/BUF_ACTIVE must be unaffected by the OVERFLOW force -- still
+    # idle S_WRITE, no packet -- confirms the force didn't perturb anything
+    # else in the status byte.
+    assert (status & 0x03) == 0x02, \
+        f"{tag}: forcing OVERFLOW perturbed state field: 0x{status & 0x3:X} " \
+        f"(expected 2, S_WRITE) (status=0x{status:02X})"
+    dut._log.info(f"{tag}: OVERFLOW register -> PSRAM_STATUS[6] wiring OK "
+                  f"(status=0x{status:02X})")
+
+    # PSRAM_CLR_ERR (0x70[1], W1P) must clear it back through the same path.
+    await spi_write(dut, 0x70, 0x03)   # PSRAM_EN=1, CLR_ERR pulse
+    await Timer(200, unit="ns")
+    status = await spi_read(dut, 0x71)
+    assert not (status & 0x40), \
+        f"{tag}: OVERFLOW did not clear via PSRAM_CLR_ERR (status=0x{status:02X})"
+    dut._log.info(f"{tag}: PASS -- OVERFLOW bit[6] wiring + CLR_ERR clear confirmed")

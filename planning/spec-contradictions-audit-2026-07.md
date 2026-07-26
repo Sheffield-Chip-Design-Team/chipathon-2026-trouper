@@ -517,6 +517,15 @@ transaction, and to note the 20 spare cycles are what debug readback is serviced
 **R=128 / 128-cycle** period with **84/72 spare** in two places — stale by the entire
 half-band migration, and optimistic by 4× on margin. Corrected in both RTL trees to
 64 cycles / 20 and 8 spare, matching TRPR-PSR-014. Comment-only; no functional change.
+
+> *Merge note (2026-07-26).* `origin/main` had fixed this same comment independently, in
+> the `psram_buf_ctrl` verification series, and its version is a superset — same 64-cycle
+> and 20/8-spare numbers plus the finding that a debug fetch is a fixed 31 sub-cycles and
+> so **cannot** fit the 20-cycle idle margin, colliding with the next capture write every
+> time (harmless: `sample_skip` flags it; Open Risks #30, jobs 3548-3550). Main's block was
+> kept on merge and this audit's narrower wording discarded; the item-31 `del_n_c` range
+> fix below was re-applied on top, since main had not made that one. Two independent
+> fixes landing on one comment is itself evidence the stale figure was conspicuous.
 | 29 | closed 2026-07-26 | **TRPR-PCF-002/008 were normative SHALLs on a dead duplicate signal** |
 
 Found while fixing item 16. `TRPR-PCF-008` required "`buf_freeze` SHALL de-assert and the

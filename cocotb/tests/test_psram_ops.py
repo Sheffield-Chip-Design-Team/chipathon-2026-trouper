@@ -37,6 +37,17 @@ test_dbg_readback_content:
   psram_model's nibble memory at the same addresses (read hierarchically,
   so the expectation is exactly what the QPI engine physically stored).
   The AUTO_INC re-fetch is then drained and compared at base+8..+15.
+
+test_dbg_readback_multisample_stream (verif plan #18, deepens #7):
+  Same recipe, but a SINGLE RD_TRIG+AUTO_INC arm is left to stream 4
+  samples (32 bytes) back-to-back with no further host writes in between
+  -- 3 consecutive `dbg_idx==7` -> refetch wraparounds, not just the one
+  test_dbg_readback_content exercises. The initial RD_TRIG-triggered fetch
+  and every subsequent AUTO_INC-triggered refetch are a genuinely distinct
+  code path (`dbg_pend` latched from two different sites in
+  psram_buf_ctrl.v); this confirms the refetch path is stable under
+  repetition -- a latent off-by-one in `dbg_addr_cur`/`dbg_idx` re-arming
+  would only surface on the 2nd or 3rd wrap, not necessarily the 1st.
 """
 
 import cocotb
@@ -194,3 +205,79 @@ async def test_dbg_readback_content(dut):
 
     dut._log.info(f"{tag}: PASS -- 16 bytes bit-exact vs stored PSRAM content "
                   f"(sample={got}, auto-inc sample={got2})")
+
+
+@cocotb.test()
+async def test_dbg_readback_multisample_stream(dut):
+    tag = "dbg_stream4"
+    sf = 7
+    clk_per_iq = 64
+    NSAMP = 4   # 1 RD_TRIG fetch + 3 AUTO_INC refetches (3 dbg_idx==7 wraps)
+
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value   = 1
+    dut.SPI_MOSI.value  = 0
+    dut.SPI_SCK.value   = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value    = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    # Same low-amplitude independent-noise recipe as test_dbg_readback_content:
+    # nonzero stored samples, no SC hits -> no lock -> packet_active stays 0
+    # so debug reads stay unblocked for the whole test.
+    mode = _StimMode()
+    cocotb.start_soon(_noise_or_cw_driver(dut, mode, sigma=8.0))
+
+    await spi_read(dut, 0x00)
+    await spi_read(dut, 0x09)
+    await spi_write(dut, 0x09, sf & 0x0F)
+    await spi_write(dut, 0x0A, 0)
+
+    await spi_write(dut, 0x70, 0x01)
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    # Let the circular capture write a comfortable prefix covering all
+    # NSAMP*8 bytes we're about to stream, well before any rewrite risk.
+    await Timer(400 * clk_per_iq * CLK_NS, unit="ns")
+
+    base = 128 * 8   # distinct base from test_dbg_readback_content's 64*8
+
+    # Single host arm: RD_TRIG + AUTO_INC. No further DBG_ADDR/RD_TRIG
+    # writes for the rest of the test -- every subsequent sample must arrive
+    # purely from the dbg_idx==7 auto-refetch path.
+    await spi_write(dut, 0x72, base & 0xFF)
+    await spi_write(dut, 0x73, (base >> 8) & 0xFF)
+    await spi_write(dut, 0x74, (base >> 16) & 0x7F)
+    await spi_write(dut, 0x75, 0x03)   # RD_TRIG | AUTO_INC
+
+    for s in range(NSAMP):
+        for _ in range(100):
+            if not ((await spi_read(dut, 0x75)) & 0x80):
+                break
+        else:
+            assert False, \
+                f"{tag}: DBG_BUSY never cleared for sample {s} (base+0x{8*s:X}) -- " \
+                f"{'initial RD_TRIG fetch' if s == 0 else f'AUTO_INC refetch #{s}'} stalled"
+
+        got = [await spi_read(dut, 0x76) for _ in range(8)]
+        exp = [await _model_byte(dut, base + 8 * s + i) for i in range(8)]
+        assert got == exp, \
+            f"{tag}: sample {s} @0x{base + 8 * s:06X}: read {got} != stored {exp} -- " \
+            f"{'initial RD_TRIG fetch' if s == 0 else f'AUTO_INC refetch #{s} (dbg_idx==7 wraparound)'} " \
+            f"returned wrong content"
+        assert any(b != 0 for b in got), \
+            f"{tag}: sample {s} all 8 bytes zero -- comparison vacuous"
+
+    dut._log.info(f"{tag}: PASS -- {NSAMP} samples ({8 * NSAMP} bytes) streamed "
+                  f"back-to-back over a single RD_TRIG+AUTO_INC arm, "
+                  f"{NSAMP - 1} consecutive dbg_idx==7 refetch wraparounds all "
+                  f"bit-exact vs stored PSRAM content")

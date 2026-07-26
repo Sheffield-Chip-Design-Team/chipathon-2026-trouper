@@ -22,7 +22,7 @@ build/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-.claude/
+.claude/settings.local.json
 
 # OS
 .DS_Store
