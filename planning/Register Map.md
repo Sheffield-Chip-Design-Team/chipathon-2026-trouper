@@ -422,8 +422,8 @@ In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [0] | `PSRAM_EN` | 0 = disabled (default); 1 = enable optional same-packet PSRAM buffering/replay. Write ignored while `PACKET_ACTIVE` — like `SF_CFG`/`BW_CFG`, toggling this mid-packet would leave `psram_buf_ctrl`'s `buf_active` set with `psram_en` now 0, an inconsistent state its own logic assumes can't happen. |
-| [1] | `PSRAM_CLR_ERR` | Write 1 to clear sticky PSRAM error flags (`OVERFLOW`, `REPLAY_MISSED`); self-clears |
+| [0] | `PSRAM_EN` | 0 = disabled (default); 1 = enable same-packet PSRAM buffering/replay. The **device is mandatory on the board** — "optional" applies to this register default only, never to the hardware; reset-default 0 exists so firmware can own the ≥150 µs power-up delay before enabling. Normal operation sets it to 1 after tPU (policy stated in full at TRPR-PSR-009). Write ignored while `PACKET_ACTIVE` — like `SF_CFG`/`BW_CFG`, toggling this mid-packet would leave `psram_buf_ctrl`'s `buf_active` set with `psram_en` now 0, an inconsistent state its own logic assumes can't happen. |
+| [1] | `PSRAM_CLR_ERR` | Write 1 to clear the four sticky PSRAM error flags — `OVERFLOW` and `REPLAY_MISSED` (0x71[6]/[5]), `SAMPLE_SKIP` (0x71[2]) and `W_COMMIT_LATE` (0x1E[4]); self-clears. (Corrected 2026-07-26: this row listed only the first two.) |
 | [2] | — | **Reserved, write 0.** The current `reg_bank` retains and reads this bit, but no downstream RTL consumes it; it has no functional effect. Storage is fixed at 8 bytes/sample (int8 I/Q × 4 branches) per TRPR-PSR-005. |
 | [3] | `QSPI_OWNER` | 0 = Trouper `psram_buf_ctrl` owns the APS6404L pads for capture/replay (default); 1 = ownership transferred away from the replay controller for a future firmware-managed external-memory mode. Ownership changes take effect only when the PSRAM controller is idle. |
 | [7:4] | — | Reserved |
@@ -434,7 +434,7 @@ Only meaningful when `PSRAM_CTRL.QSPI_OWNER=0` and `PSRAM_CTRL.PSRAM_EN=1`. Expo
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [1:0] | `STATE` | Controller state (0 = UNINIT, 1 = QE_INIT, 2 = WRITE, 3 = REPLAY; see `psram_buf_ctrl.v` `state_dbg`) |
+| [1:0] | `STATE` | Controller state (0 = UNINIT, 1 = QE_INIT, 2 = WRITE, 3 = REPLAY; see `psram_buf_ctrl.v` `state_dbg`). **There is no IDLE encoding** — do not gate anything on one. For debug readback poll `DBG_BUSY` (0x75[7]) instead; it already folds in `QSPI_OWNER`, `packet_active`, an in-flight fetch and `!INIT_DONE`. |
 | [2] | `SAMPLE_SKIP` | Sticky: an `iq_valid` arrived while the QPI engine was busy and a sample was not captured. Always 0 at 125/250 kHz (timing budget guarantees no skip); non-zero only out of spec. Clear via `PSRAM_CLR_ERR` (0x70[1]) |
 | [3] | `INIT_DONE` | QE init sequence complete |
 | [4] | `REPLAY_ACTIVE` | Replay in progress |
@@ -444,7 +444,7 @@ Only meaningful when `PSRAM_CTRL.QSPI_OWNER=0` and `PSRAM_CTRL.PSRAM_EN=1`. Expo
 
 ### `0x72`–`0x76` — PSRAM Debug Readback Registers
 
-Available when `PSRAM_STATUS.STATE=IDLE` and `PSRAM_CTRL.QSPI_OWNER=0`. Provides host SPI access to arbitrary PSRAM addresses without requiring Grouper firmware — useful for bring-up and post-capture IQ inspection.
+Available when `PSRAM_DBG_CTRL.DBG_BUSY=0` (0x75[7]) — the single gate, which folds in `QSPI_OWNER`, `packet_active`, an in-flight fetch and `!INIT_DONE`. (There is no `STATE=IDLE`; this line said so until 2026-07-26.) Provides host SPI access to arbitrary PSRAM addresses without requiring Grouper firmware — useful for bring-up and post-capture IQ inspection.
 
 **Access sequence:**
 1. Write 23-bit target byte address to `PSRAM_DBG_ADDR_LO` (`0x72`), `PSRAM_DBG_ADDR_MID` (`0x73`), `PSRAM_DBG_ADDR_HI[6:0]` (`0x74`).

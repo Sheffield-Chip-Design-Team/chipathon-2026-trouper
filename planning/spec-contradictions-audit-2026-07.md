@@ -134,64 +134,101 @@ EMA "feeds ALMMSE weight computation (w_k ∝ h_k/σ²_k)".
 
 | # | Status | Item |
 |---|---|---|
-| 9 | open | **PSRAM init trigger: reset vs firmware** |
+| 9 | closed 2026-07-26 | **PSRAM init trigger: reset vs firmware** |
 
-TRPR-PSR-001 (`:353`): init "SHALL complete within 1 ms of RESETB de-assertion".
-TRPR-SYS-018 (`:66`): init happens only once firmware sets `PSRAM_CTRL.PSRAM_EN=1`,
-"**not automatically on reset**" (RTL enforces no on-chip tPU wait). Mutually
-exclusive. See also `project_startup_delay_risks` / Open Risks #27.1.
+TRPR-PSR-001 anchored init to "within 1 ms of RESETB de-assertion"; TRPR-SYS-018 said init
+happens only once firmware sets `PSRAM_CTRL.PSRAM_EN=1`, "not automatically on reset".
+Mutually exclusive.
 
-| # | Status | Item |
-|---|---|---|
-| 10 | open | **PSRAM enable/default policy is ambiguous** |
+RTL settles it for TRPR-SYS-018: `init_start = rb_psram_ctrl[0] & ~rb_psram_ctrl[3]`
+(`trouper_top.v:473`) — i.e. `PSRAM_EN & ~QSPI_OWNER`. Nothing keys off reset.
 
-TRPR-SYS-017/018 make PSRAM mandatory ("Board designs without PSRAM are not
-supported"). `Register Map.md:421` calls `PSRAM_EN` "enable **optional** same-packet
-PSRAM buffering/replay", reset 0; TRPR-PSR-009 frames disable as bring-up-only. This
-is not necessarily a hardware contradiction — a mandatory fitted device can default
-disabled for bring-up — but the intended operating policy is not stated consistently.
-State explicitly that PSRAM is mandatory on the board while `PSRAM_EN=0` is the
-intentional reset/bring-up state, and that normal same-packet MRC enables it after
-the tPU delay.
+*Resolution (2026-07-26):* TRPR-PSR-001's 1 ms budget is now measured from the
+`init_start` trigger, with the register expression cited and the firmware-owned ≥150 µs
+tPU delay cross-referenced (Open Risks #27.1).
 
 | # | Status | Item |
 |---|---|---|
-| 11 | open | **`PSRAM_STATUS.STATE=IDLE` is not a state** |
+| 10 | closed 2026-07-26 | **PSRAM enable/default policy was ambiguous** |
 
-TRPR-PSR-017 (`:402`) and `Register Map.md:443` gate debug readback on `STATE=IDLE`.
-The enumeration at `Register Map.md:433` is `0=UNINIT, 1=QE_INIT, 2=WRITE, 3=REPLAY`.
-No IDLE encoding exists. (`packet_active=0` is presumably the intended condition.)
+TRPR-SYS-017/018 made PSRAM mandatory ("board designs without PSRAM are not supported")
+while `Register Map.md` called `PSRAM_EN` "enable **optional** same-packet PSRAM
+buffering/replay" with reset 0, and TRPR-PSR-009 framed disable as bring-up-only. Not a
+hardware contradiction — a mandatory fitted device can default disabled — but no document
+stated the operating policy.
 
-| # | Status | Item |
-|---|---|---|
-| 12 | open | **Sticky-flag clear lists disagree three ways** |
-
-- TRPR-PSR-007 (`:355`): `PSRAM_CLR_ERR` clears OVERFLOW, REPLAY_MISSED, **SAMPLE_SKIP**.
-- `Register Map.md:422`: only OVERFLOW and REPLAY_MISSED.
-- `Register Map.md:314`: `W_COMMIT_LATE` is *also* cleared by `PSRAM_CLR_ERR`.
-
-(`Register Map.md:434` separately says SAMPLE_SKIP clears via `PSRAM_CLR_ERR`, so the
-map contradicts itself as well.)
+*Resolution (2026-07-26):* the policy is now stated once, in TRPR-PSR-009, with the other
+rows deferring to it: the device is mandatory on the board; `PSRAM_EN=0` is the intended
+reset state precisely because firmware owns the ≥150 µs tPU delay; normal operation is
+reset → wait tPU → `PSRAM_EN=1` → same-packet MRC; a sustained 0 is factory-test/bring-up
+only. The map now says "optional" applies to the register default, never the board.
 
 | # | Status | Item |
 |---|---|---|
-| 13 | open | **`ENERGY_GATE_EN` lives in a register that no longer exists** |
+| 11 | closed 2026-07-26 | **`PSRAM_STATUS.STATE=IDLE` is not a state** |
 
-TRPR-SCD-015 (`:180`): "`ENERGY_GATE_EN` (SC_CFG bit 0) is reserved … SHALL be left at
-0." `Register Map.md:467` lists `SC_CFG.ENERGY_GATE_EN` under **Removed registers**.
-There is no bit to leave at 0.
+TRPR-PSR-017 and two places in `Register Map.md` gated debug readback on `STATE=IDLE`.
+The enumeration is `0=UNINIT, 1=QE_INIT, 2=WRITE, 3=REPLAY` — no IDLE encoding.
+
+RTL supplies the right gate, and it is a single signal rather than the guessed
+`packet_active=0`: `dbg_busy = QSPI_OWNER | packet_active | dbg_fetch_busy |
+!qe_init_done` (`psram_buf_ctrl.v:210`), already folding in all four blockers.
+
+*Resolution (2026-07-26):* TRPR-PSR-017 and both map sites now gate on `DBG_BUSY=0`
+(0x75[7]), and the `STATE` row states outright that no IDLE encoding exists.
+
+**Recurrence, worth noting:** this exact error was already fixed once, in TRPR-PSR-011 on
+2026-07-06 (`Traceability.md:166`, "effect only at `STATE=IDLE`" → "at the next QPI burst
+boundary"). The same phrase survived in two other rows. A grep for `STATE=IDLE` would have
+caught it then; it does now.
 
 | # | Status | Item |
 |---|---|---|
-| 14 | open | **AHB-Lite: three incompatible statements of the control interface** |
+| 12 | closed 2026-07-26 | **Sticky-flag clear lists disagreed three ways** |
 
-- §1 (`:23`): Trouper "does not embed … an on-chip AHB-Lite master/slave fabric"; byte interface instead.
-- §5 (`:510-573`): mandates a full 32-bit AHB3-Lite slave with a signal-level contract.
-- TRPR-REG-002 (`:444`): "register bank **SHALL be an AHB-Lite slave with 8-bit address and 8-bit data**" — neither of the above.
+TRPR-PSR-007 listed OVERFLOW / REPLAY_MISSED / SAMPLE_SKIP; `Register Map.md`'s
+`PSRAM_CLR_ERR` row listed only the first two; its `W_COMMIT_LATE` and `SAMPLE_SKIP` rows
+each claimed `PSRAM_CLR_ERR` clears them, so the map contradicted itself too.
 
-`Pinout.md` and `Register Map.md` describe the `GRP_*` byte bus as current, and §5.2's
-implementation note acknowledges the adapter is pending (TRPR-INT-001). The unexplained
-one is TRPR-REG-002's 8-bit AHB, a third design appearing nowhere else.
+RTL settles it — `psram_buf_ctrl.v:320-325` clears exactly **four** flags on `clr_err`:
+`overflow`, `replay_missed`, `w_commit_late`, `sample_skip`. So no document had the full
+list; the union of the map's scattered rows was right and each individual list was short.
+`w_commit_late` is additionally cleared at packet start (`:461`).
+
+*Resolution (2026-07-26):* TRPR-PSR-007 and the `PSRAM_CLR_ERR` map row both now name all
+four flags with their addresses, citing the RTL line.
+
+| # | Status | Item |
+|---|---|---|
+| 13 | closed 2026-07-26 | **`ENERGY_GATE_EN` lived in a register that no longer exists** |
+
+TRPR-SCD-015 told firmware to leave `ENERGY_GATE_EN` (SC_CFG bit 0) at 0, while
+`Register Map.md` lists `SC_CFG.ENERGY_GATE_EN` under *Removed registers*. Confirmed
+against `reg_bank.v`: neither `SC_CFG` nor `ENERGY_THR` exists anywhere in the RTL — both
+went with `noise_est.v`. There was no bit to write.
+
+*Resolution (2026-07-26):* TRPR-SCD-015 marked **REMOVED**, recording that pre-SC-lock
+energy gating is neither implemented nor planned.
+
+| # | Status | Item |
+|---|---|---|
+| 14 | closed 2026-07-26 | **AHB-Lite: three incompatible statements of the control interface** |
+
+- §1 said Trouper "does not embed … an on-chip AHB-Lite master/slave fabric"; byte interface instead.
+- §5 mandated a full 32-bit AHB3-Lite slave with a signal-level contract.
+- TRPR-REG-002 said "an AHB-Lite slave with 8-bit address and 8-bit data" — neither of the above.
+
+RTL settles it in §1's favour: `trouper_top` exposes `GRP_ADDR[7:0]`, `GRP_WDATA[7:0]`,
+`GRP_WE`, `GRP_RE`, `GRP_RDATA[7:0]`, `GRP_READY` as flattened single-bit ports
+(`trouper_top.v:69+`) and contains **no `H*` signal at all**. TRPR-REG-002's 8-bit AHB was
+a third design appearing nowhere else, in RTL or documentation.
+
+*Resolution (2026-07-26):* TRPR-REG-002 rewritten to describe the shipped `GRP_*` byte
+request/acknowledge bus with Grouper priority, stating explicitly that it is not AHB-Lite.
+§5 keeps its signal-level contract but gains a status banner retitling it as the target for
+the **Grouper-side** adapter (TRPR-INT-001), not a description of Trouper's pins, and the
+section heading changes from "On-Chip AHB-Lite + Host SPI" to "Grouper byte bus + Host
+SPI".
 
 | # | Status | Item |
 |---|---|---|
@@ -439,7 +476,7 @@ unenforced.
 3. **Item 15** — re-derive the SNR loss budget's truncation term rather than reword it.
    **Item 31** is a one-line comment fix, but its second half (unclamped `SF_CFG`) needs a
    design decision and an `Open Risks.md` entry first.
-4. **Items 7–14** — spec/map reconciliation pass.
+4. ~~**Items 7–14**~~ — all closed 2026-07-26 (item 8 on branch `feat/noise-weighted-mrc`).
 5. **Items 18–21** — bulk staleness; cheapest as one "delete the CPU-era sections" pass.
 6. **Tier 4** — sweep up alongside the next spec revision.
 

@@ -177,7 +177,7 @@ Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on
 | TRPR-SCD-012 | — | — | **REMOVED.** The former `C_POOL_I/Q` allocation at `0x64–0x67` was superseded by live `ZDIAG_0`/`ZDIAG_1` readback (TRPR-TAC-005). No pooled SC phasor/CFO readback register is implemented in the current revision. | — |
 | TRPR-SCD-013 | H | P | `sc_lock` SHALL assert within ±1 symbol of the Python block-model prediction on a clean branch-0 SF7 125 kHz preamble at 0 dB SNR. | T |
 | TRPR-SCD-014 | C | F | `sc_lock` SHALL de-assert and the detector SHALL re-arm (hit counter, symbol accumulators, and metric-engine state cleared) when the Packet Control FSM returns to IDLE, so every subsequent packet is acquired. | T |
-| TRPR-SCD-015 | L | F | `ENERGY_GATE_EN` (SC_CFG bit 0) is reserved; energy gating prior to SC lock is not implemented in the current RTL and SHALL be left at 0. | I |
+| TRPR-SCD-015 | — | — | **REMOVED.** This row instructed firmware to leave `ENERGY_GATE_EN` (SC_CFG bit 0) at 0, but neither the bit nor the register exists: `SC_CFG` and `ENERGY_THR` were deleted with `noise_est.v` and are listed under *Removed registers* in `Register Map.md`. There is no bit to write. Pre-SC-lock energy gating is not implemented and is not planned. (Removed 2026-07-26.) | — |
 | TRPR-SCD-016 | H | F | The hit decision SHALL include an e_slice guard: `eval_e_acc[25:13] > 0` (energy² ≥ 8192 ADU). When this condition is false the energy is too low for a meaningful threshold comparison; the hit is suppressed to prevent false alarms on noise. This guard is SF-adaptive because minimum detectable amplitude `A_min ∝ 1/√M`. | I |
 
 ---
@@ -351,11 +351,11 @@ Packet end: REPLAY_ACTIVE de-asserts; circular capture resumes; a commit after p
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-PSR-001 | C | F | The controller SHALL implement a QSPI master interface compatible with APS6404L (8 MB, 32 MHz QPI mode). Initialisation (enter QPI, set drive strength) SHALL complete within 1 ms of RESETB de-assertion. | T |
+| TRPR-PSR-001 | C | F | The controller SHALL implement a QSPI master interface compatible with APS6404L (8 MB, 32 MHz QPI mode). Initialisation (enter QPI, set drive strength) SHALL complete within 1 ms of the **`init_start` trigger**, which is `PSRAM_CTRL.PSRAM_EN & ~QSPI_OWNER` (`trouper_top.v:473`) — *not* of RESETB de-assertion. There is no on-chip tPU wait: firmware owns the power-up delay and SHALL not set `PSRAM_EN` until ≥150 µs after PSRAM power-up (TRPR-SYS-018, Open Risks #27.1). (Corrected 2026-07-26: this row previously anchored the 1 ms to reset, contradicting TRPR-SYS-018.) | T |
 | TRPR-PSR-006 | H | I | `PSRAM_STATUS` (0x71) SHALL expose: `state[1:0]`, `SAMPLE_SKIP[2]`, `INIT_DONE[3]`, `REPLAY_ACTIVE[4]`, `REPLAY_MISSED[5]`, `OVERFLOW[6]`, `BUF_ACTIVE[7]`. STATE occupies 2 bits (only 4 FSM states); the freed bit [2] carries `SAMPLE_SKIP`. | T |
-| TRPR-PSR-007 | H | F | Sticky error flags (`OVERFLOW`, `REPLAY_MISSED`, `SAMPLE_SKIP`) SHALL be clearable by writing `PSRAM_CLR_ERR` (0x70[1]). The `PSRAM_CLR_ERR` pulse SHALL be routed into `psram_buf_ctrl` (`clr_err` port); a genuine error coinciding with a clear in the same cycle SHALL NOT be lost. | T |
+| TRPR-PSR-007 | H | F | `PSRAM_CLR_ERR` (0x70[1]) SHALL clear exactly four sticky flags: `OVERFLOW`, `REPLAY_MISSED`, `SAMPLE_SKIP` and `W_COMMIT_LATE` (`psram_buf_ctrl.v:320-325`). `W_COMMIT_LATE` is additionally cleared at each packet start (`:461`). (Corrected 2026-07-26: this row omitted `W_COMMIT_LATE`.) The `PSRAM_CLR_ERR` pulse SHALL be routed into `psram_buf_ctrl` (`clr_err` port); a genuine error coinciding with a clear in the same cycle SHALL NOT be lost. | T |
 | TRPR-PSR-008 | — | — | **DELETED.** `PSRAM_PKT_BYTES` removed from the register map (never wired in RTL; cut under the 128-register constraint). Overflow detection uses the sticky `OVERFLOW` flag in `PSRAM_STATUS`. | — |
-| TRPR-PSR-009 | M | F | A disable mode (`PSRAM_EN=0`, 0x70[0]) SHALL be supported for factory test and bring-up only. In this mode the controller SHALL remain idle and SHALL NOT assert any QSPI pad outputs. | T |
+| TRPR-PSR-009 | M | F | **Operating policy (stated once here; TRPR-SYS-017/018 and `Register Map.md` 0x70[0] defer to this row).** The PSRAM device is **mandatory** on the host board — board designs without it are not supported, and same-packet MRC, the primary operating mode, requires it. `PSRAM_EN=0` is nonetheless the **intended reset state**, because firmware owns the ≥150 µs power-up delay (TRPR-PSR-001, Open Risks #27.1). Normal operation is therefore: reset with PSRAM disabled, wait out tPU, set `PSRAM_EN=1`, then run same-packet MRC. A sustained `PSRAM_EN=0` is a factory-test/bring-up configuration only; in it the controller SHALL remain idle and SHALL NOT assert any QSPI pad outputs. "Optional" describes the *register default*, never the board. (Reconciled 2026-07-26.) | T |
 | TRPR-PSR-010 | C | I | `PSRAM_CTRL.QSPI_OWNER` (0x70[3]) SHALL select the active QSPI master: `0` = Trouper `psram_buf_ctrl` owns the pads for capture/replay, `1` = ownership is transferred away from the replay controller for a future firmware-managed external-memory mode. While `QSPI_OWNER=1`, the local replay controller SHALL de-assert CE#, hold SCK low, tri-state SIO[3:0], and suspend BUFFERING/REPLAY activity. | T |
 | TRPR-PSR-011 | H | F | Writes to `QSPI_OWNER` during BUFFERING or REPLAY SHALL NOT glitch the pads: an in-flight QPI transaction completes with its clock running, no new bursts start after the request, and the ownership change takes effect at the next QPI burst boundary, after which the newly selected owner has exclusive control of the PSRAM QSPI pads. | T |
 | TRPR-PSR-012 | — | — | **REMOVED.** No `PAD_CONFLICT` signal exists in RTL and none is needed: `psram_buf_ctrl` is the only on-chip QSPI driver, and under `QSPI_OWNER=1` it tri-states (TRPR-PSR-010/011), so no simultaneous-driver case can arise on-chip. | — |
@@ -400,7 +400,7 @@ Register-mediated PSRAM reads over host SPI (no Grouper required) for bring-up a
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-PSR-017 | H | F | **PSRAM debug readback (host SPI, no Grouper required):** When `PSRAM_STATUS.STATE=IDLE` (`packet_active=0`) and `QSPI_OWNER=0`, the controller SHALL accept register-mediated QPI read requests from the host SPI slave: (1) Host writes a 23-bit byte address to `PSRAM_DBG_ADDR_LO/MID/HI` (0x72–0x74). (2) Host writes `PSRAM_DBG_CTRL.RD_TRIG=1` (0x75[0]); the controller asserts `DBG_BUSY` (0x75[7]) and issues a QPI burst read of 8 bytes from the target address. (3) Host polls `DBG_BUSY` until clear (≤ 31 QSPI cycles ≈ 0.97 µs at 32 MHz). (4) Host reads `PSRAM_DBG_DATA` (0x76) eight times; bytes arrive in order i0,q0,i1,q1,i2,q2,i3,q3. (5) If `AUTO_INC=1` (0x75[1]), the address advances by 8 after the last byte is read and a new fetch begins automatically. `DBG_BUSY` SHALL remain asserted and reads of `PSRAM_DBG_DATA` SHALL return 0x00 while `packet_active=1`, while `QSPI_OWNER=1`, or before `INIT_DONE`. Debug reads are serviced in the spare sub-cycles between `iq_valid` pulses and SHALL NOT delay or preempt circular capture writes. | T |
+| TRPR-PSR-017 | H | F | **PSRAM debug readback (host SPI, no Grouper required):** Firmware SHALL gate debug readback on **`DBG_BUSY=0`** (0x75[7]), not on a controller state: `dbg_busy = QSPI_OWNER | packet_active | dbg_fetch_busy | !qe_init_done` (`psram_buf_ctrl.v:210`) is the single condition that already folds in all four blockers. There is **no IDLE encoding** — `STATE[1:0]` is 0 UNINIT / 1 QE_INIT / 2 WRITE / 3 REPLAY (corrected 2026-07-26; this row previously said `STATE=IDLE`). With `DBG_BUSY=0` the controller SHALL accept register-mediated QPI read requests from the host SPI slave: (1) Host writes a 23-bit byte address to `PSRAM_DBG_ADDR_LO/MID/HI` (0x72–0x74). (2) Host writes `PSRAM_DBG_CTRL.RD_TRIG=1` (0x75[0]); the controller asserts `DBG_BUSY` (0x75[7]) and issues a QPI burst read of 8 bytes from the target address. (3) Host polls `DBG_BUSY` until clear (≤ 31 QSPI cycles ≈ 0.97 µs at 32 MHz). (4) Host reads `PSRAM_DBG_DATA` (0x76) eight times; bytes arrive in order i0,q0,i1,q1,i2,q2,i3,q3. (5) If `AUTO_INC=1` (0x75[1]), the address advances by 8 after the last byte is read and a new fetch begins automatically. `DBG_BUSY` SHALL remain asserted and reads of `PSRAM_DBG_DATA` SHALL return 0x00 while `packet_active=1`, while `QSPI_OWNER=1`, or before `INIT_DONE`. Debug reads are serviced in the spare sub-cycles between `iq_valid` pulses and SHALL NOT delay or preempt circular capture writes. | T |
 
 ---
 
@@ -442,7 +442,7 @@ Custom hand-written register bank (no generator exists or is planned — TRPR-RE
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-REG-001 | C | F | The register bank SHALL implement all 8-bit registers defined in `planning/Register Map.md`, maintaining defined reset values and R/W permissions. | T |
-| TRPR-REG-002 | C | I | The register bank SHALL be an AHB-Lite slave with 8-bit address and 8-bit data, accessible from both the SPI slave bridge and the inter-project Grouper AHB-Lite master. | T |
+| TRPR-REG-002 | C | I | The register bank SHALL be accessible from both the host SPI slave bridge and the inter-project Grouper master over a **byte-wide request/acknowledge bus** — `GRP_ADDR[7:0]`, `GRP_WDATA[7:0]`, `GRP_WE`, `GRP_RE`, `GRP_RDATA[7:0]`, `GRP_READY` (`trouper_top.v:69+`), Grouper taking priority over SPI. It is **not** an AHB-Lite slave: there is no `H*` signal in the RTL. Any AHB-Lite attachment is an adapter on the Grouper side (§5, TRPR-INT-001). (Corrected 2026-07-26: this row specified an 8-bit AHB-Lite slave, a third interface appearing nowhere else.) | T |
 | TRPR-REG-003 | C | F | Multi-byte registers (e.g., Z_kl int32, W int16) SHALL be big-endian: MSB at the lower address. | I |
 | TRPR-REG-004 | H | F | Reads from undefined or reserved addresses SHALL return 0x00. Writes to reserved addresses SHALL be silently ignored. | T |
 | TRPR-REG-005 | H | F | The register bank is custom hand-written RTL (`reg_bank.v`); `planning/Register Map.md` is the single source of truth and every register-map change SHALL update RTL and map together, verified by register-level tests (no generator tool exists or is planned). | I |
@@ -508,9 +508,16 @@ Host debug uses the SPI register/PSRAM-readback path (TRPR-SPS, TRPR-PSR-017).
 
 ---
 
-## 5. Control-Plane Integration (On-Chip AHB-Lite + Host SPI) — TRPR-INT
+## 5. Control-Plane Integration (Grouper byte bus + Host SPI) — TRPR-INT
 
-Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the same MPW. The control plane lives inside Grouper (PicoRV32 hardened macro), while Trouper acts as an AHB-Lite peripheral to Grouper.
+> **Interface status (2026-07-26).** Trouper's implemented inter-project interface is the
+> **`GRP_*` byte-wide register bus**, not AHB-Lite — see TRPR-REG-002 and §1. The
+> signal-level AHB3-Lite contract below describes the **adapter still to be built on the
+> Grouper side** (TRPR-INT-001); it is a target for that wrapper, not a description of
+> Trouper's pins. Read it that way. Previously §1, §5 and TRPR-REG-002 each asserted a
+> different control interface (no AHB / 32-bit AHB3-Lite / 8-bit AHB-Lite).
+
+Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the same MPW. The control plane lives inside Grouper (PicoRV32 hardened macro); Trouper presents its register bank to Grouper over the `GRP_*` byte bus, which a Grouper-side adapter may in turn expose as an AHB-Lite peripheral.
 
 ### 5.1 Architecture
 
