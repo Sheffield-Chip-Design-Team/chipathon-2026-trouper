@@ -1080,7 +1080,8 @@ nothing re-checks or clears it if `psram_en` later changes).
 
 **Fix:** gated `psram_ctrl[0]` the same way as `sf_cfg`/`bw_sel`:
 `8'h70: if (!packet_active) psram_ctrl[0] <= wdata[0];` (`reg_bank.v:233`;
-`psram_ctrl[1:3]` — `CLR_ERR`/`SAMPLE_WIDTH`/`QSPI_OWNER` — left ungated,
+`psram_ctrl[1:3]` — `CLR_ERR`/reserved-inert bit[2] (formerly documented as
+`SAMPLE_WIDTH`)/`QSPI_OWNER` — left ungated,
 matching their own documented semantics). `planning/Register Map.md` `0x70`
 detail section updated with the same gate note as `SF_CFG`/`BW_CFG`.
 
@@ -1132,8 +1133,8 @@ up:
   functional cocotb sweep (job 3270, 12/12 PASS at full depth) never
   triggering either condition, plus (for overflow specifically) the original
   analytical derivation — the replay backlog would need to land within 8
-  bytes of a 2^23 wraparound, while real backlogs are bounded to <=262144
-  bytes (TRPR-PSR-015, >=32x headroom) — still holding unchanged.
+  bytes of a 2^23 wraparound, while real backlogs are bounded to <=1048576
+  bytes (TRPR-PSR-015, >=8x headroom) — still holding unchanged.
 - Two environment-modeling gaps had to be fixed along the way that are worth
   knowing about if extending this file: `sf`/`sample_shift` and `iq_valid`
   are free primary inputs to `psram_buf_ctrl.v` in isolation, so this proof

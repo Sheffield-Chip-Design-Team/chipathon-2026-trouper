@@ -109,7 +109,7 @@ This is exported as a diagnostic only. It is not used in weight computation — 
 
 ### Outputs
 
-- `sc_lock` — asserted when detection statistic exceeds threshold for `SC_HITS_REQ` consecutive symbol pairs
+- `sc_lock` — asserted when the detection statistic exceeds threshold for `SC_HITS_REQ + 1` consecutive symbol pairs (raw 0 = diagnostic-only one-hit mode)
 - `timing_ref` — estimated preamble-start sample index (back-calculated from lock event)
 - `c_j[3:0]` — per-branch complex correlator value at lock (diagnostic)
 - `C_pool` — pooled complex correlator sum at lock (diagnostic)
@@ -174,7 +174,7 @@ FRONTEND_BUF
 | `delayed_valid` | in | 1 | f_s | FRONTEND_BUF delayed sample valid; high only when the stored-phase delayed sample exists |
 | `sf` | in | 3 | static | Spreading factor; sets M = 2^SF |
 | `sc_thr` | in | 16 | static | Detection threshold θ_SC (Q1.15); from `SC_THR` register |
-| `sc_hits_req` | in | 2 | static | Consecutive hits required for lock; from `SC_HITS_REQ` register |
+| `sc_hits_req` | in | 2 | static | Lock encoding: `sc_hits_req + 1` consecutive hits; 1–3 are normal-operation 2–4-hit settings, 0 is diagnostic-only one-hit mode |
 | `sc_lock` | out | 1 | per packet | Preamble detected |
 | `timing_ref` | out | 32 | per packet | Estimated preamble-start sample index in `iq_valid` units |
 | `c_j[3:0]` | out | 4×2×32 | per lock | Per-branch complex correlator at lock (I+Q, int32) — diagnostic |
@@ -193,7 +193,7 @@ FRONTEND_BUF
 | Parameter | Value | Notes |
 |---|---|---|
 | Detection window | 2L samples per evaluated block | `L=min(M,256)`; full-symbol for SF6–SF8, partial-window for SF9–SF12 |
-| Lock hold | 1–3 consecutive hits | Runtime via `SC_HITS_REQ`; default 2 |
+| Lock hold | 2–4 consecutive hits | Runtime via `SC_HITS_REQ` values 1–3; default encoding 2 = 3 hits. Raw 0 is diagnostic-only one-hit mode. |
 | Threshold θ_SC | 0.90 (default) | Programmable via `SC_THR` |
 | Accumulator width | int32 for c_j, int64 for Mag_SC / Energy_Ref | See arithmetic widths below |
 
@@ -227,7 +227,7 @@ FRONTEND_BUF
 
 4. **Hit counter / lock FSM**
    - counts consecutive hits
-   - asserts `sc_lock` when count reaches `SC_HITS_REQ`
+   - asserts `sc_lock` after `SC_HITS_REQ + 1` consecutive hits
    - prevents re-lock on the same packet until reset
 
 5. **Timing-ref back-calculator**
@@ -249,11 +249,15 @@ FRONTEND_BUF
 
 **Multiplication over division.** The threshold check uses `Mag_SC >= θ_SC² · Energy_Ref`. No divider or CORDIC needed on the detection path.
 
-**Sensitivity controls:**
+**Sensitivity controls (normal operation):**
 
 - `SC_HITS_REQ = 1`: aggressive weak-signal mode
 - `SC_HITS_REQ = 2`: default
 - `SC_HITS_REQ = 3`: conservative / noisy environment mode
+
+Raw `SC_HITS_REQ = 0` selects a one-hit diagnostic mode. Use it only for controlled
+bring-up or characterisation; it has substantially weaker false-lock immunity and
+must not be left enabled for normal reception.
 
 **Preamble length dependency.** SC does not detect preamble length — it simply accumulates per symbol pair until `SC_HITS_REQ` consecutive hits occur. The hardware works correctly with any preamble length ≥ `SC_HITS_REQ + 1` symbols; no register changes are needed for longer preambles.
 

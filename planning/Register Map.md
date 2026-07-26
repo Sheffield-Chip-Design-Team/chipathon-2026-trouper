@@ -37,7 +37,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
 | `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
-| `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Consecutive SC hits required for `sc_lock`, valid range 1-3 |
+| `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Locks after encoded value + 1 hits. Values 1–3 are normal operation (2–4 hits); 0 is diagnostic-only one-hit mode. |
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
 | **Gain / AGC / SX1257 Live RX Control** (`0x10`–`0x1B`) | | | | | |
 | `0x10` | `RX_GAIN_SHADOW_0` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_1 (Trouper does not apply it on chip) |
@@ -97,7 +97,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x6A`–`0x6C` | `ZDIAG_2` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:8] |
 | `0x6D`–`0x6F` | `ZDIAG_3` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:8] |
 | **External Memory (PSRAM)** (`0x70`–`0x78`) | | | | | |
-| `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] `SAMPLE_WIDTH`; [3] `QSPI_OWNER`; [7:4] reserved |
+| `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] reserved (inert); [3] `QSPI_OWNER`; [7:4] reserved |
 | `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [1:0] state; [2] `SAMPLE_SKIP`; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
 | `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [7:0] |
 | `0x73` | `PSRAM_DBG_ADDR_MID` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [15:8] |
@@ -224,7 +224,11 @@ Schmidl-Cox detection threshold, big-endian. Reset is `0x01CC`, the 12-bit-safe 
 
 ### `0x0E` — SC_HITS_REQ (read/write)
 
-Consecutive SC hits required for `sc_lock`; valid range 1–3.
+The detector locks after `SC_HITS_REQ + 1` consecutive symbol-hit decisions. Firmware
+shall use values 1–3 in normal reception, corresponding to 2–4 required hits. Raw
+value 0 is not clamped by hardware and selects a diagnostic-only one-hit mode; it is
+for controlled bring-up/characterisation only and must be restored to 1–3 before
+normal reception because false-lock immunity is substantially reduced.
 
 ### `0x0F` — COMB_CFG (read/write)
 
@@ -420,7 +424,7 @@ In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 | --- | --- | --- |
 | [0] | `PSRAM_EN` | 0 = disabled (default); 1 = enable optional same-packet PSRAM buffering/replay. Write ignored while `PACKET_ACTIVE` — like `SF_CFG`/`BW_CFG`, toggling this mid-packet would leave `psram_buf_ctrl`'s `buf_active` set with `psram_en` now 0, an inconsistent state its own logic assumes can't happen. |
 | [1] | `PSRAM_CLR_ERR` | Write 1 to clear sticky PSRAM error flags (`OVERFLOW`, `REPLAY_MISSED`); self-clears |
-| [2] | `SAMPLE_WIDTH` | 0 = 16-bit I/Q storage (default, max f_s = 1 MS/s); 1 = 32-bit I/Q storage (max f_s = 500 kS/s) |
+| [2] | — | **Reserved, write 0.** The current `reg_bank` retains and reads this bit, but no downstream RTL consumes it; it has no functional effect. Storage is fixed at 8 bytes/sample (int8 I/Q × 4 branches) per TRPR-PSR-005. |
 | [3] | `QSPI_OWNER` | 0 = Trouper `psram_buf_ctrl` owns the APS6404L pads for capture/replay (default); 1 = ownership transferred away from the replay controller for a future firmware-managed external-memory mode. Ownership changes take effect only when the PSRAM controller is idle. |
 | [7:4] | — | Reserved |
 
@@ -467,9 +471,9 @@ The following registers existed in earlier revisions of this map (which spanned 
 | `0x17`–`0x18`, `0x1C` | `ENERGY_THR`, `SC_CFG.ENERGY_GATE_EN` | Energy gating removed with `noise_est.v` |
 | `0x2B`–`0x2E` | `AGC_THR_HI`, `AGC_THR_SAT` | AGC comparison is software-owned; thresholds live host-side, never implemented in RTL |
 | `0x35`[7:4] | `WGT_SRC`, `WGT_AUTO_COMMIT`, `WGT_MODE` | Hardware weight_gen removed; firmware is sole weight source |
-| `0x48`–`0x4F` | `CORR_MAG_0..3` | Hardwired 0; SC magnitude readback never wired |
+| `0x48`–`0x4F` | `CORR_MAG_0..3` | Former allocation; reallocated to live `Z_02`/`Z_03` readback. No SC magnitude readback is implemented. |
 | `0x52`–`0x57` | `COND_NUM`, `SNR_0`, `NULL_QUALITY` | Firmware scratch diagnostics; no CPU on chip — host keeps its own diagnostics |
-| `0x63`–`0x69` | `Z_SHIFT`, `C_POOL`, `CFO_DIAG` | Hardwired 0 in `trouper_top` |
+| `0x63`–`0x69` | `Z_SHIFT`, `C_POOL`, `CFO_DIAG` | Former allocation; reallocated to live `Z_23`/`ZDIAG` readback. No common shift, pooled phasor, or CFO diagnostic register is implemented. |
 | `0x6A`–`0x6B` | `NOISE_WIN_CTRL`, `TACC_REF_SEL` | Legacy single-ref/noise-enable path; superseded by `TACC_NOISE_TRIG` |
 | `0xB2`–`0xB4` | `PSRAM_PKT_BYTES`, `PSRAM_RD_OFFSET` | Hardwired 0; pointer telemetry never wired |
 | `0xCA`–`0xCD` | `SRAM_DUMP_*` | Frontend SRAMs removed; PSRAM debug readback (`0x72`–`0x76`) replaces this |

@@ -147,7 +147,7 @@ Mag_SC >= θ_SC² · Energy_Ref     (default θ_SC = 0.90)
 ```
 
 **Outputs:**
-- `sc_lock` — asserted when statistic exceeds threshold for `SC_HITS_REQ` consecutive symbol pairs
+- `sc_lock` — asserted when statistic exceeds threshold for `SC_HITS_REQ + 1` consecutive symbol pairs
 - `timing_ref` — estimated preamble-start sample index, back-calculated from the lock event
 
 `sc_lock` is the terminal acquisition event in the non-FFT path. No downstream FFT or sync/downchirp refiner is needed — `timing_ref` alone locates the full packet.
@@ -264,7 +264,7 @@ If the analog filter is left wider than the digital sampling rate, signals and n
 Recommended starting points:
 - **Default:** 0.90 — static indoor channels; matches rpp0/gr-lora default
 - **Low SNR / mobile:** reduce to 0.75 — trades false-alarm rate for sensitivity
-- **Hit count:** default `SC_HITS_REQ = 2`; 1 for aggressive weak-signal mode, 3 for noisy environments
+- **Hit-count encoding:** default `SC_HITS_REQ = 2` requires 3 hits; 1 requires 2 hits for aggressive weak-signal mode, and 3 requires 4 hits for noisy environments. Raw value 0 selects a diagnostic-only one-hit mode and shall not be used in normal reception.
 - **False-alarm floor:** at threshold 0.90, noise-only statistic < threshold with > 99.9% probability (SF6, NR=4)
 
 ### 3. Weight Path Selection
