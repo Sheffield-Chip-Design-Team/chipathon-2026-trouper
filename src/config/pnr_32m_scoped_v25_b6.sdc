@@ -1,3 +1,19 @@
+# pnr_32m_scoped_v25_b6.sdc
+# v25_b6 = v20_baseline_minff adapted for the B6 packet_ctrl_fsm rewrite
+#   (area roadmap 7/8): the three 32-bit absolute deadline registers
+#   acq_timeout_q/wpend_timeout_q/pkt_end_q are now narrow DOWN-COUNTERS
+#   acq_cnt[19:0]/wpend_cnt[19:0]/pkt_cnt[22:0], loaded once in ST_ACQ_SETUP
+#   and decremented per captured sample (iq_tick).
+#   SDC deltas vs v20_baseline_minff:
+#     * pcfsm_timeout_regs re-pointed at the new counter register nets.
+#     * The three -through exception blocks (qs_srcs / lat_timing_ref / M_val)
+#       are KEPT: they now relax only the one-shot ST_ACQ_SETUP load arc.
+#       The per-tick decrement path (cnt -> cnt-1 -> cnt) does NOT traverse
+#       any -through net, so it stays honestly MCP=1; likewise the live
+#       sample_count (elapsed-correction) operand into the load.
+#   VERIFY after STA: no STA-0361/0472 on the u_pcfsm.*_cnt patterns (the
+#   silent-no-op failure mode this file's history documents).
+#
 # pnr_32m_scoped_v20.sdc
 # v24 = v23 + the RTL fix for Open Risk #39's write-arc dishonesty.
 #   packet_ctrl_fsm.v previously computed acq_timeout_q/wpend_timeout_q/
@@ -147,8 +163,8 @@ set_multicycle_path 2 -hold  -through $sc_qs_srcs -to $sc_boundary_regs
 set pcfsm_qs_srcs [get_nets -hierarchical {rb_sf_cfg* rb_sample_shift* rb_bw_sel* \
     rb_pkt_timeout_syms* rb_tacc_window_syms*}]
 set pcfsm_timeout_regs [get_cells -of_objects \
-    [get_nets -hierarchical {u_pcfsm.acq_timeout_q[*] u_pcfsm.wpend_timeout_q[*] \
-                              u_pcfsm.pkt_end_q[*]}] \
+    [get_nets -hierarchical {u_pcfsm.acq_cnt[*] u_pcfsm.wpend_cnt[*] \
+                              u_pcfsm.pkt_cnt[*]}] \
     -filter {ref_name =~ *dff*}]
 set_multicycle_path 3 -setup -through $pcfsm_qs_srcs -to $pcfsm_timeout_regs
 set_multicycle_path 2 -hold  -through $pcfsm_qs_srcs -to $pcfsm_timeout_regs

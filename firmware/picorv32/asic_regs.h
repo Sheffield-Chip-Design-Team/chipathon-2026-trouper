@@ -42,7 +42,7 @@ enum {
 
     /* Packet / weight-path / training control (0x1C-0x23) */
     REG_PACKET_STATUS    = 0x1C,   /* [0]ACTIVE [3:1]PHASE [4]TRAINING_DONE [5]W_PENDING [6]W_VALID [7]W_MISSED */
-    REG_WGT_CTRL         = 0x1E,   /* [0]W_COMMIT(W1P) [1]W_VALID [2]W_PENDING [3]W_MISSED */
+    REG_WGT_CTRL         = 0x1E,   /* [0]W_COMMIT(W1P) [1]W_VALID [2]W_PENDING [3]W_MISSED [4]W_COMMIT_LATE [5]W_WR_REJECTED */
     REG_TACC_NOISE_TRIG  = 0x1F,   /* [0] W1P arm noise accumulation */
     REG_TRAINING_STATUS  = 0x20,   /* [0]TRAINING_DONE [1]TRAINING_ARMED */
     REG_N_ACC_HI         = 0x21,   /* samples [17:16] (bits[1:0]) */
