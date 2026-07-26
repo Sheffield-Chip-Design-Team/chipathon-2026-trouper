@@ -21,8 +21,10 @@ evidence, don't delete) or as new ones are found.
 
 ### 1. Chip-wide SS-corner (32 MHz, `max_ss_125C_3v00`) closure is not on production RTL
 
-The `gf180mcu_fd_sc_mcu7t5v0` FD cells fail 32 MHz timing at the slow corner —
-worst-case blanket-`MCP=3` SS setup WNS was **−11.95 ns**. The decimator's
+The `gf180mcu_fd_sc_mcu7t5v0` FD cells fail 32 MHz timing at the slow corner.
+The current production RTL has an SS setup WNS in the **−12 to −15 ns** band
+(best **−12.11 ns**, jobs 3403/3404; repeated 2026-07-25 runs **−14.91 ns**,
+TNS −5747 ns). The decimator's
 share of that has been honestly closed (pure 3-cycle pacing + fanout fix, SS
 WNS **+8.0 ns MET**, SGE job 2149), and sc_detector/training_acc have paced
 fixes too. **Correction 2026-07-12: `ss-mcp-pacing` IS merged into `main`**
@@ -121,11 +123,12 @@ floorplan tried since (jobs 2165–2168). Described in the source doc as
 
 ### 8. AGC calibration and edge-case behavior are unverified on silicon
 
-`AGC_TARGET_LO/HI` and `AGC_SAT_GUARD` require real-PCB calibration; the
-branch-masking policy for a persistently saturated/dead/noisy antenna is
-undefined; behavior under strong blockers / near-far interference is
-untested; there is no mid-packet AGC recovery path (by design, but never
-exercised against a real scenario).
+Trouper has no on-chip analogue AGC target/guard registers. Gain is an
+external-SX1257 policy: firmware may stage `RX_GAIN_SHADOW_0..3` and commit
+them at a packet-safe boundary, while fixed programmed gain remains the
+supported fallback. Calibration, persistently bad-branch policy, and
+strong-blocker/near-far behaviour are unverified on the real board; gain
+changes are deliberately prohibited mid-packet.
 
 **Risk:** deployment-time AGC misbehavior with no bench coverage.
 **See:** `planning/blocks/AGC.md` (Open calibration items).
@@ -199,7 +202,7 @@ synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
 Open Risk #15 outright — see above. The SDC half (declaring `SPI_SCK`,
 SCK-relative MOSI/MISO I/O delays, `SPI_SCK`/`IQ_CLK` asynchronous-clock
 exceptions, mailbox settling constraint) is still open:
-`src/config/pnr_32m_scoped_v20.sdc` is unchanged. Remaining scope tracked as
+`src/config/pnr_32m_scoped_v25_b6.sdc` is the canonical signoff SDC. Remaining scope tracked as
 Implementation order steps 6-8 in
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
@@ -213,16 +216,12 @@ to the wrong clock.
 The most critical read path has only half an SCK period: the command address
 completes on its eighth rising edge, the asynchronous `reg_bank` peek decode
 must settle, and the MISO shifter loads on the following falling edge (50 ns at
-10 MHz, before pad/PCB/host margin). Separately, Open Risk #15 shows that the
-current pulse CDC can lose the final write when normal Raspberry Pi CS timing
-clears the request before the 32 MHz synchronizer observes it.
+10 MHz, before pad/PCB/host margin).
 
 **Risk:** a design that passes the current top-level timing reports can still
-fail register reads or writes at the specified 10 MHz on silicon. Slowing SCK
-may not cure the final-write CS race because it is caused by event lifetime,
-not serial shift timing.
+fail register reads or writes at the specified 10 MHz on silicon.
 
-**Action:** implement the persistent toggle/mailbox CDC; declare a 100 ns
+**Action:** declare a 100 ns
 `SPI_SCK` clock; add SCK-relative MOSI and MISO I/O delays; declare SCK and
 `IQ_CLK` asynchronous while excepting only the intentional synchronizer paths;
 constrain the bundled mailbox crossing; and run all-corner setup/hold plus
@@ -230,11 +229,11 @@ unconstrained-path review. Derive board I/O delays from the Raspberry Pi, PCB,
 and GF180 pad timing rather than guessing them.
 
 **See:** Open Risk #15; `src/control/spi_slave.v`;
-`src/config/pnr_32m_scoped_v20.sdc`;
+`src/config/pnr_32m_scoped_v25_b6.sdc`;
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 **Found:** 2026-07-11 (10 MHz SPI implementation/constraint research).
 
-### 39. Scoped-MCP SDC (v20) still leaks: three unrelaxed rb_* cones (SS WNS −20.4), plus one dishonest relaxation on the `timing_ref` write arc — cone-scoping FIXED 2026-07-12 (v21), write-arc dishonesty FIXED 2026-07-13 (RTL restructure + honest v24 SDC exception)
+### 39. Scoped-MCP SDC cone leaks and `timing_ref` write-arc dishonesty — CLOSED 2026-07-26 (v25_b6 canonicalized)
 
 The v20 SDC's `-through` net wildcards miss three quasi-static
 `rb_*` → derived-register cones (same bug class the v18/v20 headers document):
@@ -263,7 +262,8 @@ compared much later) or scoping `-from` only the quasi-static sources.
 Tooling note: the NFS `ol_mimo_rx_top/runs` symlink is a self-loop (rsync
 copied the local symlink); real runs live in `ol_trouper_top/runs/`.
 
-**See:** `src/config/pnr_32m_scoped_v20.sdc` (v18/v20 headers);
+**See:** `src/config/pnr_32m_scoped_v25_b6.sdc` (v20–v25 history and active
+exceptions);
 `src/control/packet_ctrl_fsm.v`; item 1.
 **Found:** 2026-07-12 (SDC-vs-`src/` MCP audit + NFS STA cross-check).
 
@@ -382,14 +382,14 @@ SS wall (most of job 3367's 1206 violators, worst −16.01 ns) is now rooted in
 fanout from `rb_bw_sel`/`rb_sf_cfg` — pre-existing (33 violators, −22.1 ns in
 the July 5 baseline at the same die/density) but roughly 4× wider now.
 
-**2026-07-18 addendum (B4/B6 measurement runs):** the v20-SDC signoff config
-(`config_current_signoff.json`) still carries this leak class on mainline —
-the 1200×1100/88 % baseline's worst path is `rb_sf_cfg → u_pcfsm.M_val[*]`
-(unscoped quasi-static arc, −22.70 ns). The CE-retimer branch's explicit
-`M_val` endpoint covers it; whichever SDC generation ships needs that
-exception. See `planning/b4-b6-area-cuts-2026-07.md` §4.
+**2026-07-26 correction:** the current canonical signoff SDC is
+`pnr_32m_scoped_v25_b6.sdc`, not the legacy v20 filename. It preserves the
+v24 `M_val` exception and re-points the packet-control endpoints to B6's
+`acq_cnt`/`wpend_cnt`/`pkt_cnt`; both `src/config/` and the signoff config use
+it. The historical B4/B6 v20 measurement therefore does not describe the
+shipping constraint set.
 
-### 40. SS wall (job 3367, 1000 violators, worst −16.01 ns) is FIVE stacked problems, not one — root-caused 2026-07-12 by direct netlist/STA cross-check
+### 40. SS wall is several stacked problems, not one — root-caused 2026-07-12 by direct netlist/STA cross-check
 
 **Root-cause pass complete.** Traced every major violator cluster in job
 3367's `max_ss_125C_3v00/max.rpt` (`RUN_2026-07-12_21-56-16`) against
@@ -521,6 +521,15 @@ sc_lock → timing_ref pattern, or max_transition SDC) on the chronic nets;
 `u_psram` endpoints remain item 1's pipeline. See
 `planning/b4-b6-area-cuts-2026-07.md` §4.
 
+**2026-07-26 correction:** the main deterministic fanout treatment has since
+shipped: commit `3af9619` split `packet_active` fanout and registered
+`packet_done_pulse` (merged by `b47474d`), eliminating that chronic cone in
+the B6 measurements and improving WNS from −25.5 to −15.9 ns at about +10.3 k
+µm² area churn. A pulse-only A/B variant was worse due to synthesis remapping
+sensitivity. Remaining closure work is the `u_psram` pipeline in item 1 and
+the still-uncharacterized `Zpair_*`, `ce_16m`, and `dcr_valid` cones; single
+run WNS should still be treated cautiously at this density.
+
 ---
 
 ### 41. Hold signoff corner pulls the wrong RCX deck; the corrected (min_ff) config fails routing at signoff density
@@ -619,25 +628,26 @@ is now needed for the *actual* current config, not a hypothetical future
 one.
 **See:** `planning/area-reduction-roadmap.md` §6; `planning/die-shrink-routability-floor.md` §6–8.
 
-### 12. 1100×1100 target die may be physically unreachable
+### 12. 1100×1100 die target is blocked by measured global-routing congestion
 
-1380×1100 is the measured routing-congestion floor for the current
-(un-paced) design on 7-track/5LM GF180; the honest-MCP SDC needed for item 1
-can't even reach 1550×1150 without routing failures. The original
-1100×1100 target may not be achievable on this stack without further RTL
-area cuts.
+The target is no longer speculative: at ≈974 k µm² cell area, 1100×1100 is
+93.8% effective utilisation and fails global routing (GRT-0116 at step 39)
+on every tried variant: Metal1/Metal2 pin layers and cell padding 0/1 (jobs
+3242/3243/3245). The production/signoff size is 1200×1100. Reaching 1100×1100
+requires RTL area reduction; floorplan tightening has been exhausted.
 
 **Area/cost risk, not functional.**
 **See:** `planning/area-reduction-roadmap.md` §6.
 
-### 13. No shadow→active weight promotion (TRPR-MRC-004 not implemented)
+### 13. Live weight bank has no shadow→active promotion; writes are now structurally rejected while valid
 
-`mrc_combiner` consumes `rb_w_shadow` live (`trouper_top.v:492-495`) and
-re-latches weights every sample — there is no active bank latched on
-`W_COMMIT` at a safe-switch boundary. A 16-byte SPI weight burst is not
-atomic, so a write landing mid-replay applies a half-updated W to samples.
-Mitigated by firmware discipline (write only in W_PENDING); a proper fix
-latches an active bank on `W_valid_set`.
+`mrc_combiner` consumes the live `rb_w_shadow` bank; a separate `W_ACTIVE`
+bank is deliberately not implemented. The old per-burst latches did not make
+a 16-byte SPI burst atomic and were removed by B4. The actual safety mechanism
+is hardware: after `W_COMMIT` makes `W_VALID` high, writes to `0x30–0x3F` are
+blocked and sticky `WGT_CTRL[5] W_WR_REJECTED` records the attempt. Firmware
+must write the complete vector before committing it; mid-payload `W_COMMIT`
+still applies from that point onward.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
@@ -688,35 +698,19 @@ Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
-### 30. PSRAM debug-read timing budget is stale (assumes R=128, chip is R=64) — causes `sample_skip`
+### 42. Packet-control FSM misses directed coverage for late weight commit and training timeout
 
-`psram_buf_ctrl.v`'s header comment (lines 11-13) budgets the debug-readback
-path (`PSRAM_DBG_CTRL`/`PSRAM_DBG_DATA`, TRPR-PSR-017) against "CIC R=128 →
-iq_valid every 128 cycles" (25 write + 19 del-read = 44 sub-cycles, 84 spare
-per period). The decimator is now the fixed R=64 half-band chain (`iq_valid`
-every 64 cycles, per `test_trouper_top.py`), leaving only ~20 idle sub-cycles
-per period. A debug fetch takes a fixed 31 sub-cycles once launched and runs
-to completion regardless of an arriving `iq_valid` (`psram_buf_ctrl.v:434-478`)
-— it does not abort or restart — so any debug read in flight when the next
-capture write is due collides with it, and the RTL's own `sample_skip` logic
-(line 283) correctly flags the dropped sample. Debug reads are only issuable
-when `packet_active=0` (bring-up/idle use, e.g. `PSRAM_DBG_CTRL.RD_TRIG`
-during pre-lock SC acquisition), so the exposure is confined to host
-debug-read usage rather than the primary same-packet capture/replay path —
-but the header's implicit "no timing tradeoff" framing no longer holds, and
-neither TRPR-PSR-017 nor the register map document the hazard.
+The current verification matrix explicitly leaves two functional cases
+uncovered: `W_COMMIT` during `PAYLOAD_ACTIVE` must enable combining only for
+the remainder of the packet, and a missing `training_done` must let `acq_cnt`
+enter bypass payload with `W_MISSED_PACKET` set. The existing miss test
+withholds `W_COMMIT` entirely, so it does not establish either behaviour.
 
-Found while deriving the exact worst-case bound for a k-induction proof of
-the debug-fetch bounded-response property (`formal/psram_buf_ctrl_formal.sv`):
-K = 44 (worst-case wait for an in-flight write to finish) + 31 (fixed fetch
-execution) = 75 cycles total service latency, which is fine for *when the
-fetch finishes*, but the 31-cycle fetch itself does not fit inside the
-~20-cycle idle margin left by a 64-cycle period, so it collides with the very
-next write regardless of latency budget.
-
-**Found:** 2026-07-05, deriving formal bounds for `formal/psram_buf_ctrl_formal.sv`.
-
----
+**Risk:** an untested packet-control transition can escape regression despite
+the documented implementation. **Action:** add directed cocotb cases for both
+rows, including observable combiner/bypass behaviour and sticky-status
+readback. **See:** `planning/blocks/Packet Control FSM.md` (Verification
+table); `planning/Trouper Chip Specification.md` TRPR-PCF-007/010.
 
 ### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode) — MITIGATED, downgraded from High 2026-07-12
 
@@ -793,26 +787,6 @@ investigated; out of scope when found.
 currently exercise this path correctly, so a real regression there could go
 undetected.
 
-### 20. `firmware/picorv32/asic_regs.h` is stale
-
-Uses an old memory-mapped AHB-Lite address scheme (`ASIC_REG_BASE + 0x00`–
-`0xEF`) that predates the current 7-bit SPI register map.
-`planning/Register Map.md` is authoritative; this header has not been
-resynced.
-
-**Tooling/doc gap** — a risk only if someone builds firmware against the
-stale header without noticing.
-
-### 21. NW-MRC / `energy_meas_coarse`-removal contingency stack not implemented
-
-If `energy_meas_coarse` (a ~70 k µm² area-cut candidate) is ever removed,
-none of its three proposed AGC/noise-estimate replacements
-(`live-iq-agc-calibration.md`, `per-branch-rssi-via-sx1302.md`,
-`psram-software-energy-meas.md`) are implemented yet. Currently a
-contingency, not triggered.
-
-**Escalates to Moderate/High only if the area cut is taken.**
-
 ### 22. NR=2/3-chip cascade risks unsimulated
 
 Re-modulator SQNR accumulation across cascade stages, hierarchical-MRC
@@ -834,26 +808,13 @@ matches the fixed-point model bit-for-bit on a traced unequal-noise register
 vector (job 3612). The remaining risk is the undecided runtime gating policy.
 **See:** `planning/noise-weighted-mrc-2026-07.md`.
 
-### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)
+### 24. Residual Trouper Chip Specification drift: MRC numeric representation and RMD instability wording
 
-`Register Map.md` and `reg_bank.v` agree; the spec body does not.
-**Progress 2026-07-05/06:** all the stale register addresses below were fixed
-in the spec (Traceability.md "Register Address Reconciliation"), and
-TRPR-INT-006 / TRPR-DCR-015 / TRPR-FBC-002 / TRPR-REG-005 / TRPR-WGN-008 /
-TRPR-PSR-011/012 were reworded to the shipped design. **Still open:** spec
-§3.1 / TRPR-SYS-003/015/016 / TRPR-PHY-014 still mandate a real `CLK_16M`
-generated-clock tree (RTL is single-clock + `ce_16m` CE on reg_bank only);
-TRPR-MRC-001/006 say int16 Q1.15 weights but hardware consumes the high byte
-only (8-bit, per TRPR-MRC-002 / Open Risks #33); TRPR-MRC-004's safe-switch
-"W_ACTIVE" latch is spec-only (Open Risks #13); PCF-011's "bypass training"
-overstates Mode 1 (training runs, weights are ignored); RMD-003's "permanent
-instability" framing doesn't match observed failure signatures.
-Historical record of the fixed addresses: SC_HITS_REQ 0x1B→0x0E,
-PKT_TIMEOUT_SYMS 0x16→0x0B, WGT_CTRL 0x35→0x1E, PACKET_STATUS 0x34→0x1C,
-TRAINING_STATUS 0x60→0x20; ZDIAG width/address; `Z_SHIFT` removed; SCD-012
-C_POOL double-booking. Stale R=128 comments remain in
-`trouper_top.v:150`, `psram_buf_ctrl.v:11`, `mrc_combiner.v:19`,
-`training_acc.v:15` (budgets still fit the 64-cycle window).
+The 2026-07-26 audit closed the clock-tree, register-map, W_ACTIVE/safe-switch,
+PCF state/mode, and stale R=128-comment discrepancies. Two wording questions
+remain: TRPR-MRC-001/006 must consistently describe the implemented
+high-byte/8-bit weight representation rather than int16 Q1.15, and RMD-003's
+instability wording must match the observed failure signatures.
 
 **Doc gap — risk is firmware/bring-up written against the spec, not the map.**
 **Found:** 2026-07-02 trouper_top RTL review.
@@ -969,6 +930,28 @@ analog reset/power-rail behavior itself.
 ---
 
 ## Closed
+
+### 20. `firmware/picorv32/asic_regs.h` was stale — CLOSED 2026-07-26
+
+The header now uses the current 7-bit register map and configurable 128-byte
+ASIC bank: `REG_WGT_CTRL=0x1E`, `REG_ZDIAG_0..3=0x64/0x67/0x6A/0x6D`. Its
+`WGT_CTRL` comment was also extended for `W_COMMIT_LATE` (bit 4) and
+`W_WR_REJECTED` (bit 5).
+
+### 21. `energy_meas_coarse` contingency — CLOSED 2026-07-26
+
+The block is no longer present in either RTL tree; removal is complete rather
+than a future contingency. The associated per-branch RSSI risk is documented
+as Low in `planning/per-branch-rssi-via-sx1302.md`.
+
+### 30. PSRAM debug-read R=64 collision budget — CLOSED 2026-07-26
+
+The R=128 header comments were corrected in both RTL trees. Directed
+`dbg_write_collision` verification proves that a 31-cycle fetch exceeds the
+20-cycle R=64 idle margin, so the collision and `SAMPLE_SKIP` are deterministic:
+fetch data remains intact, the capture write is cleanly dropped, and capture
+resumes normally (job 3550; full block regression job 3551). This is a
+documented debug-use tradeoff, not an unresolved failure mode.
 
 ### 2. `sc_lock` never de-asserts — receiver is one-shot — CLOSED 2026-07-02
 
