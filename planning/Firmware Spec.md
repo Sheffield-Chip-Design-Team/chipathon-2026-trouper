@@ -76,10 +76,16 @@ working around them.
 ### CPU memory map
 
 - `0x00000000`–`0x00000FFF`: 4 KiB unified CPU SRAM (in Grouper)
-- `0x00010000`–`0x000100FF`: register bank (in Trouper)
-- `0x00010100`–`0x000101FF`: SPI master peripheral (in Trouper)
-- `0x00010200`–`0x000102FF`: IRQ controller (in Trouper)
-- `0x00010300`–`0x000103FF`: JTAG/SWD TAP (in Trouper)
+- `0x00010000`–`0x0001007F`: Trouper register bank, 7-bit map `0x00`–`0x7F`, reached over
+  the `GRP_*` byte bus (Grouper has priority over the host SPI slave)
+
+> **Corrected 2026-07-26 (audit item 19).** This list previously placed an **SPI master
+> peripheral**, an **IRQ controller** and a **JTAG/SWD TAP** "in Trouper" at
+> `0x00010100`–`0x000103FF`. None exists: TRPR-SPM-001 removes the SPI master (SX1257
+> configuration is external), §4.16 removes JTAG, and interrupt aggregation is not a
+> peripheral — it is the sticky `IRQ_STATUS` register inside `reg_bank`, read at `0x02`
+> and cleared via `0x03`, driving the `IRQ_OUT` pad and `IRQ_GROUPER` line. The register
+> window is also 128 bytes, not 256: the map is 7-bit.
 
 ### Primary firmware-visible events
 

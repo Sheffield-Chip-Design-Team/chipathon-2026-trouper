@@ -290,35 +290,81 @@ table, and the obsolete "pipeline the sc_detector TDM accumulator" fix note with
 
 | # | Status | Item |
 |---|---|---|
-| 18 | open | **`Test Plan.md` Block 8/9 tests hardware Trouper does not have** |
+| 18 | closed 2026-07-26 | **`Test Plan.md` Blocks 7/8/9 tested hardware Trouper does not have** |
 
-`:147-161` requires extended firmware-load SPI opcodes, `CPU_RESET`, CPU SRAM banks,
-and borrow-bank BIST registers. `:178` requires W "within one LoRa symbol period of
-correlator lock". Spec §4.11 removed the extended frame, §3.x removed the CPU, and
-TRPR-WGN-004 explicitly marks the one-symbol constraint superseded.
+Block 7 required extended firmware-load SPI opcodes `0x01`/`0x02`, a `CPU_RESET` boot
+sequence, CPU SRAM banks `BANK0`–`BANK2`, a reserved `BANK3`/`CPU_SRAM_BORROW_BANK` and
+per-bank BIST registers. Block 8 was an entire SPI-master-to-SX1257 test. Block 9 required
+W "within one LoRa symbol period of correlator lock", an `H`/`N₀` register interface, and
+NT=2 mode auto-switch. §4.11 removed the extended frame, §3.x removed the CPU,
+TRPR-SPM-001 removed the SPI master, and TRPR-WGN-004 marks the one-symbol constraint
+superseded.
+
+*Resolution (2026-07-26):* Block 7 rewritten around what is actually tested (reset/access
+sweep, W-shadow write-lock, mid-packet write gates, SPI CDC suite, Grouper arbitration).
+Blocks 8 and 9 retired into a single section that states why each is untestable and maps
+every old concern onto its current coverage — `test_weight_gen_spi_flow.py`, the
+Eigenvector Timing Budget, the PSRAM replay suite, `test_w_missed_packet.py` — or marks it
+software-owned / out of scope.
+
+**Also swept, same defect class:** Block 2 tested `ENERGY[n]` registers and a lock-latched
+energy snapshot, both removed with `noise_est.v` — retargeted to `ZDIAG_k / n_acc` and the
+`TACC_NOISE_TRIG` noise window. The integration matrix's borrow-bank rows became PSRAM
+replay and late-commit rows, and its NT=2 ALMMSE / mode-auto-switch rows became a
+noise-weighted-MRC row. Two NT=2 ALMMSE rows in the Block 5 matrix are struck through as
+out of scope.
 
 | # | Status | Item |
 |---|---|---|
-| 19 | open | **`Firmware Spec.md:78-82` memory map lists removed peripherals** |
+| 19 | closed 2026-07-26 | **`Firmware Spec.md` memory map listed removed peripherals** |
 
-SPI master, IRQ controller, and a JTAG/SWD TAP, all "in Trouper". Contradicts
-TRPR-SPM-001 and §4.16.
+The CPU memory map placed an SPI master peripheral, an IRQ controller and a JTAG/SWD TAP
+"in Trouper" at `0x00010100`–`0x000103FF`. None exists: TRPR-SPM-001 removed the SPI
+master, §4.16 removed JTAG, and interrupt aggregation is not a peripheral — it is the
+sticky `IRQ_STATUS` register inside `reg_bank` (`0x02`, cleared via `0x03`).
 
-| # | Status | Item |
-|---|---|---|
-| 20 | open | **`DSP Flow.md:288-292` key-constraints table is pre-half-band** |
-
-"Decimation ratios R=256, 128, 64, 32", "Frontend Buffer SRAM 512 B", "SC detection
-window L = min(M,256)", SF6 assumptions, `CPU_RESET` at `:279`. Everything above it in
-the same file (`:84-91`) correctly describes fixed R=64.
+*Resolution (2026-07-26):* the three entries are deleted and replaced with the single
+`GRP_*`-reached register window, corrected to **128 bytes** (`0x00010000`–`0x0001007F`) —
+the old map also implied a 256-byte window, but the register map is 7-bit.
 
 | # | Status | Item |
 |---|---|---|
-| 21 | open | **`Memory Strategy.md` residual Trouper content past its own banner** |
+| 20 | closed 2026-07-26 | **`DSP Flow.md` key-constraints table was pre-half-band** |
 
-Carries a superseded-banner for Trouper, but `:177` still asserts a live "Frontend
-Buffer Controller FSM" timing budget at R=256/128/64/32, and `:45-51` gives a PSRAM
-utilisation figure (~38%) that doesn't match TRPR-PSR-014's cycle budget.
+The table advertised "Decimation ratios R=256, 128, 64, 32", a 512 B Frontend Buffer SRAM,
+"SC detection window L = min(M,256)", SF6 assumptions and a `< 5,000 cycles` firmware
+weight budget, while `:84-91` of the same file correctly described the fixed R=64 chain.
+
+*Resolution (2026-07-26):* table rewritten to fixed R=64 with BW selected by
+`sample_shift`, `M = 1 << (SF + sample_shift)`, the PSRAM delay line and its 19-of-64
+cycle cost, and the measured 2.08/2.28 ms weight-compute figures with the SF9+ live-mode
+consequence.
+
+**Wider than the audit recorded.** Fixing only the table would have left it contradicting
+its own document, so two further stages were rewritten: **Stage 4** was still titled
+"Frontend Buffer Controller" and described a block-based fixed-L buffer in a 512×8 SRAM
+macro accepting 3–12 dB sub-symbol integration loss at SF9–SF12 — now the PSRAM full-M
+delay line, where that loss does not arise; and **Stage 5**'s autocorrelation was still
+`L = min(M, 256)`, now the full symbol period, with the `sc_ant_sel` branch selection and the
+ant0 deep-fade risk cross-referenced. `CPU_RESET` removed from both `:30` and the AGC
+section.
+
+| # | Status | Item |
+|---|---|---|
+| 21 | closed 2026-07-26 | **`Memory Strategy.md` had residual Trouper content past its own banner** |
+
+The document carries a superseded-banner for Trouper, but `:177` still asserted a live
+"Frontend Buffer Controller FSM" timing budget across R=256/128/64/32, and `:45-51` gave a
+PSRAM utilisation of **~38%** from ~1 µs write / ~0.5 µs read timings that match no
+controller behaviour.
+
+*Resolution (2026-07-26):* the PSRAM section now derives utilisation from the actual
+sub-cycle budget — **69%** for capture + SC detection (44/64) and **88%** for capture +
+replay (56/64), the replay phase being the binding case. That is materially tighter than
+the ~38% the document claimed, and worth knowing before anyone proposes adding PSRAM
+traffic. The frontend-buffer FSM paragraph is banner-annotated as historical, marked
+*(superseded)*, and its tenses moved to the past; the R=32 / 1 MS/s extrapolation is
+flagged out of scope.
 
 ---
 
@@ -477,7 +523,7 @@ unenforced.
    **Item 31** is a one-line comment fix, but its second half (unclamped `SF_CFG`) needs a
    design decision and an `Open Risks.md` entry first.
 4. ~~**Items 7–14**~~ — all closed 2026-07-26 (item 8 on branch `feat/noise-weighted-mrc`).
-5. **Items 18–21** — bulk staleness; cheapest as one "delete the CPU-era sections" pass.
+5. ~~**Items 18–21**~~ — all closed 2026-07-26, as one pass. Each turned out to be wider than its recorded line range; see the individual entries.
 6. **Tier 4** — sweep up alongside the next spec revision.
 
 Items 1, 2 and 3 also require reopening `Traceability.md:126-127`, `:158`, `:160`,

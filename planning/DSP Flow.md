@@ -27,7 +27,7 @@ There is no hardware weight-generation baseline in the current tapeout plan. The
 
 The supported firmware-free fallback is specifically `RX-only bypass`:
 
-- `CPU_RESET=1`
+- no firmware present (Grouper CPU halted or absent — there is no `CPU_RESET` register in Trouper)
 - no weight commits
 - PSRAM replay disabled
 - fixed SX1257 gain from reset defaults or host-programmed register values
@@ -113,19 +113,31 @@ See [DC Removal](blocks/DC%20Removal.md).
 
 ---
 
-## Stage 4 — Frontend Buffer Controller
+## Stage 4 — PSRAM Buffer Controller (SC delay line)
 
-Block-based fixed-L delay buffer. Stores L = min(M, 256) channel-0 samples per symbol block in one 512×8 SRAM macro (SRAM0). Provides `del_i0/del_q0` (L-sample-delayed channel 0) and `delayed_valid` to the SC detector. Current samples for all 4 branches pass through directly.
+> **Rewritten 2026-07-26 (audit item 20).** This stage described a block-based fixed-L
+> delay buffer in a 512×8 on-chip SRAM macro with `L = min(M, 256)`. That block and all
+> on-chip SRAM were removed (TRPR-PHY-006); the delay line is now a full-M read from
+> off-chip PSRAM, so the sub-symbol integration loss the old text accepted (3–12 dB at
+> SF9–SF12) no longer applies.
 
-One SRAM macro covers all SF6–SF12. SF9–SF12 use L=256 (sub-symbol block); integration loss of 3–12 dB is acceptable given preamble repetition and the downstream timing refiner. CPU SRAM borrow path is removed — not needed.
+Full-depth delay line in the external APS6404L. On each `iq_valid` the controller writes
+all four branches (8 bytes) and reads back the selected branch's `x[n−M]` from
+`write_ptr − M`, where `M = 1 << (SF + sample_shift)` — the true symbol period at every
+supported SF, with no sub-symbol truncation. Provides `cur_i0/cur_q0`, `del_i0/del_q0`
+and `del_valid` to the SC detector; the live path for all four branches passes through
+directly from `dc_removal`.
 
-See [Frontend Buffer Controller](blocks/Frontend%20Buffer%20Controller.md).
+Budget: write 25 cycles + delay read 19 cycles = 44 of the 64 cycles between `iq_valid`
+pulses (TRPR-PSR-014). Branch selection is `BW_CFG[2:1]` (`sc_ant_sel`).
+
+See [PSRAM Buffer Controller](blocks/PSRAM%20Buffer%20Controller.md).
 
 ---
 
 ## Stage 5 — SC Preamble Detector
 
-Block-based complex autocorrelation over L = min(M, 256) samples per symbol period. NR=1 (channel 0 only). Detects the LoRa preamble and provides sample-accurate `timing_ref`. No dechirp required.
+Complex autocorrelation over the full symbol period `M = 1 << (SF + sample_shift)`, against the PSRAM-supplied `x[n−M]`. Single selected branch (`sc_ant_sel`, `BW_CFG[2:1]`; default branch 0 — see `sc-detector-ant0-fading-risk.md` for the deep-fade single-point-of-failure this leaves open). Detects the LoRa preamble and provides sample-accurate `timing_ref`. No dechirp required. (Corrected 2026-07-26: the old `L = min(M, 256)` block-based form went with the on-chip SRAM.)
 
 **Per-block statistic (channel 0):**
 
@@ -277,7 +289,7 @@ Disable EMA (`ALPHA_SHIFT=0`) for mobile deployments where channel coherence tim
 
 ### 4. Initial Gain Setting
 
-Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set `RX_GAIN_SHADOW_n` via SPI and pulse `RX_GAIN_COMMIT` before releasing `CPU_RESET`.
+Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set `RX_GAIN_SHADOW_n` via SPI and pulse `RX_GAIN_COMMIT` during bring-up, before the first packet. (There is no `CPU_RESET` — Trouper has no on-chip CPU; corrected 2026-07-26.)
 
 ---
 
@@ -285,10 +297,10 @@ Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitiv
 
 | Constraint | Value | Impact |
 | --- | --- | --- |
-| Decimation ratios | R=256, 128, 64, 32 | Native support for 125, 250, 500 kHz BW (1×) plus 1 MS/s (2× / 500 kHz); power-of-2 ensures integer M for all SF |
-| SC detection window | L = min(M, 256) samples per block | Block-based buffer; one 512×8 SRAM covers SF6–SF12 |
-| Training accumulation | ~5 symbols (SC_HITS_REQ=2) | ~2 dB loss vs ideal 8-symbol average; acceptable baseline |
-| Firmware weight generation | < 5,000 cycles | Fits the SF5/SF6 timing budget for same-packet payload weighting; full-packet same-packet delivery relies on PSRAM replay |
-| Host-assisted weight generation | board/software dependent | Valid as a bring-up or backup path, but timing margin depends on transport latency and is not the primary tapeout mode |
-| Frontend Buffer SRAM | 512 B (1 × 512 B macro) | Channel 0 only; block-based L=256; covers SF6–SF12 |
+| Decimation ratio | **Fixed R=64** (CIC-3 R=16 → HB1 ÷2 → HB2 ÷2) | 32 MS/s 1-bit → 500 kS/s int8. BW is selected by `sample_shift` oversampling, *not* by changing R: 250 kHz = 2× (`sample_shift=1`), 125 kHz = 4× (`sample_shift=2`). 1 MS/s is out of scope (PSRAM timing budget) |
+| Symbol period | `M = 1 << (SF + sample_shift)` | 256 (SF7/250 kHz) to 16384 (SF12/125 kHz) |
+| SC detection delay line | `x[n−M]` read from **off-chip PSRAM** at `write_ptr − M` | No on-chip SRAM and no block-based windowing; one QPI read per `iq_valid`, 19 of the 64 available cycles (TRPR-PSR-014) |
+| Training accumulation | `TACC_WINDOW_SYMS × M`, default 8 symbols | See `DSP Chain SNR Loss Budget.md` for the truncation term — that figure is under review (audit item 15) |
+| Firmware weight generation | 8-iteration eigenvector: **33,283 cyc / 2.08 ms** (rv32im), 36,458 / 2.28 ms (rv32emc) at 16 MHz, SF-independent | Replay mode's deadline is `packet_end` so all SFs fit; live mode's is `4·M / 500 kHz`, which fits **SF9+ only** — replay is mandatory for SF7/SF8 (TRPR-WGN-004) |
+| Host-assisted weight generation | board/software dependent | Valid bring-up or backup path; compute is effectively free but bounded by host IRQ latency, which is unmeasured |
 | ΣΔ re-mod | 3rd order, single instance | SQNR > 100 dB at OSR=64 (500 kHz BW) — LoRa headroom > 70 dB |
