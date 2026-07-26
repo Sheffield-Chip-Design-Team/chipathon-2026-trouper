@@ -74,9 +74,11 @@ def _asr(value: int, sh: int) -> int:
     """Arithmetic right-shift of a Python int, matching C `int32_t >>` on signed values."""
     if sh <= 0:
         return value
-    if value >= 0:
-        return value >> sh
-    return -((-value) >> sh)
+    # Python's signed >> is an arithmetic (sign-extending) shift, matching the
+    # deployed PicoRV32/GCC behaviour.  Do not emulate C division here:
+    # division truncates negative values toward zero, whereas an ASR rounds
+    # toward negative infinity (e.g. -9 >> 1 == -5).
+    return value >> sh
 
 
 def compute_eigvec_fw(
@@ -87,6 +89,7 @@ def compute_eigvec_fw(
     sigma2_zdiag: np.ndarray | None = None,
     strict: bool = True,
     snr_weight: bool = False,
+    register_units: bool = False,
 ) -> np.ndarray:
     """
     Firmware-accurate fixed-point eigenvector weight computation.
@@ -119,6 +122,9 @@ def compute_eigvec_fw(
                  so the result is the UNEQUAL-noise optimum conj(D^-1 h) rather
                  than the equal-noise optimum conj(h). See
                  `compute_eigvec_snrw_fw`.
+    register_units : when True, `Z_matrix` is already the 24-bit SPI readback
+                 representation (Z_kl/ZDIAG bits [31:8]), as consumed by
+                 firmware. This is the mode for bit-for-bit firmware tests.
 
     Returns
     -------
@@ -169,7 +175,8 @@ def compute_eigvec_fw(
         if np.any(whitened > 0):
             diag_full = whitened
 
-    zdiag_reg = np.array([v >> 8 for v in diag_full], dtype=np.int64)   # upper 24 bits only
+    zdiag_reg = (diag_full if register_units else
+                 np.array([v >> 8 for v in diag_full], dtype=np.int64))
 
     # ------------------------------------------------------------------
     # Step 1 — Find common normalisation shift.
@@ -182,7 +189,7 @@ def compute_eigvec_fw(
                           abs(int(round(Z_matrix[k, l].real))),
                           abs(int(round(Z_matrix[k, l].imag))))
     for k in range(NR):
-        max_abs = max(max_abs, int(zdiag_reg[k] << 8))   # compare at int32 scale
+        max_abs = max(max_abs, int(zdiag_reg[k] if register_units else zdiag_reg[k] << 8))
 
     sh = _norm_shift(max_abs, scale_bits)
 
@@ -197,10 +204,10 @@ def compute_eigvec_fw(
             m_re[k][l] =  ri;  m_re[l][k] =  ri
             m_im[k][l] =  ii;  m_im[l][k] = -ii   # Hermitian conjugate
 
-    # Diagonal: (zdiag_reg[k] << 8) >> sh -- same scale as off-diagonal, so no
-    # separate scale-alignment case is needed (net is always >= 0 in practice
-    # since sh grows with matrix magnitude, but keep the >=0 guard for safety).
-    net = sh - 8
+    # Full-accumulator callers need to undo ZDIAG's [31:8] truncation before
+    # the common shift. Firmware/register callers already have matched-scale
+    # 24-bit ZDIAG and off-diagonal entries, so use the shift directly.
+    net = sh if register_units else sh - 8
     diag = []
     for k in range(NR):
         zd = int(zdiag_reg[k])
@@ -258,12 +265,17 @@ def compute_eigvec_fw(
         for k in range(NR):
             gg_kk = (g[k] * g[k]) >> _G_BITS
             diag[k] = _asr(diag[k] * gg_kk, _G_BITS)
-            for l in range(NR):
-                if l == k:
-                    continue
+        # Firmware stores/scales only the upper triangle and reconstructs the
+        # reverse entry by conjugation in the MAC equations.  Scaling both
+        # sides independently can round a tiny imaginary component differently
+        # (e.g. +1 -> 0 while -1 -> -1), breaking Hermitian symmetry.
+        for k in range(NR):
+            for l in range(k + 1, NR):
                 gg = (g[k] * g[l]) >> _G_BITS
                 m_re[k][l] = _asr(m_re[k][l] * gg, _G_BITS)
                 m_im[k][l] = _asr(m_im[k][l] * gg, _G_BITS)
+                m_re[l][k] = m_re[k][l]
+                m_im[l][k] = -m_im[k][l]
 
     # ------------------------------------------------------------------
     # Step 2 — Power iteration.
@@ -393,6 +405,7 @@ def compute_eigvec_snrw_fw(
     iters: int = _ITERS,
     scale_bits: int = _SCALE_BITS,
     strict: bool = True,
+    register_units: bool = False,
 ) -> np.ndarray:
     """
     Full noise-whitened (SNR-weighted) fixed-point eigenvector weights.
@@ -438,4 +451,5 @@ def compute_eigvec_snrw_fw(
     return compute_eigvec_fw(
         Z_matrix, n_acc, iters=iters, scale_bits=scale_bits,
         sigma2_zdiag=sigma2_zdiag, strict=strict, snr_weight=True,
+        register_units=register_units,
     )

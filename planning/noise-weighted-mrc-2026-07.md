@@ -127,10 +127,27 @@ error over 300 channels); the win is purely cycles. `test_fp_snr_weighting_
 needs_no_mulh` pins the int32 bound so a refactor cannot silently move the
 scaling back before normalisation.
 
-> Cycle figures are README per-instruction costs × multiply counts — **not
-> measured, not compiled**. The existing 36.5k-cycle / 2.28 ms eigenvector
-> budget came from a real measurement; A′ needs measuring the same way before
-> the ~12% saving is quoted anywhere load-bearing.
+### Cycle-accurate PicoRV32 measurement (2026-07-26)
+
+SGE job 3608 repeated the established `rdcycle`/`rdinstret` Icarus method on
+the real PicoRV32 configured as deployed (`rv32emc`, 16 registers, compressed
+ISA, `ENABLE_MUL=1`, `ENABLE_FAST_MUL=0`, one-cycle SRAM). The harness seeds a
+fully resolved, unequal per-branch noise window, then measures only
+`compute_eigvec_weights_fw()`:
+
+| interval | cycles | instructions | time at 16 MHz |
+|---|---:|---:|---:|
+| Raw eigenvector (`nfe_valid=0`) | 37,016 | 3,755 | 2.313 ms |
+| One `update_noise_floor_fw()` | 1,656 | 175 | 0.104 ms |
+| SNR-weighted eigenvector | 42,857 | 4,462 | 2.679 ms |
+| SNRW increment over raw | **5,841** | **707** | **0.365 ms** |
+
+This supersedes the 1,040-cycle A′ estimate. The estimate counted only the
+post-normalisation matrix multiplies; it omitted the four 64-bit pedestal
+products, four scale-factor divisions, integer square roots, and surrounding
+multi-cycle PicoRV32 work. The noise-window update is between packets; the
+load-bearing same-packet increment is 5,841 cycles. Harness/logs:
+`/srv/eda/designs/timothyjabez/eigvec_bench_nwmrc_20260726/`, SGE job 3608.
 
 ---
 
@@ -279,25 +296,30 @@ to the integer path `g_k = GMAX · s_min / s_k`, so both sides now run identical
 arithmetic. Still reaches the optimum (`[0.107, 1.0, 1.0, 1.0]` vs
 `[0.1, 1, 1, 1]`); 180 tests still pass.
 
+### Firmware/model equivalence (SGE job 3612)
+
+The first direct C/model comparison exposed a reference-model rounding bug,
+not a firmware error. During SNR scaling the model independently rounded both
+sides of every Hermitian pair; a tiny `+1` component could round to zero while
+its `−1` conjugate rounded to `−1`. Firmware stores and scales only the upper
+triangle, then uses the exact conjugate in the reverse MAC row. The model now
+does the same. It also has an explicit `register_units=True` mode for the
+24-bit Z/ZDIAG values firmware actually consumes.
+
+The trace vector (unequal noise window ZDIAG `[4096,1024,256,64]` at
+`N_ACC=1024`, signal window `N_ACC=512`) matched all four Q1.15 pairs exactly:
+`[(169,12), (448,653), (4649,5279), (9069,32767)]`. Regression:
+`sim/tests/test_eigvec_nw_fw.py::test_snrw_register_units_matches_picorv32_trace_job_3612`.
+
 ---
 
 ## 7. Open
 
-1. **Firmware equivalence test.** The C is written and builds clean for
-   `rv32emc` (§6.5) but has **never been executed**. Nothing yet proves it
-   produces the same weights as `compute_eigvec_snrw_fw`. `main.c` already has
-   an `ASIC_REG_TESTMEM` hook for host-compiled unit tests — feed known
-   Z/ZDIAG/N_ACC through both and compare bit-for-bit.
-2. **Gating policy.** With de-biasing alone, whitening cost slightly at matched
+1. **Gating policy.** With de-biasing alone, whitening cost slightly at matched
    noise (0.0435 → 0.0625 BER at −12 dB) so gating on measured imbalance
    mattered. With full SNR weighting the upside is far larger and the threshold
    is much less delicate — but no rule is implemented anywhere.
-3. **Measure A′ cycles** on the real core (the ~1040 figure is an estimate,
-   never measured); reconcile with the ~31 cycles/MUL
-   figure in `planning/blocks/Eigenvector Weight Computation.md` and Open Risks
-   #7, which the vendor README contradicts (40 for MUL, 72 for MULH). That
-   independently makes the SF7 margin worse than currently written.
-4. **Per-branch noise in `iq_capture`** so the RTL path can assert gain, not
+2. **Per-branch noise in `iq_capture`** so the RTL path can assert gain, not
    just plumbing.
-5. **Re-run `sims/compare_mrc_methods.py`** — its stored "whitening adds
+3. **Re-run `sims/compare_mrc_methods.py`** — its stored "whitening adds
    nothing" table was produced with the scalar form.

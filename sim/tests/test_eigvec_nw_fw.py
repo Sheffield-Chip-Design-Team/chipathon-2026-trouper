@@ -436,3 +436,32 @@ def test_fp_snr_weighting_needs_no_mulh():
     max_g = (1 << _G_BITS) - 1
     assert max_entry * max_g < 2**31, "entry * g must fit int32 (single MUL)"
     assert max_g * max_g < 2**31, "g * g must fit int32 (single MUL)"
+
+
+def test_snrw_register_units_matches_picorv32_trace_job_3612():
+    """Pin the 24-bit register-interface arithmetic against real PicoRV32.
+
+    This vector uses a completed unequal-noise window (N_ACC=1024) followed by
+    a signal window (N_ACC=512). Job 3612 ran the matching C firmware on the
+    project's rv32emc PicoRV32 and returned the expected Q1.15 pairs.
+    """
+    from sim.models.eigvec_fw import compute_eigvec_snrw_fw
+
+    od = [0x31A240, -0x0022C1, 0x28FF10, 0x15AB00, -0x001D33, 0x0F4208,
+          0x26B000, 0x19C420, 0x12AA00, -0x000E71, 0x21D500, 0x113340]
+    diag = [0x5A2180, 0x4C9340, 0x611008, 0x3F0477]
+    pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    z = np.zeros((NR, NR), dtype=complex)
+    for i, (k, l) in enumerate(pairs):
+        z[k, l] = complex(od[2*i], od[2*i + 1])
+        z[l, k] = np.conj(z[k, l])
+    for k in range(NR):
+        z[k, k] = diag[k]
+
+    # ZDIAG noise samples [4096, 1024, 256, 64] over 1024 samples.
+    w = compute_eigvec_snrw_fw(
+        z, n_acc=512, sigma2_zdiag=np.array([4.0, 1.0, 0.25, 0.0625]),
+        register_units=True,
+    )
+    got = [(int(x.real * 32768), int(x.imag * 32768)) for x in w]
+    assert got == [(169, 12), (448, 653), (4649, 5279), (9069, 32767)]

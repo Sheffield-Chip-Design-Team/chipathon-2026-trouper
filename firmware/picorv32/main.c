@@ -64,7 +64,9 @@
  * Cost: the D^-1/2 scale is applied to the ALREADY-NORMALISED matrix, so every
  * product stays inside int32 (2^12 * 2^15 = 2^27) and only MUL is needed --
  * never MULH. That matters here: picorv32 with ENABLE_FAST_MUL=0 costs 40
- * cycles for MUL and 72 for MULH. 26 MUL, ~1040 cycles, once per packet.
+ * cycles for MUL and 72 for MULH. The post-normalisation scaling itself has
+ * 26 MULs; its complete measured cost, including pedestal products, divisions
+ * and integer square roots, is +5841 cycles once per packet (SGE job 3608).
  * Scaling the raw matrix instead would need 32x32->64 products (~2190 cycles);
  * folding the scale into each power-iteration step would cost ~5440.
  *

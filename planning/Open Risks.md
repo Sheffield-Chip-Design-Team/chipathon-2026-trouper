@@ -825,12 +825,13 @@ multi-ASIC cascade topology.
 product ships.
 **See:** `planning/NR2-multi-ASIC-cascade.md`, `planning/cascade-beamsteering.md`.
 
-### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware open
+### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware equivalence verified; gating policy open
 
 Float and fixed-point SNR-weighted eigenvector paths implemented and verified
-end-to-end over SPI (jobs 3596/3598, combiner bit-exact); firmware C written and
-building clean for rv32emc (job 3602) but **never executed** — residual risk is
-that unproven equivalence to the model, plus the undecided gating policy.
+end-to-end over SPI (jobs 3596/3598, combiner bit-exact). Firmware builds for
+rv32emc (job 3602), was cycle-measured on the real PicoRV32 (job 3608), and
+matches the fixed-point model bit-for-bit on a traced unequal-noise register
+vector (job 3612). The remaining risk is the undecided runtime gating policy.
 **See:** `planning/noise-weighted-mrc-2026-07.md`.
 
 ### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)
