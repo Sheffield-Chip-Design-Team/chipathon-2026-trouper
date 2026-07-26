@@ -266,7 +266,7 @@ Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
 
 **AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
 
-**Noise EMA (separate from AGC):** Between packets (`PACKET_ACTIVE=0`), software arms a noise accumulation window via `TACC_NOISE_TRIG` (`0x1F`[0]=1). After `IRQ_TRAINING_DONE` fires in noise mode, `ZDIAG_k ≈ σ²_k × n_acc`. Software maintains σ²_ema[k] ← (1−α)·σ²_ema[k] + α·(ZDIAG_k/n_acc); this feeds ALMMSE weight computation (w_k ∝ h_k/σ²_k).
+**Noise EMA (separate from AGC):** Between packets (`PACKET_ACTIVE=0`), software arms a noise accumulation window via `TACC_NOISE_TRIG` (`0x1F`[0]=1). After `IRQ_TRAINING_DONE` fires in noise mode, `ZDIAG_k ≈ σ²_k × n_acc`. Software maintains σ²_ema[k] ← (1−α)·σ²_ema[k] + α·(ZDIAG_k/n_acc); this supplies optional noise-weighted MRC, which scales each conventional MRC weight by `1/σ²_ema[k]`. For NT=1 diagonal noise, this is the diagonal-MMSE special case—not a full ALMMSE/multi-user detector.
 
 ---
 

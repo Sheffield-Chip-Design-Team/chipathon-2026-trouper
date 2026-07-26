@@ -23,21 +23,75 @@ from .fixed import quantize_q1_15
 # Noise floor estimator — firmware policy model
 # ---------------------------------------------------------------------------
 
+# Fractional bits carried by the integer EMA state. Two separate constraints
+# both want fractional bits:
+#
+#  1. EMA deadband. The increment is (x - s) >> alpha_shift in integer
+#     arithmetic, which stalls whenever the difference is under 2^alpha_shift.
+#  2. Representable noise floor. sigma2 per sample is ZDIAG_k / n_acc, a RATIO
+#     -- so it underflows to zero whenever ZDIAG_k / n_acc < 2^-frac_bits.
+#     NOTE this is NOT fixed by a longer noise window: lengthening the window
+#     scales ZDIAG_k and n_acc together and leaves the ratio unchanged.
+#
+# Real capture data forced this from 8 to 16: an 8-symbol window gave
+# ZDIAG = [11, 7, 5, 4] at n_acc = 2048, i.e. sigma2 ~ 0.0034 ZDIAG units per
+# sample, just under the Q8 floor of 1/256 = 0.0039 -- three of four branches
+# floored to zero (SGE job 3593). Q16 resolves them.
+#
+# Firmware note: (zdiag << 16) with a 24-bit ZDIAG reaches 2^40, so the RV32IM
+# implementation needs a 64-bit intermediate (__udivdi3) for this divide. The
+# alternative, if that cost is unacceptable, is to skip the per-sample form and
+# carry the pedestal directly as ZDIAG_noise * n_acc_sig / n_acc_noise with the
+# multiply first -- same precision, one 64/32 divide, no fractional state.
+NFE_FRAC_BITS = 16
+
+
+def zdiag_from_energy(energy_sum: np.ndarray) -> np.ndarray:
+    """Convert a full-scale Σ|x|² accumulator to its ZDIAG register value.
+
+    Hardware exposes ZDIAG_k as bits [31:8] of the 32-bit accumulator
+    (`Register Map.md` 0x64–0x6F), so the low byte is not readable.
+    """
+    return (np.asarray(energy_sum).astype(np.int64)) >> 8
+
+
 class NoiseFloorEstimator:
     """
-    Firmware-side per-branch noise floor estimator.
+    Firmware-side per-branch noise floor estimator — ZDIAG source.
 
-    Models the idle-state noise sampling policy from Weight Generation.md:
-    when packet_phase == IDLE, sc_lock is inactive, and all per-branch
-    energy_j < noise_thresh, firmware reads ENERGY[0..3] and updates
-    a per-branch EMA of the noise power.
+    Models the noise-window policy that Trouper actually implements:
+
+        1. firmware waits for PACKET_ACTIVE = 0
+        2. firmware writes TACC_NOISE_TRIG (0x1F[0]) to arm a window of
+           TACC_WINDOW_SYMS x M samples without sc_lock (TRPR-TAC-007)
+        3. on NOISE_READY (IRQ_STATUS[4]) — the hardware SC-contamination
+           gate — firmware reads ZDIAG_k (0x64-0x6F) and N_ACC (0x21-0x23)
+        4. per-branch EMA update, sigma2_k ~= ZDIAG_k / n_acc
+
+    This replaces the pre-2026-07 policy that polled free-running ENERGY[0..3]
+    registers; that block was removed with `noise_est.v` and those registers no
+    longer exist. The `noise_thresh` near-far guard is retained as an optional
+    firmware-side second line of defence behind the NOISE_READY gate.
+
+    Arithmetic is integer throughout and mirrors what RV32IM firmware runs:
+    the state is a fixed-point value with `NFE_FRAC_BITS` fractional bits and
+    the EMA is a shift-and-add, so there is no float on the firmware path.
 
     Parameters
     ----------
     NR          : number of receive branches
     alpha_shift : EMA decay exponent; alpha = 2^(-alpha_shift). Default 4 → α=0.0625.
-    noise_thresh: per-branch per-sample energy threshold above which the near-far
-                  guard rejects the symbol window. None disables the guard.
+    noise_thresh: optional per-branch threshold, in ZDIAG-register units per
+                  sample, above which the window is rejected. None disables it.
+    frac_bits   : fractional bits in the integer EMA state.
+
+    Units
+    -----
+    `estimate` is returned in **ZDIAG register units per sample** — the same
+    scale as the Z_kl off-diagonal readback, since both are bits [31:8]. That
+    makes `estimate * n_acc` directly subtractable from a ZDIAG-scale diagonal
+    (see `eigvec_fw.compute_eigvec_nw_fw`) with no scale-alignment step.
+    Use `estimate_full_scale` for the untruncated int32 accumulator scale.
     """
 
     def __init__(
@@ -45,47 +99,112 @@ class NoiseFloorEstimator:
         NR: int,
         alpha_shift: int = 4,
         noise_thresh: float | None = None,
+        frac_bits: int = NFE_FRAC_BITS,
     ):
         self.NR = NR
+        self.alpha_shift = alpha_shift
         self.alpha = 2.0 ** (-alpha_shift)
         self.noise_thresh = noise_thresh
-        self._sigma2_j = np.zeros(NR)
+        self.frac_bits = frac_bits
+        self._sigma2_q = np.zeros(NR, dtype=np.int64)   # Q(frac_bits), ZDIAG units
         self._n_updates = 0
         self._n_rejected = 0
 
-    def update(self, energy_sum_j: np.ndarray, n_window: int) -> bool:
+    def update(self, zdiag: np.ndarray, n_acc: int) -> bool:
         """
-        Attempt a noise floor update from one symbol window.
+        Attempt a noise floor update from one completed noise window.
 
         Parameters
         ----------
-        energy_sum_j : (NR,) per-branch Σ|x|² over the symbol window (ENERGY registers)
-        n_window     : samples in the window (M = 2^SF)
+        zdiag : (NR,) per-branch ZDIAG_k as read from 0x64-0x6F — bits [31:8]
+                of the Σ|raw_k|² accumulator. Pass `zdiag_from_energy(E)` if
+                starting from a full-scale energy sum.
+        n_acc : accumulated sample count from N_ACC (0x21-0x23).
 
         Returns
         -------
-        accepted : True if the near-far guard passed and the EMA was updated
+        accepted : True if the guard passed and the EMA was updated.
         """
-        energy_per_sample = energy_sum_j / n_window
-
-        # Near-far guard: reject if any branch exceeds threshold
-        if self.noise_thresh is not None and np.any(energy_per_sample > self.noise_thresh):
+        if n_acc <= 0:
             self._n_rejected += 1
             return False
 
+        zd = np.asarray(zdiag).astype(np.int64)
+
+        # Per-sample noise power in Q(frac_bits), ZDIAG units. Integer divide
+        # matches the RV32IM `divu` firmware would issue.
+        x_q = (zd << self.frac_bits) // np.int64(n_acc)
+
+        # Optional near-far guard, behind the hardware NOISE_READY gate.
+        if self.noise_thresh is not None:
+            thresh_q = np.int64(self.noise_thresh * (1 << self.frac_bits))
+            if np.any(x_q > thresh_q):
+                self._n_rejected += 1
+                return False
+
         if self._n_updates == 0:
-            self._sigma2_j = energy_per_sample.copy()   # cold-start: seed the EMA
+            self._sigma2_q = x_q.copy()          # cold-start: seed, don't decay up
         else:
-            self._sigma2_j = (
-                (1.0 - self.alpha) * self._sigma2_j + self.alpha * energy_per_sample
-            )
+            # s += (x - s) >> alpha_shift, with arithmetic (floor) shift.
+            diff = x_q - self._sigma2_q
+            self._sigma2_q = self._sigma2_q + (diff >> self.alpha_shift)
         self._n_updates += 1
         return True
 
     @property
     def estimate(self) -> np.ndarray:
-        """Current per-branch noise power estimate σ²_j (per sample)."""
-        return self._sigma2_j.copy()
+        """Per-branch σ²_j per sample, in ZDIAG register units (float view)."""
+        return self._sigma2_q.astype(float) / (1 << self.frac_bits)
+
+    @property
+    def estimate_q(self) -> np.ndarray:
+        """Raw integer EMA state, Q(frac_bits) — the bit-exact firmware value."""
+        return self._sigma2_q.copy()
+
+    @property
+    def estimate_full_scale(self) -> np.ndarray:
+        """Per-branch σ²_j per sample at the untruncated int32 accumulator scale."""
+        return self.estimate * 256.0
+
+    @property
+    def underflow_mask(self) -> np.ndarray:
+        """Per-branch True where the EMA state has quantised to exactly zero.
+
+        Happens when ZDIAG_k * 2^frac_bits < n_acc, i.e. the branch's noise
+        floor is below the estimator's resolution for that window length.
+        """
+        return self._sigma2_q == 0
+
+    @property
+    def valid(self) -> bool:
+        """
+        True if `estimate` is safe to whiten with.
+
+        False for a PARTIALLY underflowed estimate — some branches zero, others
+        not. Whitening on that fabricates a branch imbalance that was never
+        measured, which is worse than not whitening at all. An all-zero estimate
+        is 'valid' in the sense that whitening becomes an exact no-op.
+
+        Observed on real capture data: an 8-symbol window gave
+        ZDIAG = [11, 7, 5, 4] at n_acc = 2048 -> sigma2 = [0.004, 0, 0, 0],
+        three branches underflowed (SGE job 3593). The sigma-delta full scale is
+        set by the packet peak, so a quiet noise floor lands below one ZDIAG LSB.
+        The remedy is more `frac_bits` (the default is now 16, which resolves
+        that case). A longer noise window does NOT help on its own: sigma2 is
+        the ratio ZDIAG_k / n_acc and lengthening the window scales both.
+        """
+        if self._n_updates == 0:
+            return False
+        nz = int(np.count_nonzero(self._sigma2_q))
+        return nz == 0 or nz == self.NR
+
+    def resolution_floor(self, n_acc: int) -> float:
+        """Smallest per-sample σ² this estimator can represent for `n_acc`.
+
+        Below this a branch underflows to zero. Useful for sizing the noise
+        window: ZDIAG_k must reach about n_acc / 2^frac_bits to resolve at all.
+        """
+        return 1.0 / (1 << self.frac_bits) if n_acc > 0 else float("inf")
 
     @property
     def n_updates(self) -> int:

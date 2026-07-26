@@ -126,11 +126,16 @@ sticky `W_WR_REJECTED` (`0x1E[5]`).
 
 | # | Status | Item |
 |---|---|---|
-| 8 | open | **ALMMSE vs eigenvector** |
+| 8 | closed 2026-07-26 | **ALMMSE terminology conflicted with the NT=1 weight-mode scope** |
 
-TRPR-WGN-006 (`:261`) states the secondary mode is power-iteration eigenvector
-"(**not ALMMSE**)". TRPR-AGC-005 (`:485`) and `Register Map.md:265` both say the noise
-EMA "feeds ALMMSE weight computation (w_k ∝ h_k/σ²_k)".
+Before resolution, TRPR-WGN-006 called eigenvector mode "not ALMMSE," while
+TRPR-AGC-005 and `Register Map.md` described the noise EMA as feeding "ALMMSE" with
+`w_k ∝ h_k/σ²_k`.
+
+*Resolution (2026-07-26):* the NT=1 option is now explicitly named **noise-weighted
+MRC** (TRPR-WGN-012): inverse-variance scaling of conventional MRC weights. It is
+documented as the diagonal-noise MMSE special case, not a full ALMMSE/multi-user
+detector; full NT≥2 ALMMSE remains out of scope.
 
 | # | Status | Item |
 |---|---|---|

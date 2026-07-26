@@ -293,6 +293,193 @@ def compute_eigvec_weights(
     return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
 
 
+def whiten_z_diagonal(
+    Z_matrix: np.ndarray,
+    sigma2: np.ndarray,
+    n_acc: int,
+) -> np.ndarray:
+    """
+    Remove the per-branch noise pedestal from a Z matrix's diagonal.
+
+        Z_kk' = max(Z_kk - sigma2_k * n_acc, 0)
+
+    Z_kk carries (|h_k|^2 + sigma2_k) * n_acc. With MATCHED branch noise the
+    pedestal is a multiple of I: it shifts every eigenvalue equally and leaves
+    the eigenvectors untouched, so whitening is a no-op in direction. With
+    UNEQUAL branch noise it is not a multiple of I and biases the principal
+    eigenvector toward the noisiest branch — the inverse of what MRC should do.
+    That asymmetric case is the one this corrects.
+
+    Clamped at zero per branch: a negative diagonal would let the fixed-point
+    power iteration (which tracks largest |lambda|, not largest lambda) lock
+    onto a negative eigenvalue.
+
+    Parameters
+    ----------
+    Z_matrix : (NR, NR) complex Hermitian matrix.
+    sigma2   : (NR,) per-branch noise power per sample, in the SAME units as
+               Z_matrix's entries.
+    n_acc    : accumulation sample count.
+
+    Returns
+    -------
+    Z_w : (NR, NR) complex, whitened copy (input is not modified).
+    """
+    NR = Z_matrix.shape[0]
+    s2 = np.asarray(sigma2, dtype=float)
+    Z_w = Z_matrix.copy()
+    for k in range(NR):
+        Z_w[k, k] = complex(max(Z_matrix[k, k].real - s2[k] * n_acc, 0.0), 0.0)
+    return Z_w
+
+
+def sigma2_is_usable(sigma2: np.ndarray) -> bool:
+    """
+    True if a per-branch noise estimate is safe to whiten with.
+
+    Rejects a PARTIALLY underflowed estimate — some branches zero, others not.
+    That case is worse than not whitening at all: subtracting a pedestal from
+    only some branches fabricates an imbalance that was never measured, biasing
+    the eigenvector away from the branches that happened to resolve.
+
+    An all-zero estimate is accepted: whitening is then exactly a no-op, which
+    is the correct degenerate behaviour.
+
+    Seen for real on silicon-model RTL: an 8-symbol noise window on a live
+    capture produced sigma2 = [0.004, 0, 0, 0] because the sigma-delta full
+    scale is set by the packet peak, putting the noise floor below one ZDIAG
+    LSB on three of four branches (SGE job 3593).
+    """
+    s2 = np.asarray(sigma2, dtype=float)
+    nz = np.count_nonzero(s2)
+    return nz == 0 or nz == s2.size
+
+
+def compute_eigvec_nw_weights(
+    Z_matrix: np.ndarray,
+    sigma2: np.ndarray,
+    n_acc: int,
+    antenna_en: int = 0xF,
+    cal_j: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Float-reference NOISE-WHITENED eigenvector MRC weights.
+
+    Principal eigenvector of `whiten_z_diagonal(Z, sigma2, n_acc)`, falling back
+    to the unwhitened matrix if whitening drives the top eigenvalue non-positive
+    (over-subtraction at very low SNR).
+
+    This is the float counterpart of `eigvec_fw.compute_eigvec_nw_fw`. Unlike the
+    older scalar `sims/compare_mrc_methods.py::_eigvec_nw`, the pedestal is
+    PER BRANCH — a scalar sigma2*I cannot rotate an eigenvector at all, so the
+    scalar form is structurally unable to correct branch-noise imbalance.
+
+    Callers should gate on `sigma2_is_usable(sigma2)`; this function does not
+    enforce it, so that studies can deliberately explore degenerate estimates.
+
+    Parameters
+    ----------
+    Z_matrix  : (NR, NR) complex Hermitian matrix.
+    sigma2    : (NR,) per-branch noise power per sample, same units as Z_matrix.
+    n_acc     : accumulation sample count.
+    antenna_en: enabled antenna bitmask.
+    cal_j     : (NR,) complex Q1.15 calibration coefficients, or None.
+
+    Returns
+    -------
+    w : (NR,) complex Q1.15 weights.
+    """
+    Z_w = whiten_z_diagonal(Z_matrix, sigma2, n_acc)
+    eigvals = np.linalg.eigvalsh(Z_w)
+    if eigvals[-1] <= 0:
+        Z_w = Z_matrix
+    return compute_eigvec_weights(Z_w, antenna_en=antenna_en, cal_j=cal_j)
+
+
+def compute_eigvec_snr_weights(
+    Z_matrix: np.ndarray,
+    sigma2: np.ndarray,
+    n_acc: int,
+    antenna_en: int = 0xF,
+    cal_j: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Full noise-whitened (SNR-weighted) eigenvector MRC weights — float reference.
+
+    Distinct from `compute_eigvec_nw_weights`, and the difference matters:
+
+      * `compute_eigvec_nw_weights` subtracts the noise pedestal from the
+        diagonal. That recovers Z' ~ n_acc * h*h^H, whose principal eigenvector
+        is h, so it returns conj(h) — the EQUAL-noise optimum. It removes the
+        bias that pulls the raw eigenvector onto the noisiest branch, but it
+        never applies a 1/sigma2_k factor.
+      * this function additionally applies the similarity transform
+        D^-1/2 Z' D^-1/2 (D = diag(sigma2)), takes the principal eigenvector
+        v~ of the transformed matrix, then maps back with D^-1/2. Since
+        v~ ∝ D^-1/2 h, the result is D^-1 h — the true UNEQUAL-noise optimum
+        w ∝ conj(h_k)/sigma2_k.
+
+    Worked example (h identical on all branches, ant0 10x noisier), weights
+    normalised to max 1:
+
+        raw eigenvector          [1.000, 0.023, 0.023, 0.023]   broken
+        pedestal subtraction     [1.000, 1.000, 1.000, 1.000]   de-biased
+        this function            [0.100, 1.000, 1.000, 1.000]   optimal
+        theory D^-1 h            [0.100, 1.000, 1.000, 1.000]
+
+    Degenerate sigma2 (any non-positive entry) cannot be transformed, so the
+    function falls back to `compute_eigvec_nw_weights`. Callers should still
+    gate on `sigma2_is_usable`.
+
+    Parameters
+    ----------
+    Z_matrix  : (NR, NR) complex Hermitian matrix.
+    sigma2    : (NR,) per-branch noise power per sample, same units as Z_matrix.
+    n_acc     : accumulation sample count.
+    antenna_en: enabled antenna bitmask.
+    cal_j     : (NR,) complex Q1.15 calibration coefficients, or None.
+
+    Returns
+    -------
+    w : (NR,) complex Q1.15 weights.
+    """
+    from .fixed import quantize_q1_15
+    from .weight_generation import apply_calibration
+
+    NR = Z_matrix.shape[0]
+    s2 = np.asarray(sigma2, dtype=float)
+    mask = np.array([(antenna_en >> j) & 1 for j in range(NR)], dtype=bool)
+
+    if np.any(s2[mask] <= 0):
+        # No usable per-branch scale — de-bias only.
+        return compute_eigvec_nw_weights(Z_matrix, sigma2, n_acc,
+                                         antenna_en=antenna_en, cal_j=cal_j)
+
+    Z_w = whiten_z_diagonal(Z_matrix, s2, n_acc)
+    if np.linalg.eigvalsh(Z_w)[-1] <= 0:
+        Z_w = Z_matrix
+
+    inv_sqrt = np.where(mask, 1.0 / np.sqrt(np.where(s2 > 0, s2, 1.0)), 0.0)
+    D_inv = np.diag(inv_sqrt)
+
+    Z_t = D_inv @ Z_w @ D_inv
+    Z_t[~mask, :] = 0.0
+    Z_t[:, ~mask] = 0.0
+
+    v_t = np.linalg.eigh(Z_t)[1][:, -1]
+    v = inv_sqrt * v_t                  # map back: D^-1/2 v~  ∝  D^-1 h
+
+    if cal_j is not None:
+        v = apply_calibration(v, cal_j)
+    v[~mask] = 0.0
+
+    max_abs = float(np.max(np.abs(v)))
+    if max_abs == 0.0:
+        return np.zeros(NR, dtype=complex)
+    w = np.conj(v) / max_abs
+    return quantize_q1_15(w.real) + 1j * quantize_q1_15(w.imag)
+
+
 def noise_est_rtl(
     raw_j: np.ndarray,
     sc_lock_sample: int,

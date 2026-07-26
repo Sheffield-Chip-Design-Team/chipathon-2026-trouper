@@ -56,8 +56,10 @@ from test_trouper_top import CLK_NS, spi_read, spi_write, spi_burst_write
 from test_capture_playback import capture_driver, _env_int
 import iq_capture
 
-from sim.models.eigvec_fw import compute_eigvec_fw
+from sim.models.eigvec_fw import (compute_eigvec_fw, compute_eigvec_nw_fw,
+                                  compute_eigvec_snrw_fw)
 from sim.models.receiver import nonfft_combine_rtl_int8w
+from sim.models.weight_generation import NoiseFloorEstimator
 
 
 ZDIAG_ADDR = {0: (0x64, 0x65, 0x66), 1: (0x67, 0x68, 0x69),
@@ -141,6 +143,130 @@ def _encode_w_shadow_bytes(w):
         burst += [int(w_re8[k]) & 0xFF, 0x00, int(w_im8[k]) & 0xFF, 0x00]
     w_hw = np.array([complex(int(w_re8[k]), int(w_im8[k])) for k in range(4)])
     return burst, w_hw
+
+
+async def _read_zdiag_regs(dut):
+    """Per-branch ZDIAG_k (0x64-0x6F) as raw unsigned 24-bit register values.
+
+    These are ALREADY bits [31:8] of the accumulator -- hardware truncated
+    them. Do not apply a further >>8 (e.g. sim.models.weight_generation's
+    zdiag_from_energy(), which is for full-scale energy sums): that is exactly
+    the double-shift bug fixed in _read_z_matrix on 2026-07-05.
+    """
+    out = []
+    for k in range(4):
+        hi, mid, lo = ZDIAG_ADDR[k]
+        d_hi = await spi_read(dut, hi)
+        d_mid = await spi_read(dut, mid)
+        d_lo = await spi_read(dut, lo)
+        out.append((d_hi << 16) | (d_mid << 8) | d_lo)
+    return out
+
+
+async def _verify_combiner_against_oracle(dut, w_hw, tag, clk_per_iq=64):
+    """Record the RTL's own pre-combiner samples and combiner output over the
+    payload window, then check the hardware arithmetic against
+    nonfft_combine_rtl_int8w() given identical inputs and identical weights.
+
+    Extracted verbatim from test_weight_gen_spi_flow so both the plain and the
+    noise-whitened flows verify the combiner the same way.
+    """
+    # Settle delay: W_ACTIVE only updates at the packet FSM's next
+    # safe_switch boundary (Register Map.md), not instantly at W_COMMIT --
+    # recording immediately risked capturing samples still combined under
+    # the pre-commit (default/zero) weight. A few decimated-sample periods
+    # of margin (clk_per_iq=64 each) comfortably clears any such boundary.
+    for _ in range(4 * clk_per_iq):
+        await RisingEdge(dut.IQ_CLK)
+
+    xi_rec = [[], [], [], []]
+    xq_rec = [[], [], [], []]
+    y_i_rec, y_q_rec = [], []
+    # comb_xvalid/comb_y_valid pulse at the 500 kS/s decimated rate -- once
+    # per clk_per_iq=64 IQ_CLK cycles -- so reaching 500 samples needs at
+    # least 500*64=32000 IQ_CLK cycles. The original 6000-cycle budget only
+    # ever collected ~94 samples (found via a genuine RTL run, job 3280).
+    for _ in range(35000):
+        await RisingEdge(dut.IQ_CLK)
+        if int(dut.u_dut.comb_xvalid.value):
+            for b in range(4):
+                xi_rec[b].append(int(dut.u_dut.comb_xi[b].value.signed_integer))
+                xq_rec[b].append(int(dut.u_dut.comb_xq[b].value.signed_integer))
+        yv = dut.u_dut.comb_y_valid.value
+        if yv.is_resolvable and int(yv):
+            y_i_rec.append(int(dut.u_dut.comb_y_i.value.signed_integer))
+            y_q_rec.append(int(dut.u_dut.comb_y_q.value.signed_integer))
+        if len(y_i_rec) >= 500:
+            break
+
+    assert len(y_i_rec) >= 100, \
+        f"{tag}: only {len(y_i_rec)} combiner output samples captured, too few to compare"
+    n_common = min(len(y_i_rec), *[len(xi_rec[b]) for b in range(4)])
+    assert n_common >= 100, f"{tag}: only {n_common} aligned input/output samples"
+
+    y_rtl_full = np.array(y_i_rec) + 1j * np.array(y_q_rec)
+    post_gain_shift = (await spi_read(dut, 0x0F)) & 0x07
+
+    def _align(lag):
+        if lag >= 0:
+            xi_al = [xi_rec[b][lag:] for b in range(4)]
+            xq_al = [xq_rec[b][lag:] for b in range(4)]
+            y_al = y_rtl_full
+        else:
+            xi_al = [xi_rec[b][:lag] for b in range(4)]
+            xq_al = [xq_rec[b][:lag] for b in range(4)]
+            y_al = y_rtl_full[-lag:]
+        return xi_al, xq_al, y_al
+
+    # Lag search: comb_xi/comb_xq (input) and comb_y_i/comb_y_q (output) were
+    # recorded via two independent valid strobes in the same loop, with no
+    # guarantee they line up index-for-index -- mrc_combiner.v is a multi-
+    # state serial MAC pipeline (state 0 catches x_valid, several more clk_16m
+    # states before y_valid), so a genuine per-sample lag between the two
+    # streams is expected. Rather than assume a specific lag, search a small
+    # window and report whichever alignment the data itself supports -- this
+    # also self-diagnoses whether a real mismatch (bad at every lag) vs. a
+    # pure alignment issue (good at exactly one lag) is going on.
+    best_lag, best_err, best_n = None, None, 0
+    for lag in range(-5, 6):
+        xi_al, xq_al, y_al = _align(lag)
+        n = min(len(y_al), *[len(xi_al[b]) for b in range(4)])
+        if n < 100:
+            continue
+        rx_payload = np.array([
+            np.array(xi_al[b][:n]) + 1j * np.array(xq_al[b][:n]) for b in range(4)
+        ])
+        y_oracle = nonfft_combine_rtl_int8w(rx_payload, w_hw, post_gain_shift=post_gain_shift)
+        max_err = np.max(np.abs(y_oracle - y_al[:n]))
+        if best_err is None or max_err < best_err:
+            best_lag, best_err, best_n = lag, max_err, n
+
+    assert best_lag is not None, f"{tag}: no lag in [-5,5] gave >=100 aligned samples"
+    dut._log.info(f"{tag}: best lag={best_lag} max_err={best_err:.2f} over {best_n} samples "
+                  f"(searched lags -5..5)")
+
+    # Per-sample error at the best lag -- locate WHERE the mismatch is
+    # concentrated (all samples vs. a late-window subset, e.g. past the
+    # capture clip's end where capture_driver holds the last bit frozen).
+    xi_al, xq_al, y_al = _align(best_lag)
+    n = best_n
+    rx_payload = np.array([
+        np.array(xi_al[b][:n]) + 1j * np.array(xq_al[b][:n]) for b in range(4)
+    ])
+    y_oracle_full = nonfft_combine_rtl_int8w(rx_payload, w_hw, post_gain_shift=post_gain_shift)
+    err_full = np.abs(y_oracle_full - y_al[:n])
+    bad_idx = np.where(err_full > 2)[0]
+    if len(bad_idx):
+        i0 = bad_idx[0]
+        dut._log.info(f"{tag}: {len(bad_idx)}/{n} samples exceed 2 LSB at lag={best_lag}; "
+                      f"first bad idx={i0} x={[rx_payload[b][i0] for b in range(4)]} "
+                      f"y_rtl={y_al[i0]} y_oracle={y_oracle_full[i0]}")
+
+    # int8 domain: allow +-2 LSB residual after finding the true pipeline lag.
+    assert best_err <= 2, \
+        f"{tag}: even at the best-fit lag ({best_lag}), oracle/RTL combiner " \
+        f"mismatch max_err={best_err:.2f} (expected <=2 LSB) -- weights were " \
+        f"not applied as computed (not just a sample-alignment artifact)"
 
 
 @cocotb.test()
@@ -242,109 +368,295 @@ async def test_weight_gen_spi_flow(dut):
     assert (wgt >> 1) & 1, f"{tag}: W_VALID never latched after W_COMMIT (WGT_CTRL=0x{wgt:02X})"
     dut._log.info(f"{tag}: W_COMMIT -> W_VALID OK, w_hw (int8, as hardware sees it) = {w_hw}")
 
-    # Settle delay: W_ACTIVE only updates at the packet FSM's next
-    # safe_switch boundary (Register Map.md), not instantly at W_COMMIT --
-    # recording immediately risked capturing samples still combined under
-    # the pre-commit (default/zero) weight. A few decimated-sample periods
-    # of margin (clk_per_iq=64 each) comfortably clears any such boundary.
-    for _ in range(4 * clk_per_iq):
-        await RisingEdge(dut.IQ_CLK)
-
-    # -- record real combiner inputs/outputs over the payload window ------------
-    xi_rec = [[], [], [], []]
-    xq_rec = [[], [], [], []]
-    y_i_rec, y_q_rec = [], []
-    # comb_xvalid/comb_y_valid pulse at the 500 kS/s decimated rate -- once
-    # per clk_per_iq=64 IQ_CLK cycles -- so reaching 500 samples needs at
-    # least 500*64=32000 IQ_CLK cycles. The original 6000-cycle budget only
-    # ever collected ~94 samples (found via a genuine RTL run, job 3280).
-    for _ in range(35000):
-        await RisingEdge(dut.IQ_CLK)
-        if int(dut.u_dut.comb_xvalid.value):
-            for b in range(4):
-                xi_rec[b].append(int(dut.u_dut.comb_xi[b].value.signed_integer))
-                xq_rec[b].append(int(dut.u_dut.comb_xq[b].value.signed_integer))
-        yv = dut.u_dut.comb_y_valid.value
-        if yv.is_resolvable and int(yv):
-            y_i_rec.append(int(dut.u_dut.comb_y_i.value.signed_integer))
-            y_q_rec.append(int(dut.u_dut.comb_y_q.value.signed_integer))
-        if len(y_i_rec) >= 500:
-            break
-
-    assert len(y_i_rec) >= 100, \
-        f"{tag}: only {len(y_i_rec)} combiner output samples captured, too few to compare"
-    n_common = min(len(y_i_rec), *[len(xi_rec[b]) for b in range(4)])
-    assert n_common >= 100, f"{tag}: only {n_common} aligned input/output samples"
-
-    y_rtl_full = np.array(y_i_rec) + 1j * np.array(y_q_rec)
-    post_gain_shift = (await spi_read(dut, 0x0F)) & 0x07
-
-    # Lag search: comb_xi/comb_xq (input) and comb_y_i/comb_y_q (output) were
-    # recorded via two independent valid strobes in the same loop, with no
-    # guarantee they line up index-for-index -- mrc_combiner.v is a multi-
-    # state serial MAC pipeline (state 0 catches x_valid, several more clk_16m
-    # states before y_valid), so a genuine per-sample lag between the two
-    # streams is expected. Rather than assume a specific lag, search a small
-    # window and report whichever alignment the data itself supports -- this
-    # also self-diagnoses whether a real mismatch (bad at every lag) vs. a
-    # pure alignment issue (good at exactly one lag) is going on.
-    best_lag, best_err, best_n = None, None, 0
-    for lag in range(-5, 6):
-        if lag >= 0:
-            xi_al = [xi_rec[b][lag:] for b in range(4)]
-            xq_al = [xq_rec[b][lag:] for b in range(4)]
-            y_al = y_rtl_full
-        else:
-            xi_al = [xi_rec[b][:lag] for b in range(4)]
-            xq_al = [xq_rec[b][:lag] for b in range(4)]
-            y_al = y_rtl_full[-lag:]
-        n = min(len(y_al), *[len(xi_al[b]) for b in range(4)])
-        if n < 100:
-            continue
-        rx_payload = np.array([
-            np.array(xi_al[b][:n]) + 1j * np.array(xq_al[b][:n]) for b in range(4)
-        ])
-        y_oracle = nonfft_combine_rtl_int8w(rx_payload, w_hw, post_gain_shift=post_gain_shift)
-        err = np.abs(y_oracle - y_al[:n])
-        max_err = np.max(err)
-        if best_err is None or max_err < best_err:
-            best_lag, best_err, best_n = lag, max_err, n
-
-    assert best_lag is not None, f"{tag}: no lag in [-5,5] gave >=100 aligned samples"
-    dut._log.info(f"{tag}: best lag={best_lag} max_err={best_err:.2f} over {best_n} samples "
-                  f"(searched lags -5..5)")
-
-    # Per-sample error at the best lag -- locate WHERE the mismatch is
-    # concentrated (all samples vs. a late-window subset, e.g. past the
-    # capture clip's end where capture_driver holds the last bit frozen).
-    lag = best_lag
-    if lag >= 0:
-        xi_al = [xi_rec[b][lag:] for b in range(4)]
-        xq_al = [xq_rec[b][lag:] for b in range(4)]
-        y_al = y_rtl_full
-    else:
-        xi_al = [xi_rec[b][:lag] for b in range(4)]
-        xq_al = [xq_rec[b][:lag] for b in range(4)]
-        y_al = y_rtl_full[-lag:]
-    n = best_n
-    rx_payload = np.array([
-        np.array(xi_al[b][:n]) + 1j * np.array(xq_al[b][:n]) for b in range(4)
-    ])
-    y_oracle_full = nonfft_combine_rtl_int8w(rx_payload, w_hw, post_gain_shift=post_gain_shift)
-    err_full = np.abs(y_oracle_full - y_al[:n])
-    bad_idx = np.where(err_full > 2)[0]
-    if len(bad_idx):
-        i0 = bad_idx[0]
-        dut._log.info(f"{tag}: {len(bad_idx)}/{n} samples exceed 2 LSB at lag={lag}; "
-                      f"first bad idx={i0} x={[rx_payload[b][i0] for b in range(4)]} "
-                      f"y_rtl={y_al[i0]} y_oracle={y_oracle_full[i0]}")
-
-    # int8 domain: allow +-2 LSB residual after finding the true pipeline lag.
-    assert best_err <= 2, \
-        f"{tag}: even at the best-fit lag ({best_lag}), oracle/RTL combiner " \
-        f"mismatch max_err={best_err:.2f} (expected <=2 LSB) -- weights were " \
-        f"not applied as computed (not just a sample-alignment artifact)"
+    # -- record real combiner inputs/outputs, verify against the oracle --------
+    await _verify_combiner_against_oracle(dut, w_hw, tag, clk_per_iq=clk_per_iq)
 
     dut._log.info(f"{tag}: PASS -- IRQ->Z read->firmware weight compute->SPI write->"
                   f"W_COMMIT->combiner output all verified against oracle")
+    drv.cancel()
+
+
+@cocotb.test()
+async def test_weight_gen_spi_flow_nw(dut):
+    """Commits the DE-BIASED weights (compute_eigvec_nw_fw)."""
+    await _noise_weighted_flow(dut, "WGEN-SPI-NW", mode="nw")
+
+
+@cocotb.test()
+async def test_weight_gen_spi_flow_snrw(dut):
+    """Commits the fully SNR-WEIGHTED weights (compute_eigvec_snrw_fw).
+
+    Prediction for this stimulus: gains_db scales the captured signal AND its
+    noise floor together, so every branch has the same SNR. The unequal-noise
+    optimum conj(D^-1 h) then goes as 1/g -- the exact MIRROR of the de-biased
+    answer conj(h), which goes as g. Whether the measured sigma2 actually
+    tracks g^2 is the open question: at this signal scale the noise window may
+    be quantisation-limited rather than gain-proportional.
+    """
+    await _noise_weighted_flow(dut, "WGEN-SPI-SNRW", mode="snrw")
+
+
+async def _noise_weighted_flow(dut, tag, mode):
+    """
+    Shared body for the noise-whitened flows. `mode` selects which weight
+    vector is committed to hardware:
+
+        "nw"   -> compute_eigvec_nw_fw    (pedestal subtraction; conj(h),
+                                           the EQUAL-noise optimum)
+        "snrw" -> compute_eigvec_snrw_fw  (pedestal + D^-1/2 transform;
+                                           conj(D^-1 h), the UNEQUAL-noise optimum)
+
+    Exercises the whole path end to end over SPI:
+
+        TACC_NOISE_TRIG (0x1F) -> NOISE_READY (IRQ_STATUS[4])
+          -> read ZDIAG/N_ACC   -> NoiseFloorEstimator (integer EMA, ZDIAG units)
+          -> packet: sc_lock -> training_done -> read Z_kl/ZDIAG
+          -> compute_eigvec_nw_fw(Z, n_acc, sigma2)
+          -> W shadow write -> W_COMMIT -> combiner output vs oracle
+
+    Scope note: this verifies the FLOW and the combiner ARITHMETIC, not that
+    whitening improves BER. The BER question is answered by the Python sweep in
+    sim/notebooks/05_sw_vs_hw_weight_gen.ipynb section 5, which can average
+    thousands of channel realisations; a single RTL packet cannot.
+
+    What it does assert beyond the plain flow:
+      - a noise window completes and NOISE_READY fires with PSRAM disabled
+        (no delay line -> the SC detector cannot lock and contaminate it)
+      - the measured per-branch noise floor ranks in the same order as the
+        applied per-antenna gains (they scale the captured noise floor too)
+      - whitening actually CHANGES the weight vector -- a whitened path that
+        silently degenerates to the unwhitened one would otherwise pass
+      - the whitened weights are applied bit-exactly by the combiner
+    """
+    npy = os.environ.get(
+        "CAPTURE_NPY",
+        "/foss/designs/lora-mimo/lora-capture/captures/lora_20260619_144822_SF7-BW250-gain30.npy",
+    )
+    sf, bw_khz = 7, 250
+    start = _env_int("CAPTURE_START", 668000)
+    nsamp = _env_int("CAPTURE_NSAMP", 60000)
+    sample_shift = 1
+    M = 1 << (sf + sample_shift)
+    clk_per_iq = 64
+
+    gains_db = [0.0, -3.0, -6.0, -9.0]
+
+    dut._log.info(f"{tag}: loading {npy} [{start}:{start+nsamp}] gains={gains_db}")
+    bits_i, bits_q, meta, branch_power = iq_capture.prepare_stimulus(
+        npy, start=start, nsamp=nsamp, n_branches=4, snr_db=None, seed=0,
+        channel="awgn", gains_db=gains_db)
+    n32 = bits_i.shape[1]
+    dut._log.info(f"{tag}: {n32} chip samples, branch power={[round(p,5) for p in branch_power]}")
+
+    # -- reset ----------------------------------------------------------------
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value   = 1
+    dut.SPI_MOSI.value  = 0
+    dut.SPI_SCK.value   = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value    = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    drv = cocotb.start_soon(capture_driver(dut, bits_i, bits_q))
+
+    await spi_read(dut, 0x00)
+    await spi_read(dut, 0x09)
+    await spi_write(dut, 0x09, sf & 0x0F)
+    await spi_write(dut, 0x0A, 0 if bw_khz == 250 else 1)
+    await spi_write(dut, 0x0C, 0x01)
+    await spi_write(dut, 0x0D, 0x00)
+    await spi_write(dut, 0x0E, 0x00)
+
+    sym_ns = M * clk_per_iq * CLK_NS
+    max_polls = max(4, int(n32 * CLK_NS / sym_ns))
+
+    # =====================================================================
+    # Phase 1 -- noise window, PSRAM still DISABLED.
+    # With PSRAM off the SC detector has no delay line, so it cannot lock
+    # and contaminate the window by construction (same argument as
+    # cocotb/tests/test_noise_trig.py phase A). This runs on the leading,
+    # pre-preamble part of the capture, so it measures the recording's real
+    # per-antenna noise floor with gains_db applied.
+    # =====================================================================
+    await Timer(4 * sym_ns, unit="ns")     # let the decimator/DCR transient die
+
+    ts = await spi_read(dut, 0x20)
+    assert ts == 0x00, f"{tag}: TRAINING_STATUS=0x{ts:02X} before any trigger"
+
+    await spi_write(dut, 0x1F, 0x01)       # TACC_NOISE_TRIG (W1P)
+
+    noise_ready = False
+    for _ in range(20):
+        await Timer(sym_ns, unit="ns")
+        irq = await spi_read(dut, 0x02)
+        if irq & 0x10:                     # NOISE_READY
+            noise_ready = True
+            break
+    assert noise_ready, \
+        f"{tag}: NOISE_READY (IRQ_STATUS[4]) never fired for the noise window"
+    assert not (irq & 0x01), \
+        f"{tag}: sc_lock IRQ set during the noise window with PSRAM disabled (0x{irq:02X})"
+
+    n_acc_noise = await _read_n_acc(dut)
+    zdiag_noise = await _read_zdiag_regs(dut)
+    assert n_acc_noise > 0, f"{tag}: noise-window n_acc=0"
+    assert all(z > 0 for z in zdiag_noise), \
+        f"{tag}: a branch accumulated no noise energy: {zdiag_noise}"
+    dut._log.info(f"{tag}: noise window n_acc={n_acc_noise} ZDIAG={zdiag_noise}")
+
+    # Feed the firmware-side estimator. ZDIAG over SPI is already bits [31:8];
+    # NoiseFloorEstimator works in exactly those units, so no conversion here
+    # (see _read_zdiag_regs docstring on the 2026-07-05 double-shift bug).
+    nfe = NoiseFloorEstimator(NR=4, alpha_shift=4)
+    assert nfe.update(np.array(zdiag_noise, dtype=np.int64), n_acc_noise), \
+        f"{tag}: NoiseFloorEstimator rejected the noise window"
+    sigma2 = nfe.estimate
+    dut._log.info(f"{tag}: sigma2 (ZDIAG units/sample) = {[round(s, 6) for s in sigma2]}")
+    dut._log.info(f"{tag}: underflow_mask={list(nfe.underflow_mask)} valid={nfe.valid}")
+
+    # Fixed-point resolution gate. sigma2 is the ratio ZDIAG_k/n_acc, and on a
+    # live capture the sigma-delta full scale is set by the packet peak, so a
+    # quiet noise floor lands very close to the estimator's representable floor.
+    # At Q8 this exact window underflowed 3 of 4 branches (job 3593); Q16 is the
+    # default precisely because of that. A partially underflowed estimate must
+    # never be whitened with -- it fabricates an imbalance that was not measured.
+    assert nfe.valid, (
+        f"{tag}: noise estimate unusable (underflow={list(nfe.underflow_mask)}, "
+        f"sigma2={list(sigma2)}) -- firmware must skip whitening here, not "
+        f"fabricate a per-branch imbalance")
+
+    # The applied gains scale the captured noise floor as well as the signal,
+    # so the measured noise floor must rank in the same order as gains_db.
+    assert sigma2[0] >= sigma2[3], (
+        f"{tag}: noise floor does not track applied gains "
+        f"(ant0 {sigma2[0]:.3f} < ant3 {sigma2[3]:.3f}, gains={gains_db}) -- "
+        f"the noise window probably overlapped the packet; adjust CAPTURE_START")
+
+    await spi_write(dut, 0x03, 0xFF)       # clear IRQ before the packet phase
+
+    # =====================================================================
+    # Phase 2 -- enable PSRAM, acquire the packet, read the signal Z.
+    # =====================================================================
+    await spi_write(dut, 0x70, 0x01)
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    lock_ok = False
+    for _ in range(max_polls):
+        await Timer(sym_ns, unit="ns")
+        if (await spi_read(dut, 0x02)) & 0x01:
+            lock_ok = True
+            break
+    assert lock_ok, f"{tag}: sc_lock never fired"
+    dut._log.info(f"{tag}: sc_lock OK")
+
+    await spi_write(dut, 0x03, 0xFF)
+    train_ok = False
+    for _ in range(max_polls):
+        await Timer(sym_ns, unit="ns")
+        if (await spi_read(dut, 0x02)) & 0x02:
+            train_ok = True
+            break
+    assert train_ok, f"{tag}: training_done (IRQ_STATUS[1]) never fired"
+
+    Z = await _read_z_matrix(dut)
+    n_acc = await _read_n_acc(dut)
+    assert n_acc > 0, f"{tag}: n_acc=0, training accumulator never armed"
+    dut._log.info(f"{tag}: signal window n_acc={n_acc} "
+                  f"ZDIAG={[round(Z[k,k].real) for k in range(4)]}")
+
+    # Sanity: the signal window must sit above the noise window on at least
+    # the strongest branch, otherwise the 'noise' window caught the packet.
+    sig_per_sample = Z[0, 0].real / max(n_acc, 1)
+    assert sig_per_sample > sigma2[0], (
+        f"{tag}: ant0 signal-window power/sample ({sig_per_sample:.1f}) is not above "
+        f"the measured noise floor ({sigma2[0]:.1f}) -- windows likely overlap")
+
+    # =====================================================================
+    # Phase 3 -- whitened weight computation, commit, verify.
+    # =====================================================================
+    w_plain = compute_eigvec_fw(Z, n_acc)
+    w_nw = compute_eigvec_nw_fw(Z, n_acc, sigma2)
+    w_snrw = compute_eigvec_snrw_fw(Z, n_acc, sigma2)
+    dut._log.info(f"{tag}: w_plain={w_plain}")
+    dut._log.info(f"{tag}: w_nw   ={w_nw}")
+    dut._log.info(f"{tag}: w_snrw ={w_snrw}")
+
+    def _angle_deg(a, b):
+        a = a / np.linalg.norm(a); b = b / np.linalg.norm(b)
+        return float(np.degrees(np.arccos(np.clip(abs(np.dot(np.conj(a), b)), 0.0, 1.0))))
+
+    def _rel(w):
+        return np.abs(w) / np.abs(w).max()
+
+    w_commit = w_nw if mode == "nw" else w_snrw
+    assert np.any(np.abs(w_commit) > 0), f"{tag}: weight computation returned all zeros"
+
+    if mode == "nw":
+        # Common-noise-floor case: de-biasing must be HARMLESS. iq_capture's
+        # fan_out_branches uses "identical sigma on every branch", so the
+        # pedestal is ~a multiple of I and cannot rotate the eigenvector.
+        # Catches an over-subtracting or mis-scaled implementation.
+        ang = _angle_deg(w_nw, w_plain)
+        dut._log.info(f"{tag}: angle(w_nw, w_plain) = {ang:.3f} deg")
+        assert ang < 5.0, (
+            f"{tag}: de-biasing rotated the weight vector by {ang:.2f} deg where it "
+            f"should be a near-no-op -- sigma2 pedestal mis-scaled "
+            f"(sigma2={list(sigma2)}, n_acc={n_acc})")
+
+        # Directed imbalance: the whitening arithmetic must actually bite.
+        sigma2_imb = sigma2.copy()
+        sigma2_imb[0] = 0.5 * Z[0, 0].real / n_acc
+        w_imb = compute_eigvec_nw_fw(Z, n_acc, sigma2_imb)
+        assert not np.array_equal(w_imb, w_plain), (
+            f"{tag}: a pedestal of half of ZDIAG_0 left the weights unchanged")
+        # Normalise by the VECTOR NORM, not the max component: ant0 is the
+        # largest entry in both vectors, so a max-normalised ant0 is 1.0 by
+        # construction and the comparison below would be vacuous.
+        rel_plain = abs(w_plain[0]) / np.linalg.norm(w_plain)
+        rel_imb = abs(w_imb[0]) / np.linalg.norm(w_imb)
+        dut._log.info(f"{tag}: directed imbalance -- ant0 relative weight "
+                      f"{rel_plain:.4f} -> {rel_imb:.4f}")
+        assert rel_imb < rel_plain, (
+            f"{tag}: declaring ant0 noisiest did not down-weight it "
+            f"({rel_plain:.4f} -> {rel_imb:.4f}) -- whitening has the wrong sign")
+    else:
+        # SNR weighting must reorder the branches relative to de-biasing.
+        # conj(h) ranks by |h_k| (loudest first); conj(D^-1 h) divides that by
+        # sigma2_k. With gains scaling signal and noise together the ranking
+        # should invert outright.
+        ang = _angle_deg(w_snrw, w_nw)
+        dut._log.info(f"{tag}: angle(w_snrw, w_nw) = {ang:.3f} deg")
+        dut._log.info(f"{tag}: rel |w_nw|   = {np.round(_rel(w_nw), 4)}")
+        dut._log.info(f"{tag}: rel |w_snrw| = {np.round(_rel(w_snrw), 4)}")
+
+        ratio_nw = _rel(w_nw)[0] / max(_rel(w_nw)[3], 1e-9)
+        ratio_snrw = _rel(w_snrw)[0] / max(_rel(w_snrw)[3], 1e-9)
+        dut._log.info(f"{tag}: ant0/ant3 weight ratio  nw={ratio_nw:.3f}  "
+                      f"snrw={ratio_snrw:.3f}")
+        assert ratio_snrw < ratio_nw, (
+            f"{tag}: SNR weighting did not shift weight away from the branch "
+            f"with the higher noise floor (nw ratio {ratio_nw:.3f} -> "
+            f"snrw {ratio_snrw:.3f}, sigma2={list(sigma2)})")
+
+    burst, w_hw = _encode_w_shadow_bytes(w_commit)
+    await spi_burst_write(dut, 0x30, burst)
+    await spi_write(dut, 0x1E, 0x01)       # W_COMMIT
+
+    wgt = await spi_read(dut, 0x1E)
+    assert (wgt >> 1) & 1, f"{tag}: W_VALID never latched after W_COMMIT (WGT_CTRL=0x{wgt:02X})"
+    dut._log.info(f"{tag}: W_COMMIT -> W_VALID OK, w_hw (int8) = {w_hw}")
+
+    await _verify_combiner_against_oracle(dut, w_hw, tag, clk_per_iq=clk_per_iq)
+
+    dut._log.info(f"{tag}: PASS -- noise window->sigma2->whitened weight compute->"
+                  f"SPI write->W_COMMIT->combiner output all verified against oracle")
     drv.cancel()
