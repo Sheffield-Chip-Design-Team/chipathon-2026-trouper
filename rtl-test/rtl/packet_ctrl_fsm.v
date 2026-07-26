@@ -1,5 +1,7 @@
 // packet_ctrl_fsm.v
-// Packet control FSM: orchestrates buffer freeze, weight application, and payload timing
+// Packet control FSM: orchestrates packet phase, weight application, and payload timing
+// (the buf_freeze output was deleted 2026-07-26: bit-identical to packet_active and
+//  consumed by nothing since the frontend_buf_ctrl -> PSRAM migration)
 // GF180MCU, 3.3V, 32 MHz single clock domain
 
 module packet_ctrl_fsm (
@@ -24,7 +26,6 @@ module packet_ctrl_fsm (
     // consumed by the IRQ path and is firmware-invisible if wired to
     // reg_bank directly. Held through IDLE, cleared at the next packet start.
     output reg         W_missed_q,
-    output reg         buf_freeze,
     output reg  [2:0]  packet_phase,
     output reg         packet_active,
     // Physical fanout split (2026-07-19): bit-identical duplicate of
@@ -125,7 +126,6 @@ module packet_ctrl_fsm (
             W_valid_set      <= 1'b0;
             W_missed_packet  <= 1'b0;
             W_missed_q       <= 1'b0;
-            buf_freeze       <= 1'b0;
             packet_phase     <= 3'd0;
             packet_active    <= 1'b0;
             packet_active_ps <= 1'b0;
@@ -158,7 +158,6 @@ module packet_ctrl_fsm (
 
             case (state)
                 ST_IDLE: begin
-                    buf_freeze      <= 1'b0;
                     packet_active   <= 1'b0;
                     packet_active_ps <= 1'b0;
                     packet_phase    <= 3'd0;
@@ -181,7 +180,6 @@ module packet_ctrl_fsm (
                         lat_timing_ref    <= timing_ref;
                         active_mode       <= mode_shadow;
                         active_antenna_en <= antenna_en_shadow;
-                        buf_freeze        <= 1'b1;
                         packet_active     <= 1'b1;
                         packet_active_ps  <= 1'b1;
                         packet_phase      <= 3'd1;
@@ -262,7 +260,6 @@ module packet_ctrl_fsm (
                     // must be reintroduced here AND in psram_buf_ctrl.
                     if (pkt_cnt == 23'd0) begin
                         // Packet timeout -> IDLE
-                        buf_freeze      <= 1'b0;
                         W_valid         <= 1'b0;
                         packet_active   <= 1'b0;
                         packet_active_ps <= 1'b0;
@@ -299,7 +296,6 @@ module packet_ctrl_fsm (
         .W_valid_set      (W_valid_set),
         .W_missed_packet  (W_missed_packet),
         .W_missed_q       (W_missed_q),
-        .buf_freeze       (buf_freeze),
         .packet_phase     (packet_phase),
         .packet_active    (packet_active),
         .packet_active_ps (packet_active_ps),

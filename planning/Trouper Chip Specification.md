@@ -270,18 +270,18 @@ training_done IRQ fires
 
 ### 4.7 Packet Control FSM (`packet_ctrl_fsm.v`) — TRPR-PCF
 
-Master datapath controller. Sequences buf_freeze, weight gating, and mode latching.
+Master datapath controller. Sequences packet phase, weight gating, and mode latching.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-PCF-001 | C | F | The FSM SHALL implement four states: IDLE → PREAMBLE_ACQ → W_PENDING → PAYLOAD_ACTIVE, with transition back to IDLE on packet end or timeout. | T |
-| TRPR-PCF-002 | C | F | On `sc_lock`: the FSM SHALL assert `buf_freeze` and transition to PREAMBLE_ACQ. | T |
+| TRPR-PCF-002 | C | F | On `sc_lock`: the FSM SHALL assert `packet_active` and transition to PREAMBLE_ACQ. (Reworded 2026-07-26: this row previously required a `buf_freeze` output. That output was bit-identical to `packet_active` and, since the `frontend_buf_ctrl` → PSRAM migration, drove nothing; it was deleted from the RTL. PSRAM capture/replay is sequenced from `sc_lock`, `packet_active` and `packet_end` — see TRPR-PSR-002/016.) | T |
 | TRPR-PCF-003 | C | F | On `training_done`: the FSM SHALL transition to W_PENDING and assert `TRAINING_DONE` IRQ. | T |
 | TRPR-PCF-004 | C | F | On receipt of `W_COMMIT` from the weight path: the FSM SHALL assert `W_VALID` and transition to PAYLOAD_ACTIVE. There is no separate `W_ACTIVE` bank in the current RTL: the combiner reads the live W register bank, which is write-locked while `W_VALID` is high (TRPR-MRC-004). | T |
 | TRPR-PCF-005 | C | F | If `W_COMMIT` is not received before the payload boundary, the FSM SHALL remain in bypass mode for the current packet, set `W_MISSED_PACKET`, and assert the corresponding IRQ. | T |
 | TRPR-PCF-006 | C | F | `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` (both packed into `ACTIVE_STATUS`, 0x1D: `[1:0]`/`[7:4]`) SHALL be latched from `MIMO_CTRL` only at the safe-switch boundary (FSM in IDLE), never during an active packet. | T |
 | TRPR-PCF-007 | C | F | A packet timeout SHALL be enforced: if the FSM does not reach IDLE within `PKT_TIMEOUT_SYMS` (0x0B) LoRa symbols, it SHALL force a return to IDLE and assert `PACKET_DONE` IRQ. | T |
-| TRPR-PCF-008 | H | F | On IDLE entry, `buf_freeze` SHALL de-assert and the frontend buffer SHALL resume rolling capture. | T |
+| TRPR-PCF-008 | H | F | On IDLE entry, `packet_active` SHALL de-assert. (Reworded 2026-07-26: previously "`buf_freeze` SHALL de-assert and the frontend buffer SHALL resume rolling capture" — a normative requirement on the on-chip frontend buffer that TRPR-PHY-006 removed. The PSRAM controller resumes its circular capture off `packet_active` falling.) | T |
 | TRPR-PCF-009 | H | I | `PACKET_STATUS` (0x1C) SHALL expose `PACKET_ACTIVE`, `PACKET_PHASE[2:0]`, `TRAINING_DONE`, `W_PENDING`, `W_VALID`, and `W_MISSED_PACKET`. | T |
 | TRPR-PCF-010 | H | F | When firmware is held in reset or no W_COMMIT is received, the FSM SHALL pass through W_PENDING → timeout → IDLE without deadlock. | T |
 | TRPR-PCF-011 | M | F | Mode 1 (passthrough, `MIMO_CTRL.MODE=1`): the FSM SHALL route the lowest-numbered enabled antenna directly to the re-modulator output, bypassing training accumulation and weight computation. | T |
@@ -370,7 +370,7 @@ Serves the SC detector's M-sample delay (`x[n−M]`, M = 1 << (SF + sample_shift
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-FBC-001 | C | F | The SC correlator M-sample delay SHALL be provided by the PSRAM Buffer Controller. On each `iq_valid`, the PSRAM controller SHALL supply the selected branch's `x[n−M]` (M = 1 << (SF + sample_shift), branch per TRPR-PSR-021) by issuing a QPI read at `write_ptr − M` before the next `iq_valid` arrives. The QPI read latency (30 cycles at 32 MHz) is well within the 64-cycle `iq_valid` period. | T |
-| TRPR-FBC-002 | C | F | At packet start the PSRAM controller SHALL latch the packet start pointer and cease SC delay reads; implemented directly off `sc_lock` (see TRPR-PSR-002/016) — the FSM's `buf_freeze` output is not connected to the buffer controller (Open Risks #25). | T |
+| TRPR-FBC-002 | C | F | At packet start the PSRAM controller SHALL latch the packet start pointer and cease SC delay reads; implemented directly off `sc_lock` (see TRPR-PSR-002/016). The FSM's former `buf_freeze` output was deleted 2026-07-26 (see TRPR-PCF-002). | T |
 | TRPR-FBC-003 | C | F | The SC detector SHALL receive: `x[n]` — the selected branch's live sample from the decimator; `x[n−M]` — the same branch read back from PSRAM at offset M behind the current write pointer. Both SHALL be valid and stable before the SC detector evaluates each `iq_valid` pulse. | T |
 | TRPR-FBC-004 | C | P | The PSRAM controller SHALL arbitrate SC delay reads against same-packet capture writes. SC delay reads are issued in the idle cycles between writes; the idle margin of TRPR-PSR-014 is sufficient to accommodate one additional QPI read per `iq_valid`. | A |
 | TRPR-FBC-005 | H | I | PSRAM controller status SHALL remain readable via `PSRAM_STATUS` (0x71). The legacy `BUF_WR_PTR`, `FRONTEND_STATUS`, `FRONTEND_CFG`, and `SRAM_DUMP_*` registers are removed from the map (see Register Map.md "Removed registers"). | I |

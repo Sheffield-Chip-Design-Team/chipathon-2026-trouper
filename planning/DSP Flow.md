@@ -51,7 +51,7 @@ Two operating modes share the same hardware:
 | 3 | DC Removal (×4) | Full-precision complex × 4 | DC-removed complex × 4 | f_s | All |
 | 4 | Frontend Buffer Controller | DC-removed samples | current + M-delayed samples per branch | f_s | Mode 0 |
 | 5 | SC Preamble Detector | current + delayed samples | `sc_lock`, `timing_ref` | per 2 sym | Mode 0 |
-| 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `buf_freeze`, `combiner_source`, `safe_switch` | per packet | Mode 0 |
+| 5.5 | Packet Control FSM | `sc_lock`, `timing_ref`, `training_done`, `W_commit` | `packet_active`, `packet_phase`, `W_valid_set`, `active_mode`/`active_antenna_en` | per packet | Mode 0 |
 | 6 | Training Accumulator | DC-removed samples, `sc_lock`, `timing_ref` | all-pairs `Z_kl`, `Z_diag`, `training_done` | per packet | Mode 0 |
 | 7 | Firmware Weight Generation | register-bank `Z_kl`, `training_done` IRQ | `W_SHADOW`, `W_COMMIT` | per packet | Mode 0 |
 | 7' | Bypass MUX | int8 from selected antenna | int8 (no sign-extension needed) | f_s | Mode 1 only |
@@ -167,9 +167,9 @@ Owns packet phase and no-glitch switching between bypass and combined output. Co
 **States:** IDLE → PREAMBLE_ACQ → W_PENDING → PAYLOAD_ACTIVE → IDLE
 
 Key outputs:
-- `safe_switch` — receiver idle; W/mode/antenna active banks may update
+- safe-switch boundary — a *condition* (FSM in IDLE), not an RTL signal: W/mode/antenna active banks may update. The former `safe_switch` output was deleted from `packet_ctrl_fsm`.
 - `combiner_source` — bypass until W is valid for the current packet
-- `buf_freeze` — holds FRONTEND_BUF frozen from `sc_lock` to packet end
+- `packet_active` — asserted from `sc_lock` to packet end; gates PSRAM capture/replay and the `SF_CFG`/`PSRAM_EN` shadow registers
 
 See [Packet Control FSM](blocks/Packet%20Control%20FSM.md).
 

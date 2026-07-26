@@ -15,7 +15,7 @@ src/
   combiner/    training_acc.v           — all-pairs cross-correlator (Z_kl / Z_kk / W_k)
                mrc_combiner.v           — ŷ = wᴴ·x MRC combine
   remod/       sd_remod.v               — 3rd-order ΣΔ re-modulator (OSR=64, int8 → 1-bit @32 MS/s)
-  control/     packet_ctrl_fsm.v        — packet control FSM (buf_freeze / W gating / safe_switch)
+  control/     packet_ctrl_fsm.v        — packet control FSM (packet phase / W gating / mode latching)
                reg_bank.v               — 7-bit register map (SPI/AHB accessible)
                spi_slave.v              — host SPI slave
                psram_buf_ctrl.v         — APS6404L PSRAM QPI controller

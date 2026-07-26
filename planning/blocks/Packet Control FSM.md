@@ -112,14 +112,23 @@ In IDLE           → W_valid_set = 1, W_ACTIVE ← W_SHADOW, W_commit_pending =
 
 ---
 
-## FRONTEND_BUF control
+## Buffer control
 
-| FSM event | FRONTEND_BUF action |
+> **Superseded 2026-07-26.** This section described a `buf_freeze` output driving the
+> on-chip `frontend_buf_ctrl` / 1 kB SRAM. That block and its SRAM were removed
+> (TRPR-PHY-006), and `buf_freeze` — which was bit-identical to `packet_active` — has
+> been deleted from the RTL along with the formal-harness port and assertion.
+
+| FSM event | PSRAM Buffer Controller action |
 |---|---|
-| sc_lock (IDLE → PREAMBLE_ACQ) | Assert `buf_freeze` — stop overwriting acquisition history |
-| packet_end (any → IDLE) | Deassert `buf_freeze` — resume rolling acquisition |
+| sc_lock (IDLE → PREAMBLE_ACQ) | `packet_active` asserts; the PSRAM controller latches the packet-start pointer and ceases SC delay reads, keyed off `sc_lock` directly (TRPR-FBC-002, TRPR-PSR-002/016) |
+| packet_end (any → IDLE) | `packet_active` de-asserts; circular capture resumes |
 
-The buffer is frozen from sc_lock until packet end so that the 2-symbol acquisition history is preserved for optional post-lock diagnostics. Freezing does not affect the live sample path to the training accumulator or combiner — those receive samples directly from the decimator.
+The FSM does not gate the buffer itself — `psram_buf_ctrl` sequences capture and replay
+from `sc_lock`, `packet_active`, `packet_end` and `W_commit`. The live sample path to the
+training accumulator and combiner is unaffected either way; those receive samples
+directly from `dc_removal`, except during replay, when a `replay_active` mux substitutes
+the PSRAM read data at the combiner input.
 
 ---
 
@@ -193,7 +202,6 @@ Unlike the baseline live path, PSRAM replay does **not** require `W_commit` befo
 | `psram_replay_start` | out | 1 | Start PSRAM replay from `payload_rd_base` |
 | `psram_abort` | out | 1 | Cancel replay for current packet and fall back to live path |
 | `payload_rd_base` | out | 24 | Byte offset into the current PSRAM packet buffer for replay start |
-| `buf_freeze` | out | 1 | FRONTEND_BUF freeze control |
 | `packet_phase` | out | 3 | Encoded FSM state for status/debug |
 | `packet_active` | out | 1 | Packet FSM not in IDLE |
 | `active_mode` | out | 2 | Latched combining mode for current packet |
@@ -239,7 +247,7 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 |---|---|---|
 | After sc_lock | Wait for live FFT window (`timing_ref + 8M - 1`), trigger FFT | Wait for `training_done` (asserts at approximately same point) |
 | States | IDLE / PREAMBLE_DETECTED / FFT_WAIT / W_COMMIT_WINDOW / PAYLOAD_ACTIVE / PACKET_DONE | IDLE / PREAMBLE_ACQ / W_PENDING / PAYLOAD_ACTIVE |
-| SRAM management | `live_fft_ready`, `capture_protect` for 288 KB capture window | `buf_freeze` for 1 kB FRONTEND_BUF only |
+| SRAM management | `live_fft_ready`, `capture_protect` for 288 KB capture window | none — no on-chip SRAM; off-chip PSRAM sequenced by `psram_buf_ctrl` |
 | W computation trigger | `h_ready` from FFT engine | `training_done` from training accumulator |
 | W computation path | PicoRV32 reads H/N0 from SRAM | PicoRV32 or hardware reads Z_j from registers |
 | Combiner fallback | Bypass until W_valid | Bypass until W_valid (identical policy) |
@@ -262,7 +270,7 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 | Back-to-back packets | Two sc_locks in rapid succession | First sc_lock ends current packet (IDLE); second sc_lock immediately enters PREAMBLE_ACQ |
 | Mode shadow write mid-packet | Write mode_shadow during PAYLOAD_ACTIVE | active_mode unchanged until IDLE; shadow value promoted at safe_switch |
 | No backpressure | Packet arrives during W_PENDING | iq_valid path unaffected; combiner stays bypass |
-| buf_freeze timing | Check FRONTEND_BUF control | buf_freeze asserts at sc_lock, deasserts at packet end |
+| packet_active timing | Check packet-phase control | `packet_active` asserts at sc_lock, de-asserts at packet end (TRPR-PCF-002/008, `test_w_missed_packet.py`) |
 | Noise sample, quiet channel | IDLE, inject noise-only signal below NOISE_THRESH, no sc_lock | `noise_sample_en` pulses once per symbol; `IRQ_NOISE_SAMPLE` fires |
 | Noise sample suppressed, near-far | IDLE, inject signal above NOISE_THRESH, no sc_lock | `noise_sample_en` does not pulse; no IRQ |
 | Noise sample suppressed, sc_lock | IDLE → PREAMBLE_ACQ mid-symbol | `noise_sample_en` suppressed from the symbol where sc_lock fires |
@@ -274,7 +282,7 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 - [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
 - [Training Accumulator](Training%20Accumulator.md) — provides `training_done`
 - [Weight Generation](Weight%20Generation.md) — archived hardware exploration; current `W_commit` source is firmware/host
-- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — receives `buf_freeze`
+- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — **removed block**, retained for history only
 - [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) — optional same-packet replay path
 - [MRC Combiner](MRC%20Combiner.md) — receives `combiner_source`, `active_mode`, `active_antenna_en`
 - [Register Map](../Register%20Map.md) — `PKT_TIMEOUT_SYMS`, `PACKET_PHASE`, `W_MISSED_PACKET`, IRQ registers

@@ -3,10 +3,13 @@ test_w_missed_packet.py -- W_MISSED_PACKET regression (no-W_COMMIT packet).
 
 Traceability (planning/Traceability.md): TRPR-PCF-005 (primary), plus the
 W_MISSED_PACKET readback halves of TRPR-PCF-009 / TRPR-MRC-011, the
-PACKET_DONE-IRQ sub-gap of TRPR-PCF-007, and (added 2026-07-06) TRPR-PCF-002 /
-TRPR-PCF-008: buf_freeze observed as a packet_ctrl_fsm output for the first
-time -- asserted at packet start, held through PAYLOAD_ACTIVE, de-asserted at
-IDLE entry, re-asserted at the next packet start.
+PACKET_DONE-IRQ sub-gap of TRPR-PCF-007, and (added 2026-07-06, retargeted
+2026-07-26) TRPR-PCF-002 / TRPR-PCF-008: the packet-phase output asserted at
+packet start, held through PAYLOAD_ACTIVE, de-asserted at IDLE entry,
+re-asserted at the next packet start. These checks originally observed
+buf_freeze; that output was deleted 2026-07-26 (bit-identical to
+packet_active, consumed by nothing), so they now watch packet_active
+directly at the same four points.
 
 TRPR-PCF-005: if firmware never sends W_COMMIT before the payload
 boundary, the FSM must stay in bypass, set W_MISSED_PACKET, and assert the
@@ -57,11 +60,11 @@ async def test_w_missed_on_wpend_timeout(dut):
     pkt_status = await spi_read(dut, 0x1C)
     assert pkt_status & 0x01, f"{tag}: PACKET_ACTIVE not set after sc_lock (0x{pkt_status:02X})"
 
-    # TRPR-PCF-002: buf_freeze asserts at packet start (sc_lock edge) and holds
-    # through the packet. First test to observe it as a packet_ctrl_fsm output
-    # (previously only ever a hardwired-0 port on unrelated standalone tbs).
-    assert int(dut.u_dut.buf_freeze.value) == 1, \
-        f"{tag}: buf_freeze not asserted after sc_lock (TRPR-PCF-002)"
+    # TRPR-PCF-002: packet_active asserts at packet start (sc_lock edge) and
+    # holds through the packet -- checked at the FSM output, not just via the
+    # PACKET_STATUS readback above.
+    assert int(dut.u_dut.packet_active.value) == 1, \
+        f"{tag}: packet_active not asserted after sc_lock (TRPR-PCF-002)"
 
     # -- training_done (IRQ[1]); the miss must NOT have fired yet ----------
     train_ok = False
@@ -115,8 +118,8 @@ async def test_w_missed_on_wpend_timeout(dut):
     # -- payload must run in BYPASS (no weights): comb_y == raw ant0 -------
     assert int(dut.u_dut.u_comb.use_mrc_r.value) == 0, \
         f"{tag}: use_mrc_r=1 on a missed packet -- combiner left bypass without weights"
-    assert int(dut.u_dut.buf_freeze.value) == 1, \
-        f"{tag}: buf_freeze dropped during PAYLOAD_ACTIVE (TRPR-PCF-002)"
+    assert int(dut.u_dut.packet_active.value) == 1, \
+        f"{tag}: packet_active dropped during PAYLOAD_ACTIVE (TRPR-PCF-002)"
     await _watch_bypass(dut, 0, 20, tag=f"{tag}/payload-bypass",
                         expect_silenced=True, check_remod=False)
 
@@ -133,9 +136,9 @@ async def test_w_missed_on_wpend_timeout(dut):
     pkt_status = await spi_read(dut, 0x1C)
     wgt = await spi_read(dut, 0x1E)
     assert not (pkt_status & 0x01), f"{tag}: PACKET_ACTIVE still set in IDLE (0x{pkt_status:02X})"
-    # TRPR-PCF-008: buf_freeze de-asserts on IDLE entry
-    assert int(dut.u_dut.buf_freeze.value) == 0, \
-        f"{tag}: buf_freeze still asserted after return to IDLE (TRPR-PCF-008)"
+    # TRPR-PCF-008: packet_active de-asserts on IDLE entry
+    assert int(dut.u_dut.packet_active.value) == 0, \
+        f"{tag}: packet_active still asserted after return to IDLE (TRPR-PCF-008)"
     assert pkt_status & 0x80, \
         f"{tag}: W_MISSED_PACKET readback lost at IDLE entry -- firmware polling after " \
         f"PACKET_DONE would miss it (0x{pkt_status:02X})"
@@ -155,7 +158,7 @@ async def test_w_missed_on_wpend_timeout(dut):
     assert pkt_status & 0x01, f"{tag}: PACKET_ACTIVE clear after re-lock (0x{pkt_status:02X})"
     assert not (pkt_status & 0x80), \
         f"{tag}: W_MISSED_PACKET not cleared at next packet start (0x{pkt_status:02X})"
-    assert int(dut.u_dut.buf_freeze.value) == 1, \
-        f"{tag}: buf_freeze not re-asserted at the next packet start (TRPR-PCF-002)"
+    assert int(dut.u_dut.packet_active.value) == 1, \
+        f"{tag}: packet_active not re-asserted at the next packet start (TRPR-PCF-002)"
     dut._log.info(f"{tag}: PASS -- miss IRQ, sticky readback through IDLE, bypass payload, "
                   f"PACKET_DONE IRQ, clear-on-next-packet all confirmed")

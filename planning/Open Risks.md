@@ -861,8 +861,12 @@ inputs deleted from the RTL — `psram_packet_arm`, `psram_replay_start`,
 `payload_rd_base`, `safe_switch`, `combiner_source` (superseded by the
 continuous-delay replay redesign, commit `46e1cdf`), plus the now-unused
 inputs `iq_valid`, `psram_en`, `psram_replay_active`. `buf_freeze` was
-KEPT: it is regression-covered (TRPR-PCF-002/008, `test_w_missed_packet.py`)
-even though it drives nothing in `trouper_top` yet.
+initially KEPT because it was regression-covered (TRPR-PCF-002/008,
+`test_w_missed_packet.py`) even though it drove nothing in `trouper_top`;
+it was **deleted 2026-07-26** once it was established to be a bit-identical
+duplicate of `packet_active` (same four assignment sites, same values — the
+formal harness had been asserting both equal `state != ST_IDLE`). PCF-002/008
+and the four regression assertions are retargeted to `packet_active`.
 
 **Resolved (`psram_abort` — the "verify that path or wire/delete" item):
 verified UNREACHABLE, branch deleted.** The mid-payload re-lock scenario

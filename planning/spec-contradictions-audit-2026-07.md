@@ -302,6 +302,33 @@ utilisation figure (~38%) that doesn't match TRPR-PSR-014's cycle budget.
 | # | Status | Item |
 |---|---|---|
 | 27 | open | **SC delay-read cycle budget is internally inconsistent.** TRPR-FBC-001 (`Trouper Chip Specification.md:371`) calls the delay read 30 cycles, while TRPR-PSR-014/018 (`:362-363`) and `blocks/PSRAM Buffer Controller.md:35` budget it as 19 cycles within `25 + 19 = 44` cycles. TRPR-FBC-004 (`:374`) then calls this an “additional” read even though the 19-cycle delay read is already included in that 44-cycle `S_WRITE` budget. Use the RTL-measured/implemented transaction figure, state it once, and remove “additional.” |
+| 29 | closed 2026-07-26 | **TRPR-PCF-002/008 were normative SHALLs on a dead duplicate signal** |
+
+Found while fixing item 16. `TRPR-PCF-008` required "`buf_freeze` SHALL de-assert and the
+frontend buffer SHALL resume rolling capture" — a normative requirement on the on-chip
+frontend buffer that TRPR-PHY-006 removed, same defect class as items 13 and 16.
+`TRPR-PCF-002` required asserting the same output. Both were signed off in
+`Traceability.md` against `test_w_missed_packet.py`, whose own row already recorded that
+the signal "drives nothing in `trouper_top`".
+
+Investigation showed `buf_freeze` was not merely dead but a **bit-identical duplicate of
+`packet_active`** — same four assignment sites, same values — which the formal harness
+had itself been asserting (`a_freeze_iff_not_idle` alongside `a_active_iff_not_idle`,
+both `state != ST_IDLE`). Its only consumer, `frontend_buf_ctrl.v`, is no longer
+instantiated in the design; four legacy `tb_dsp_chain_*` benches tie it to constant 0.
+
+*Resolution (2026-07-26):* `buf_freeze` deleted from `packet_ctrl_fsm.v`,
+`trouper_top.v` (both the `src/` and `rtl-test/rtl/` trees), the formal harness port and
+assertion, and the B6 equivalence TB's compare vector. PCF-002/008 reworded to
+`packet_active`, and the four regression assertions in `test_w_missed_packet.py`
+retargeted to the same signal at the same four points, so FSM-contract coverage is
+preserved. `packet_ctrl_fsm_ref.v` keeps the port — it is a frozen pre-B6 snapshot.
+Verified: exact P&R file set elaborates clean, yosys `check` count unchanged from the
+last signoff run (367, pre-existing `reg_bank` mem2reg artifacts), B6 equivalence TB
+bit-identical across 40 packets, `w_missed` cocotb regression re-run (jobs 3603–3605).
+
+| # | Status | Item |
+|---|---|---|
 | 28 | open | **Eigenvector firmware timing is stale by about 2×.** TRPR-WGN-004 (`Trouper Chip Specification.md:259`) says 8 iterations take ~1.0–1.1 ms and makes SF7 “roughly break-even.” The cycle-accurate measurement in `blocks/Eigenvector Weight Computation.md:374-448` and `Open Risks.md:723-730` supersedes that: 33,283 cycles = **2.08 ms** at 16 MHz for rv32im (2.28 ms for rv32emc). SF7 and SF8 miss the live deadline; only SF9+ fits. Update the normative requirement and its timing/risk references. |
 
 ---
