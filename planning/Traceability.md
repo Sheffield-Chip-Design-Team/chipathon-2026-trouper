@@ -54,7 +54,8 @@ Map.md` agreed with each other throughout; only the spec text lagged.
 included for completeness since they were part of the same sweep, no edits
 needed): SPS-002, SPS-006 (`CHIP_ID` 0x00), SPS-010/011 (`PSRAM_DBG_DATA` 0x76,
 `0x7F` reserved), REG-004, REG-006 (`TACC_NOISE_TRIG` 0x1F, `WGT_CTRL.W_COMMIT`
-0x1E, `RX_GAIN_COMMIT` 0x18, `PSRAM_CLR_ERR` 0x70, `PSRAM_DBG_CTRL.RD_TRIG` 0x75),
+0x1E, `RX_GAIN_CTRL.RX_GAIN_COMMIT` 0x18, `PSRAM_CTRL.PSRAM_CLR_ERR` 0x70,
+`PSRAM_DBG_CTRL.RD_TRIG` 0x75),
 REG-007/IRQ-001/002/006 (`IRQ_STATUS` 0x02, `IRQ_CLEAR` 0x03), AGC-003
 (`RX_GAIN_SHADOW`/`ACTIVE` 0x10–0x17), AGC-004 (`TACC_NOISE_TRIG` 0x1F), INT-002/009
 (0x00–0x7F range, W shadow 0x30–0x3F, `WGT_CTRL` 0x1E), TAC-002/003/004/007

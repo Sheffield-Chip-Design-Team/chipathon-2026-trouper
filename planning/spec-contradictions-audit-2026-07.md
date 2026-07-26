@@ -15,6 +15,12 @@ self-consistent and match spec §4.16 / TRPR-PHY-003).
 
 Status column: `open` = not yet fixed. Update in place as items close.
 
+**All 31 items closed 2026-07-26.** Item 8 closed on branch `feat/noise-weighted-mrc`;
+the rest on `audit/2026-07-26`. Three items turned out to be materially wider or
+different than recorded rather than simple reconciliations — 15 (the truncation term was
+overstated by ~1.7 dB and was the wrong *kind* of quantity), 21 (PSRAM utilisation was
+~2.3× optimistic), and 22/26 (both stated premises that had already been measured false).
+
 ---
 
 ## Tier 1 — wrong addresses or wrong numbers; would mislead firmware or signoff
@@ -435,11 +441,54 @@ flagged out of scope.
 
 | # | Status | Item |
 |---|---|---|
-| 22 | open | **TRPR-PHY-008 accepts an SS band never achieved.** `:596` accepts "−7 to −10 ns at MCP=2". `Open Risks.md` records best measured −12.11 ns (item 39) and official signoff −25.39 ns. |
-| 23 | open | **MCP tier mismatch.** PHY-008 says MCP=2; §3.1 / TRPR-SYS-015 put TDM cones at MCP=3 and only the control plane at MCP=2. |
-| 24 | open | **Register-map occupancy arithmetic.** `Register Map.md:113` says "110 implemented + 18 reserved = 128"; the map lists 13 reserved slots (`0x04–0x07`, `0x1A–0x1B`, `0x79–0x7E`, `0x7F`) → 115 + 13. |
-| 25 | open | **Register name mismatch.** TRPR-REG-006 (`:448`) names the bit's register `RX_GAIN_COMMIT 0x18[0]`; the map calls the register `RX_GAIN_CTRL`. Cosmetic. |
-| 26 | open | **Die-target drift.** TRPR-SYS-009 / PHY-003 target 1100×1100; all current signoff work in `Open Risks.md` runs 1200×1100. Target vs actual — spec doesn't acknowledge the gap. |
+| 22 | closed 2026-07-26 | **TRPR-PHY-008 accepts an SS band never achieved.** `:596` accepts "−7 to −10 ns at MCP=2". `Open Risks.md` records best measured −12.11 ns (item 39) and official signoff −25.39 ns. |
+| 23 | closed 2026-07-26 | **MCP tier mismatch.** PHY-008 says MCP=2; §3.1 / TRPR-SYS-015 put TDM cones at MCP=3 and only the control plane at MCP=2. |
+| 24 | closed 2026-07-26 | **Register-map occupancy arithmetic.** `Register Map.md:113` says "110 implemented + 18 reserved = 128"; the map lists 13 reserved slots (`0x04–0x07`, `0x1A–0x1B`, `0x79–0x7E`, `0x7F`) → 115 + 13. |
+| 25 | closed 2026-07-26 | **Register name mismatch.** TRPR-REG-006 (`:448`) names the bit's register `RX_GAIN_COMMIT 0x18[0]`; the map calls the register `RX_GAIN_CTRL`. Cosmetic. |
+| 26 | closed 2026-07-26 | **Die-target drift.** TRPR-SYS-009 / PHY-003 target 1100×1100; all current signoff work in `Open Risks.md` runs 1200×1100. Target vs actual — spec doesn't acknowledge the gap. |
+
+*Resolution (2026-07-26), items 22–26.* Two of these were cosmetic as recorded; three
+were not.
+
+**22 + 23 are one row and one root cause.** TRPR-PHY-008's "−7 to −10 ns at MCP=2" is
+wrong on both halves, and both halves come from the same place: the row was never
+updated after the blanket-MCP era ended. `Physical Design Change List.md:883` is the
+origin — that band was measured on a **blanket** `set_multicycle_path 2` SDC, at 630 k
+µm² cell area, on a 1100×1100 die. All three premises are gone. The blanket exception
+was replaced by the scoped mixed set in `pnr_32m_scoped_v25_b6.sdc` (verified by
+reading it: MCP=3 on the four paced TDM cones plus the quasi-static
+`sc_detector`/`packet_ctrl_fsm`/`training_acc` control arcs; MCP=2 only on the
+`reg_bank` write bus and barrel-shift registers — i.e. exactly TRPR-SYS-015's tiering,
+so item 23 resolves in SYS-015's favour). Measured SS WNS under the honest set: best
+ever **−12.11 ns** (jobs 3403/3404), **−14.91 ns** on the three 2026-07-25 runs (read
+from `RUN_2026-07-25_14-{35-07,35-09,41-00}/*-openroad-stapostpnr/max_ss_125C_3v00/wns.max.rpt`,
+all identical, TNS −5747 ns), and **−25.39 ns** for the older official figure
+`Open Risks.md` #1 still treats as blocking. PHY-008 now states the accepted band as
+the measured **−12 to −15 ns** and forbids claiming better without a citable run.
+The historical entry is annotated rather than rewritten, so the provenance survives:
+**a tighter number there is not progress, it is the blanket exception hiding paths.**
+
+**24 — both terms were wrong; only the sum was right.** Counted the main map table
+programmatically: **115 implemented + 13 reserved = 128**, exactly as predicted.
+"110 + 18" summed correctly by coincidence, which is why it survived review.
+
+**25 — cosmetic, but the reverse of how it was recorded.** There is no name conflict:
+`RX_GAIN_CTRL` is the register at `0x18` and `RX_GAIN_COMMIT` is its bit [0]. The
+defect is that TRPR-REG-006 listed three of its five W1P entries by bit name and two in
+`REGISTER.BIT` form, which reads as though `RX_GAIN_COMMIT` and `PSRAM_CLR_ERR` were
+registers of their own. Normalised all five to `REGISTER.BIT`, noting that only
+`TACC_NOISE_TRIG` has an address to itself; same fix applied to `Traceability.md:57`.
+
+**26 — not drift; a measured hard wall.** The audit called this "target vs actual".
+`planning/die-shrink-routability-floor.md` is stronger than that: at the current ≈974 k
+µm² cell area, 1100×1100 sits at 93.8% effective utilisation and fails **global**
+routing (GRT-0116 congestion at step 39) on every variant tried — Metal1 and Metal2 pin
+layers, cell padding 0 and 1 (jobs 3242/3243/3245). So 1100×1100 is blocked on RTL area
+reduction, not floorplan tightening. Both rows now state the as-built **1200×1100**
+(`DIE_AREA [0,0,1200,1100]`, `config_current_signoff.json`) and keep 1100×1100 only as a
+target contingent on the area roadmap.
+
+Documentation only — no RTL or SDC was changed, so nothing needed re-verification.
 
 ---
 
@@ -587,7 +636,9 @@ unenforced.
    firmware responsibility (no hardware clamp, no `Open Risks.md` entry — user decision).
 4. ~~**Items 7–14**~~ — all closed 2026-07-26 (item 8 on branch `feat/noise-weighted-mrc`).
 5. ~~**Items 18–21**~~ — all closed 2026-07-26, as one pass. Each turned out to be wider than its recorded line range; see the individual entries.
-6. **Tier 4** — sweep up alongside the next spec revision.
+6. ~~**Tier 4**~~ — items 22-26 closed 2026-07-26. Items 22/23 (PHY-008) and 26
+   (die target) were substantive, not minor: both were stating premises that had
+   been measured false.
 
 Items 1, 2 and 3 also require reopening `Traceability.md:126-127`, `:158`, `:160`,
 which currently certify the wrong values.

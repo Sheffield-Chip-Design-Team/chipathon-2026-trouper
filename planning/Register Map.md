@@ -110,7 +110,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x79`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 110 implemented + 18 reserved = 128.
+**Occupancy:** 115 implemented + 13 reserved = 128. (Corrected 2026-07-26, audit item 24 — this line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 13 reserved slots are `0x04`–`0x07`, `0x1A`–`0x1B`, `0x79`–`0x7E` and `0x7F`.)
 
 ---
 
