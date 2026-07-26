@@ -400,7 +400,7 @@ from roughly SF8 upward". Corrected to 2.08/2.28 ms and SF9+.
 
 | # | Status | Item |
 |---|---|---|
-| 31 | open | **`psram_buf_ctrl.v` comments the delay depth as `128..16384`; the reachable range is `256..16384`** |
+| 31 | closed 2026-07-26 | **`psram_buf_ctrl.v` commented the delay depth as `128..16384`; the in-spec range is `256..16384`** |
 
 Noticed while closing item 27, not fixed. `psram_buf_ctrl.v:183` annotates
 `del_n_c = 15'd1 << (sf[3:0] + sample_shift)` as "`2^(SF+shift), 128..16384`". The low
@@ -416,12 +416,16 @@ firmware can also write `SF_CFG = 13..15`, giving `SF + sample_shift` up to 17 �
 `15'd1 << 17` truncates to **zero** in the 15-bit `del_n_c`, which would collapse the SC
 delay depth. Compare `TACC_WINDOW_SYMS` (`0x27`), which *is* clamped in `reg_bank`.
 
-Two separate dispositions are needed: correct the comment's bound to 256, and decide
-whether the unclamped `SF_CFG` is acceptable (documented firmware contract) or wants a
-hardware clamp to 7–12. The second is a robustness question rather than a document
-contradiction, so it belongs in `Open Risks.md` — **not yet filed there**; no existing
-risk covers `SF_CFG` *range* (item 31 in that file is about its `PACKET_ACTIVE` gate,
-closed 2026-07-05).
+*Resolution (2026-07-26):* comment bound corrected to `256..16384 in-spec (SF_CFG 7-12,
+shift 1..2)` in both RTL trees.
+
+*Decision (2026-07-26, user):* the unclamped `SF_CFG` stays **a firmware
+consideration** — no hardware clamp, and no `Open Risks.md` entry. Keeping `SF_CFG` in
+7–12 is the controlling firmware's responsibility; writing 6 or 13–15 is out of contract
+and its consequences (a short delay depth, or a `del_n_c` that truncates to zero above
+`SF+shift = 15`) are not guarded against in hardware. Recorded here so the reasoning is
+findable, since the register's own map row states the 7–12 range without saying it is
+unenforced.
 
 ---
 

@@ -32,7 +32,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x07` | — | — | `0x00` | — | Reserved (former `GPIO_IN`; GPIO removed) |
 | **RX / Modem Configuration** (`0x08`–`0x0F`) | | | | | |
 | `0x08` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
-| `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12); write ignored while `PACKET_ACTIVE` |
+| `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12, firmware-enforced — not clamped in HW); write ignored while `PACKET_ACTIVE` |
 | `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); [2:1] `sc_ant_sel` SC correlator antenna (0-3); write ignored while `PACKET_ACTIVE` |
 | `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
 | `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
@@ -185,7 +185,7 @@ Spreading-factor selection for the non-FFT receive path. Direct-coded: the regis
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [3:0] | `SF` | Spreading factor, valid range 7–12 |
+| [3:0] | `SF` | Spreading factor, valid range 7–12. **Not range-clamped in hardware** — `reg_bank` stores the raw 4-bit write (the only gate is `PACKET_ACTIVE`). Keeping SF in 7–12 is a firmware responsibility: 0–6 shortens the SC delay depth `M = 2^(SF+sample_shift)` below its intended 256 minimum, and 13–15 pushes `SF+sample_shift` past 15, where `psram_buf_ctrl`'s 15-bit delay-depth term truncates to zero. Deliberate — no clamp is planned (decision 2026-07-26). |
 | [7:4] | — | Reserved, write 0 |
 
 This configures `M = 2^SF` for the PSRAM delay line, SC detector, training accumulator, and packet-control timing arithmetic. Like `BW_CFG`, writes are blocked in hardware while `PACKET_ACTIVE=1` — an SF change mid-packet would desynchronize the SC detector's and training accumulator's symbol-length arithmetic (neither has a re-arm mechanism for a live SF change), unlike the PSRAM delay line which explicitly re-arms its warm-up counter on any `sf`/`sample_shift` change.

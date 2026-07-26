@@ -180,7 +180,7 @@ module psram_buf_ctrl (
     reg [3:0]       sf_prev;
     reg [1:0]       sample_shift_prev;
     reg [14:0]      del_n_r;                                       // registered (see del_offset_r)
-    wire [14:0]     del_n_c = (15'd1 << (sf[3:0] + sample_shift)); // 2^(SF+shift), 128..16384
+    wire [14:0]     del_n_c = (15'd1 << (sf[3:0] + sample_shift)); // 2^(SF+shift), 256..16384 in-spec (SF_CFG 7-12, shift 1..2)
 
     // -----------------------------------------------------------------------
     // QPI transaction sub-cycle FSM
