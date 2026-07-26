@@ -222,13 +222,24 @@ TRPR-SYS-017 — is absent from the diagram entirely.
 
 | # | Status | Item |
 |---|---|---|
-| 17 | open | **`System Architecture.md:288-303` still specifies the CLK_16M generated clock** |
+| 17 | closed 2026-07-26 | **`System Architecture.md` specified the CLK_16M generated clock** |
 
-Documents two clock domains, a `create_generated_clock -divide_by 2` SDC snippet, and
-lists `frontend_buf_ctrl` among 16 MHz blocks. Spec §3.1 (`:78`) explicitly supersedes
-this — single clock net, `ce_16m` clock-enable, no generated clocks — and TRPR-PHY-014
-*forbids* that SDC construct. **Highest-priority Tier 3 item:** directly
-actionable-wrong for anyone writing constraints.
+Before resolution, `:288-303` documented two clock domains, a
+`create_generated_clock -divide_by 2` SDC snippet, and listed `frontend_buf_ctrl` among
+16 MHz blocks; the CDC table added two IQ_CLK↔CLK_16M crossing rows. Spec §3.1 (`:78`)
+supersedes all of it — single clock net, `ce_16m` clock-enable, no generated clocks —
+and TRPR-PHY-014 *forbids* that SDC construct. It was the highest-priority Tier 3 item
+because it was directly actionable-wrong for anyone writing constraints.
+
+*Resolution (2026-07-26):* the section is rewritten as "Clocking, timing tiers, and
+asynchronous boundaries" and now mirrors spec §3.1's three *constraint* tiers
+(full-rate 31.25 ns / paced-TDM MCP=3 93.75 ns / CE-gated MCP=2 62.5 ns), states
+explicitly that there are no internal clock domains and no core CDC, and replaces the
+generated-clock snippet with the TRPR-PHY-014 contract (`create_clock -period 31.25`
+plus scoped MCPs, no generated clocks, no blanket override). The two CLK_16M crossing
+rows are deleted, leaving the host SPI interface as the only asynchronous boundary.
+The stale `frontend_buf_ctrl` and `sd_decimator_cic_tdm8` names are gone from the tier
+table, and the obsolete "pipeline the sc_detector TDM accumulator" fix note with them.
 
 | # | Status | Item |
 |---|---|---|
@@ -290,8 +301,10 @@ utilisation figure (~38%) that doesn't match TRPR-PSR-014's cycle budget.
 1. **Items 1–6 and 27–28** — unambiguous. Items 1–4 and 27–28 are settled by RTL,
    arithmetic, or cycle-accurate measurement; item 6 by `blocks/PSRAM Buffer Controller.md`.
    Item 5's `+1` convention is now confirmed in `sc_detector.v`.
-2. **Item 17**, then 16 — `System Architecture.md` is the doc most likely to be read by
-   someone writing SDC or a new block.
+2. ~~**Item 17**~~ (closed 2026-07-26), then **16** — `System Architecture.md` is the doc
+   most likely to be read by someone writing SDC or a new block. Item 16 (the block
+   diagram still showing the deleted frontend buffer, and omitting the PSRAM replay
+   path) is now the remaining defect in that document.
 3. **Item 15** — re-derive the SNR loss budget's truncation term rather than reword it.
 4. **Items 7–14** — spec/map reconciliation pass.
 5. **Items 18–21** — bulk staleness; cheapest as one "delete the CPU-era sections" pass.
