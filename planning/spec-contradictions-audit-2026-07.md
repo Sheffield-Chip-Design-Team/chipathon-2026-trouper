@@ -329,6 +329,35 @@ bit-identical across 40 packets, `w_missed` cocotb regression re-run (jobs 3603�
 
 | # | Status | Item |
 |---|---|---|
+| 30 | closed 2026-07-26 | **`blocks/Packet Control FSM.md` described a different FSM than the one implemented** |
+
+Found while closing item 29. Beyond the `buf_freeze` rows, the document asserted: a
+4-state FSM (RTL has 5 — `ST_ACQ_SETUP` was added for Open Risk #39); a `W_ACTIVE` shadow
+bank promoted at IDLE (no such bank — the combiner reads the live W register file, per the
+item-7 resolution); `W_valid` persisting across packets so a stale weight vector is reused
+(RTL clears it on the timeout path into IDLE — every packet must earn its own commit); a
+mid-packet `W_commit` being *queued to the next IDLE* (RTL applies it immediately, in
+`W_PENDING` and in `PAYLOAD_ACTIVE`); FSM outputs `psram_packet_arm`,
+`psram_replay_start`, `psram_abort`, `payload_rd_base`, `safe_switch`, `combiner_source`,
+`noise_sample_en`, `noise_thresh` (all deleted from the RTL); packet-end detection off a
+new `sc_lock` (structurally impossible — `sc_lock` is level-held until `sc_clr`); a 16 MHz
+clock; `M = 2^SF`; and an entire "Per-branch noise floor estimation" section built on the
+removed `noise_est` block. The interface table carried a 2026-07-12 banner admitting the
+port list was stale, but the body sections were never corrected.
+
+The two most consequential were the `W_valid` lifetime and the `W_commit` deferral, which
+inverted real firmware-visible behaviour rather than merely naming dead signals.
+
+*Resolution (2026-07-26):* document rewritten against `src/control/packet_ctrl_fsm.v` —
+5-state machine with `packet_phase` encodings, the three down-counter deadlines with
+their real spans (`tacc_span + 2M` / `+ 5M` / `PKT_TIMEOUT_SYMS × M`) and the B6
+rationale, correct `W_commit` semantics, live port list, IRQ aggregation as actually done
+in `trouper_top`, and a verification table marked with real job numbers plus two honest
+coverage gaps (mid-payload `W_commit`, training timeout). `TRPR-PCF-001` corrected from
+four states to five in the same pass.
+
+| # | Status | Item |
+|---|---|---|
 | 28 | open | **Eigenvector firmware timing is stale by about 2×.** TRPR-WGN-004 (`Trouper Chip Specification.md:259`) says 8 iterations take ~1.0–1.1 ms and makes SF7 “roughly break-even.” The cycle-accurate measurement in `blocks/Eigenvector Weight Computation.md:374-448` and `Open Risks.md:723-730` supersedes that: 33,283 cycles = **2.08 ms** at 16 MHz for rv32im (2.28 ms for rv32emc). SF7 and SF8 miss the live deadline; only SF9+ fits. Update the normative requirement and its timing/risk references. |
 
 ---

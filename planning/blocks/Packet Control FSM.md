@@ -1,243 +1,245 @@
 # Packet Control FSM
 
-RX path control block (non-FFT frontend). See [Non-FFT LoRa Frontend Proposal](../Non-FFT%20LoRa%20Frontend%20Proposal.md) and [DSP Flow](../DSP%20Flow.md) for context.
+RX path control block. See [Non-FFT LoRa Frontend Proposal](../Non-FFT%20LoRa%20Frontend%20Proposal.md) and [DSP Flow](../DSP%20Flow.md) for context.
 
 **Owner:** TBD
-**Status:** Rewritten for non-FFT path
+**Status:** Reconciled against `src/control/packet_ctrl_fsm.v` on 2026-07-26
+
+> **Reconciliation note (2026-07-26).** This document had drifted a long way from the
+> RTL: it described a 4-state FSM (there are 5), a `W_ACTIVE` shadow bank (no such bank
+> exists), `W_valid` persisting across packets (it is cleared at every packet end), a
+> `W_commit` arriving mid-packet being deferred to IDLE (it is applied immediately), the
+> FSM commanding the PSRAM controller through `psram_packet_arm`/`psram_replay_start`/
+> `psram_abort`/`payload_rd_base` (all deleted; `psram_buf_ctrl` self-sequences),
+> `safe_switch`/`combiner_source`/`buf_freeze` outputs (all deleted), a
+> `noise_sample_en`/`NOISE_THRESH` noise-floor path (removed with the noise-estimator
+> migration), a 16 MHz clock (it is 32 MHz), `M = 2^SF` (it is `2^(SF+sample_shift)`),
+> and packet-end detection off a new `sc_lock` (structurally impossible). All of that is
+> corrected below. Sections that documented deleted hardware are removed rather than
+> annotated; the deletion history lives in `Open Risks.md` (#25) and
+> `planning/spec-contradictions-audit-2026-07.md` (items 16, 29).
 
 ---
 
 ## Role
 
-Owns packet phase and no-glitch switching between bypass and combined output. Converts SC timing events and weight-readiness signals into deterministic control for the frontend buffer, weight generation, combiner, and optional PSRAM replay path.
+Owns packet phase, weight gating, and per-packet latching of the combining mode and
+antenna mask. Converts SC timing events and weight-readiness signals into deterministic
+control for the combiner, the PSRAM buffer controller's enable window, and the IRQ path.
 
-Compared to the FFT-path FSM, this version is significantly simplified:
+Compared to the FFT-path FSM this version is significantly simplified:
 
-- No FFT trigger, no capture protection, no SRAM window management
+- No FFT trigger, no capture protection, no on-chip SRAM window management
 - No `h_ready` input — replaced by `training_done` from the training accumulator
-- Critical path is: `sc_lock → training_done → W_commit → safe_switch`
+- Control chain is: `sc_lock → training_done → W_commit → W_valid`
 
-The FSM must never backpressure `iq_valid`. If weight computation misses the current packet, the live stream stays in bypass — this is expected next-packet behaviour, not an error.
+The FSM must never backpressure the sample path. If weight computation misses the current
+packet, that packet stays in bypass — expected behaviour, not an error.
 
-If the optional PSRAM same-packet path is enabled, the FSM also decides whether the current packet should:
-
-- stay on the baseline live/bypass flow
-- start PSRAM buffering at `sc_lock`
-- switch the SX1302-facing output from zeros to PSRAM replay once `W_commit` arrives
-- drain buffered packet tail after `packet_end`
+The FSM does **not** command the PSRAM replay path. `psram_buf_ctrl` self-sequences its
+capture and replay phases from `sc_lock`, `packet_active`, `packet_end` and `W_commit`;
+the FSM's contribution is `packet_active` (the enable window) and the `W_valid` gate.
 
 ---
 
 ## State Machine
 
+Five states. `ST_ACQ_SETUP` is a single dedicated cycle between `sc_lock` and
+`PREAMBLE_ACQ` that loads the three timeout down-counters from the already-registered
+`lat_timing_ref`, rather than combinationally from the live `timing_ref` input — see
+Open Risk #39 for why that arc had to be split.
+
 ```
-        sc_lock
-IDLE ──────────────► PREAMBLE_ACQ
- ▲                        │
- │                  training_done
- │                        │
- │                        ▼
- │                    W_PENDING ──── timeout / W_commit ──► PAYLOAD_ACTIVE
- │                                                                │
- └────────────────────────────── packet_end / timeout ───────────┘
+                sc_lock rising          unconditional
+       IDLE ──────────────────► ACQ_SETUP ──────────► PREAMBLE_ACQ
+        ▲                                                  │
+        │                              training_done ┌──────┴──────┐ acq_cnt == 0
+        │                                            ▼             │
+        │                                        W_PENDING         │
+        │                                            │             │
+        │                    W_commit | wpend_cnt==0 │             │
+        │                                            ▼             │
+        └────────── pkt_cnt == 0 ──────────  PAYLOAD_ACTIVE ◄──────┘
+                    (clears W_valid)
 ```
 
-| State | Entry condition | Active behaviour | Exit condition |
-|---|---|---|---|
-| `IDLE` | Reset; packet end; timeout | `safe_switch=1`; promote `W_SHADOW→W_ACTIVE` if `W_commit_pending`; unfreeze FRONTEND_BUF; assert `noise_sample_en` each symbol period while `energy_j < NOISE_THRESH` and `!sc_lock` | `sc_lock` |
-| `PREAMBLE_ACQ` | `sc_lock` | Latch `timing_ref`, `ACTIVE_MODE`, `ACTIVE_ANTENNA_EN`; freeze FRONTEND_BUF; combiner=bypass; raise `IRQ_CORR_LOCK` | `training_done` or preamble timeout |
-| `W_PENDING` | `training_done` | Raise `IRQ_TRAINING_DONE`; firmware computes and writes `W_SHADOW`; combiner stays bypass | `W_commit` or payload-start timeout |
-| `PAYLOAD_ACTIVE` | Payload phase begins | Combiner = `W_ACTIVE` if `W_valid`, else bypass; if `PSRAM_EN=1` and replay was armed on time, combiner input switches to PSRAM replay; else live path remains active; set `W_MISSED_PACKET` if W was not committed before this state | `packet_end` or timeout |
+The `acq_cnt` timeout path skips `W_PENDING` entirely and enters `PAYLOAD_ACTIVE`
+directly with `W_missed_packet` set — training never completed, so there is nothing to
+wait for a weight commit on.
+
+| State | `packet_phase` | Entry condition | Active behaviour | Exit condition |
+|---|---|---|---|---|
+| `ST_IDLE` | 0 | Reset; packet timeout | `packet_active=0`; apply a pending `W_commit` (`W_valid`, `W_valid_set`) | `sc_lock` rising edge |
+| `ST_ACQ_SETUP` | 1 | `sc_lock` rising edge | Load `acq_cnt`/`wpend_cnt`/`pkt_cnt` from `lat_timing_ref` | Unconditional, next cycle |
+| `ST_PREAMBLE_ACQ` | 1 | `ST_ACQ_SETUP` | Await training; counters decrement per `iq_tick` | `training_done` → `W_PENDING`; `acq_cnt==0` → `PAYLOAD_ACTIVE` with `W_missed_packet` |
+| `ST_W_PENDING` | 2 | `training_done` | Firmware computes and writes the W bank | `W_commit` → `PAYLOAD_ACTIVE` with `W_valid`; `wpend_cnt==0` → `PAYLOAD_ACTIVE`, `W_missed_packet` if `!W_valid` |
+| `ST_PAYLOAD_ACTIVE` | 3 | `W_PENDING` or acq timeout | Apply a late `W_commit` immediately; no mid-payload re-lock handling | `pkt_cnt==0` → `IDLE`, clearing `W_valid` |
+
+On the `sc_lock` rising edge the FSM latches `lat_timing_ref`, `active_mode` and
+`active_antenna_en`, clears the sticky `W_missed_q`, and asserts `packet_active` /
+`packet_active_ps`.
 
 ### Packet end detection
 
-The ASIC has no explicit framing signal from SX1302. Packet end is detected by either:
+There is no framing signal from the SX1302. Packet end is detected by **one** mechanism:
+the `pkt_cnt` down-counter reaching zero, loaded from `PKT_TIMEOUT_SYMS` (0x0B) × M.
 
-1. **New `sc_lock`** — a new preamble detected implies the previous packet is done
-2. **Configurable timeout** — `timing_ref + PKT_TIMEOUT_SYMS * M` where `PKT_TIMEOUT_SYMS` is a register-configurable maximum packet length in symbols (default covers the maximum LoRa payload at the configured SF/BW/CR)
-
-Whichever fires first terminates the current packet and returns the FSM to IDLE.
+A new `sc_lock` cannot end a packet: `sc_detector` holds `sc_lock` at level until
+`sc_clr` (the falling edge of `packet_active`), so no second rising edge can occur while
+the FSM is out of IDLE. Every packet acquisition necessarily passes through `ST_IDLE`.
+A former mid-payload re-lock branch, with a `psram_abort` output to bail the PSRAM
+controller out of a stale replay, was verified structurally unreachable and removed
+2026-07-12. **If `sc_detector` ever gains a mid-packet re-arm path** — for example a
+cascade `sc_lock_in` without the `!sc_lock` gate — re-lock handling and a replay abort
+must be reintroduced here *and* in `psram_buf_ctrl`.
 
 ---
 
 ## Timing Events
 
-### Preamble timeout
+All three deadlines are **down-counters**, decremented once per captured sample
+(`iq_tick`) while the FSM is in `PREAMBLE_ACQ`, `W_PENDING` or `PAYLOAD_ACTIVE`. They are
+loaded once, in `ST_ACQ_SETUP`, from quasi-static operands. This replaced three 32-bit
+absolute deadlines and their continuous `sample_count >` comparators (area cut B6); the
+counters are also wrap-immune, which the old compares were not — a 32-bit sample counter
+wraps after ~2.4 h at 500 kS/s.
 
-Training should complete within the 8-symbol preamble window:
+`M = 1 << (SF + sample_shift)`, so M ≤ 16384 (SF12 at 125 kHz). Spans, in samples
+relative to `lat_timing_ref`, with `tacc_span = TACC_WINDOW_SYMS × M`:
 
-```
-preamble_timeout = timing_ref + 8M + PREAMBLE_GUARD
-```
+| Counter | Span | Width | Purpose |
+|---|---|---|---|
+| `acq_cnt` | `tacc_span + 2M` | 20 | Training must complete inside the accumulation window plus 2 symbols of guard |
+| `wpend_cnt` | `tacc_span + 5M` | 20 | Firmware weight-compute deadline: 3 further symbols beyond `acq_cnt` |
+| `pkt_cnt` | `PKT_TIMEOUT_SYMS × M` | 23 | Maximum packet length before a forced return to IDLE |
 
-`PREAMBLE_GUARD` is a small configurable margin (default 2M) to account for timing_ref accuracy. If `training_done` has not asserted by this point, the FSM transitions to PAYLOAD_ACTIVE without valid weights, and `W_MISSED_PACKET` is set.
+`TACC_WINDOW_SYMS` is `0x27[3:0]`, default 8. There are two independent clamps: `reg_bank`
+rejects writes below 8 (raising them to 8), and the FSM defensively floors a raw 0 to 1.
+Counter loads are themselves floored at zero, so an already-expired deadline fires on
+first evaluation in the consuming state — identical to the old already-expired compare.
 
-### Payload start estimate
+A note on the load arithmetic: elapsed time is computed modulo 2^20 from the low bits of
+`sample_count`, because the true elapsed value is structurally bounded by
+`(SC_HITS_REQ+1)×M` plus pipeline lag (≈2^17). The full-width 32-bit subtract this
+replaced *was* the post-P&R SS worst path at −20.5 ns.
 
-The FSM enters PAYLOAD_ACTIVE no later than:
+### Mode and antenna latching
 
-```
-payload_start_estimate = timing_ref + 12M   (approximate sync + SFD length at SF6)
-```
-
-If `W_commit` fires before this point and the receiver is between packets, `W_valid_set` promotes the weights. Otherwise the commit is queued for the next safe_switch.
-
-### Safe switch
-
-`safe_switch=1` only while in IDLE (between packets). This is the only window where:
-
-- `W_ACTIVE` is updated from `W_SHADOW`
-- `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` are updated from their shadow registers
-- queued `RX_GAIN_COMMIT` requests may be applied to the SX1257s
-- FRONTEND_BUF is unfrozen
-
-Mid-packet changes to mode or antenna mask are accepted into shadow registers but do not take effect until the next IDLE entry.
+`active_mode` and `active_antenna_en` are latched from their shadow registers only on the
+`sc_lock` rising edge out of IDLE — never mid-packet. Writes to `MIMO_CTRL` during a
+packet land in the shadow registers and take effect at the next packet start. This is the
+"safe-switch boundary" of TRPR-PCF-006; it is a *condition* (FSM in IDLE), not a signal.
+The former `safe_switch` output was deleted from the RTL.
 
 ---
 
 ## W_commit handling
 
-`W_commit` may arrive in any state. The FSM sets `W_commit_pending` as a sticky flag:
+`W_commit` may arrive in any state. The FSM latches it as the sticky `W_commit_pending`
+and applies it at the first opportunity — it is **not** deferred to IDLE:
 
-```
-W_commit asserted → W_commit_pending = 1
-In IDLE           → W_valid_set = 1, W_ACTIVE ← W_SHADOW, W_commit_pending = 0
-```
-
-| W_commit timing | Result |
+| `W_commit` arrives in | Result |
 |---|---|
-| Arrives in W_PENDING or PAYLOAD_ACTIVE | Queued; activates at next IDLE entry |
-| Arrives in IDLE | Immediately promotes W_SHADOW → W_ACTIVE |
-| Never arrives before packet end | W_MISSED_PACKET set; combiner stays bypass for that packet |
+| `IDLE` | `W_valid` set immediately, `W_valid_set` pulses |
+| `W_PENDING` | `W_valid` set and the FSM advances to `PAYLOAD_ACTIVE` in the same cycle |
+| `PAYLOAD_ACTIVE` | `W_valid` set immediately — the remainder of the packet is combined |
+| Never, before `wpend_cnt` expires | `W_missed_packet` pulses (if `!W_valid`), `W_missed_q` latches; packet stays in bypass |
+
+There is **no `W_ACTIVE` bank.** The combiner reads the live W register bank
+(0x30–0x3F), which `reg_bank` write-locks while `W_VALID` is high; writes attempted
+during the lock are rejected with sticky `W_WR_REJECTED` (0x1E[5]). See TRPR-PCF-004 /
+TRPR-MRC-004.
+
+**`W_valid` does not persist across packets.** It is cleared on the `pkt_cnt` timeout
+path into IDLE, so every packet must earn its own `W_COMMIT`; there is no carry-over of
+an older weight vector. (Earlier revisions of this document claimed the opposite.)
 
 ---
 
 ## Buffer control
 
-> **Superseded 2026-07-26.** This section described a `buf_freeze` output driving the
-> on-chip `frontend_buf_ctrl` / 1 kB SRAM. That block and its SRAM were removed
-> (TRPR-PHY-006), and `buf_freeze` — which was bit-identical to `packet_active` — has
-> been deleted from the RTL along with the formal-harness port and assertion.
+The FSM does not gate the buffer. `psram_buf_ctrl` sequences capture and replay itself:
 
 | FSM event | PSRAM Buffer Controller action |
 |---|---|
-| sc_lock (IDLE → PREAMBLE_ACQ) | `packet_active` asserts; the PSRAM controller latches the packet-start pointer and ceases SC delay reads, keyed off `sc_lock` directly (TRPR-FBC-002, TRPR-PSR-002/016) |
-| packet_end (any → IDLE) | `packet_active` de-asserts; circular capture resumes |
+| `sc_lock` (IDLE → ACQ_SETUP) | `packet_active` asserts; the controller latches the packet-start pointer and ceases SC delay reads, keyed off `sc_lock` directly (TRPR-FBC-002, TRPR-PSR-002/016) |
+| `W_commit` before `packet_end` | Controller starts replay (`replay_active`) as a never-rewinding delay line |
+| `pkt_cnt==0` (any → IDLE) | `packet_active` de-asserts; circular capture resumes |
 
-The FSM does not gate the buffer itself — `psram_buf_ctrl` sequences capture and replay
-from `sc_lock`, `packet_active`, `packet_end` and `W_commit`. The live sample path to the
-training accumulator and combiner is unaffected either way; those receive samples
-directly from `dc_removal`, except during replay, when a `replay_active` mux substitutes
-the PSRAM read data at the combiner input.
+The live sample path to the training accumulator and combiner comes directly from
+`dc_removal`, except during replay, when a `replay_active` mux substitutes the PSRAM read
+data at the combiner input (`trouper_top.v:534-537`).
+
+The on-chip `frontend_buf_ctrl` / 1 kB rolling SRAM this section once described was
+removed by TRPR-PHY-006, and the `buf_freeze` output that drove it — bit-identical to
+`packet_active` — was deleted 2026-07-26.
 
 ---
 
 ## Combiner source policy
 
-| Condition | `combiner_source` |
+The FSM does not drive a `combiner_source` signal; the top level derives bypass-versus-
+combine from `W_valid` and `active_antenna_en`.
+
+| Condition | Combiner behaviour |
 |---|---|
-| `W_valid = 0` (no committed weights yet) | Bypass (lowest enabled antenna) |
-| In PREAMBLE_ACQ or W_PENDING | Bypass |
-| In PAYLOAD_ACTIVE, `W_valid = 1` | W_ACTIVE |
-| In PAYLOAD_ACTIVE, `W_valid = 0` | Bypass |
-| `W_MISSED_PACKET = 1` for current packet | Bypass (this packet only) |
-
-`W_valid` is set once after the first successful W_commit and cleared only if the host explicitly resets it or changes mode. It persists across packets so that an older (but still valid) W is used rather than falling back to bypass every time weight computation is slightly late.
-
-### Optional PSRAM same-packet replay
-
-When `PSRAM_EN=1`, the FSM commands the [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) as follows:
-
-| FSM event | PSRAM action |
-|---|---|
-| `IDLE -> PREAMBLE_ACQ` | Assert `psram_packet_arm`; begin buffering at `sc_lock` |
-| `W_commit` during BUFFERING and before `packet_end` | Assert `psram_replay_start`; PSRAM controller switches SX1302 input from zeros to delayed replay |
-| `W_commit` after `packet_end` | Replay for the current packet is impossible; queue W for the next packet |
-| `packet_end` while replay active | Allow PSRAM controller `DRAIN` phase, then return to live path in `IDLE` |
-| Timeout / abort | Assert `psram_abort`; fall back to baseline next-packet behaviour |
-
-The replay path is optional and default-off. With `PSRAM_EN=0`, all outputs above remain inactive and the FSM behaviour is identical to the baseline next-packet design.
-
-Unlike the baseline live path, PSRAM replay does **not** require `W_commit` before the live payload boundary. During BUFFERING the SX1302-facing output is forced to zero, so the current packet is not exposed downstream until replay begins. The practical PSRAM deadline is therefore `packet_end`, not `payload_start_estimate`.
+| `W_valid = 0` (no committed weights this packet) | Bypass — lowest enabled antenna per `active_antenna_en` |
+| In `PREAMBLE_ACQ` or `W_PENDING` | Bypass (`W_valid` not yet set) |
+| In `PAYLOAD_ACTIVE`, `W_valid = 1` | Combine using the live W bank |
+| `W_missed_q = 1` for the current packet | Bypass for that packet |
 
 ---
 
 ## Interface
 
-> **RTL status (2026-07-12):** the implemented `packet_ctrl_fsm.v` interface
-> is a subset of this table. The PSRAM command outputs (`psram_packet_arm`,
-> `psram_replay_start`, `psram_abort`, `payload_rd_base`) were superseded by
-> the continuous-delay replay redesign — `psram_buf_ctrl` self-sequences
-> from `training_done`/`W_commit`/`packet_end` directly — and, with
-> `safe_switch`/`combiner_source` (top-level derives these from
-> `W_valid`/`packet_active`) and the unused `iq_valid`/`psram_en`/
-> `psram_replay_active` inputs, were **deleted from the RTL** (Open Risks
-> #25). `psram_abort`'s mid-payload re-lock scenario was verified
-> structurally unreachable (`sc_lock` is level-held until packet done).
-> `noise_sample_en`/`noise_thresh` were removed with the noise-estimator
-> migration. The clock is 32 MHz, not 16. Rows below are kept for design
-> history; consult the RTL for the live port list.
+Live port list, `src/control/packet_ctrl_fsm.v`. Single 32 MHz clock domain.
 
 | Port | Dir | Width | Description |
 |---|---|---|---|
-| `clk` | in | 1 | 16 MHz system clock |
+| `clk` | in | 1 | 32 MHz system clock (`IQ_CLK`) |
 | `rst_n` | in | 1 | Active-low reset |
-| `iq_valid` | in | 1 | Decimated sample strobe |
-| `sample_count` | in | 32 | Free-running iq_valid sample counter |
-| `sf` | in | 3 | Spreading factor; M = 2^SF |
-| `sc_lock` | in | 1 | SC preamble detection event |
+| `sample_count` | in | 32 | Free-running captured-sample counter from `trouper_top` |
+| `iq_tick` | in | 1 | 1-clock pulse per captured sample (`dcr_valid`) — the counter tick |
+| `sf` | in | 4 | Spreading factor, 7–12 |
+| `sample_shift` | in | 2 | Oversampling shift: 1 = 250 kHz, 2 = 125 kHz |
+| `sc_lock` | in | 1 | SC preamble detection, level-held until packet done |
 | `timing_ref` | in | 32 | Preamble-start sample index from SC |
 | `training_done` | in | 1 | Training accumulator complete |
-| `W_commit` | in | 1 | Firmware/host finished writing W_SHADOW |
-| `mode_shadow` | in | 2 | Host/firmware requested combining mode |
-| `antenna_en_shadow` | in | 4 | Host/firmware requested antenna mask |
-| `psram_en` | in | 1 | Optional same-packet PSRAM replay enable |
-| `psram_replay_active` | in | 1 | PSRAM controller is currently feeding replay samples to combiner |
-| `pkt_timeout_syms` | in | 8 | Max packet length in symbols (register-configurable) |
-| `safe_switch` | out | 1 | Receiver idle; W/mode/antenna active banks may update |
-| `W_valid_set` | out | 1 | Strobe: commit W_SHADOW → W_ACTIVE |
-| `W_missed_packet` | out | 1 | Sticky: baseline path missed payload deadline, or PSRAM path missed `packet_end`; cleared on next sc_lock |
-| `combiner_source` | out | 1 | 0=bypass, 1=W_ACTIVE |
-| `psram_packet_arm` | out | 1 | Start per-packet PSRAM buffering at `sc_lock` |
-| `psram_replay_start` | out | 1 | Start PSRAM replay from `payload_rd_base` |
-| `psram_abort` | out | 1 | Cancel replay for current packet and fall back to live path |
-| `payload_rd_base` | out | 24 | Byte offset into the current PSRAM packet buffer for replay start |
-| `packet_phase` | out | 3 | Encoded FSM state for status/debug |
-| `packet_active` | out | 1 | Packet FSM not in IDLE |
-| `active_mode` | out | 2 | Latched combining mode for current packet |
-| `active_antenna_en` | out | 4 | Latched antenna mask for current packet |
-| `noise_sample_en` | out | 1 | Pulses once per symbol in IDLE when `!sc_lock` and all `energy_j < NOISE_THRESH`; triggers `IRQ_NOISE_SAMPLE` |
-| `noise_thresh` | in | 16 | Per-branch energy threshold below which idle energy is treated as noise floor; from `NOISE_THRESH` register |
+| `W_commit` | in | 1 | Firmware/host finished writing the W bank |
+| `mode_shadow` | in | 2 | Requested combining mode |
+| `antenna_en_shadow` | in | 4 | Requested antenna mask |
+| `pkt_timeout_syms` | in | 8 | Max packet length in symbols (`PKT_TIMEOUT_SYMS`, 0x0B) |
+| `tacc_window_syms` | in | 4 | Training window in symbols (`TACC_WINDOW_SYMS`, `0x27[3:0]`, default 8); `reg_bank` clamps writes below 8 up to 8, and the FSM floors a raw 0 to 1 |
+| `W_valid_set` | out | 1 | 1-cycle strobe: `W_valid` just asserted |
+| `W_missed_packet` | out | 1 | 1-cycle pulse: weight deadline missed. Consumed by the IRQ path |
+| `W_missed_q` | out | 1 | Sticky mirror of the above for register readback (`PACKET_STATUS[7]` / `WGT_CTRL[3]`); held through IDLE, cleared at the next packet start |
+| `packet_phase` | out | 3 | Encoded FSM phase for status/debug: 0 IDLE, 1 ACQ, 2 W_PENDING, 3 PAYLOAD |
+| `packet_active` | out | 1 | FSM not in IDLE |
+| `packet_active_ps` | out | 1 | Bit-identical duplicate of `packet_active` dedicated to `u_psram`'s wide enable cone, so the repair lottery on one net cannot starve the other's buffer tree. Carries `(* keep *)` to stop `opt_merge` folding it back (2026-07-19 fanout split) |
+| `active_mode` | out | 2 | Combining mode latched for the current packet |
+| `active_antenna_en` | out | 4 | Antenna mask latched for the current packet |
+
+`W_valid` itself is internal — firmware observes it through `PACKET_STATUS`, and the
+combiner is gated on it at the top level.
 
 ---
 
 ## IRQ Sources
 
-| IRQ | Trigger | Consumer |
-|---|---|---|
-| `IRQ_CORR_LOCK` | IDLE → PREAMBLE_ACQ | Debug / host visibility |
-| `IRQ_TRAINING_DONE` | PREAMBLE_ACQ → W_PENDING | PicoRV32 (firmware weight path) or debug |
-| `IRQ_W_MISSED_PACKET` | W_MISSED_PACKET set | Debug / threshold tuning |
-| `IRQ_PACKET_DONE` | Any → IDLE | Debug / host visibility |
+The FSM does not drive IRQ lines directly. `trouper_top` edge-detects the level-held
+sources and assembles `irq_set`; `reg_bank` sticky-ORs it into `IRQ_STATUS`, which drives
+both `IRQ_OUT` and `IRQ_GROUPER`.
 
----
+| Bit | IRQ | Trigger | Source |
+|---|---|---|---|
+| 0 | `CORR_LOCK` | `sc_lock` rising edge | `sc_detector` (edge-detected in `trouper_top`) |
+| 1 | `TRAINING_DONE` | `training_done` rising edge | `training_acc` (edge-detected) |
+| 2 | `W_MISSED_PACKET` | `W_missed_packet` pulse | **this FSM** |
+| 3 | `PACKET_DONE` | `packet_active` falling edge | **this FSM**, via `packet_done_pulse` |
+| 4 | `NOISE_READY` | `sigma2_valid` | `training_acc` noise mode |
 
-## Per-branch noise floor estimation
-
-While in IDLE, the FSM asserts `noise_sample_en` once per symbol window when both conditions hold:
-
-1. `sc_lock` has not fired (no preamble detected)
-2. All per-branch `energy_j < NOISE_THRESH` (near-far guard)
-
-`noise_sample_en` is consumed directly by the **Noise Floor Estimator** RTL block, which updates the per-branch EMA automatically. The FSM does not maintain any EMA state.
-
-`NOISE_THRESH` is a register-configurable value; recommended starting point is `AGC_TARGET / 8` (−9 dB below AGC target).
-
-The FSM hardware contribution is:
-- Assert `noise_sample_en` at the symbol boundary when both conditions are met
-- `NOISE_THRESH` register input (from `NFE_CTRL` / `NOISE_THRESH` registers)
-
-See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec.
+Status pulses are stretched to two cycles before reaching `reg_bank`, because the
+CE-gated register bank samples every other clock and would otherwise miss them.
 
 ---
 
@@ -245,44 +247,41 @@ See [Noise Floor Estimator](Noise%20Floor%20Estimator.md) for the EMA block spec
 
 | Feature | FFT path | Non-FFT path |
 |---|---|---|
-| After sc_lock | Wait for live FFT window (`timing_ref + 8M - 1`), trigger FFT | Wait for `training_done` (asserts at approximately same point) |
-| States | IDLE / PREAMBLE_DETECTED / FFT_WAIT / W_COMMIT_WINDOW / PAYLOAD_ACTIVE / PACKET_DONE | IDLE / PREAMBLE_ACQ / W_PENDING / PAYLOAD_ACTIVE |
-| SRAM management | `live_fft_ready`, `capture_protect` for 288 KB capture window | none — no on-chip SRAM; off-chip PSRAM sequenced by `psram_buf_ctrl` |
+| After sc_lock | Wait for live FFT window (`timing_ref + 8M − 1`), trigger FFT | Wait for `training_done` |
+| States | IDLE / PREAMBLE_DETECTED / FFT_WAIT / W_COMMIT_WINDOW / PAYLOAD_ACTIVE / PACKET_DONE | IDLE / ACQ_SETUP / PREAMBLE_ACQ / W_PENDING / PAYLOAD_ACTIVE |
+| SRAM management | `live_fft_ready`, `capture_protect` for 288 KB capture window | none — no on-chip SRAM; off-chip PSRAM self-sequenced by `psram_buf_ctrl` |
 | W computation trigger | `h_ready` from FFT engine | `training_done` from training accumulator |
-| W computation path | PicoRV32 reads H/N0 from SRAM | PicoRV32 or hardware reads Z_j from registers |
-| Combiner fallback | Bypass until W_valid | Bypass until W_valid (identical policy) |
-| safe_switch policy | Identical | Identical |
+| W computation path | PicoRV32 reads H/N0 from SRAM | Grouper firmware / host reads Z over SPI or the `GRP_*` bus |
+| Combiner fallback | Bypass until W_valid | Bypass until W_valid |
+| Mode/antenna switching | Dedicated `safe_switch` output | Latched at the `sc_lock` edge out of IDLE; no `safe_switch` signal |
 
 ---
 
 ## Verification
 
-| Test | Method | Pass criterion |
-|---|---|---|
-| Normal lock and train | Inject sc_lock → training_done → W_commit in sequence | FSM traverses all states; W_valid_set asserts in IDLE; combiner uses W_ACTIVE on next packet |
-| W on time | W_commit before payload start | W_MISSED_PACKET=0; W_ACTIVE valid for current packet in baseline live mode |
-| W late (next-packet) | W_commit during PAYLOAD_ACTIVE | W_MISSED_PACKET=1; combiner stays bypass this packet; W_ACTIVE updated at IDLE |
-| PSRAM replay on time | `PSRAM_EN=1`, `W_commit` before `packet_end` | `psram_replay_start` asserts once; SX1302 output switches from zeros to replayed packet stream |
-| PSRAM disabled | `PSRAM_EN=0` for full packet | `psram_packet_arm/replay_start` never assert; behaviour matches baseline next-packet path |
-| PSRAM late replay | `PSRAM_EN=1`, `W_commit` after `packet_end` | Replay for that packet never starts; W queued for next packet |
-| Training timeout | training_done never asserts | Preamble timeout fires; FSM enters PAYLOAD_ACTIVE in bypass; W_MISSED_PACKET=1 |
-| Packet timeout | New sc_lock never arrives | PKT_TIMEOUT_SYMS expires; FSM returns to IDLE |
-| Back-to-back packets | Two sc_locks in rapid succession | First sc_lock ends current packet (IDLE); second sc_lock immediately enters PREAMBLE_ACQ |
-| Mode shadow write mid-packet | Write mode_shadow during PAYLOAD_ACTIVE | active_mode unchanged until IDLE; shadow value promoted at safe_switch |
-| No backpressure | Packet arrives during W_PENDING | iq_valid path unaffected; combiner stays bypass |
-| packet_active timing | Check packet-phase control | `packet_active` asserts at sc_lock, de-asserts at packet end (TRPR-PCF-002/008, `test_w_missed_packet.py`) |
-| Noise sample, quiet channel | IDLE, inject noise-only signal below NOISE_THRESH, no sc_lock | `noise_sample_en` pulses once per symbol; `IRQ_NOISE_SAMPLE` fires |
-| Noise sample suppressed, near-far | IDLE, inject signal above NOISE_THRESH, no sc_lock | `noise_sample_en` does not pulse; no IRQ |
-| Noise sample suppressed, sc_lock | IDLE → PREAMBLE_ACQ mid-symbol | `noise_sample_en` suppressed from the symbol where sc_lock fires |
+| Test | Method | Pass criterion | Status |
+|---|---|---|---|
+| Normal lock and train | `sc_lock` → `training_done` → `W_commit` in sequence | FSM traverses all states; `W_valid_set` pulses; combiner uses the W bank for the packet | ✅ `test_weight_gen_spi_flow.py` (job 3286) |
+| W on time | `W_commit` during `W_PENDING` | `W_missed_q=0`; combine for the current packet | ✅ |
+| W never committed | `W_commit` withheld past `wpend_cnt` | `W_missed_packet` pulses, `W_missed_q` sticky through IDLE, payload stays bypass, `PACKET_DONE` fires | ✅ `test_w_missed_packet.py` (job 3310) |
+| W late, mid-payload | `W_commit` during `PAYLOAD_ACTIVE` | `W_valid` asserts immediately; remainder of packet combines | ⚠️ Not directly covered — the miss test withholds `W_COMMIT` entirely |
+| Training timeout | `training_done` never asserts | `acq_cnt` expires; FSM enters `PAYLOAD_ACTIVE` in bypass with `W_missed_packet` | ⚠️ Not directly covered |
+| Packet timeout | Run past `PKT_TIMEOUT_SYMS` | `pkt_cnt` expires; FSM returns to IDLE, `W_valid` cleared | ✅ `test_w_missed_packet.py` |
+| Back-to-back packets | Two preambles in succession | First packet ends on timeout (IDLE); `sc_detector` re-arms via `sc_clr`; second enters ACQ_SETUP | ✅ `test_capture_two_packet.py` (job 3273, real capture) |
+| Mode shadow write mid-packet | Write `mode_shadow` during `PAYLOAD_ACTIVE` | `active_mode` unchanged until the next packet start | ✅ |
+| No backpressure | Packet arrives during `W_PENDING` | Sample path unaffected; combiner stays bypass | ✅ |
+| `packet_active` timing | Observe the FSM output | Asserts at `sc_lock`, held through `PAYLOAD_ACTIVE`, de-asserts at IDLE, re-asserts next packet (TRPR-PCF-002/008) | ✅ `test_w_missed_packet.py`, retargeted 2026-07-26 |
+| B6 down-counter equivalence | Compare against the frozen absolute-deadline reference model | All outputs bit-identical every cycle, 40 randomised packets | ✅ `tb_pcfsm_b6_equiv.v` |
+| Formal: phase/state invariants | k-induction on the `ifdef FORMAL` harness | `packet_active == (state != ST_IDLE)`, `packet_active_ps` mirrors it, `packet_phase` is a pure function of state, `W_missed_q` stickiness, counter-update discipline | ✅ `formal/packet_ctrl_fsm_formal.sv` (job 3487) |
 
 ---
 
 ## Related Blocks
 
 - [Correlator Bank (SC)](Correlator%20Bank.md) — provides `sc_lock`, `timing_ref`
-- [Training Accumulator](Training%20Accumulator.md) — provides `training_done`
-- [Weight Generation](Weight%20Generation.md) — archived hardware exploration; current `W_commit` source is firmware/host
-- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — **removed block**, retained for history only
-- [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) — optional same-packet replay path
-- [MRC Combiner](MRC%20Combiner.md) — receives `combiner_source`, `active_mode`, `active_antenna_en`
-- [Register Map](../Register%20Map.md) — `PKT_TIMEOUT_SYMS`, `PACKET_PHASE`, `W_MISSED_PACKET`, IRQ registers
+- [Training Accumulator](Training%20Accumulator.md) — provides `training_done`, and `sigma2_valid` in noise mode
+- [Weight Generation](Weight%20Generation.md) — archived hardware exploration; the current `W_commit` source is firmware/host
+- [PSRAM Buffer Controller](PSRAM%20Buffer%20Controller.md) — self-sequenced capture and same-packet replay; gated by `packet_active`
+- [MRC Combiner](MRC%20Combiner.md) — receives `active_mode`, `active_antenna_en`, and the `W_valid` gate
+- [Register Map](../Register%20Map.md) — `PKT_TIMEOUT_SYMS` (0x0B), `TACC_WINDOW_SYMS` (0x27), `PACKET_STATUS` (0x1C), `WGT_CTRL` (0x1E), IRQ registers
+- [Frontend Buffer Controller](Frontend%20Buffer%20Controller.md) — **removed block**, retained for design history only

@@ -274,7 +274,7 @@ Master datapath controller. Sequences packet phase, weight gating, and mode latc
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-PCF-001 | C | F | The FSM SHALL implement four states: IDLE → PREAMBLE_ACQ → W_PENDING → PAYLOAD_ACTIVE, with transition back to IDLE on packet end or timeout. | T |
+| TRPR-PCF-001 | C | F | The FSM SHALL implement five states: IDLE → ACQ_SETUP → PREAMBLE_ACQ → W_PENDING → PAYLOAD_ACTIVE, with transition back to IDLE on packet timeout. `ACQ_SETUP` is one dedicated cycle that loads the three timeout down-counters from the registered `lat_timing_ref` instead of the live `timing_ref` (Open Risk #39); the training-window timeout may enter PAYLOAD_ACTIVE directly from PREAMBLE_ACQ, skipping W_PENDING. (Corrected 2026-07-26: this row said four states and omitted ACQ_SETUP.) | T |
 | TRPR-PCF-002 | C | F | On `sc_lock`: the FSM SHALL assert `packet_active` and transition to PREAMBLE_ACQ. (Reworded 2026-07-26: this row previously required a `buf_freeze` output. That output was bit-identical to `packet_active` and, since the `frontend_buf_ctrl` → PSRAM migration, drove nothing; it was deleted from the RTL. PSRAM capture/replay is sequenced from `sc_lock`, `packet_active` and `packet_end` — see TRPR-PSR-002/016.) | T |
 | TRPR-PCF-003 | C | F | On `training_done`: the FSM SHALL transition to W_PENDING and assert `TRAINING_DONE` IRQ. | T |
 | TRPR-PCF-004 | C | F | On receipt of `W_COMMIT` from the weight path: the FSM SHALL assert `W_VALID` and transition to PAYLOAD_ACTIVE. There is no separate `W_ACTIVE` bank in the current RTL: the combiner reads the live W register bank, which is write-locked while `W_VALID` is high (TRPR-MRC-004). | T |
