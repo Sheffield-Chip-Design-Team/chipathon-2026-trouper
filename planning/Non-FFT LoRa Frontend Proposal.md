@@ -33,7 +33,7 @@ The architectural rule is:
 
 - the receive chain must continue to detect packets, estimate weights, select bypass versus combine, and drive the SX1302-facing output with PicoRV32 halted or held in reset
 - PicoRV32 is an enhancement and control-plane block, not a correctness dependency for baseline RX
-- any experimental feature that relies on firmware, including ALMMSE, EMA smoothing, or PSRAM policy refinement, must degrade cleanly to the hardware baseline when firmware is unavailable
+- any experimental feature that relies on firmware, including noise-weighted MRC, EMA smoothing, or PSRAM policy refinement, must degrade cleanly to the hardware baseline when firmware is unavailable
 
 So the intended baseline receive path is:
 

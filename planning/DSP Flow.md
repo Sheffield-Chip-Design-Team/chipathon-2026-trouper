@@ -20,7 +20,7 @@ The mandatory hardware-only receive path is:
 PicoRV32 is therefore treated as:
 
 - optional for baseline RX correctness
-- useful for ALMMSE, EMA smoothing, diagnostics, AGC policy, and TDD control
+- useful for noise-weighted MRC, EMA smoothing, diagnostics, AGC policy, and TDD control
 - required for MRC weighting in the current tapeout plan; if held in reset, Trouper remains limited to bypass-mode packet forwarding
 
 There is no hardware weight-generation baseline in the current tapeout plan. The only firmware-free fallback is bypass-mode receive, with the selected antenna forwarded directly to the re-modulator.

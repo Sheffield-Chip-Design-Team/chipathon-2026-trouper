@@ -182,8 +182,10 @@ The assignee should implement in this order:
 1. software MRC
 2. software SC
 3. software EGC
+4. optional noise-weighted MRC when per-branch `σ²_ema` estimates are available
 
-`NT=2` ALMMSE is out of scope — this is an NT=1 design.
+Full `NT=2` ALMMSE is out of scope — this is an NT=1 design. NT=1 noise-weighted
+MRC is allowed as the diagonal-noise MMSE special case; it is not a multi-user detector.
 
 ### Acceptance criteria
 - software-computed `W` matches the reference model for the supported modes within the agreed
@@ -229,7 +231,7 @@ This order is deliberate:
 ## Explicit Non-Goals For First Assignment
 
 The first firmware assignment should not include:
-- ALMMSE or any multi-transmitter (NT≥2) algorithm
+- full ALMMSE or any multi-transmitter (NT≥2) algorithm (NT=1 noise-weighted MRC is allowed)
 - SIC or advanced multi-user detectors
 - dynamic runtime switching among many algorithms
 - generic C library integration
