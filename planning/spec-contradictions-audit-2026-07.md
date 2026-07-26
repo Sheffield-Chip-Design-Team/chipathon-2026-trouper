@@ -398,6 +398,31 @@ Timing Budget section 150 lines earlier, still saying "~1.0–1.1 ms … comfort
 from roughly SF8 upward". Corrected to 2.08/2.28 ms and SF9+.
 
 
+| # | Status | Item |
+|---|---|---|
+| 31 | open | **`psram_buf_ctrl.v` comments the delay depth as `128..16384`; the reachable range is `256..16384`** |
+
+Noticed while closing item 27, not fixed. `psram_buf_ctrl.v:183` annotates
+`del_n_c = 15'd1 << (sf[3:0] + sample_shift)` as "`2^(SF+shift), 128..16384`". The low
+bound implies `SF+shift = 7`, which no in-spec configuration produces: `sample_shift` is
+derived at the top level as `rb_bw_sel ? 2'd2 : 2'd1` (`trouper_top.v:177`), so it is
+always 1 or 2 — never 0 — and `SF_CFG`'s documented range is 7–12 (`Register Map.md:35`).
+The in-spec minimum is therefore `2^(7+1) = 256`.
+
+**The reason this is worth more than a comment fix:** `128` *is* reachable, via
+`SF_CFG = 6` — because `reg_bank.v:217` writes `sf_cfg <= wdata[3:0]` with **no range
+clamp at all**, only a `packet_active` gate. The register accepts any 4-bit value, so
+firmware can also write `SF_CFG = 13..15`, giving `SF + sample_shift` up to 17 — and
+`15'd1 << 17` truncates to **zero** in the 15-bit `del_n_c`, which would collapse the SC
+delay depth. Compare `TACC_WINDOW_SYMS` (`0x27`), which *is* clamped in `reg_bank`.
+
+Two separate dispositions are needed: correct the comment's bound to 256, and decide
+whether the unclamped `SF_CFG` is acceptable (documented firmware contract) or wants a
+hardware clamp to 7–12. The second is a robustness question rather than a document
+contradiction, so it belongs in `Open Risks.md` — **not yet filed there**; no existing
+risk covers `SF_CFG` *range* (item 31 in that file is about its `PACKET_ACTIVE` gate,
+closed 2026-07-05).
+
 ---
 
 ## Suggested fix order
@@ -408,6 +433,8 @@ from roughly SF8 upward". Corrected to 2.08/2.28 ms and SF9+.
    most likely to be read by someone writing SDC or a new block; its clocking section and
    block diagram now match RTL.
 3. **Item 15** — re-derive the SNR loss budget's truncation term rather than reword it.
+   **Item 31** is a one-line comment fix, but its second half (unclamped `SF_CFG`) needs a
+   design decision and an `Open Risks.md` entry first.
 4. **Items 7–14** — spec/map reconciliation pass.
 5. **Items 18–21** — bulk staleness; cheapest as one "delete the CPU-era sections" pass.
 6. **Tier 4** — sweep up alongside the next spec revision.
