@@ -301,7 +301,27 @@ utilisation figure (~38%) that doesn't match TRPR-PSR-014's cycle budget.
 
 | # | Status | Item |
 |---|---|---|
-| 27 | open | **SC delay-read cycle budget is internally inconsistent.** TRPR-FBC-001 (`Trouper Chip Specification.md:371`) calls the delay read 30 cycles, while TRPR-PSR-014/018 (`:362-363`) and `blocks/PSRAM Buffer Controller.md:35` budget it as 19 cycles within `25 + 19 = 44` cycles. TRPR-FBC-004 (`:374`) then calls this an “additional” read even though the 19-cycle delay read is already included in that 44-cycle `S_WRITE` budget. Use the RTL-measured/implemented transaction figure, state it once, and remove “additional.” |
+| 27 | closed 2026-07-26 | **SC delay-read cycle budget was internally inconsistent** |
+
+Before resolution, TRPR-FBC-001 called the delay read 30 cycles, while TRPR-PSR-014/018
+and `blocks/PSRAM Buffer Controller.md:35` budgeted it as 19 cycles within `25 + 19 = 44`.
+TRPR-FBC-004 then called it an "additional" read even though the 19-cycle read is already
+inside that 44-cycle `S_WRITE` budget.
+
+RTL settles it — `psram_buf_ctrl.v:184` lays out the sub-cycle FSM explicitly: write on
+sub 0–24 (25 cycles), del-read on sub 25–43 (**19 cycles**), rpl-read on sub 25–55 (31).
+So 19 is right and 30 was simply wrong; TRPR-PSR-014's 44/56 totals and 20/8 spare against
+the 64-cycle `iq_valid` period were already correct.
+
+*Resolution (2026-07-26):* TRPR-FBC-001 corrected to 19 cycles with the sub-cycle range
+cited, stated once and cross-referenced to TRPR-PSR-014 rather than restated; TRPR-FBC-004
+reworded to say the delay read is *part of* the 44-cycle budget, not an additional
+transaction, and to note the 20 spare cycles are what debug readback is serviced from.
+
+**Also found:** `psram_buf_ctrl.v`'s own header comment still carried the pre-half-band
+**R=128 / 128-cycle** period with **84/72 spare** in two places — stale by the entire
+half-band migration, and optimistic by 4× on margin. Corrected in both RTL trees to
+64 cycles / 20 and 8 spare, matching TRPR-PSR-014. Comment-only; no functional change.
 | 29 | closed 2026-07-26 | **TRPR-PCF-002/008 were normative SHALLs on a dead duplicate signal** |
 
 Found while fixing item 16. `TRPR-PCF-008` required "`buf_freeze` SHALL de-assert and the
@@ -358,15 +378,32 @@ four states to five in the same pass.
 
 | # | Status | Item |
 |---|---|---|
-| 28 | open | **Eigenvector firmware timing is stale by about 2×.** TRPR-WGN-004 (`Trouper Chip Specification.md:259`) says 8 iterations take ~1.0–1.1 ms and makes SF7 “roughly break-even.” The cycle-accurate measurement in `blocks/Eigenvector Weight Computation.md:374-448` and `Open Risks.md:723-730` supersedes that: 33,283 cycles = **2.08 ms** at 16 MHz for rv32im (2.28 ms for rv32emc). SF7 and SF8 miss the live deadline; only SF9+ fits. Update the normative requirement and its timing/risk references. |
+| 28 | closed 2026-07-26 | **Eigenvector firmware timing was stale by about 2×** |
+
+Before resolution, TRPR-WGN-004 said 8 iterations take ~1.0–1.1 ms and called SF7
+"roughly break-even". The cycle-accurate measurement supersedes that: **33,283 cycles =
+2.08 ms** at 16 MHz for rv32im, **36,458 = 2.28 ms** for rv32emc (the current Grouper
+plan), SF-independent because the matrix is always 4×4 (`blocks/Eigenvector Weight
+Computation.md` Timing Budget, SGE jobs 3333–3335; `Open Risks.md` #7).
+
+*Resolution (2026-07-26):* TRPR-WGN-004 now carries the measured cycle counts and both
+ISA figures, and states the consequence explicitly — replay mode's deadline scales with
+payload so every supported SF fits, while live mode's `4·M / 500 kHz` deadline fits only
+SF9+ (SF7 ~1.02 ms and SF8 ~2.05 ms both miss on either ISA), making replay mandatory
+rather than optional for SF7/SF8. The 16-iteration split (rv32im clears SF9, rv32emc does
+not) and the external-host lever with its unmeasured IRQ-latency caveat are recorded too.
+
+**Also found:** `blocks/Eigenvector Weight Computation.md:558` contradicted its *own*
+Timing Budget section 150 lines earlier, still saying "~1.0–1.1 ms … comfortable only
+from roughly SF8 upward". Corrected to 2.08/2.28 ms and SF9+.
+
 
 ---
 
 ## Suggested fix order
 
-1. **Items 1–6 and 27–28** — unambiguous. Items 1–4 and 27–28 are settled by RTL,
-   arithmetic, or cycle-accurate measurement; item 6 by `blocks/PSRAM Buffer Controller.md`.
-   Item 5's `+1` convention is now confirmed in `sc_detector.v`.
+1. ~~**Items 1–6 and 27–28**~~ — all closed 2026-07-26. Settled by RTL, arithmetic, or
+   cycle-accurate measurement, exactly as expected; no judgement calls were needed.
 2. ~~**Item 17**, then 16~~ — both closed 2026-07-26. `System Architecture.md` was the doc
    most likely to be read by someone writing SDC or a new block; its clocking section and
    block diagram now match RTL.

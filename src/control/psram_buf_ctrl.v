@@ -21,9 +21,12 @@
 //       bypass until weights land, and a commit arriving after replay has
 //       started sets the sticky w_commit_late flag (WGT_CTRL[4]).
 //
-// Sub-cycle budget (32 MHz, CIC R=128 → iq_valid every 128 cycles):
-//   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (84 spare)  ✓
-//   S_REPLAY : 25 write + 31 rpl-read  = 56 sub-cycles  (72 spare)  ✓
+// Sub-cycle budget (32 MHz, R=64 half-band chain → iq_valid every 64 cycles,
+// i.e. 2.0 us at 500 kS/s).  The 128-cycle period and 84/72 spare figures this
+// comment carried until 2026-07-26 were left over from the pre-half-band R=128
+// chain; the real margins are tighter.  Matches TRPR-PSR-014.
+//   S_WRITE  : 25 write + 19 del-read  = 44 sub-cycles  (20 spare)  ✓
+//   S_REPLAY : 25 write + 31 rpl-read  = 56 sub-cycles  ( 8 spare)  ✓
 //
 // QPI init sequence (SPI serial mode on SIO[0]):
 //   RSTEN(0x66) → RST(0x99) → tRST wait → Enter QPI(0x35)
@@ -55,8 +58,9 @@
 //   Debug reads are blocked (DBG_BUSY held) while packet_active=1, while
 //   QSPI_OWNER=1 (pad handover), and before qe_init_done.
 //
-// Interface must remain QPI (not SPI): at 250 kHz iq_valid rate (128-cycle period),
-// one period must fit both a write (25 cyc QPI) and an SC delay read (19 cyc QPI) = 44 cyc.
+// Interface must remain QPI (not SPI): at the fixed 500 kS/s output rate (64-cycle
+// period), one period must fit both a write (25 cyc QPI) and an SC delay read
+// (19 cyc QPI) = 44 cyc.  ("250 kHz / 128-cycle period" here was also pre-half-band.)
 // SPI equivalents are ~96 cyc write + ~104 cyc read = 200 cyc — 1.56× over budget.
 // SIO[3:0] occupy 4 dedicated pads (TRPR-PHY-003), so QPI costs zero extra pads
 // vs SPI; there is no pin-count reason to downgrade.

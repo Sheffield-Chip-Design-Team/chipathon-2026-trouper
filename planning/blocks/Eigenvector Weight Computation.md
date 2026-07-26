@@ -554,10 +554,10 @@ burden).
 
 ### Timing — the actual constraint
 
-The PicoRV32 path is deterministic but, per the corrected Timing Budget
-above, is itself ~1.0–1.1 ms at 8 iterations (SF-independent) against an
-SF-dependent deadline — comfortable only from roughly SF8 upward in baseline
-live mode. A general-purpose Linux host's `IRQ_OUT` interrupt-to-userspace
+The PicoRV32 path is deterministic but, per the measured Timing Budget
+above, is itself 2.08 ms (rv32im) / 2.28 ms (rv32emc) at 8 iterations
+(SF-independent) against an SF-dependent deadline — in baseline live mode that
+fits only from SF9 upward, with SF7 and SF8 both missing on either ISA. A general-purpose Linux host's `IRQ_OUT` interrupt-to-userspace
 latency is a different, non-deterministic problem on top of that: not
 guaranteed, and can run into the low milliseconds under load on a non-RT
 kernel.
