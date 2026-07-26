@@ -8,7 +8,7 @@
 //     exactly one cycle (the Open Risk #39 structure);
 //   * packet_active_ps is a bit-identical mirror of packet_active (the
 //     2026-07-19 fanout split);
-//   * packet_active / buf_freeze / packet_phase are pure functions of state;
+//   * packet_active / packet_phase are pure functions of state;
 //   * W_missed_q stickiness and the exact timeout causes of the
 //     W_missed_packet pulse;
 //   * counters change only via the SETUP load or a single armed decrement.
@@ -41,7 +41,6 @@ module packet_ctrl_fsm_formal (
     input  wire        W_valid_set,
     input  wire        W_missed_packet,
     input  wire        W_missed_q,
-    input  wire        buf_freeze,
     input  wire [2:0]  packet_phase,
     input  wire        packet_active,
     input  wire        packet_active_ps,
@@ -201,12 +200,10 @@ module packet_ctrl_fsm_formal (
         if (rst_n)
             a_ps_mirror: assert (packet_active_ps == packet_active);
 
-    // packet_active and buf_freeze are both exactly "not idle".
+    // packet_active is exactly "not idle".
     always @(posedge clk)
-        if (rst_n) begin
+        if (rst_n)
             a_active_iff_not_idle: assert (packet_active == (state != ST_IDLE));
-            a_freeze_iff_not_idle: assert (buf_freeze == (state != ST_IDLE));
-        end
 
     // packet_phase is a pure function of state (readback contract for
     // PACKET_STATUS): IDLE→0, SETUP/ACQ→1, W_PENDING→2, PAYLOAD→3.

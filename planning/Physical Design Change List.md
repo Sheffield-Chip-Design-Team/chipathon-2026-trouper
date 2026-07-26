@@ -884,6 +884,19 @@ SS timing analysis:
 
 Area: stdcell area 630k µm², die 1.21 mm² (1100×1100), stdcell utilisation 52%.
 
+> **Historical — do not quote these figures as current (annotated 2026-07-26, audit
+> item 22).** This entry is the origin of the "−7 to −10 ns" band that TRPR-PHY-008
+> carried until this audit. It was measured on a **blanket** `set_multicycle_path 2`
+> SDC at 630 k µm² cell area and 1100×1100 die, none of which still hold: the
+> blanket MCP was replaced by the scoped mixed MCP=2/3 set
+> (`pnr_32m_scoped_v25_b6.sdc`) precisely because a global exception is dishonest,
+> cell area has since grown to ≈974 k µm², and the die is 1200×1100 because
+> 1100×1100 fails global routing at the current area (item 26,
+> `die-shrink-routability-floor.md`). Under the honest constraint set the measured SS
+> WNS is **−12.11 ns best ever** (jobs 3403/3404) and **−14.91 ns** on the 2026-07-25
+> runs. A tighter number here than in TRPR-PHY-008 is not progress — it is the
+> blanket exception hiding paths.
+
 ---
 
 ## Routing congestion reduction

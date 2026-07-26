@@ -75,13 +75,57 @@ needed. The source files are still present but orphaned (not yet deleted).
 | Effect | Measured | Conditions | Status | Reference |
 |---|---|---|---|---|
 | Noiseless all-pairs correctness | matches `h_k·conj(h_l)·n_acc` to float-rounding floor (< −100 dB error) | SF7, NR4, no noise | Verified | `sim/notebooks/11_training_accumulator.ipynb` §1 |
-| Baseline preamble-truncation loss (`SC_HITS_REQ=2`, `PREAMBLE_LEN=8`, 5 of 8 symbols accumulated) | ≈ −2.2 dB vs an ideal 8-symbol window | fixed, unavoidable in the baseline live path (not a fault condition) | Verified, matches doc | `sim/notebooks/11_training_accumulator.ipynb` §2 |
+| Baseline preamble-truncation loss (`SC_HITS_REQ=2`, `TACC_WINDOW_SYMS=8`, `n_acc = 5M − 1` of 8M) | **≤ −0.5 dB** post-combining (worst case: SF7 at −16 dB/antenna, float estimator); **≤ −0.21 dB** on the shipped fixed-point firmware path; **< −0.05 dB** above −10 dB/antenna or at SF9+. The **training**-SNR ratio is −2.04 dB = 10·log₁₀(5/8), but that is not a chain SNR loss — see the note below. | fixed, unavoidable in the baseline live path (not a fault condition) | **Re-derived 2026-07-26 (audit item 15) — supersedes the "≈ −2.2 dB" this row previously carried** | `sim/sims/truncation_loss_rederive.py`; `sim/notebooks/11_training_accumulator.ipynb` §2 |
 | Late-SC-lock additional loss (low-SNR delayed lock) | −2.2 / −4.0 / −7.0 / −10.0 dB at 5/6/7/7.5 symbols locked (on top of baseline) | reproduces `planning/blocks/Training Accumulator.md`'s published late-lock table exactly | Verified | `sim/notebooks/11_training_accumulator.ipynb` §2 |
 | ZDIAG register widening (16-bit → 24-bit, `reg_bank.v` 0x64-0x6F) | Closed a ≈0.9 dB firmware combining-gain loss found in an earlier pass: −0.897 dB → −0.001 dB (noiseless test) | 500 random Rayleigh channels, baseline 5-symbol accumulation | **Fixed and verified.** RTL, `sim/models/eigvec_fw.py`, `sim/tests/test_eigvec_fw.py`, `sim/tests/test_pgs_fw.py`, `rtl-test/tb/tb_mrc_fw_precision.v`, `rtl-test/tb/test_capture_playback.py`, and all planning docs updated to match. Testing showed the gap was not recoverable by any firmware-only change (more iterations, wider int12 normalisation, warm-start) prior to the fix — the precision was discarded in hardware before firmware ever saw it. | `sim/notebooks/11_training_accumulator.ipynb` §3; `planning/blocks/Training Accumulator.md` "ZDIAG widening" |
 | Residual firmware combining-gain loss at low SNR, post-ZDIAG-fix | ≈ −0.8 dB at −16 dB per-antenna SNR with 8 iterations (current firmware default); ≈ −0.3 dB with 16 iterations | noisy Z, near-degenerate eigenvalues — power-iteration convergence-rate limited, not register precision | Verified as an SNR effect — **but NOT a cheap follow-up.** More iterations were tested and found *not* to help before the ZDIAG fix (the truncation bias dominated and masked this smaller effect); post-fix they measurably do. However, a **cycle-accurate measurement** (2026-07-11, SGE jobs 3333–3335; see `planning/blocks/Eigenvector Weight Computation.md` Timing Budget) shows 8 iterations on the real `picorv32.v` (slow non-`FAST_MUL` multiplier) costs **33,283 cyc = 2.08 ms @16 MHz** (rv32im; 2.28 ms on rv32emc), SF-independent — ~2× the earlier back-of-envelope — against a deadline that scales with SF (`4·M/500kHz`). With SF6 out of scope (`SF_CFG` valid range 7–12, Register Map `0x09`), **live-mode weight compute now fits only SF9+: SF7 and SF8 both miss on both ISAs**; 16 iterations (~3.88 ms) needs SF9+ (rv32im) / SF10+ (rv32emc). So the −0.3 dB improvement from 16 iterations is unavailable in live mode below SF9. My earlier claim of "large timing slack" in this row was wrong. PSRAM replay mode sidesteps the problem entirely (packet-length-scaled deadline) and is mandatory for SF7/SF8 MRC gain. | `sim/notebooks/11_training_accumulator.ipynb` §3; `planning/blocks/Eigenvector Weight Computation.md` Timing Budget |
 | Zpair 24-bit host-telemetry register readback error | ≈ −98 dB relative to typical Z magnitude — architecturally irrelevant to combining weights (firmware reads the un-truncated int32 accumulator directly; only host telemetry readback is truncated) | n_acc ≈ 640, int8 input | Verified — negligible, telemetry-only, unaffected by the ZDIAG fix | `sim/notebooks/11_training_accumulator.ipynb` §3 |
 | Combining-method SER, firmware eigvec vs its own float reference vs legacy W_k | `eigvec_fw` far better than legacy `W_k` (~1.4x lower SER @ −16 dB) but **still worse than its own float reference** `eigvec_pre` (~1.5-2x higher SER at −16 to −12 dB, now attributable to iteration count rather than ZDIAG) | SF7, NR4, reduced 250-pkt re-run of `sim/sims/compare_mrc_methods.py` | Verified; the float-vs-fixed-point firmware gap still isn't isolated in the doc's published 2000-pkt sweep table | `sim/notebooks/11_training_accumulator.ipynb` §4 |
 | Noise-mode off-diagonal leakage / diagonal accuracy | off-diagonal leakage ≈ −26 dB mean below diagonal; diagonal tracks σ²·n_acc within a few % | 8-symbol noise window (`TACC_NOISE_TRIG`), 200 trials | Verified | `sim/notebooks/11_training_accumulator.ipynb` §5 |
+
+**Why the truncation term dropped from −2.2 dB to ≤ −0.5 dB (audit item 15,
+re-derived 2026-07-26).** Two errors were compounded in the old row.
+
+*First, the number was the wrong ratio.* `blocks/Training Accumulator.md`'s
+late-lock table is indexed to the 5-symbol baseline, and its `5M → 3M` entry is
+−2.2 dB = 10·log₁₀(3/5). The budget row quoted that figure for the *8M → 5M*
+step, which is 10·log₁₀(5/8) = **−2.04 dB**.
+
+*Second, and more importantly, a training-SNR ratio is not a chain SNR loss.*
+Every other line in this document is an SNR the demodulator actually loses.
+Shortening the accumulation window does not attenuate the signal — it makes the
+channel *estimate* noisier, and MRC is only weakly sensitive to that. Truncating
+8M → 5M multiplies the estimate-error term by 8/5, so it multiplies the
+already-small full-window estimation loss by ≈1.6 rather than subtracting 2 dB
+from the link. Measured incremental cost of the truncation, 4000 Rayleigh trials
+per point, float `eigh` estimator, SF7
+(`python3 -m sim.sims.truncation_loss_rederive`):
+
+| Per-antenna SNR | Loss at full 8M window | Loss at baseline 5M − 1 | Truncation increment |
+|---|---|---|---|
+| −20 dB | −3.19 dB | −3.55 dB | −0.36 dB |
+| −16 dB | −1.20 dB | −1.66 dB | **−0.46 dB** (worst case) |
+| −12 dB | −0.29 dB | −0.45 dB | −0.16 dB |
+| −6 dB | −0.03 dB | −0.05 dB | −0.02 dB |
+| 0 dB and above | −0.004 dB | −0.007 dB | < −0.01 dB |
+
+The increment shrinks with SF, because `n_acc` scales with `M` (−16 dB/antenna,
+float): **−0.50 dB at SF7**, −0.14 dB at SF9, −0.03 dB at SF12. On the *shipped*
+fixed-point firmware path (`compute_eigvec_fw`, 8 iterations) it is smaller
+still — **−0.21 dB worst case at SF7** — because the 8-iteration convergence
+residual already dominates the estimate error, so the extra samples have less to
+recover. The truncation term can only approach 2 dB if the full-window estimate
+is itself ≈4 dB lossy, which happens nowhere in the supported operating range.
+
+Run-to-run spread on the worst-case figure is ≈±0.05 dB: `rayleigh_coefficients`
+draws from the global NumPy RNG, so the script's seed pins the noise realisations
+but not the channel draws. That is well inside the margin between −0.5 dB and the
+−2.2 dB being replaced, so it was not worth plumbing a channel seed through.
+
+Book **−0.5 dB (SF7, worst case)** in the budget, not −2.2 dB. This does not
+change any conclusion about the late-lock table in
+`blocks/Training Accumulator.md`, whose entries remain correct as
+training-SNR ratios relative to the 5-symbol baseline.
 
 See also `planning/blocks/Training Accumulator.md` and Gate 6 in
 `decimator-hb-migration-impact-plan.md` for `n_acc` correctness

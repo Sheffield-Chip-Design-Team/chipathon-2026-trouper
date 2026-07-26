@@ -121,20 +121,24 @@ Z_kl → FW channel estimates
 Z_kk (auto) → FW energy/noise
 noise_mode · training_done"]
             PCFSM["Packet Control FSM
-packet phase · safe_switch
-buf_freeze · W gating"]
-            FBUF["Frontend Buffer Controller
-1 kB rolling SRAM
-8-bit saturated"]
+packet_phase · packet_active
+W gating · active mode/antenna"]
+            PSBUF["PSRAM Buffer Controller
+QPI circular capture
+SC delay reads at write_ptr − M
+same-packet replay delay line"]
         end
 
         subgraph combining["MRC Combining"]
             direction LR
+            XMUX{"replay_active
+mux"}
             COMB["MRC Combiner
 ŷ[n] = w^H·x[n] per sample
 time domain · int32→int8 (÷2)"]
             REMOD_A["ΣΔ Re-mod
 3rd order · int8 → 1-bit"]
+            XMUX --> COMB
             COMB --> REMOD_A
         end
 
@@ -150,19 +154,27 @@ IRQ_OUT plus register-visible status"]
         D1 & D2 & D3 & D4 --> DCR
         DCR --> SC
         DCR --> TACC
-        DCR --> COMB
-        DCR -->|"8-bit saturated"| FBUF
+        DCR -->|"live path"| XMUX
+        DCR -->|"int8 I/Q ×4 · iq_valid"| PSBUF
         SC -->|"sc_lock · timing_ref"| PCFSM
         SC -->|"sc_lock · timing_ref"| TACC
-        FBUF -->|"current · delayed samples"| SC
-        PCFSM -->|"buf_freeze"| FBUF
+        SC -->|"sc_lock · timing_ref"| PSBUF
+        PSBUF -->|"cur / del sample pair
+branch 0, N = 2^(SF+sample_shift) ago"| SC
+        PSBUF -->|"replay path (primary)
+rpl I/Q ×4 · rpl_valid"| XMUX
+        PSBUF -->|"replay_active"| XMUX
+        PCFSM -->|"packet_active · packet_end"| PSBUF
         TACC -->|"training_done"| PCFSM
-        TACC -->|"training_done"| IRQC
-        REGBANK -->|"W_SHADOW write
+        TACC -->|"training_done"| IRQO
+        REGBANK -->|"W bank write
 W_COMMIT"| PCFSM
-        SC -->|"corr_lock"| IRQO
+        REGBANK -->|"W_COMMIT starts replay"| PSBUF
+        SC -->|"sc_lock"| IRQO
         PCFSM -->|"mode status · packet_done"| IRQO
-        PCFSM -->|"safe_switch · W_valid
+        PSBUF -->|"overflow · replay_missed
+sample_skip (sticky)"| IRQO
+        PCFSM -->|"W_valid
 active mode/antenna"| COMB
     end
 
@@ -170,9 +182,8 @@ active mode/antenna"| COMB
 
     PSRAM["APS6404L PSRAM
 8 MB ext QSPI · 32 MHz
-decimated IQ replay buffer"]
-    FBUF -->|"QSPI burst"| PSRAM
-    PSRAM -->|"replay"| FBUF
+decimated IQ capture + replay buffer"]
+    PSBUF <-->|"QPI burst write / read"| PSRAM
 ```
 
 ---
@@ -285,43 +296,43 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 
 ---
 
-## Clock domain crossing boundaries
+## Clocking, timing tiers, and asynchronous boundaries
 
-The design uses two internal clock domains derived from the single 32 MHz external reference (`IQ_CLK`, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins):
+**There are no internal clock domains and no CDC inside the core.** The single 32 MHz external reference (`IQ_CLK`, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins) drives every flop on one clock net. The tiers below are *constraint* tiers, not clock domains — they differ in how many IQ_CLK cycles a path is allowed, not in which clock it runs on. Normative source: spec §3.1 and TRPR-SYS-003.
 
-| Domain | Clock | Period | Blocks |
+| Tier | Mechanism | Effective budget | Blocks |
 |---|---|---|---|
-| 32 MHz tier | `IQ_CLK` | 31.25 ns | `sd_decimator_cic_tdm8`, `sd_remod`, `psram_buf_ctrl`, `sc_detector`, `trouper_top` glue |
-| 16 MHz tier | `CLK_16M` (IQ_CLK÷2) | 62.5 ns | `dc_removal`, `training_acc`, `mrc_combiner`, `frontend_buf_ctrl`, `packet_ctrl_fsm`, `reg_bank` (incl. interrupt aggregation), `spi_slave` |
+| Full-rate | single-cycle | 31.25 ns | decimator CIC integrators, `sd_remod`, `psram_buf_ctrl` QPI FSM |
+| Paced TDM | RTL hold counters + scoped MCP=3 | 93.75 ns | HB MACs (`sd_decimator_poly`), `sc_detector` TDM + serial eval, `training_acc` walk, `mrc_combiner` states 1–10 |
+| CE-gated | `ce_16m` clock-enable + scoped MCP=2 | 62.5 ns | `reg_bank` (incl. interrupt aggregation), `spi_slave`, `packet_ctrl_fsm` |
 
-`CLK_16M` is generated **once at top level** as a registered divide-by-2 of IQ_CLK and distributed as a normal clock tree. Per-block local clock dividers are not used. The divider FF is synchronously reset so phase is deterministic after RESETB de-assertion.
+`dc_removal` and `training_acc` update only on their valid strobes. All handshakes are CE-aligned by construction on the single clock net.
 
-Rationale for block placement:
+**Superseded:** the former `CLK_16M` scheme — a top-level registered divide-by-2 distributed as a second clock tree — no longer exists, and neither does the former single-cycle `sc_detector` TDM limitation that motivated pipelining its accumulator. The control plane is clock-enable-gated (see `planning/ce-gated-quasi-static-retimer-experiment.md`) and every TDM/MAC cone is paced in RTL so its multicycle constraint is honest. The residual SS/3.0 V gap is a library limitation tracked under TRPR-PHY-008, not a clocking problem.
 
-- `sd_decimator_cic_tdm8`, `sd_remod`, and `psram_buf_ctrl` have true 32 MHz bit-level timing obligations.
-- `sc_detector` has a TDM FSM with single-cycle path dependencies; moving it to 16 MHz does not eliminate the SS violation (the TDM chain still needs one full cycle, and at 62.5 ns it still exceeds the ~72 ns SS path). Fix requires pipelining the TDM accumulator into 2 cycles.
-- All remaining blocks update only on `iq_valid` or `raw_valid` and have no 32 MHz timing obligations; they run comfortably at 62.5 ns.
+### SDC contract
 
-### Domain crossing treatment
-
-Because CLK_16M is phase-aligned with IQ_CLK (derived by registered divide-by-2), there is no metastability risk at domain crossings. No 2-FF synchronisers are required. The SDC declares CLK_16M as a generated clock and the timing analyser constrains all crossings automatically:
+TRPR-PHY-014 is normative and **forbids generated clocks**. The PNR and signoff SDC declares one clock plus scoped multicycle constraints that exactly match the RTL hold counters and clock-enables:
 
 ```
-create_generated_clock -divide_by 2 -source [get_ports IQ_CLK] \
-  [get_pins clk_div_reg/Q] -name CLK_16M
+create_clock -period 31.25 [get_ports IQ_CLK]
+# plus scoped set_multicycle_path: MCP=3 on paced TDM cones,
+#                                  MCP=2 on the ce_16m-gated control plane
 ```
+
+No `create_generated_clock`, and no blanket MCP override. Every MCP arc must be honest — the RTL has to guarantee the multi-cycle stability the constraint claims (see Open Risks #39/#40 for the history of arcs that did not).
 
 > **CFO is a transmitter-only property.** Because all four SX1257 AFEs and the ASIC itself derive their clocks from one TCXO, there is no sampling-rate offset (SRO) between antennas or between the ADC outputs and ASIC processing. Any observed carrier frequency offset `df` is entirely due to the remote transmitter's TCXO offset. The digital CFO correction `exp(−j2π·df_est·n/Fs)` applied in firmware operates with cycle-accurate sample indexing — no accumulated phase error from clock-domain mismatch.
 >
 > **Reference gap:** this section previously cited `sim/notebooks/02_cfo_estimation.ipynb` as the source of the quantified residuals — that file does not exist in the repo (no such notebook, no git history). The closest existing coverage is the pytest regression `sim/tests/test_cfo_droop.py` (CFO sensitivity of the current R=64 half-band decimator's dechirp peak amplitude, both BWs), which has not been distilled into a headline error-budget number. See `planning/DSP Chain SNR Loss Budget.md` §10 for the full consolidated SNR/quality-loss ledger across the RX chain, including this gap.
 
-The following boundaries require explicit treatment:
+The host SPI interface is the **only** asynchronous boundary in the design:
 
 | Boundary | Signal(s) | Direction | Required treatment | Documented in |
 | --- | --- | --- | --- | --- |
-| RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi (async) → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with AHB-Lite handshake | [SPI Slave](blocks/SPI%20Slave.md) |
-| IQ_CLK → CLK_16M | `raw_valid`, decimated I/Q samples | 32 MHz → 16 MHz | STA-constrained via `create_generated_clock`; no synchroniser logic required (phase-aligned clocks) | TRPR-SYS-003, TRPR-SYS-016 |
-| CLK_16M → IQ_CLK | weight shadow registers, control strobes to `sd_remod`/`psram_buf_ctrl` | 16 MHz → 32 MHz | STA-constrained via `create_generated_clock`; no synchroniser logic required (phase-aligned clocks) | TRPR-SYS-003, TRPR-SYS-015 |
+| RPi SPI slave | `HOST_CS`, `SPI_SCK`, `SPI_MOSI` | RPi (async) → ASIC | 2-FF synchroniser on `HOST_CS` and `SPI_SCK` edges; or run SPI slave FSM in the SPI clock domain with a handshake into the core | [SPI Slave](blocks/SPI%20Slave.md) |
+
+The former IQ_CLK↔CLK_16M rows are deleted along with the generated clock itself. Paths between full-rate, paced, and CE-gated logic are same-clock paths constrained by the scoped MCPs above (TRPR-SYS-003/015/016) — they are not crossings and need no synchroniser.
 
 **SX1257 I/Q bitstreams are NOT a CDC boundary.** All four SX1257s receive the 32 MHz reference on their **XTB** pins (sourced from a shared TCXO via a clock buffer), so their `I_OUT`/`Q_OUT` signals change on the falling edge of the same clock the ASIC uses. This is a timing-constraint problem (board-level setup/hold on pad inputs), not a metastability problem. **Note: Using CLK_IN (pin 11) is incorrect as it only feeds the TX DAC.**
 
@@ -334,15 +345,29 @@ The following boundaries require explicit treatment:
 **Top-level figures — Trouper Project (macro only)**
 *Note: Area for the companion Grouper project is documented separately.*
 
+Snapshot source: `RUN_2026-07-25_14-35-09` in `rtl-test/ol_trouper_top/runs/` — the
+latest complete full-P&R run, 1200×1100 µm die, `create_clock -period 31.25`, on
+`gf180mcu_fd_sc_mcu7t5v0`. All rows below come from that one run, so they are mutually
+consistent.
+
 | Metric | Value |
 | --- | --- |
-| Logic area (synthesis-only, active `trouper_top`, SGE 1965) | **748,043 µm²** hierarchical total on `gf180mcu_fd_sc_mcu7t5v0` TT; largest blocks are `sd_decimator_cic_tdm8` 207,754, `training_acc` 131,229, `sc_detector` 108,487 µm² |
+| Logic area (Yosys synthesis, module `trouper_top`) | **974,329 µm²** on TT 25°C 3.3 V |
+| Cell area (placed, standard cells) | **1,091,200 µm²** at **86.3%** utilisation |
+| Instance count | 70,858 total (44,418 standard cells, of which 5,189 sequential; 26,440 fill) |
+| Largest blocks (% of synth cell area) | `sd_decimator_poly` ~36%, `training_acc` ~15%, `sc_detector` ~14% — full per-block breakdown in `planning/area-reduction-roadmap.md` §7 (canonical) |
 | On-chip SRAM | **None** (off-chip APS6404L PSRAM used for all DSP buffering) |
-| Core area (placed) | 1,822,012 µm² (1.82 mm²) at 69.3% utilisation |
-| Post-PNR WNS — TT 25°C 3.3 V (setup) | +24.70 ns ✓ |
-| Post-PNR WNS — SS 125°C 3.0 V (setup) | **−10.08 ns ✗** (expected — FD cells fail 32 MHz SS) |
-| Post-PNR WNS — FF −40°C 3.6 V (hold) | −0.98 ns ✗ (hold violations at FF corner) |
-| Power — TT 25°C 3.3 V | 50.9 mW (42.5 mW internal + 8.4 mW switching) |
+| Core / die area | 1,264,650 µm² core inside a 1,320,000 µm² (1200 × 1100 µm) die |
+| Post-PNR WNS — TT 25°C 3.3 V (setup) | +8.89 ns ✓ |
+| Post-PNR WNS — SS 125°C 3.0 V (setup) | **−14.91 ns ✗**, TNS −5,747 ns (expected — FD cells fail 32 MHz SS; see TRPR-PHY-008 and `Open Risks.md`) |
+| Post-PNR WNS — FF −40°C 3.6 V (setup) | +11.79 ns ✓ |
+| Hold — all three corners | **MET**, 0 violations; worst slack +0.170 ns at FF −40°C 3.6 V |
+| Signoff checks | Magic DRC 0, LVS 0, antenna violations 6 |
+| Power — TT 25°C 3.3 V | 276.7 mW (145.8 mW internal + 130.9 mW switching + 4.4 µW leakage) |
+
+> **Die-size note:** this run is 1200 × 1100 µm. TRPR-SYS-009 / TRPR-PHY-003 still
+> target 1100 × 1100 — the gap is tracked as item 26 of
+> `planning/spec-contradictions-audit-2026-07.md`.
 
 > **Memory update:** The Trouper macro now contains zero internal SRAM instances. The frontend buffer SRAM and SC correlator delay line have been replaced by the **off-chip APS6404L PSRAM** via the `psram_buf_ctrl`. CPU memory remains part of the hardened **Grouper** project.
 

@@ -45,15 +45,24 @@
 
 ### Block 2 — Energy Measurement
 
-**Pass criterion:** `ENERGY[n]` registers match `Σ|x|²` computed by Python reference over the same 8-symbol window. Lock-latched energy snapshot is stable and packet-consistent.
+> **Superseded 2026-07-26 (same defect class as audit item 18).** The `ENERGY[n]`
+> registers and the lock-latched energy snapshot went with `noise_est.v`; `ENERGY_THR`
+> and `SC_CFG` are listed under *Removed registers*. Per-branch power is now read from
+> `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc`, and noise-only power from a
+> firmware-armed `TACC_NOISE_TRIG` window.
+
+**Pass criterion:** `ZDIAG_k / n_acc` matches the Python reference branch power within
+Q-format rounding, and ranks the four branches by received power correctly. In noise
+mode, `ZDIAG_k ≈ σ²_k × n_acc` with `NOISE_READY` gating out SC-contaminated windows.
 
 **Method:**
-- Inject known-amplitude sine through decimator → measure ENERGY vs Python reference
-- Assert a known correlator-lock event → verify the exported energy snapshot matches the expected lock-time window
+- Inject known-amplitude per-branch signals; compare `ZDIAG_k/n_acc` against the model
+- Measured-capture playback asserts the branch power ranking (`cocotb/trouper_capture`)
+- Arm `TACC_NOISE_TRIG` between packets; verify `NOISE_READY` and the σ² estimate
 
 ---
 
-### Block 3 — Correlator Bank ×8
+### Block 3 — Correlator Bank (single shared correlator, ×4 branches)
 
 **Pass criterion:** `|H_j,k|` magnitude matches Python correlator reference to within ±2 LSB after 8-symbol integration. `lock` flag asserts within ±1 symbol of Python model prediction. Cross-correlator term (wrong Δf bin) < −20 dB relative to on-bin term.
 
@@ -79,9 +88,9 @@
 
 > **Non-FFT path:** FFT Engine test is not applicable. This block is now split between the Trouper Training Accumulator RTL and firmware weight generation. See [Training Accumulator](blocks/Training%20Accumulator.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md), and [Firmware Spec](Firmware%20Spec.md).
 
-**Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(8 - SC_HITS_REQ - 1) × M`.
+**Pass criterion (Training Accumulator):** `Z_j / n_acc` matches Python reference `h_j` within Q1.15 rounding on a noiseless channel. `training_done` asserts at the correct sample boundary. `n_acc` matches `(TACC_WINDOW_SYMS - SC_HITS_REQ - 1) × M - 1` — with the reset defaults (`TACC_WINDOW_SYMS = 8`, `SC_HITS_REQ = 2`) that is `5M - 1`; the `-1` is real and is asserted by `cocotb/tests/test_trouper_top.py` (`7M - 1` in its `SC_HITS_REQ = 0` configuration). `TACC_WINDOW_SYMS` is clamped to ≥ 8 on write (`reg_bank.v:240`), so windows below 8 cannot be tested from the register interface. In noise mode the window is forward-only from the trigger and `n_acc == 8M` exactly (`cocotb/tests/test_noise_trig.py`).
 
-**Pass criterion (Firmware Weight Generation):** Firmware-computed weights match the Python reference for the selected algorithm (row-sum MRC or eigenvector power iteration) to within the expected Q1.15 rounding error. `W_COMMIT` is issued within the SF5/SF6 timing budget after `training_done`. Full same-packet delivery is proven with PSRAM replay tests, not by a standalone hardware weight FSM latency check.
+**Pass criterion (Firmware Weight Generation):** Firmware-computed weights match the Python reference for the selected algorithm (row-sum MRC or eigenvector power iteration) to within the expected Q1.15 rounding error. `W_COMMIT` is issued within the timing budget for the SF under test after `training_done` (`SF_CFG` valid range is 7–12; SF5/SF6 are out of scope). The measured 8-iteration eigenvector kernel costs 2.08 ms (rv32im) / 2.28 ms (rv32emc) at 16 MHz independent of SF, so in **live** mode only SF9+ meets the `4·M / 500 kHz` deadline — SF7 and SF8 must be tested in **PSRAM replay** mode, where the deadline scales with payload length (TRPR-WGN-004). Full same-packet delivery is proven with PSRAM replay tests, not by a standalone hardware weight FSM latency check.
 
 **End-to-end SPI weight flow:** `rtl-test/tb/test_weight_gen_spi_flow.py` drives the full off-chip-MCU loop against real captured IQ data (4 antennas at distinct gains) — `sc_lock` → `training_done` IRQ → SPI-read `Z_kl`/`Zdiag` (`0x40`–`0x6F`) → firmware-accurate eigenvector computation → SPI-write `W_SHADOW` (`0x30`–`0x3F`) → `W_COMMIT` → combiner output, compared bit-exact against an independent oracle model (`sim/models/receiver.py`). Passing (SGE job 3286, `max_err=0.00`); see `planning/Open Risks.md` #33 for findings surfaced while building it (undocumented Q0.7 combiner weight precision, now in the Register Map's `0x30`–`0x3F` section).
 
@@ -115,8 +124,8 @@
 | --- | --- | --- | --- |
 | NT=1 MRC | H* / (‖H‖²+N₀) | 4 equal-amplitude channels | ~6 dB vs single antenna |
 | NT=1 MRC | Degenerate (1 antenna only) | One channel active | Matches single-channel SNR |
-| NT=2 ALMMSE | Computed from 2×4 H | Both nodes present | Node separation > 20 dB |
-| NT=2 ALMMSE, ill-conditioned H | κ(H) >> 1 | Near-collinear channels | Output valid, no overflow |
+| ~~NT=2 ALMMSE~~ | — | — | **Out of scope** — NT=1 design; full ALMMSE is not implemented (TRPR-WGN-006/012) |
+| ~~NT=2 ALMMSE, ill-conditioned H~~ | — | — | **Out of scope**, as above |
 
 ---
 
@@ -144,51 +153,59 @@
 
 ### Block 7 — SPI Slave (host interface)
 
-**Pass criterion:** All register R/W operations via RPi SPI0 match expected values. CHIP_ID reads `0xA7`. Extended firmware-load commands write and read back byte-identical CPU SRAM contents in the firmware-visible banks. Firmware load and CPU_RESET sequence boots PicoRV32 without touching the reserved borrow bank.
+**Pass criterion:** All register R/W operations via RPi SPI0 match expected values. CHIP_ID reads `0xA7`. Reset values match the map on every implemented address, and RO/W1P/W1C behaviour matches the map's access column.
 
 **Method:**
 - cocotb testbench simulates RPi SPI master; write and read back every defined register
-- Issue extended opcode `0x01` firmware-load writes into firmware-visible CPU SRAM window only (`BANK0`–`BANK2`)
-- Issue extended opcode `0x02` firmware-readback and compare against written bytes
-- Firmware load sequence: assert `CPU_RESET`, load test binary, de-assert, verify PicoRV32 fetches from `0x00000`
+- Reset/access sweep over the whole 7-bit map (`cocotb/reg_reset_sweep`, TRPR-REG-001)
+- Grouper-vs-SPI arbitration, Grouper priority (`tb_trouper_grp_arb.v`)
+- SPI-domain CDC scenarios: phase sweep, back-to-back frames, burst, read side effects, reset interrupt, abort, clock limit, W1P (`cocotb/spi_cdc`)
+
+> **Removed 2026-07-26 (audit item 18).** This block previously specified extended
+> firmware-load opcodes `0x01`/`0x02`, a `CPU_RESET` boot sequence, CPU SRAM banks
+> `BANK0`–`BANK2`, a reserved `BANK3`/`CPU_SRAM_BORROW_BANK`, and per-bank BIST
+> registers. Trouper has no on-chip CPU and no on-chip SRAM (§3.x, TRPR-PHY-006), and
+> the extended SPI frame was removed with §4.11. None of it is testable.
 
 **Additional matrix:**
 
 | Test | Pass criterion |
 | --- | --- |
-| Borrow-bank exclusion | Firmware image and readback never touch reserved `BANK3` / `CPU_SRAM_BORROW_BANK` |
-| Reserved-bank persistence | Preload a sentinel pattern into `BANK3`, release `CPU_RESET`, and confirm the sentinel is unchanged after firmware boot |
-| Per-bank BIST visibility | Host can read `CPU_SRAM_BANK0_PASS..CPU_SRAM_BORROW_BANK_PASS` distinctly |
+| Register reset sweep | Every implemented address reads its documented reset value; resetless Z-bank (`0x40`–`0x6F`) excluded by design |
+| Write-lock behaviour | `0x30`–`0x3F` writes rejected while `W_VALID`, setting sticky `W_WR_REJECTED` (`0x1E[5]`) |
+| Mid-packet write gates | `SF_CFG`, `BW_CFG`, `PSRAM_EN`, `SC_FORCE_LOCK` writes ignored while `PACKET_ACTIVE` |
 
 ---
 
-### Block 8 — SPI Master (→ SX1257)
+### Blocks 8 and 9 — retired 2026-07-26 (audit item 18)
 
-**Pass criterion:** All SX1257 register writes produce correct SPI transactions (correct chip select, correct opcode/address/data sequence). No bus contention with SPI slave during simultaneous activity.
+Both blocks tested hardware Trouper does not contain.
 
-**Method:**
-- Logic analyser / cocotb SPI monitor: capture SPI_MOSI/SCK/CSn during a `RegMode` write
-- Verify byte sequence matches SX1257 register write format (§5.1 of SX1257 datasheet)
-- Verify MISO tristating while acting as master
+**Block 8 — SPI Master (→ SX1257).** Trouper has no on-chip SPI master (TRPR-SPM-001).
+SX1257 configuration is external: the host RPi or Grouper programs the four front-ends
+directly, so there is no Trouper-side transaction to capture, and no master/slave bus
+contention to check. AFE bring-up coverage lives in
+[Frontend Calibration Procedure](Frontend%20Calibration%20Procedure.md) and
+[AFE Characterisation Board](AFE%20Characterisation%20Board.md).
 
----
+**Block 9 — PicoRV32 + Firmware.** There is no CPU in Trouper (§3.x); weight computation
+is performed by Grouper firmware or the host, and Trouper consumes only the committed W
+bank. The old pass criteria are superseded on three counts: the CPU SRAM banks and borrow
+bank do not exist; the `H`/`N₀` register interface does not exist (firmware reads `Z`
+from `0x40`–`0x6F` instead); and "within one LoRa symbol period of correlator lock" was
+the removed next-packet constraint, explicitly superseded by TRPR-WGN-004, whose real
+deadline is `packet_end` in replay mode and `4·M / 500 kHz` in live mode.
 
-### Block 9 — PicoRV32 + Firmware
+Current equivalent coverage:
 
-**Pass criterion:** Firmware computes correct W matrix (verified against Python reference) within one LoRa symbol period of correlator lock. AGC converges within 3 packets on a static channel. Mode auto-switch triggers correctly on NT=2 preamble pair. When borrow mode is supported with `CPU_RESET=0`, firmware operates correctly while respecting the reserved upper borrow bank.
-
-**Method:**
-- Write H matrix and N₀ to registers; release CPU_RESET; read back W matrix after IRQ
-- Compare W to Python `W = (H^H @ H + N0*I)^-1 @ H^H`
-- Inject two-node preamble (NT=2); verify ACTIVE_MODE register switches to 1
-
-**Additional matrix:**
-
-| Test | Pass criterion |
+| Concern | Where it is actually tested |
 | --- | --- |
-| Linker reservation | `.text/.data/.bss/stack` are placed only in `BANK0`–`BANK2`; map file shows no allocation in reserved `BANK3` |
-| Runtime exclusion | C runtime zero/init path does not clear or write reserved `BANK3` |
-| Shared borrow with CPU live | With `CPU_RESET=0` and `CPU_SRAM_BORROW_EN=1`, AGC still runs and borrowed-bank sentinel data is preserved |
+| Firmware weight computation matches the reference model | `cocotb/tests/test_weight_gen_spi_flow.py` (bit-exact vs `sim/models/eigvec_fw.py`, job 3286); `sim/tests/test_eigvec_fw.py` |
+| Weight-commit timing against the real deadline | `planning/blocks/Eigenvector Weight Computation.md` Timing Budget (cycle-accurate, jobs 3333–3335) + TRPR-WGN-004 |
+| Same-packet delivery of trained weights | PSRAM replay suite (`cocotb/replay_data`, `cocotb/replay_delay`, `test_capture_playback.py`) |
+| Missed / late commit degradation | `cocotb/tests/test_w_missed_packet.py` (job 3310), `W_COMMIT_LATE` sticky |
+| AGC convergence | Software-owned (TRPR-AGC-002 thresholds are firmware constants); not a Trouper RTL test |
+| NT=2 mode auto-switch | Out of scope — this is an NT=1 design |
 
 ---
 
@@ -246,12 +263,11 @@ First test with all blocks connected. Run after all block tests pass.
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | NT=1 MRC, single node, SF7 | Real node → SX1257 ×4 → ASIC RTL → SX1302 → ChirpStack | Packet received and decoded |
-| NT=1 MRC, single node, SF7 with borrow bank enabled | Real node → SX1257 ×4 → ASIC RTL → SX1302 → ChirpStack | Packet received and decoded with `CPU_SRAM_BORROW_BANK_PASS=1` and `CPU_SRAM_BORROW_EN=1` |
-| NT=1 MRC, single node, SF7 borrow bank failed | Force `CPU_SRAM_BORROW_BANK_PASS=0` / inject fault | System downgrades to `NR=2` on branches `1` and `3`; packet still received in degraded mode |
+| NT=1 MRC, single node, SF7 via PSRAM replay | Real node → SX1257 ×4 → ASIC → SX1302 → ChirpStack, `PSRAM_EN=1` | Packet decoded with `REPLAY_ACTIVE` observed and `REPLAY_MISSED=0` |
+| NT=1 MRC, late weight commit | Withhold `W_COMMIT` until after replay start | Packet still decoded; `W_COMMIT_LATE` sticky set (partial diversity, not a whole-packet miss) |
 | NT=1 MRC, sensitivity sweep | Vary node TX power | Sensitivity ≥ standard SX1302 single-antenna (−125 dBm SF7) |
 | NT=1 MRC, gain vs single antenna | Compare PER with 1 vs 4 antennas enabled | ≥ 4 dB improvement at threshold SNR |
-| NT=2 ALMMSE, two nodes, SF7 | Both nodes transmit simultaneously | Both packets received and separated |
-| Mode auto-switch | Start in NT=1; bring up second node | ACTIVE_MODE transitions to 1 within one packet |
+| NT=1 noise-weighted MRC | Per-branch noise floors deliberately unequal | Combining gain ≥ plain MRC; weights track `1/σ²_ema[k]` |
 | AGC settling | Start at mid-gain; vary path loss by 20 dB | AGC converges within 3 packets |
 
 ---

@@ -825,10 +825,14 @@ multi-ASIC cascade topology.
 product ships.
 **See:** `planning/NR2-multi-ASIC-cascade.md`, `planning/cascade-beamsteering.md`.
 
-### 23. Weight Generation: noise-whitening (NW-MRC) not implemented
+### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware equivalence verified; gating policy open
 
-Feature gap in both firmware and the Python reference model.
-**See:** `planning/blocks/Weight Generation.md`.
+Float and fixed-point SNR-weighted eigenvector paths implemented and verified
+end-to-end over SPI (jobs 3596/3598, combiner bit-exact). Firmware builds for
+rv32emc (job 3602), was cycle-measured on the real PicoRV32 (job 3608), and
+matches the fixed-point model bit-for-bit on a traced unequal-noise register
+vector (job 3612). The remaining risk is the undecided runtime gating policy.
+**See:** `planning/noise-weighted-mrc-2026-07.md`.
 
 ### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)
 
@@ -861,8 +865,12 @@ inputs deleted from the RTL — `psram_packet_arm`, `psram_replay_start`,
 `payload_rd_base`, `safe_switch`, `combiner_source` (superseded by the
 continuous-delay replay redesign, commit `46e1cdf`), plus the now-unused
 inputs `iq_valid`, `psram_en`, `psram_replay_active`. `buf_freeze` was
-KEPT: it is regression-covered (TRPR-PCF-002/008, `test_w_missed_packet.py`)
-even though it drives nothing in `trouper_top` yet.
+initially KEPT because it was regression-covered (TRPR-PCF-002/008,
+`test_w_missed_packet.py`) even though it drove nothing in `trouper_top`;
+it was **deleted 2026-07-26** once it was established to be a bit-identical
+duplicate of `packet_active` (same four assignment sites, same values — the
+formal harness had been asserting both equal `state != ST_IDLE`). PCF-002/008
+and the four regression assertions are retargeted to `packet_active`.
 
 **Resolved (`psram_abort` — the "verify that path or wire/delete" item):
 verified UNREACHABLE, branch deleted.** The mid-payload re-lock scenario
@@ -1080,7 +1088,8 @@ nothing re-checks or clears it if `psram_en` later changes).
 
 **Fix:** gated `psram_ctrl[0]` the same way as `sf_cfg`/`bw_sel`:
 `8'h70: if (!packet_active) psram_ctrl[0] <= wdata[0];` (`reg_bank.v:233`;
-`psram_ctrl[1:3]` — `CLR_ERR`/`SAMPLE_WIDTH`/`QSPI_OWNER` — left ungated,
+`psram_ctrl[1:3]` — `CLR_ERR`/reserved-inert bit[2] (formerly documented as
+`SAMPLE_WIDTH`)/`QSPI_OWNER` — left ungated,
 matching their own documented semantics). `planning/Register Map.md` `0x70`
 detail section updated with the same gate note as `SF_CFG`/`BW_CFG`.
 
@@ -1132,8 +1141,8 @@ up:
   functional cocotb sweep (job 3270, 12/12 PASS at full depth) never
   triggering either condition, plus (for overflow specifically) the original
   analytical derivation — the replay backlog would need to land within 8
-  bytes of a 2^23 wraparound, while real backlogs are bounded to <=262144
-  bytes (TRPR-PSR-015, >=32x headroom) — still holding unchanged.
+  bytes of a 2^23 wraparound, while real backlogs are bounded to <=1048576
+  bytes (TRPR-PSR-015, >=8x headroom) — still holding unchanged.
 - Two environment-modeling gaps had to be fixed along the way that are worth
   knowing about if extending this file: `sf`/`sample_shift` and `iq_valid`
   are free primary inputs to `psram_buf_ctrl.v` in isolation, so this proof

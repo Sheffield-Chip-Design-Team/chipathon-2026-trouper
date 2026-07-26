@@ -36,6 +36,7 @@ from sim.models.channel import rayleigh_coefficients, apply_iq_imbalance
 from sim.models.training_accumulator import (
     training_accumulate_allpairs,
     compute_eigvec_weights,
+    compute_eigvec_nw_weights,
     compute_weights as tacc_compute_weights,
 )
 from sim.models.receiver import nonfft_combine, quantize_q1_15
@@ -86,13 +87,21 @@ def _eigvec_weights(Z_mat: np.ndarray, q15: bool = True) -> np.ndarray:
     return _normalise(np.conj(v), q15)
 
 
-def _eigvec_nw(Z_mat: np.ndarray, N0: float, n_acc: int, q15: bool = True) -> np.ndarray:
-    """Noise-whitened eigvec: eig(Z − σ²·n_acc·I). Falls back to plain eigvec if all-negative."""
+def _eigvec_nw(Z_mat: np.ndarray, N0, n_acc: int, q15: bool = True) -> np.ndarray:
+    """Noise-whitened eigvec, delegating to the models-level PER-BRANCH form.
+
+    Was a local scalar implementation subtracting N0*n_acc*I. A scalar pedestal
+    is a multiple of I and therefore cannot rotate an eigenvector at all, so it
+    could only ever correct the low-SNR magnitude bias -- never branch-noise
+    imbalance, which is the case whitening actually exists for. A scalar N0 is
+    still accepted here (broadcast to all branches) so this sweep's existing
+    equal-noise call sites keep working; pass an (NR,) array for the asymmetric
+    case. See sim/models/training_accumulator.py::compute_eigvec_nw_weights.
+    """
     NR = Z_mat.shape[0]
-    Z_w = Z_mat - N0 * n_acc * np.eye(NR)
-    eigvals, eigvecs = np.linalg.eigh(Z_w)
-    v = eigvecs[:, -1] if eigvals[-1] > 0 else np.linalg.eigh(Z_mat)[1][:, -1]
-    return _normalise(np.conj(v), q15)
+    sigma2 = np.broadcast_to(np.asarray(N0, dtype=float), (NR,))
+    w = compute_eigvec_nw_weights(Z_mat, sigma2, n_acc)
+    return w if q15 else _normalise(w, False)
 
 
 def simulate_one(SF: int, NR: int, N0: float,

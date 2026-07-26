@@ -8,9 +8,10 @@ External-memory subsystem for the Trouper receive chain. One shared QPI engine s
 **Design record:** `planning/psram-replay-continuous-delay-redesign.md` (2026-07-12 replay redesign)
 
 > Superseded content note: earlier revisions of this document described a W_COMMIT-triggered
-> rewind replay, a JTAG/QPI pad mux, a `SAMPLE_WIDTH` bit, and a 16 MHz controller-clock
+> rewind replay, a JTAG/QPI pad mux, functional sample-width selection, and a 16 MHz controller-clock
 > constraint. None of these exist: replay is margin-timed continuous-delay, the four SIO pads
-> are dedicated (JTAG removed, spec §4.16), storage is fixed 8 bytes/sample, and the
+> are dedicated (JTAG removed, spec §4.16), storage is fixed 8 bytes/sample (the retained
+> `PSRAM_CTRL[2]` readback bit is inert), and the
 > controller runs at 32 MHz.
 
 ---
@@ -89,7 +90,7 @@ Downstream, the SX1302 sees silence during the pre-replay window and then the co
 | Quantity | Value |
 |---|---|
 | Storage format | 8 bytes/sample (int8 I+Q × 4 branches) — fixed, no other width |
-| Write rate | 2 MB/s at 250 kS/s (~3% of device capability) |
+| Write rate | 4 MB/s at 500 kS/s (~6% of device capability) |
 | Max occupied depth (SF12) | ≈ 8 × 2^14 samples × 8 B ≈ 1 MiB at 125 kHz — APS6404L 8 MB, ≥ 8× headroom |
 | Overflow / skip observability | sticky `OVERFLOW` (0x71[6]), sticky `SAMPLE_SKIP` (0x71[2], must stay 0 in-budget — TRPR-PSR-020) |
 

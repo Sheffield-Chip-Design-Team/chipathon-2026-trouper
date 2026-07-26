@@ -274,7 +274,6 @@ module trouper_top (
     wire signed [7:0] psram_cur_i0, psram_cur_q0;  // branch 0, current sample
     wire signed [7:0] psram_del_i0, psram_del_q0;  // branch 0, N-sample delayed
     wire              psram_del_valid;               // pulses when cur/del pair ready
-    wire        buf_freeze;  // driven by packet_ctrl_fsm (unused without fbuf, kept for FSM)
     wire        sc_lock;    // declared here to avoid forward-reference; driven by u_sc
     wire        rb_sc_force_lock; // manual SC lock override (SC_FORCE_LOCK 0x19); declared here to avoid forward-reference
 
@@ -448,7 +447,6 @@ module trouper_top (
         .W_valid_set     (W_valid_set),
         .W_missed_packet (W_missed_packet),
         .W_missed_q      (W_missed_q),
-        .buf_freeze        (buf_freeze),
         .packet_phase      (packet_phase),
         .packet_active     (packet_active),
         .packet_active_ps  (packet_active_ps),

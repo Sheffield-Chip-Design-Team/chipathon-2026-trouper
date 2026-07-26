@@ -95,7 +95,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A([IRQ_TRAINING_DONE]) --> B[Read N_ACC\n from 0x21–0x22]
+    A([IRQ_TRAINING_DONE]) --> B[Read 18-bit N_ACC\n from 0x21–0x23]
     B --> C{N_ACC == 0?}
     C -- Yes --> Z([Exit — no weights committed])
     C -- No --> D[Read 6 off-diagonal Z_kl pairs\n int24 bits 31:8 I+Q from 0x40–0x63]
@@ -185,8 +185,9 @@ scale, no scale-alignment shift is needed before comparing or combining them
 
 ### Accumulation count
 
-`N_ACC` at `0x21`–`0x22` (uint16, big-endian). Skip weight computation if
-`N_ACC == 0`.
+`N_ACC` is an 18-bit unsigned value across `0x21`–`0x23`, big-endian:
+`((read(0x21) & 0x03) << 16) | (read(0x22) << 8) | read(0x23)`. Skip weight
+computation if `N_ACC == 0`.
 
 ---
 
@@ -500,7 +501,7 @@ Iteration**): the host is not integer-only, so use exact math instead of the
 |---|---|---|
 | Trigger | `IRQ_STATUS` bit[1] (`0x02`), or the dedicated `IRQ_OUT` pad | Poll bit[1] over SPI, or take a GPIO edge interrupt on `IRQ_OUT` to avoid poll latency. Clear via `IRQ_CLEAR` (`0x03`). |
 | Read Z | `0x40–0x63` (6 pairs × I/Q int24, 36 bytes) + `0x64–0x6F` (4 × ZDIAG int24, 12 bytes) | One 49-byte SPI burst read (auto-increment while CS held low). |
-| Read N_ACC | `0x21–0x22` | Same as constrained path; skip if zero. |
+| Read N_ACC | `0x21–0x23` | Full 18-bit count; same representation as the constrained path; skip if zero. |
 | Write weights | `0x30–0x3F` (8 × int16, Q1.15, top byte effective) | Same 8-byte-pair layout as the constrained path — top byte convention unchanged. |
 | Write gain shift | `0x0F` bits [2:0] (`COMB_CFG.post_gain_shift`) | Must be written before `W_COMMIT`, same ordering requirement. |
 | Commit | `0x1E` bit 0 (`WGT_CTRL.W_COMMIT`) | Self-clears in hardware. |
@@ -553,10 +554,10 @@ burden).
 
 ### Timing — the actual constraint
 
-The PicoRV32 path is deterministic but, per the corrected Timing Budget
-above, is itself ~1.0–1.1 ms at 8 iterations (SF-independent) against an
-SF-dependent deadline — comfortable only from roughly SF8 upward in baseline
-live mode. A general-purpose Linux host's `IRQ_OUT` interrupt-to-userspace
+The PicoRV32 path is deterministic but, per the measured Timing Budget
+above, is itself 2.08 ms (rv32im) / 2.28 ms (rv32emc) at 8 iterations
+(SF-independent) against an SF-dependent deadline — in baseline live mode that
+fits only from SF9 upward, with SF7 and SF8 both missing on either ISA. A general-purpose Linux host's `IRQ_OUT` interrupt-to-userspace
 latency is a different, non-deterministic problem on top of that: not
 guaranteed, and can run into the low milliseconds under load on a non-RT
 kernel.

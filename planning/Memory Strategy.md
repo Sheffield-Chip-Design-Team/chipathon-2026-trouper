@@ -41,11 +41,19 @@ The APS6404L (8 MB, QSPI, 32 MHz) serves as the primary data buffer for the MIMO
 
 ### Timing and Bandwidth
 
-At 32 MHz with 8-bit complex samples:
-- Sample rate: 500 kS/s (2 µs period)
-- Write burst (4 antennas, 8 bits): ~1 µs
-- Read burst (1 antenna for SC): ~0.5 µs
-- **Total utilization: ~38%** during concurrent capture and SC detection.
+At 32 MHz with 8-bit complex samples (corrected 2026-07-26, audit item 21 — the previous
+"~1 µs write / ~0.5 µs read / **~38%**" figures did not match the controller's actual
+sub-cycle budget; TRPR-PSR-014 and `psram_buf_ctrl.v:184` are authoritative):
+
+- Sample rate: 500 kS/s → `iq_valid` every **64 clocks** (2.0 µs)
+- Capture write, 8 bytes covering all 4 antennas: **25 cycles** (0.78 µs)
+- SC delay read, 1 branch, 2 bytes: **19 cycles** (0.59 µs)
+- Replay read, 8 bytes: **31 cycles** (0.97 µs)
+- **Capture + SC detection: 44 of 64 cycles → 69%**, 20 spare
+- **Capture + replay: 56 of 64 cycles → 88%**, 8 spare
+
+The replay phase is the binding case. Debug readback is serviced only from the S_WRITE
+spare slot, at lower priority than capture writes.
 
 ---
 
@@ -170,11 +178,19 @@ Under that assumption:
 
 ### DSP SRAMs — GF-provided 512x8 macros at 3.3 V
 
-The Frontend Buffer SRAMs (SRAM0, SRAM1) are in the real-time acquisition critical path. A single stuck bit causes a corrupt delayed-sample read, which degrades the SC autocorrelation statistic and can prevent preamble detection entirely. There is no runtime recovery path short of resetting the block.
+*(Historical — see the banner at the top of this document; these macros are not instantiated.)* The Frontend Buffer SRAMs (SRAM0, SRAM1) were in the real-time acquisition critical path. A single stuck bit causes a corrupt delayed-sample read, which degrades the SC autocorrelation statistic and can prevent preamble detection entirely. There is no runtime recovery path short of resetting the block.
 
 The `gf180mcu_fd_ip_sram__sram512x8m8wm1` macro size exactly matches the required 2-channel × 128-sample rolling window at 8-bit storage. No level shifters are required — core logic and SRAM share the 3.3 V rail.
 
-**2 clock cycles per byte access** at 32 MHz (budget = 62.5 ns) is the current assumption, pending parasitic-extracted SPICE confirmation — see post-extraction timing verification above. No divided clock is needed — the Frontend Buffer Controller FSM holds each address stable for 2 cycles before advancing. Each sample time requires 4 reads + 4 writes = 16 cycles total (was previously documented as 8 cycles — that was incorrect). At the primary sample rates (R=256/128/64) the SRAM utilisation is 6–25%; at R=32 (1 MS/s debug mode) it is 50%, leaving 16 idle cycles per sample for control logic. If extraction shows 3 cycles are needed, R=32 utilisation rises to 75% — workable but worth noting.
+> **Historical only (audit item 21, annotated 2026-07-26).** The paragraph below sized a
+> `gf180mcu_fd_ip_sram__sram512x8m8wm1` frontend-buffer SRAM against decimation ratios
+> R=256/128/64/32. None of that is live: the block and all Trouper on-chip SRAM were
+> removed (TRPR-PHY-006), the chain is a fixed R=64 half-band chain, and R=32 / 1 MS/s is
+> out of scope. The equivalent live budget is the PSRAM sub-cycle table above. Retained
+> because the 2-cycles-per-access extraction question still informs the Grouper CPU SRAM
+> discussion that follows.
+
+*(superseded)* **2 clock cycles per byte access** at 32 MHz (budget = 62.5 ns) was the working assumption, pending parasitic-extracted SPICE confirmation. No divided clock was needed — the Frontend Buffer Controller FSM held each address stable for 2 cycles before advancing. Each sample time required 4 reads + 4 writes = 16 cycles. At the then-primary sample rates (R=256/128/64) SRAM utilisation was 6–25%; at R=32 (1 MS/s debug mode) 50%.
 
 ### CPU SRAMs — experimental macros at 3.3 V
 

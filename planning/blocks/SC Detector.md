@@ -33,7 +33,7 @@ On lock, `timing_ref` is set to the sample index of the first valid symbol bound
 | `delayed_valid` | in | 1 | Delay buffer has produced a valid stored-phase delayed sample; deasserted during the ignored phase region |
 | `sf` | in | 4 | Spreading factor select (only SF6 special-cases M) |
 | `sc_thr` | in | 16 | Threshold (firmware; see note below) |
-| `sc_hits_req` | in | 2 | Number of consecutive hits required before lock |
+| `sc_hits_req` | in | 2 | Lock encoding: locks after `sc_hits_req + 1` consecutive hits; 0 is diagnostic-only one-hit mode, 1–3 are normal-operation 2–4-hit settings |
 | `sc_lock` | out | 1 | Preamble locked |
 | `timing_ref` | out | 32 | Sample index of first symbol boundary |
 | `c_i0/q0` | out | 32 | Final correlation phasor (diagnostic) |
