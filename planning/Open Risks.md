@@ -828,8 +828,9 @@ product ships.
 ### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware open
 
 Float and fixed-point SNR-weighted eigenvector paths implemented and verified
-end-to-end over SPI (jobs 3596/3598, combiner bit-exact); residual risk is the
-unported firmware C and the absence of a runtime gating policy.
+end-to-end over SPI (jobs 3596/3598, combiner bit-exact); firmware C written and
+building clean for rv32emc (job 3602) but **never executed** — residual risk is
+that unproven equivalence to the model, plus the undecided gating policy.
 **See:** `planning/noise-weighted-mrc-2026-07.md`.
 
 ### 24. Trouper Chip Specification drift vs. RTL (clock architecture, register addresses)

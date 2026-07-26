@@ -1,11 +1,13 @@
 # Noise-Weighted MRC — implementation record, 2026-07-26
 
-Closes the modelling and verification half of Open Risks #23. Firmware C and a
-runtime gating policy remain open (§7).
+Closes the modelling and RTL-verification half of Open Risks #23. Firmware C is
+written and builds clean for the target but has **never been executed** (§6.5);
+the runtime gating policy is undecided. Both tracked in §7.
 
 **Code:** `sim/models/weight_generation.py` (`NoiseFloorEstimator`),
 `sim/models/training_accumulator.py` (float references),
 `sim/models/eigvec_fw.py` (fixed-point),
+`firmware/picorv32/main.c` (firmware),
 `rtl-test/tb/test_weight_gen_spi_flow.py` (RTL end-to-end),
 `sim/tests/test_noise_floor_estimator.py`, `sim/tests/test_eigvec_nw_fw.py`.
 
@@ -221,16 +223,77 @@ flow and arithmetic; BER is answered by the Python sweep.
 
 ---
 
+## 6.5 Firmware (`firmware/picorv32/main.c`)
+
+Implemented 2026-07-26. **Builds for the real target; not yet run.**
+
+| symbol | role |
+|---|---|
+| `update_noise_floor_fw()` | called on `NOISE_READY`; reads `ZDIAG_k`/`N_ACC`, folds into the per-branch Q16 integer EMA |
+| `nfe_valid()` | rejects a partially underflowed estimate |
+| `isqrt32()` | bit-by-bit integer sqrt, no multiply, no float |
+| `nw_mode` | `OFF` / `DEBIAS` / `SNRW`, default `SNRW` — gating threshold is still `TODO(policy)` |
+
+Whitening and the `G` scaling live inside `compute_eigvec_weights_fw()`:
+pedestal subtraction at raw ZDIAG scale with a per-branch clamp at zero, then
+`Z̃ = G Z' G` built once from the already-normalised matrix, then one final `G`
+map-back. The power-iteration body is unchanged.
+
+`NOISE_READY` is serviced **before** `TRAINING_DONE` in the poll loop, so a
+noise window completing in the same poll reaches the EMA before the weights
+that consume it.
+
+### Build result (SGE job 3602)
+
+```
+riscv64-unknown-elf-gcc -march=rv32emc -mabi=ilp32e -Os -Wall -Wextra -Werror
+   text   data    bss    dec
+   2466      0     20   2486
+undefined symbols:   (none)
+libgcc helper calls: (none)
+```
+
+### Two link hazards `-nostdlib` creates
+
+`LDFLAGS` uses `-nostdlib`, which omits **libgcc** as well as libc. Anything the
+compiler lowers to a helper call is an undefined symbol at link time.
+
+1. **64-bit divide.** `((uint64_t)zdiag << 16) / n_acc` needs `__udivdi3`.
+   Replaced with staged 32-bit long division, 8 fractional bits at a time —
+   each remainder is `< n_acc ≤ 2^18` so `(r << 8) ≤ 2^26` stays in 32 bits, and
+   the result is bit-exact with `floor((zdiag<<16)/n_acc)`:
+   `(z<<16)/n = q1<<16 + q2<<8 + q3`.
+2. **Array aggregate initialisers.** GCC lowered `uint32_t zd_in[4] = {…}` and
+   `g[4] = {G_MAX,…}` into `memcpy` from `.rodata` — link failure in job 3601.
+   Assign elementwise; the comment in the source says why, so it does not get
+   "tidied" back.
+
+Note the widening multiply `(uint64_t)a * b` is fine — GCC emits `MUL`+`MULHU`
+inline, no libcall. Only the *divide* needed restructuring.
+
+### Model change this forced
+
+`eigvec_fw.py` claimed bit-accuracy to firmware but computed `g` with float
+`sqrt`, which firmware cannot. Added `_isqrt32()` to the model and switched `g`
+to the integer path `g_k = GMAX · s_min / s_k`, so both sides now run identical
+arithmetic. Still reaches the optimum (`[0.107, 1.0, 1.0, 1.0]` vs
+`[0.1, 1, 1, 1]`); 180 tests still pass.
+
+---
+
 ## 7. Open
 
-1. **Firmware C.** `firmware/picorv32/main.c:35` `compute_eigvec_weights_fw()`
-   has no σ² handling; `main.c:140` defers noise-EMA policy to the host. The
-   bit-true model exists, so this is a mechanical port.
+1. **Firmware equivalence test.** The C is written and builds clean for
+   `rv32emc` (§6.5) but has **never been executed**. Nothing yet proves it
+   produces the same weights as `compute_eigvec_snrw_fw`. `main.c` already has
+   an `ASIC_REG_TESTMEM` hook for host-compiled unit tests — feed known
+   Z/ZDIAG/N_ACC through both and compare bit-for-bit.
 2. **Gating policy.** With de-biasing alone, whitening cost slightly at matched
    noise (0.0435 → 0.0625 BER at −12 dB) so gating on measured imbalance
    mattered. With full SNR weighting the upside is far larger and the threshold
    is much less delicate — but no rule is implemented anywhere.
-3. **Measure A′ cycles** on the real core; reconcile with the ~31 cycles/MUL
+3. **Measure A′ cycles** on the real core (the ~1040 figure is an estimate,
+   never measured); reconcile with the ~31 cycles/MUL
    figure in `planning/blocks/Eigenvector Weight Computation.md` and Open Risks
    #7, which the vendor README contradicts (40 for MUL, 72 for MULH). That
    independently makes the SF7 margin worse than currently written.

@@ -48,6 +48,28 @@ def _trunc_div(a: int, b: int) -> int:
     return -((-a) // b)
 
 
+def _isqrt32(v: int) -> int:
+    """Integer square root, bit-by-bit — matches the firmware `isqrt32()`.
+
+    No multiply, no float. Used for the per-branch D^-1/2 scale so the model
+    stays bit-accurate to RV32IM firmware (a float sqrt here would diverge).
+    """
+    if v <= 0:
+        return 0
+    rem, root, bit = 0, 0, 1 << 30
+    while bit > v:
+        bit >>= 2
+    x = v
+    while bit:
+        if x >= root + bit:
+            x -= root + bit
+            root = (root >> 1) + bit
+        else:
+            root >>= 1
+        bit >>= 2
+    return root
+
+
 def _asr(value: int, sh: int) -> int:
     """Arithmetic right-shift of a Python int, matching C `int32_t >>` on signed values."""
     if sh <= 0:
@@ -218,9 +240,18 @@ def compute_eigvec_fw(
     if snr_weight and sigma2_zdiag is not None:
         s2 = np.asarray(sigma2_zdiag, dtype=np.float64)
         if np.all(s2 > 0):
-            inv_sqrt = 1.0 / np.sqrt(s2)
-            g = [int(round((1 << _G_BITS) - 1) * (x / inv_sqrt.max())) for x in inv_sqrt]
-            g = [max(1, min((1 << _G_BITS) - 1, x)) for x in g]
+            # Integer path, bit-identical to firmware: g_k ~ 1/sqrt(sigma2_k),
+            # normalised so the quietest branch gets full scale. Working from
+            # integer sqrts makes this g_k = GMAX * s_min / s_k with s = isqrt,
+            # which needs only isqrt + one divu per branch -- no float, no
+            # reciprocal-sqrt table.
+            gmax = (1 << _G_BITS) - 1
+            # sigma2 may be fractional here (ZDIAG units); scale into an integer
+            # domain first, exactly as firmware does with its Q16 EMA state.
+            s2_q = [max(1, int(x * (1 << 16))) for x in s2]
+            sq = [max(1, _isqrt32(x)) for x in s2_q]
+            s_min = min(sq)
+            g = [max(1, min(gmax, (gmax * s_min) // sq[k])) for k in range(NR)]
         # else: no usable per-branch scale -> de-bias only (g stays None)
 
     if g is not None:
