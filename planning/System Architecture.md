@@ -355,7 +355,7 @@ consistent.
 | Logic area (Yosys synthesis, module `trouper_top`) | **974,329 µm²** on TT 25°C 3.3 V |
 | Cell area (placed, standard cells) | **1,091,200 µm²** at **86.3%** utilisation |
 | Instance count | 70,858 total (44,418 standard cells, of which 5,189 sequential; 26,440 fill) |
-| Largest blocks (% of synth cell area) | `sd_decimator_poly` ~36%, `training_acc` ~15%, `sc_detector` ~14% — full per-block breakdown in `planning/area-reduction-roadmap.md` §7 (canonical) |
+| Largest blocks (% of synth cell area) | `sd_decimator_poly` ~36%, `training_acc` ~16%, `sc_detector` ~13% — full per-block breakdown in `planning/area-reduction-roadmap.md` §1 (canonical, refreshed 2026-07-28 job 3683) |
 | On-chip SRAM | **None** (off-chip APS6404L PSRAM used for all DSP buffering) |
 | Core / die area | 1,264,650 µm² core inside a 1,320,000 µm² (1200 × 1100 µm) die |
 | Post-PNR WNS — TT 25°C 3.3 V (setup) | +8.89 ns ✓ |

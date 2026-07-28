@@ -5,11 +5,12 @@
 > This note models the older `mimo_rx_top` architecture from 2026-06-03: PicoRV32, hardware `weight_gen`, `energy_meas_coarse`, and the pre-TDM decimator arrangement. It is still useful as design history, but it is **not** the correct baseline for the current active `trouper_top` hard macro.
 >
 > For the current synthesis-only area breakdown of the active RTL, use:
-> `rtl-test/syn_mimo_per_module/README.md` and `rtl-test/syn_mimo_per_module/out_trouper_top_current_fd/stat_hier.txt`
+> `planning/area-reduction-roadmap.md` §1 (canonical, refreshed 2026-07-28) and
+> `rtl-test/syn_mimo_per_module/out_trouper_top_current_fd/stat_hier.txt`
 >
-> Current active `trouper_top` synthesis totals from SGE job `1965` (`2026-06-18`, FD TT):
-> - top total: `748,042.9376 µm²`
-> - largest blocks: `sd_decimator_cic_tdm8` `207,753.7280 µm²`, `training_acc` `131,229.0560 µm²`, `sc_detector` `108,486.7840 µm²`, `psram_buf_ctrl` `67,006.2848 µm²`, `mrc_combiner` `59,331.8656 µm²`
+> Current active `trouper_top` synthesis totals from SGE job `3683` (`2026-07-28`, FD TT):
+> - top total: `935,082.7584 µm²`
+> - largest blocks: `sd_decimator_poly` `340,000 µm²`, `training_acc` `146,000 µm²`, `sc_detector` `119,000 µm²`, `psram_buf_ctrl` `74,100 µm²`, `mrc_combiner` `55,900 µm²`
 >
 > Use this file only for historical comparison against the superseded CPU-containing architecture.
 

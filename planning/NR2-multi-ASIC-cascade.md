@@ -4,7 +4,7 @@
 
 > This note evaluates an older `mimo_rx_top` / PicoRV32 / hardware-`weight_gen` architecture.
 > It is not the baseline for the current active `trouper_top` hard macro.
-> For current area ranking, use `rtl-test/syn_mimo_per_module/README.md` and the SGE-1965 synthesis report.
+> For current area ranking, use `planning/area-reduction-roadmap.md` §1 (canonical, refreshed 2026-07-28, SGE job 3683).
 
 ## Area Targets
 
