@@ -46,14 +46,78 @@ before the script forced `gf180mcuD`.
 
 ## Shared filesystem paths (this repo's project)
 
-| Purpose | Host path (NFS) | Container path |
-|---------|-----------------|----------------|
-| Input files / designs | `/srv/eda/designs/timothyjabez/lora-mimo/` | `/foss/designs/` |
-| Job stdout | `/srv/eda/logs/timothyjabez/job-<ID>.o` | — |
-| Job stderr | `/srv/eda/logs/timothyjabez/job-<ID>.e` | — |
-| Submitted script copy | `/srv/eda/logs/timothyjabez/job-<ID>.sh` | — |
+**The SGE owner is `timothyn-dev`, not `timothyjabez`** (migrated 2026-07-27/28 —
+if you see references to `timothyjabez` in older scripts/docs on NFS, that's the
+old owner; sync and submit against `timothyn-dev` paths).
 
-Log path uses `timothyjabez`, not `timothyn` — see [[feedback_sge_log_path]].
+| Purpose | Host path (NFS) | Container path (no `--project`) |
+|---------|-----------------|-----------------|
+| Input files / designs | `/srv/eda/designs/timothyn-dev/lora-mimo/` | `/foss/designs/lora-mimo/` |
+| Job stdout | `/srv/eda/logs/timothyn-dev/job-<ID>.o` | — |
+| Job stderr | `/srv/eda/logs/timothyn-dev/job-<ID>.e` | — |
+| Submitted script copy | `/srv/eda/logs/timothyn-dev/job-<ID>.sh` | — |
+
+**`--project lora-mimo` changes the container mount point.** Without `--project`,
+the whole designs root is mounted and this repo's project shows up at
+`/foss/designs/lora-mimo/...` inside the container. **With** `--project lora-mimo`
+(recommended — see below), the *project directory itself* is mounted directly at
+`/foss/designs`, so paths inside job scripts become `/foss/designs/rtl-test/...`,
+**not** `/foss/designs/lora-mimo/rtl-test/...`. Getting this wrong is an easy way
+to burn a whole job on a `cd: No such file or directory` — check which mount mode
+a script assumes before reusing it. `run_synth_trouper_top_breakdown.sh` already
+handles both cases (see its `RTL_ROOT` fallback logic); a plain hand-written job
+script usually does not, so write it for the `--project`-scoped path once you're
+using `--project` (which should be the default here, see next section).
+
+**Always pass `--project lora-mimo`** to `hqsub` for jobs in this repo — the
+unscoped snapshot walks the entire multi-GB `timothyn-dev` designs root
+(dozens of other project checkouts) and can hit the 180s client timeout or the
+snapshot's size/file bounds outright.
+
+Even `--project`-scoped, this project is large enough (~2GB: `rtl-test/cocotb_trouper_capture/`,
+`ip/`, `cocotb/`, `fpga-emul/`, `lora-capture/`, `characterization/` are the big
+non-P&R-relevant trees) that plain submits can still hit the 180s client
+timeout. If that happens, reach for `hqsub`'s repeatable `--snapshot-exclude
+<glob>` flag to cut those subtrees out of the snapshot — see the `hlab-sge`
+skill for the flag's syntax.
+
+Log path uses `timothyn-dev`, not `timothyjabez`/`timothyn` — see [[feedback_sge_user_timothyn_dev]].
+
+## `/foss/designs` is read-only — LibreLane needs `--force-run-dir`
+
+As of the 2026-07-27/28 NFS `manage_gids` change, `/foss/designs` (however it's
+mounted — see the `--project` note above) is **read-only** inside the container.
+This breaks anything that tries to write inside the design tree, including
+LibreLane's default behavior of creating its `runs/<tag>/` output directory
+*inside* the design directory the config file lives in
+(`<design_dir>/runs/<tag>`) — a plain `librelane ... ol_trouper_top/config.json`
+job fails with:
+
+```
+OSError: [Errno 30] Read-only file system: '/foss/designs/rtl-test/ol_trouper_top/runs'
+```
+
+Fix: pass **`--force-run-dir <path>`** (an internal-but-real CLI flag — confirmed
+via `librelane/flows/cli.py`, click option `--force-run-dir` → `_force_run_dir` →
+`Flow.start()`) pointing at a writable directory, using the same `$RUN_DIR`
+env var the SGE scheduler already provides for exactly this purpose (see the
+`run_synth_trouper_top_breakdown.sh` pattern). **The target directory must
+already exist** — `--force-run-dir` is validated by click before LibreLane gets
+a chance to `mkdir -p` it, unlike the default `runs/<tag>` path which LibreLane
+creates itself:
+
+```bash
+OUT=${RUN_DIR:-/foss/runs}/my_pnr_run
+mkdir -p "$OUT/run"          # must pre-exist, --force-run-dir won't create it
+librelane --pdk gf180mcuD --scl gf180mcu_fd_sc_mcu7t5v0 \
+          --force-run-dir "$OUT/run" \
+          ol_trouper_top/config_current_signoff.json
+```
+
+This applies to **every** LibreLane invocation against this repo's designs now
+(synth-only or full P&R) — not just this one config. The synth-only
+`run_synth_trouper_top_breakdown.sh` script doesn't need this because it's pure
+Yosys with its own `$OUT`/`$RUN_DIR` handling, not a LibreLane flow.
 
 ## NFS symlinks for P&R run outputs
 
@@ -64,7 +128,7 @@ stays small.
 **Layout:**
 
 ```
-rtl-test/ol_<block>/runs  →  /srv/eda/designs/timothyjabez/lora-mimo/rtl-test/ol_<block>/runs
+rtl-test/ol_<block>/runs  →  /srv/eda/designs/timothyn-dev/lora-mimo/rtl-test/ol_<block>/runs
 ```
 
 The `.gitignore` excludes `rtl-test/ol_*/runs` (matches both directories and symlinks).
@@ -73,7 +137,7 @@ The `.gitignore` excludes `rtl-test/ol_*/runs` (matches both directories and sym
 
 ```bash
 BLOCK=ol_my_new_block
-NFS=/srv/eda/designs/timothyjabez/lora-mimo/rtl-test/$BLOCK/runs
+NFS=/srv/eda/designs/timothyn-dev/lora-mimo/rtl-test/$BLOCK/runs
 LOCAL=/home/timothyjabez/Documents/chipathon-2026/chipathon-2026-trouper/rtl-test/$BLOCK/runs
 
 # Remove any local runs/ directory first (if it exists)
@@ -92,7 +156,7 @@ ln -s "$NFS" "$LOCAL"
 cd /home/timothyjabez/Documents/chipathon-2026/chipathon-2026-trouper/rtl-test
 for block in ol_*/; do
     block="${block%/}"
-    nfs="/srv/eda/designs/timothyjabez/lora-mimo/rtl-test/$block/runs"
+    nfs="/srv/eda/designs/timothyn-dev/lora-mimo/rtl-test/$block/runs"
     local="$block/runs"
     rm -rf "$local"
     mkdir -p "$nfs"
@@ -114,22 +178,28 @@ done
 
 ```bash
 export HLAB_SGE_URL=http://nas.home:4783
-USER=timothyjabez
+USER=timothyn-dev
 
-# 1. Write script to NFS designs dir
+# 1. Write script to NFS designs dir. Note: with --project lora-mimo below,
+#    the project dir is mounted directly at /foss/designs (not
+#    /foss/designs/lora-mimo) — see "Shared filesystem paths" above. Also
+#    remember /foss/designs is read-only; any tool that writes into the
+#    design tree (LibreLane's runs/, etc.) needs its output redirected to
+#    $RUN_DIR — see "/foss/designs is read-only" above.
 cat > /srv/eda/designs/$USER/lora-mimo/sim.sh << 'EOF'
 #!/bin/bash
 set -euo pipefail
 export PDK_ROOT=/foss/pdks
 export PDK=gf180mcuD
-ngspice -b /foss/designs/netlist.spice > /foss/designs/result.txt
+OUT=${RUN_DIR:-/foss/runs}
+ngspice -b /foss/designs/netlist.spice > "$OUT/result.txt"
 EOF
 
 # 2. Place input file
 cp netlist.spice /srv/eda/designs/$USER/lora-mimo/
 
-# 3. Submit
-JOB_ID=$(hqsub --name ngspice-sim --cpus 2 --mem 4G \
+# 3. Submit (--project scopes the snapshot to this project only — see above)
+JOB_ID=$(hqsub --name ngspice-sim --cpus 2 --mem 4G --project lora-mimo \
     /srv/eda/designs/$USER/lora-mimo/sim.sh \
     | grep -oP '\d+')
 echo "Submitted job $JOB_ID"
@@ -137,12 +207,13 @@ echo "Submitted job $JOB_ID"
 # 4. Wait for completion (see hlab-sge skill for hqwait, the simpler alternative)
 hqwait "$JOB_ID"
 
-# 5. Check outcome
+# 5. Check outcome (result.txt was written under $RUN_DIR inside the
+#    container, not under the read-only /foss/designs mount — read it back
+#    via the job's log, or check hqlog/hqsub --help for the host-side path
+#    $RUN_DIR resolves to if you need the raw file)
 EXIT=$(hqstat --json --all | python3 -c \
     "import json,sys; jobs=json.load(sys.stdin); m=[j for j in jobs if j['id']==$JOB_ID]; print(m[0]['exit_code'] if m else '')")
-if [ "$EXIT" = "0" ]; then
-    cat /srv/eda/designs/$USER/lora-mimo/result.txt
-else
+if [ "$EXIT" != "0" ]; then
     echo "Job failed — stderr:" >&2
     cat /srv/eda/logs/$USER/job-$JOB_ID.e >&2
 fi

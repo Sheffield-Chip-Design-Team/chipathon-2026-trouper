@@ -694,14 +694,37 @@ the fictional on-chip gain-commit sequencer (it described a register
 interface at `0x20`-`0x2A` that never matched the real map even before this
 cut) and reflect the actual firmware-only AGC architecture.
 
-**Measured (job 3687 vs job 3683, same-day before/after):** −4,144.5376 µm²
-(−9.6%) on `reg_bank`, −3,391.584 µm² (−23.6%) on `trouper_top` local glue,
-−7,801.74 µm² (−0.83%) total synth area. See
+**Synth-only measured (job 3687 vs job 3683, same-day before/after):**
+−4,144.5376 µm² (−9.6%) on `reg_bank`, −3,391.584 µm² (−23.6%) on
+`trouper_top` local glue, −7,801.74 µm² (−0.83%) total synth area. See
 `rtl-test/syn_mimo_per_module/README.md` "History" for the full breakdown.
-Full P&R run pending to confirm the placed-area and SS-timing effect (this
-cut is combinational-cone-adjacent flop removal, not a pure flop cut, so per
-the B1/B2 ranking rule at the top of this section it should be SS-safe, but
-that has not yet been measured post-place).
+
+**Full P&R confirmed (jobs 3699 vs 3700, 2026-07-28, `config_current_signoff.json`,
+identical RTL/config apart from this cut — job 3700 is commit `e2db56f`, the
+exact pre-removal parent, not the stale job-3484/`b47474d` "−14.91ns" figure
+quoted elsewhere in this doc, which predates several unrelated intervening
+RTL changes and is not a valid comparison point for this specific cut):**
+
+| Metric | Baseline (job 3700) | Post-removal (job 3699) | Δ |
+|---|---:|---:|---:|
+| Placed stdcell area | 1,091,680 µm² | 1,079,670 µm² | **−12,010 µm² (−1.10%)** |
+| Sequential-cell area | 382,274 µm² | 377,278 µm² | −4,996 µm² |
+| Combinational area | 593,709 µm² | 585,049 µm² | −8,660 µm² |
+| Utilization (1200×1100 die) | 86.32% | 85.37% | −0.95 pt |
+| WNS `max_ss_125C_3v00` | −19.22 ns | −18.18 ns | **+1.04 ns (improved)** |
+| TNS `max_ss_125C_3v00` | −7,329.4 ns | −6,496.9 ns | +832.5 ns (improved) |
+| WNS `max_ff_n40C_3v60` / `nom_tt_025C_3v30` | 0.0 / 0.0 | 0.0 / 0.0 | unchanged, both met |
+| Magic DRC / LVS | 0 / clean | 0 / clean | unchanged |
+
+This cut is a net win on every axis measured: smaller placed area, modestly
+*better* SS WNS/TNS (not worse — per the B1/B2 ranking rule at the top of
+this section, pure flop cuts are usually reabsorbed by SS repair buffering at
+3.0V, but this one also removed a combinational decode cone, which tracks
+with the small positive timing move), and clean DRC/LVS in both runs. The
+sequential-area delta (−4,996 µm²) lines up with the ~65 flops removed (4×
+shadow bytes + 4× active bytes + 1 commit bit, all 8-bit-wide registers) at
+~74.6 µm²/flop (`dffrnq` unit area, per the decimator flop-cost note in §1)
+≈ 4,849 µm², within noise of the measured delta.
 
 **B10. reg_bank dead control-state trim. Tiny, behaviour-preserving.**
 Two stored control bits have no consumer in current RTL:

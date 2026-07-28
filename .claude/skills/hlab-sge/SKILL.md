@@ -5,9 +5,12 @@ description: Run and manage EDA jobs on a homelab-sge job scheduler using its CL
 
 <!--
 SYNCED COPY — source of truth is git.home/TimothyNewman/homelab-sge, .claude/skills/hlab-sge/SKILL.md
-Last synced from upstream commit 7c3ccf00a454ebc4f481b1387d8f2f5a455528c1 (2026-07-27).
+Last synced from upstream commit b654aa19b456f463fd458ba4d716e413644fd3e7 (2026-07-28, dev branch).
 This is a manual copy, not a submodule/symlink — re-sync periodically by diffing against
 the homelab-sge repo checkout (see project_hlab_sge_skill_split memory for why).
+NOTE: the frontmatter `description` here is intentionally customized (points at this repo's
+own `sge-job` skill, not upstream's `hlab-sge-jobs-debug`) — don't overwrite it wholesale on
+future syncs, merge in body/content changes only.
 -->
 
 # homelab-sge — running jobs
@@ -49,6 +52,12 @@ Common flags:
   few hundred MB** — an unscoped submit against a multi-GB or multi-project root can take
   well over a minute to stage (see the timeout note below) or hit the snapshot's size/file
   bounds outright (`413`).
+- `--snapshot-exclude <glob>` — repeatable; skip extra paths from the snapshot on top of
+  whatever the daemon already excludes (it can only add exclusions, not remove one the
+  daemon config sets). No `/` matches a basename at any depth (e.g. `*.vcd`); a `/` in
+  the pattern matches a source-relative path (e.g. `fpga-emul/vivado_proj/**`). Reach for
+  this when a project has large generated/output content next to its inputs that isn't
+  worth changing the daemon config for.
 
 `hqsub` prints the assigned job ID. For interactive or GUI work, use `hqlogin` instead —
 `hqsub` is batch-only.
