@@ -1,6 +1,10 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-07-19c (§8: B4+B6+fanout-split MERGED TO MAIN (b47474d) — combined measured −17.3K placed, SS WNS −14.91 best-of-era, all suites PASS; canonical signoff SDC now v25_b6). Owner: timothyjabez.
+Status: 2026-07-28 (§1 refreshed against current RTL — total synth area is now
+935K µm², down from the 973K figure below; see job 3683 note). Prior status:
+2026-07-19c (§8: B4+B6+fanout-split MERGED TO MAIN (b47474d) — combined
+measured −17.3K placed, SS WNS −14.91 best-of-era, all suites PASS; canonical
+signoff SDC now v25_b6). Owner: timothyjabez.
 
 Goal: shrink `trouper_top` from the current **1550 × 1150 µm** SS-closure
 floorplan toward the long-stated **1100 × 1100 µm** target, *without* losing the
@@ -8,32 +12,38 @@ SS-corner timing closure or DSP precision earned so far.
 
 This document is grounded in a fresh per-module area measurement (Yosys
 keep-hierarchy stat against `gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30`, SGE job
-2177), not the stale 982K memory figure.
+2177), not the stale 982K memory figure. **§1 table refreshed 2026-07-28**
+against current RTL (`rtl-test/scripts/run_synth_trouper_top_breakdown.sh`,
+SGE job 3683) — figures are per-block totals including child submodules
+(matching this table's original job-2177 methodology).
 
 ---
 
 ## 1. Where the area actually is
 
-Real routed cell area = **973K µm²** (unchanged by the SS pacing/registering
-work). All large blocks are single TDM instances (×4 branches folded
-internally), so there are no easy multiplicity wins.
+Real synth cell area (2026-07-28, job 3683) = **935K µm²**, down ~38K (−3.9%)
+from the 973K job-2177 baseline. All large blocks are single TDM instances
+(×4 branches folded internally), so there are no easy multiplicity wins.
 
 | Block | Area µm² | % cells | Character |
 |---|---:|---:|---|
-| **sd_decimator_poly** (u_dec) | **335K** | **36%** | CIC-3 R=16 14-bit + HB1/HB2 polyphase MAC |
-| sc_detector (+ shared mul) | 135K | 14.5% | autocorr; mul already folded to 1 shared 13-bit |
-| training_acc | 134K | 14.4% | all-pairs correlator; 2nd mult already halved |
-| psram_buf_ctrl | 71K | 7.7% | QSPI + SC-delay + dbg |
-| mrc_combiner | 62K | 6.6% | w^H·x |
-| sd_remod | 59K | 6.4% | fixed 3rd-order NTF — SQNR-locked, do not touch |
-| reg_bank | 40K | 4.3% | 128-reg map |
-| packet_ctrl_fsm | 37K | 4.0% | |
-| dc_removal | 33K | 3.6% | single instance |
-| glue / spi_slave | 23K | 2.4% | |
+| **sd_decimator_poly** (u_dec) | **340K** | **36.4%** | CIC-3 R=16 14-bit + HB1/HB2 polyphase MAC |
+| training_acc | 146K | 15.6% | all-pairs correlator; 2nd mult already halved |
+| sc_detector (+ shared mul) | 119K | 12.7% | autocorr; mul already folded to 1 shared 13-bit |
+| psram_buf_ctrl | 74K | 7.9% | QSPI + SC-delay + dbg |
+| sd_remod | 61K | 6.5% | fixed 3rd-order NTF — SQNR-locked, do not touch |
+| mrc_combiner | 56K | 6.0% | w^H·x |
+| reg_bank | 43K | 4.6% | 128-reg map |
+| dc_removal | 37K | 4.0% | single instance, 8× dc_removal_chan (4I+4Q) |
+| packet_ctrl_fsm | 36K | 3.9% | |
+| glue / spi_slave | 23K | 2.5% | |
 
-**Decimator is 36% of the chip but is ALREADY OPTIMIZED — not a remaining area
-target.** Per `decimator-hb-area-reduction.md` (2026-06-20, all verified bit-exact
-on SGE):
+Deltas vs the job-2177 baseline: `sc_detector` fell 135K→119K (−16K) and
+`training_acc` rose 134K→146K (+12K); decimator, `psram_buf_ctrl`, `sd_remod`,
+`mrc_combiner`, `reg_bank`, `packet_ctrl_fsm` are all within a few K of prior
+figures. **Decimator is still ~36% of the chip and remains ALREADY OPTIMIZED —
+not a remaining area target.** Per `decimator-hb-area-reduction.md`
+(2026-06-20, all verified bit-exact on SGE):
 - Storage is ~**50%** of the decimator (~160K µm²; `dffrnq` = 74.6 µm²/flop, 1344
   HB + 672 CIC flops). It is irreducibly flop-based at this size — SRAM-backed
   delay lines were **explored and rejected** (168 B is sub-2-kbit; smallest fitting
