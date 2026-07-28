@@ -6,10 +6,15 @@
 # /tmp, run librelane with --pdk-root.
 # Usage: stage_as_scl.sh <overlay_root>
 set -euo pipefail
+
+RTL_ROOT=${RTL_ROOT:-/foss/designs/lora-mimo}
+if [ ! -d "$RTL_ROOT/src" ] && [ -d /foss/designs/src ]; then RTL_ROOT=/foss/designs; fi
+echo "RTL_ROOT=$RTL_ROOT"
+
 SCL=gf180mcu_as_sc_mcu7t3v3
 OVR="${1:?usage: $0 <overlay_root>}"
 REAL=/foss/pdks/gf180mcuD
-SRC=/foss/designs/lora-mimo/ip/gf180mcu_as_sc_mcu7t3v3/pdk
+SRC=$RTL_ROOT/ip/gf180mcu_as_sc_mcu7t3v3/pdk
 if [ -d "$REAL/libs.tech/librelane" ]; then TSUB=librelane; else TSUB=openlane; fi
 
 echo "[stage] writable overlay ${OVR}/gf180mcuD (tech subdir: $TSUB); SCL=$SCL"

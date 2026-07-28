@@ -3,8 +3,11 @@
 # Runs on Verilator (not Icarus) — millions of 32 MS/s clocks bit-by-bit are
 # impractical under Icarus. Clip the capture with CAPTURE_START/CAPTURE_NSAMP.
 #
-# Usage (inside the chipathon26 container):
-#   make CAPTURE_NPY=/foss/designs/lora-mimo/lora-capture/captures/<file>.npy \
+# Usage (inside the chipathon26 container). Real captures are available via
+# the hlab-sge shared_data_dir mount (read-only, present in every job
+# automatically): $SHARED_DIR/lora-mimo-captures/captures/<file>.npy — see
+# rtl-test/scripts/run_capture_playback.sh for the SGE-submitted wrapper.
+#   make CAPTURE_NPY=$SHARED_DIR/lora-mimo-captures/captures/<file>.npy \
 #        CAPTURE_SF=7 CAPTURE_BW=250 CAPTURE_NSAMP=60000
 #   make clean
 

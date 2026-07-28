@@ -119,6 +119,48 @@ This applies to **every** LibreLane invocation against this repo's designs now
 `run_synth_trouper_top_breakdown.sh` script doesn't need this because it's pure
 Yosys with its own `$OUT`/`$RUN_DIR` handling, not a LibreLane flow.
 
+**Host-side path:** `$RUN_DIR`/`/foss/runs` resolves on the host to
+`/srv/eda/runs/<user>/<--project value>/...` — a sibling of `/srv/eda/designs/`
+and `/srv/eda/logs/`. Confirmed by inspection: `hqsub --project synth_area ...`
+produced `/srv/eda/runs/timothyn-dev/synth_area/trouper_top_src_20260728_v3/`.
+See the "Complete example" below for how this plays out end to end.
+
+## Static/shared input data — `$SHARED_DIR`/`/foss/shared`
+
+For large static input files that shouldn't be staged into the project
+snapshot on every submit (e.g. captured IQ datasets), hlab-sge's
+`shared_data_dir` feature mounts a fixed host directory **read-only at
+`/foss/shared` automatically in every job** (batch, interactive, and VNC —
+no per-submit flag needed), with a `SHARED_DIR=/foss/shared` env var set
+inside the container. Nothing needs to be passed at `hqsub` submit time —
+it's always there.
+
+For this repo, that mount is populated with real measured LoRa IQ captures:
+`$SHARED_DIR/lora-mimo-captures/captures/*.{npy,iq,json}` (SF7–SF12, various
+BW/preamble/SNR/pathloss combos), sourced from
+`/srv/eda/shared/lora-mimo-captures/captures/` on the host.
+
+Confirmed end-to-end (job 3706): `rtl-test/scripts/run_capture_playback.sh`
+reads a capture straight from `$SHARED_DIR` with no staging step and no
+`--project`-time argument:
+
+```bash
+SHARED=${SHARED_DIR:-/foss/shared}
+CAPTURE_NPY=${CAPTURE_NPY:-$SHARED/lora-mimo-captures/captures/lora_20260621_092430_SF7-BW125-Pre8.npy}
+```
+
+Two gotchas found while validating this:
+- Inside the job, `/foss/shared` is read-only, same as `/foss/designs` — only
+  read captures from it, never write there; write outputs to `$RUN_DIR`.
+- `test_capture_playback.py`'s own defaults (`CAPTURE_START=0`,
+  `CAPTURE_NSAMP=60000`) do **not** reliably land on the packet burst for a
+  given capture file — this looks like a passing infra check but fails with
+  a misleading `"sc_lock never fired over the capture window"` DSP
+  assertion, not an SGE/mount problem. Compute the real window first with
+  `python3 cocotb/tests/sweep_captures.py <captures_dir>` (pure Python/numpy,
+  runs fine outside the container) and use its `start`/`nsamp` columns —
+  see the `block-regression` skill §3 for the general pattern.
+
 ## NFS symlinks for P&R run outputs
 
 Source files (`.v`, `config.json`, `pnr.sdc`) are tracked in git under `rtl-test/`.
@@ -208,9 +250,10 @@ echo "Submitted job $JOB_ID"
 hqwait "$JOB_ID"
 
 # 5. Check outcome (result.txt was written under $RUN_DIR inside the
-#    container, not under the read-only /foss/designs mount — read it back
-#    via the job's log, or check hqlog/hqsub --help for the host-side path
-#    $RUN_DIR resolves to if you need the raw file)
+#    container, not under the read-only /foss/designs mount. On the host,
+#    $RUN_DIR resolves to /srv/eda/runs/<user>/<--project value>/... — a
+#    sibling of /srv/eda/designs/ and /srv/eda/logs/ — so the raw file here
+#    would be at /srv/eda/runs/timothyn-dev/lora-mimo/result.txt)
 EXIT=$(hqstat --json --all | python3 -c \
     "import json,sys; jobs=json.load(sys.stdin); m=[j for j in jobs if j['id']==$JOB_ID]; print(m[0]['exit_code'] if m else '')")
 if [ "$EXIT" != "0" ]; then

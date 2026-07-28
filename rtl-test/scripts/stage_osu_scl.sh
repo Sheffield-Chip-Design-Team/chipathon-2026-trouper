@@ -10,11 +10,16 @@
 # from the 5V SCL (layer-agnostic); synth map/cells files created empty.
 # Usage: stage_osu_scl.sh <scl> <overlay_root>
 set -euo pipefail
+
+RTL_ROOT=${RTL_ROOT:-/foss/designs/lora-mimo}
+if [ ! -d "$RTL_ROOT/src" ] && [ -d /foss/designs/src ]; then RTL_ROOT=/foss/designs; fi
+echo "RTL_ROOT=$RTL_ROOT"
+
 SCL="${1:?usage: $0 <scl> <overlay_root>}"
 OVR="${2:?usage: $0 <scl> <overlay_root>}"
 REAL=/foss/pdks/gf180mcuD
-SRC=/foss/designs/lora-mimo/ip/gf180mcu_osu_sc/${SCL}
-SCLCFG=/foss/designs/lora-mimo/ip/gf180mcu_osu_sc/librelane_scl/${SCL}/config.tcl
+SRC=$RTL_ROOT/ip/gf180mcu_osu_sc/${SCL}
+SCLCFG=$RTL_ROOT/ip/gf180mcu_osu_sc/librelane_scl/${SCL}/config.tcl
 
 # Newer images (2026.04) use libs.tech/librelane; older (:latest) use openlane.
 if [ -d "$REAL/libs.tech/librelane" ]; then TSUB=librelane; else TSUB=openlane; fi

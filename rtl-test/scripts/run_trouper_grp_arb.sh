@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
-cd /foss/designs/lora-mimo/rtl-test
+
+RTL_ROOT=${RTL_ROOT:-/foss/designs/lora-mimo}
+if [ ! -d "$RTL_ROOT/src" ] && [ -d /foss/designs/src ]; then RTL_ROOT=/foss/designs; fi
+echo "RTL_ROOT=$RTL_ROOT"
+RT=$RTL_ROOT/rtl-test
+cd $RT
 
 iverilog -g2005 -o tb_trouper_grp_arb.vvp tb/tb_trouper_grp_arb.v \
     ../src/top/trouper_top.v \
