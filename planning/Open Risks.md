@@ -123,10 +123,13 @@ floorplan tried since (jobs 2165–2168). Described in the source doc as
 
 ### 8. AGC calibration and edge-case behavior are unverified on silicon
 
-Trouper has no on-chip analogue AGC target/guard registers. Gain is an
-external-SX1257 policy: firmware may stage `RX_GAIN_SHADOW_0..3` and commit
-them at a packet-safe boundary, while fixed programmed gain remains the
-supported fallback. Calibration, persistently bad-branch policy, and
+Trouper has no on-chip analogue AGC target/guard registers, and (as of
+2026-07-28) no on-chip gain-shadow/commit register either — `RX_GAIN_SHADOW_0..3`/
+`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` were removed since Trouper has no
+SX1257 SPI/control outputs to apply them to. Gain is entirely an
+external-SX1257 policy: Grouper/board firmware programs each SX1257 directly
+at a packet-safe boundary, while fixed programmed gain remains the supported
+fallback. Calibration, persistently bad-branch policy, and
 strong-blocker/near-far behaviour are unverified on the real board; gain
 changes are deliberately prohibited mid-packet.
 

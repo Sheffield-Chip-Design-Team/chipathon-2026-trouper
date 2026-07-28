@@ -674,14 +674,18 @@ write-phase decode saves ~1–2K of control logic. Explicitly OUT of scope here:
 `dbg_buf` (firmware energy-measurement plan) and any pointer-width cut (the
 23-bit address space is genuinely needed at SF12·shift2 replay depth).
 
-**B9. RX gain ACTIVE bank deletion. ~−3K. Register-map change — team decision.**
-`RX_GAIN_ACTIVE_0-3` (32 flops in trouper_top, `rx_gain_active_r`) plus the
-commit plumbing and 0x14–0x17 decode drive no hardware: Register Map.md §0x18
-confirms they are only "a hardware-latched record of the last committed gain"
-— pure software bookkeeping the host/Grouper can track itself (Trouper has no
-SPI master; SX1257 programming is external, TRPR-SPM-001). Cutting them
-removes registers 0x14–0x17 and RX_GAIN_CTRL's latch action from the map, so
-it needs sign-off against firmware plans, not just RTL.
+**B9. RX gain ACTIVE bank deletion — DONE 2026-07-28, expanded scope.**
+Team decision landed on removing the *whole* `0x10`–`0x18` block, not just
+`RX_GAIN_ACTIVE_0-3`: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/
+`RX_GAIN_CTRL` all only mirrored software-written values with no SX1257-facing
+hardware consumer (Trouper has no SPI master; SX1257 programming is external,
+TRPR-SPM-001), so the shadow half was equally dead weight. `reg_bank.v` and
+`trouper_top.v` (`rx_gain_active_r` and all shadow/commit plumbing) trimmed;
+`Register Map.md`, `Trouper Chip Specification.md` (TRPR-AGC-003 → REMOVED),
+`Traceability.md`, `tb_trouper_spi.v`, and the reg-reset-sweep/SPI-CDC cocotb
+tests updated to match. `planning/blocks/AGC.md` still describes an on-chip
+gain-commit sequencer at different addresses (`0x20`-`0x2A`) predating this
+cut and needs a follow-up rewrite — flagged, not done here.
 
 **B10. reg_bank dead control-state trim. Tiny, behaviour-preserving.**
 Two stored control bits have no consumer in current RTL:

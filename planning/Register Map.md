@@ -39,18 +39,10 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
 | `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Locks after encoded value + 1 hits. Values 1–3 are normal operation (2–4 hits); 0 is diagnostic-only one-hit mode. |
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
-| **Gain / AGC / SX1257 Live RX Control** (`0x10`–`0x1B`) | | | | | |
-| `0x10` | `RX_GAIN_SHADOW_0` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_1 (Trouper does not apply it on chip) |
-| `0x11` | `RX_GAIN_SHADOW_1` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_2 |
-| `0x12` | `RX_GAIN_SHADOW_2` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_3 |
-| `0x13` | `RX_GAIN_SHADOW_3` | R/W | `0x3E` | AGC / External Control | Software-visible desired gain byte for SX1257_4 |
-| `0x14` | `RX_GAIN_ACTIVE_0` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_1; updated from `RX_GAIN_SHADOW_0` on commit pulse |
-| `0x15` | `RX_GAIN_ACTIVE_1` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_2 |
-| `0x16` | `RX_GAIN_ACTIVE_2` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_3 |
-| `0x17` | `RX_GAIN_ACTIVE_3` | R | `0x3E` | AGC | Hardware-latched live gain byte for SX1257_4 |
-| `0x18` | `RX_GAIN_CTRL` | R/W | `0x00` | AGC | [0] `RX_GAIN_COMMIT` (W1P: latches shadow→active, auto-clears; reads 0 — commit completes within one clock, there is no observable pending state) |
+| **Reserved** (`0x10`–`0x18`) | | | | | |
+| `0x10`–`0x18` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below) |
 | `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`) |
-| `0x1A`–`0x1B` | — | — | — | — | Reserved for gain/AGC growth |
+| `0x1A`–`0x1B` | — | — | — | — | Reserved |
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
@@ -110,7 +102,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x79`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 115 implemented + 13 reserved = 128. (Corrected 2026-07-26, audit item 24 — this line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 13 reserved slots are `0x04`–`0x07`, `0x1A`–`0x1B`, `0x79`–`0x7E` and `0x7F`.)
+**Occupancy:** 106 implemented + 22 reserved = 128. (Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 22 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x1A`–`0x1B`, `0x79`–`0x7E` and `0x7F`.)
 
 ---
 
@@ -245,24 +237,9 @@ Reset values are conservative. Firmware/host may adjust after observing output h
 
 ---
 
-### `0x10`–`0x18` — RX gain shadow/active/commit control
+### `0x10`–`0x18` — reserved (former RX gain shadow/active/commit control)
 
-**Gain byte format** (applies to `RX_GAIN_SHADOW_n` and `RX_GAIN_ACTIVE_n`):
-
-- `[7:5]` `RxLnaGain` (`1=G1` max gain, `6=G6` min gain)
-- `[4:1]` `RxBbGain` (0-15, 2 dB per step)
-- `[0]` `LnaZin` (keep 0 for 50 ohm)
-
-Reset value `0x3E` gives maximum-gain fallback for CPU-less RX-only mode.
-
-**Commit model:** Software writes `RX_GAIN_SHADOW_n` (`0x10`–`0x13`), programs the corresponding SX1257 externally (board-level SPI master), then writes `RX_GAIN_CTRL` (`0x18`[0]=1). Trouper hardware latches `RX_GAIN_SHADOW_n → RX_GAIN_ACTIVE_n` on the commit pulse. `RX_GAIN_ACTIVE_n` is therefore a hardware-latched record of the last committed gain, not a software-maintained mirror.
-
-### `0x18` — RX_GAIN_CTRL (read/write)
-
-| Bits | Field | Description |
-| --- | --- | --- |
-| [0] | `RX_GAIN_COMMIT` | W1P: latches all four `RX_GAIN_SHADOW_n → RX_GAIN_ACTIVE_n`; auto-clears. Reads 0 (like `WGT_CTRL[0]`): the latch completes within one clock, so no pending state is ever observable over SPI. |
-| [7:1] | — | Reserved |
+Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by Grouper/board logic, and these registers only mirrored software-written values internally, with no hardware consumer. Removed; see "Removed registers" below. All eight addresses now read `0x00` and ignore writes.
 
 **AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
 
@@ -461,10 +438,11 @@ Available when `PSRAM_DBG_CTRL.DBG_BUSY=0` (0x75[7]) — the single gate, which 
 
 ## Removed registers
 
-The following registers existed in earlier revisions of this map (which spanned `0x00`–`0xEF`) and were **removed** to fit the 7-bit SPI address constraint. None of them had live hardware behind them in the current `trouper_top` integration.
+The following registers existed in earlier revisions of this map (which spanned `0x00`–`0xEF`) and were **removed** to fit the 7-bit SPI address constraint. None of them had live hardware behind them in the current `trouper_top` integration, with one exception noted below.
 
 | Former address(es) | Name | Reason removed |
 | --- | --- | --- |
+| `0x10`–`0x13`, `0x14`–`0x17`, `0x18`[0] | `RX_GAIN_SHADOW_0..3`, `RX_GAIN_ACTIVE_0..3`, `RX_GAIN_CTRL.RX_GAIN_COMMIT` | Removed 2026-07-28: Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by Grouper/board logic, and these registers only mirrored software-written values internally (shadow→active latch in `trouper_top.v`, no SX1257-facing consumer). This is the one exception above: these *did* have live `reg_bank`/`trouper_top` hardware before removal, unlike the rest of this table. |
 | `0x02`, `0x07`–`0x08` | `CPU_RESET`, `CPU_SRAM_CTRL/STATUS` | No PicoRV32 / CPU SRAM in Trouper |
 | `0x0A` | `LOW_BAT_THR` | No hardware; never implemented in RTL. Address `0x0A` is now reused for `BW_CFG` (see active map). |
 | `0x13`–`0x15` | `FRONTEND_CFG/STATUS`, `BUF_WR_PTR` | frontend_buf_ctrl and on-chip frontend SRAMs removed (PSRAM delay line replaces them) |
@@ -481,7 +459,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed; no TAP in RTL, GPIO never wired out of macro. Addresses now reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x1A`–`0x1B`, `0x79`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x18`, `0x1A`–`0x1B`, `0x79`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -491,7 +469,7 @@ If a future revision reinstates any of these features, allocate addresses from t
 | --- | --- |
 | `0x00`–`0x07` | Global / IRQ (`0x04`–`0x07` reserved; former JTAG/GPIO) |
 | `0x08`–`0x0F` | RX / modem configuration |
-| `0x10`–`0x1B` | Gain / AGC / SX1257 live RX control (`0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A`–`0x1B` reserved) |
+| `0x10`–`0x1B` | `0x10`–`0x18` reserved (former gain/AGC/SX1257 live RX control, removed); `0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A`–`0x1B` reserved |
 | `0x1C`–`0x23` | Packet / weight-path / training control |
 | `0x24`–`0x2F` | SC status, `TACC_WINDOW_SYMS`, and bring-up debug |
 | `0x30`–`0x3F` | W shadow bank |

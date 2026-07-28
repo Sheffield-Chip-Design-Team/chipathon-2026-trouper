@@ -181,23 +181,6 @@ module trouper_top (
     wire [7:0]  rb_pkt_timeout_syms;
     wire [3:0]  rb_tacc_window_syms;
     wire [15:0] rb_replay_delay_samples;
-    wire [7:0]  rb_rx_gain_shadow_0, rb_rx_gain_shadow_1,
-                rb_rx_gain_shadow_2, rb_rx_gain_shadow_3;
-    wire        rb_rx_gain_commit;
-    reg  [7:0]  rx_gain_active_r [0:3];
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            rx_gain_active_r[0] <= 8'h3E;
-            rx_gain_active_r[1] <= 8'h3E;
-            rx_gain_active_r[2] <= 8'h3E;
-            rx_gain_active_r[3] <= 8'h3E;
-        end else if (rb_rx_gain_commit) begin
-            rx_gain_active_r[0] <= rb_rx_gain_shadow_0;
-            rx_gain_active_r[1] <= rb_rx_gain_shadow_1;
-            rx_gain_active_r[2] <= rb_rx_gain_shadow_2;
-            rx_gain_active_r[3] <= rb_rx_gain_shadow_3;
-        end
-    end
     wire        rb_w_commit_pulse;
     wire [2:0]  rb_comb_post_gain_shift;
     wire [1:0]  rb_remod_backoff_shift;
@@ -715,8 +698,6 @@ module trouper_top (
         .ready      (cfg_ready_w),
         .irq_out    (rb_irq_out_sticky),
         // Hardware status inputs
-        .rx_gain_active_0 (rx_gain_active_r[0]), .rx_gain_active_1 (rx_gain_active_r[1]),
-        .rx_gain_active_2 (rx_gain_active_r[2]), .rx_gain_active_3 (rx_gain_active_r[3]),
         .active_mode_rb   (active_mode),
         .active_antenna_en_rb (active_antenna_en),
         .packet_active    (packet_active),
@@ -760,11 +741,6 @@ module trouper_top (
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
         .pkt_timeout_syms(rb_pkt_timeout_syms),
-        .rx_gain_shadow_0(rb_rx_gain_shadow_0),
-        .rx_gain_shadow_1(rb_rx_gain_shadow_1),
-        .rx_gain_shadow_2(rb_rx_gain_shadow_2),
-        .rx_gain_shadow_3(rb_rx_gain_shadow_3),
-        .rx_gain_commit  (rb_rx_gain_commit),
         .w_commit_pulse  (rb_w_commit_pulse),
         .comb_post_gain_shift(rb_comb_post_gain_shift),
         .remod_backoff_shift(rb_remod_backoff_shift),

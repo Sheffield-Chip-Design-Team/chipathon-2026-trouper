@@ -226,11 +226,10 @@ module tb_trouper_spi;
         end
         spi_write(7'h09, 8'h07);
 
-        // 3. Reset values: MIMO_CTRL 0xF0, COMB_CFG 0x10, gain shadow 0x3E
+        // 3. Reset values: MIMO_CTRL 0xF0, COMB_CFG 0x10
         spi_read(7'h08, rd); check("MIMO_CTRL reset", rd, 8'hF0);
         spi_read(7'h0F, rd); check("COMB_CFG reset",  rd, 8'h10);
-        spi_read(7'h10, rd); check("RX_GAIN_SH0",     rd, 8'h3E);
-        spi_read(7'h14, rd); check("RX_GAIN_ACT0",    rd, 8'h3E);
+        spi_read(7'h10, rd); check("rsvd 0x10 reads 0", rd, 8'h00);
 
         // 4. Burst write W shadow bank 0x30-0x3F, then burst readback
         spi_start;
@@ -303,7 +302,6 @@ module tb_trouper_spi;
         // 11. Read-only registers ignore writes (write 0xFF, value unchanged)
         spi_write(7'h00, 8'hFF); spi_read(7'h00, rd); check("RO CHIP_ID",    rd, 8'hA7);
         spi_write(7'h01, 8'hFF); spi_read(7'h01, rd); check("RO CHIP_REV",   rd, 8'h01);
-        spi_write(7'h14, 8'hFF); spi_read(7'h14, rd); check("RO RX_GAIN_ACT",rd, 8'h3E);
         spi_write(7'h1C, 8'hFF); spi_read(7'h1C, rd); check("RO PKT_STATUS", rd, 8'h00);
         spi_write(7'h20, 8'hFF); spi_read(7'h20, rd); check("RO TRAIN_STAT", rd, 8'h00);
         spi_write(7'h21, 8'hFF); spi_read(7'h21, rd); check("RO N_ACC_HI",   rd, 8'h00);
@@ -316,13 +314,10 @@ module tb_trouper_spi;
         spi_read (7'h75, rd); check("DBG_CTRL RD_TRIG self-clr", rd & 8'h01, 8'h00);
         spi_write(7'h75, 8'h00);                       // restore
 
-        // 13. RX_GAIN shadow→active commit datapath (W1P RX_GAIN_COMMIT)
-        spi_write(7'h11, 8'h2A);                       // shadow_1 = 0x2A
-        spi_read (7'h11, rd); check("RX_GAIN_SH1 wr",  rd, 8'h2A);
-        spi_read (7'h15, rd); check("RX_GAIN_ACT1 pre",rd, 8'h3E);  // not yet committed
-        spi_write(7'h18, 8'h01);                       // RX_GAIN_COMMIT pulse
-        spi_read (7'h15, rd); check("RX_GAIN_ACT1 post",rd, 8'h2A); // latched from shadow
-        spi_read (7'h18, rd); check("RX_GAIN_COMMIT self-clr", rd & 8'h01, 8'h00);
+        // 13. 0x10-0x18 reserved (former gain shadow/active/commit block, removed):
+        //     writes ignored, reads always 0
+        spi_write(7'h11, 8'hFF); spi_read(7'h11, rd); check("rsvd 0x11 ignores wr", rd, 8'h00);
+        spi_write(7'h18, 8'hFF); spi_read(7'h18, rd); check("rsvd 0x18 ignores wr", rd, 8'h00);
 
         // 14. PSRAM_CTRL masking + CLR_ERR (bit1) is W1P (self-clears)
         spi_write(7'h70, 8'hFF); spi_read(7'h70, rd); check("PSRAM_CTRL mask+W1P", rd, 8'h0D);

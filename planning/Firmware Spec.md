@@ -104,8 +104,6 @@ The firmware must be able to write:
 - `NULL_QUALITY`
 - `W` shadow bank
 - `W_COMMIT`
-- `RX_GAIN_SHADOW_*`
-- `RX_GAIN_COMMIT`
 - `NOISE_WIN_CTRL`
 - `SX_TARGET` / `SX_ADDR` / `SX_DATA` / `SX_CTRL`
 
@@ -121,8 +119,6 @@ The firmware must be able to read:
 - `N_ACC`
 - `Z_SHIFT`
 - `Z_j`
-- `RX_GAIN_ACTIVE_*`
-- `RX_GAIN_CTRL`
 
 ## Deliverables
 
@@ -163,9 +159,8 @@ This is the first tapeout-useful firmware feature.
 - **Noise Measurement Path:** Estimation SHALL use the periodic Training Accumulator trigger mechanism (`TACC_NOISE_TRIG`) and SHALL NOT depend on the PSRAM replay path.
 
 ### Acceptance criteria
-- gain changes are visible in `RX_GAIN_ACTIVE_*`.
+- gain changes are staged and applied externally (board-level SPI master); Trouper has no on-chip gain-shadow/commit register to observe.
 - `sigma2` estimates converge in firmware memory during idle periods.
-- `RX_GAIN_PENDING`/`RX_GAIN_ERROR` are handled correctly.
 - AGC converges on a static channel within the planned packet budget.
 - firmware never blocks the packet path waiting for AGC or noise measurement completion.
 
