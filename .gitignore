@@ -23,6 +23,10 @@ build/
 .pytest_cache/
 .ruff_cache/
 .claude/settings.local.json
+.claude/settings.json
+
+# Scratch / local-only working files
+/tmp/
 
 # OS
 .DS_Store
@@ -37,6 +41,7 @@ rtl-test/ol_*/*.log
 rtl-test/picorv32_ip/
 rtl-test/*status*.txt
 rtl-test/tmp_*.tcl
+rtl-test/*.vvp
 
 # Synthesis output netlists (regenerable; keep .log/.txt reports)
 rtl-test/syn_*/out_*/netlist.v
@@ -85,6 +90,10 @@ fpga-emul/sw/vivado*.jou
 fpga-emul/sw/vivado*.log
 fpga-emul/uart_pin_test/uart_pin_test.bit
 fpga-emul/uart_pin_test/vivado_proj/
+fpga-emul/xsim_clksync/
+
+# NFS-backed symlink (points at /srv/eda/designs/.../lora-capture/captures)
+lora-capture/captures
 
 # Loose backup snapshots of IP submodules (e.g. OCD SRAM restore copies) -
 # large, regenerable, and duplicate a tracked submodule
