@@ -33,10 +33,10 @@ Scenario -> test function map:
     8. W1P exactly-once sweep                -> test_w1p_exactly_once
 
 Safe (no-side-effect, plain-storage) registers used as CDC test payloads:
-0x0B (PKT_TIMEOUT_SYMS), 0x10-0x13 (RX_GAIN_SHADOW), 0x30-0x3F (W shadow
-bank) -- none of these gate on packet_active or trigger a downstream FSM,
-so repeated/aborted/reset-interrupted writes to them can't be confused with
-a real functional failure elsewhere in the chip.
+0x0B (PKT_TIMEOUT_SYMS), 0x30-0x3F (W shadow bank) -- none of these gate on
+packet_active or trigger a downstream FSM, so repeated/aborted/reset-interrupted
+writes to them can't be confused with a real functional failure elsewhere in
+the chip.
 """
 
 import random

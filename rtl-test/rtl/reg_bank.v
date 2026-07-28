@@ -27,9 +27,6 @@ module reg_bank (
     // -----------------------------------------------------------------------
     // Hardware status inputs (RO registers)
     // -----------------------------------------------------------------------
-    // RX gain active values (applied to SX1257)
-    input  wire [7:0]  rx_gain_active_0, rx_gain_active_1,
-                       rx_gain_active_2, rx_gain_active_3,
     // Packet / weight control readback
     input  wire [1:0]  active_mode_rb,
     input  wire [3:0]  active_antenna_en_rb,
@@ -83,10 +80,6 @@ module reg_bank (
     output reg [1:0]   sc_hits_req,
     // Packet timeout
     output reg [7:0]   pkt_timeout_syms,
-    // Gain control
-    output reg [7:0]   rx_gain_shadow_0, rx_gain_shadow_1,
-                       rx_gain_shadow_2, rx_gain_shadow_3,
-    output reg         rx_gain_commit,  // W1P
     // Weight path
     output reg         w_commit_pulse,  // W1P: WGT_CTRL[0]
     output reg [2:0]   comb_post_gain_shift,
@@ -169,11 +162,6 @@ module reg_bank (
             sc_thr           <= 16'h01CC;   // 0x7333 ÷ 64; sc_thr[11:0] used (12-bit positive)
             sc_hits_req      <= 2'h2;
             pkt_timeout_syms <= 8'h50;
-            rx_gain_shadow_0 <= 8'h3E;
-            rx_gain_shadow_1 <= 8'h3E;
-            rx_gain_shadow_2 <= 8'h3E;
-            rx_gain_shadow_3 <= 8'h3E;
-            rx_gain_commit   <= 1'b0;
             w_commit_pulse   <= 1'b0;
             comb_post_gain_shift <= 3'd0;
             remod_backoff_shift <= 2'd1;
@@ -192,7 +180,6 @@ module reg_bank (
             // Auto-clear write-1-pulse outputs (held one CE period = 2 clocks,
             // safely caught by 32 MHz consumers; we is 2 cycles wide so each
             // write/W1P fires exactly once per CE edge)
-            rx_gain_commit  <= 1'b0;
             w_commit_pulse  <= 1'b0;
             psram_ctrl[1]   <= 1'b0;
             psram_dbg_rd_trig <= 1'b0;
@@ -227,12 +214,6 @@ module reg_bank (
                                comb_post_gain_shift <= wdata[2:0];
                                remod_backoff_shift  <= wdata[5:4];
                            end
-                    // --- Gain ---
-                    8'h10: rx_gain_shadow_0 <= wdata;
-                    8'h11: rx_gain_shadow_1 <= wdata;
-                    8'h12: rx_gain_shadow_2 <= wdata;
-                    8'h13: rx_gain_shadow_3 <= wdata;
-                    8'h18: rx_gain_commit   <= wdata[0];
                     8'h19: if (!packet_active) sc_force_lock <= wdata[0]; // blocked during active packet
                     // --- Packet / weight / training control ---
                     8'h1E: w_commit_pulse   <= wdata[0];
@@ -298,19 +279,6 @@ module reg_bank (
             8'h0D: rdata_next = sc_thr[7:0];
             8'h0E: rdata_next = {6'h0, sc_hits_req};
             8'h0F: rdata_next = {2'h0, remod_backoff_shift, 1'b0, comb_post_gain_shift};
-            // --- Gain ---
-            8'h10: rdata_next = rx_gain_shadow_0;
-            8'h11: rdata_next = rx_gain_shadow_1;
-            8'h12: rdata_next = rx_gain_shadow_2;
-            8'h13: rdata_next = rx_gain_shadow_3;
-            8'h14: rdata_next = rx_gain_active_0;
-            8'h15: rdata_next = rx_gain_active_1;
-            8'h16: rdata_next = rx_gain_active_2;
-            8'h17: rdata_next = rx_gain_active_3;
-            // W1P commit bit reads back 0 (same as WGT_CTRL[0]): the pulse
-            // lasts one CE period and the shadow→active latch completes within
-            // one clock — there is no observable "pending" state over SPI.
-            8'h18: rdata_next = 8'h00;
             8'h19: rdata_next = 8'h00;                              // SC_FORCE_LOCK (WO)
             // --- Packet / weight / training control ---
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,

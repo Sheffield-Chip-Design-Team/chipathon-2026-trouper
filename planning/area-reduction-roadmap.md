@@ -1,7 +1,8 @@
 # trouper_top Area-Reduction Roadmap
 
-Status: 2026-07-28 (§1 refreshed against current RTL — total synth area is now
-935K µm², down from the 973K figure below; see job 3683 note). Prior status:
+Status: 2026-07-28 (§1 refreshed twice today: job 3683 baseline, then job 3687
+after the B9 register-block removal landed — total synth area is now 927K
+µm², down from the 973K figure below; see job 3683/3687 notes). Prior status:
 2026-07-19c (§8: B4+B6+fanout-split MERGED TO MAIN (b47474d) — combined
 measured −17.3K placed, SS WNS −14.91 best-of-era, all suites PASS; canonical
 signoff SDC now v25_b6). Owner: timothyjabez.
@@ -14,35 +15,40 @@ This document is grounded in a fresh per-module area measurement (Yosys
 keep-hierarchy stat against `gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30`, SGE job
 2177), not the stale 982K memory figure. **§1 table refreshed 2026-07-28**
 against current RTL (`rtl-test/scripts/run_synth_trouper_top_breakdown.sh`,
-SGE job 3683) — figures are per-block totals including child submodules
-(matching this table's original job-2177 methodology).
+SGE job 3687, superseding the same-day job 3683 baseline) — figures are
+per-block totals including child submodules (matching this table's original
+job-2177 methodology).
 
 ---
 
 ## 1. Where the area actually is
 
-Real synth cell area (2026-07-28, job 3683) = **935K µm²**, down ~38K (−3.9%)
-from the 973K job-2177 baseline. All large blocks are single TDM instances
-(×4 branches folded internally), so there are no easy multiplicity wins.
+Real synth cell area (2026-07-28, job 3687) = **927K µm²**, down ~46K (−4.7%)
+from the 973K job-2177 baseline (of which ~7.8K is the same-day B9
+register-block removal below job 3683 — see `rtl-test/syn_mimo_per_module/README.md`
+"History"). All large blocks are single TDM instances (×4 branches folded
+internally), so there are no easy multiplicity wins.
 
 | Block | Area µm² | % cells | Character |
 |---|---:|---:|---|
-| **sd_decimator_poly** (u_dec) | **340K** | **36.4%** | CIC-3 R=16 14-bit + HB1/HB2 polyphase MAC |
-| training_acc | 146K | 15.6% | all-pairs correlator; 2nd mult already halved |
-| sc_detector (+ shared mul) | 119K | 12.7% | autocorr; mul already folded to 1 shared 13-bit |
-| psram_buf_ctrl | 74K | 7.9% | QSPI + SC-delay + dbg |
-| sd_remod | 61K | 6.5% | fixed 3rd-order NTF — SQNR-locked, do not touch |
+| **sd_decimator_poly** (u_dec) | **340K** | **36.7%** | CIC-3 R=16 14-bit + HB1/HB2 polyphase MAC |
+| training_acc | 146K | 15.7% | all-pairs correlator; 2nd mult already halved |
+| sc_detector (+ shared mul) | 119K | 12.8% | autocorr; mul already folded to 1 shared 13-bit |
+| psram_buf_ctrl | 74K | 8.0% | QSPI + SC-delay + dbg |
+| sd_remod | 61K | 6.6% | fixed 3rd-order NTF — SQNR-locked, do not touch |
 | mrc_combiner | 56K | 6.0% | w^H·x |
-| reg_bank | 43K | 4.6% | 128-reg map |
+| reg_bank | 39K | 4.2% | 119-reg map (9 addresses freed by B9) |
 | dc_removal | 37K | 4.0% | single instance, 8× dc_removal_chan (4I+4Q) |
 | packet_ctrl_fsm | 36K | 3.9% | |
-| glue / spi_slave | 23K | 2.5% | |
+| glue / spi_slave | 20K | 2.2% | |
 
 Deltas vs the job-2177 baseline: `sc_detector` fell 135K→119K (−16K) and
 `training_acc` rose 134K→146K (+12K); decimator, `psram_buf_ctrl`, `sd_remod`,
-`mrc_combiner`, `reg_bank`, `packet_ctrl_fsm` are all within a few K of prior
-figures. **Decimator is still ~36% of the chip and remains ALREADY OPTIMIZED —
-not a remaining area target.** Per `decimator-hb-area-reduction.md`
+`mrc_combiner`, `packet_ctrl_fsm` are all within a few K of prior figures.
+`reg_bank` and glue/`spi_slave` are down from the job-3683 same-day figures
+(43K/2.5%→39K/2.2%) from the B9 register-block removal, not from drift
+against the older job-2177 baseline. **Decimator is still ~37% of the chip
+and remains ALREADY OPTIMIZED — not a remaining area target.** Per `decimator-hb-area-reduction.md`
 (2026-06-20, all verified bit-exact on SGE):
 - Storage is ~**50%** of the decimator (~160K µm²; `dffrnq` = 74.6 µm²/flop, 1344
   HB + 672 CIC flops). It is irreducibly flop-based at this size — SRAM-backed
@@ -674,14 +680,73 @@ write-phase decode saves ~1–2K of control logic. Explicitly OUT of scope here:
 `dbg_buf` (firmware energy-measurement plan) and any pointer-width cut (the
 23-bit address space is genuinely needed at SF12·shift2 replay depth).
 
-**B9. RX gain ACTIVE bank deletion. ~−3K. Register-map change — team decision.**
-`RX_GAIN_ACTIVE_0-3` (32 flops in trouper_top, `rx_gain_active_r`) plus the
-commit plumbing and 0x14–0x17 decode drive no hardware: Register Map.md §0x18
-confirms they are only "a hardware-latched record of the last committed gain"
-— pure software bookkeeping the host/Grouper can track itself (Trouper has no
-SPI master; SX1257 programming is external, TRPR-SPM-001). Cutting them
-removes registers 0x14–0x17 and RX_GAIN_CTRL's latch action from the map, so
-it needs sign-off against firmware plans, not just RTL.
+**B9. RX gain ACTIVE bank deletion — DONE 2026-07-28, expanded scope.**
+Team decision landed on removing the *whole* `0x10`–`0x18` block, not just
+`RX_GAIN_ACTIVE_0-3`: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/
+`RX_GAIN_CTRL` all only mirrored software-written values with no SX1257-facing
+hardware consumer (Trouper has no SPI master; SX1257 programming is external,
+TRPR-SPM-001), so the shadow half was equally dead weight. `reg_bank.v` and
+`trouper_top.v` (`rx_gain_active_r` and all shadow/commit plumbing) trimmed;
+`Register Map.md`, `Trouper Chip Specification.md` (TRPR-AGC-003 → REMOVED),
+`Traceability.md`, `tb_trouper_spi.v`, and the reg-reset-sweep/SPI-CDC cocotb
+tests updated to match. `planning/blocks/AGC.md` rewritten 2026-07-28 to drop
+the fictional on-chip gain-commit sequencer (it described a register
+interface at `0x20`-`0x2A` that never matched the real map even before this
+cut) and reflect the actual firmware-only AGC architecture.
+
+**Synth-only measured (job 3687 vs job 3683, same-day before/after):**
+−4,144.5376 µm² (−9.6%) on `reg_bank`, −3,391.584 µm² (−23.6%) on
+`trouper_top` local glue, −7,801.74 µm² (−0.83%) total synth area. See
+`rtl-test/syn_mimo_per_module/README.md` "History" for the full breakdown.
+
+**Full P&R confirmed (jobs 3699 vs 3700, 2026-07-28, `config_current_signoff.json`,
+identical RTL/config apart from this cut — job 3700 is commit `e2db56f`, the
+exact pre-removal parent, not the stale job-3484/`b47474d` "−14.91ns" figure
+quoted elsewhere in this doc, which predates several unrelated intervening
+RTL changes and is not a valid comparison point for this specific cut):**
+
+| Metric | Baseline (job 3700) | Post-removal (job 3699) | Δ |
+|---|---:|---:|---:|
+| Placed stdcell area | 1,091,680 µm² | 1,079,670 µm² | **−12,010 µm² (−1.10%)** |
+| Sequential-cell area | 382,274 µm² | 377,278 µm² | −4,996 µm² |
+| Combinational area | 593,709 µm² | 585,049 µm² | −8,660 µm² |
+| Utilization (1200×1100 die) | 86.32% | 85.37% | −0.95 pt |
+| WNS `max_ss_125C_3v00` | −19.22 ns | −18.18 ns | **+1.04 ns (improved)** |
+| TNS `max_ss_125C_3v00` | −7,329.4 ns | −6,496.9 ns | +832.5 ns (improved) |
+| WNS `max_ff_n40C_3v60` / `nom_tt_025C_3v30` | 0.0 / 0.0 | 0.0 / 0.0 | unchanged, both met |
+| Magic DRC / LVS | 0 / clean | 0 / clean | unchanged |
+
+This cut is a net win on every axis measured: smaller placed area, modestly
+*better* SS WNS/TNS (not worse — per the B1/B2 ranking rule at the top of
+this section, pure flop cuts are usually reabsorbed by SS repair buffering at
+3.0V, but this one also removed a combinational decode cone, which tracks
+with the small positive timing move), and clean DRC/LVS in both runs. The
+sequential-area delta (−4,996 µm²) lines up with the ~65 flops removed (4×
+shadow bytes + 4× active bytes + 1 commit bit, all 8-bit-wide registers) at
+~74.6 µm²/flop (`dffrnq` unit area, per the decimator flop-cost note in §1)
+≈ 4,849 µm², within noise of the measured delta.
+
+**4.5V SS-corner STA reload (job 3701, 2026-07-28):** same routed netlist as
+job 3699 (identical `.nl.v`/`.spef`/`.sdc` — only the liberty voltage
+changed, `ss_125C_3v00` → `ss_125C_4v50`), reusing the "VDD closes SS timing"
+technique documented elsewhere in this project. Result: **WNS −18.18 ns →
+−1.13 ns**, **TNS −6,496.9 ns → −3.18 ns**. TNS essentially flattens — nearly
+the entire chip meets timing at 4.5V — but the corner does **not fully
+close**: one residual −1.13 ns violation remains, on a different critical
+path than the 3.0V run (`_60551_ → _62568_`, a `clkinv`/`nand2`/`nand2`/`nor4`
+chain — raising voltage pulled in the `training_armed` cone that dominated at
+3.0V, and this path was next in line). This is consistent with prior
+"VDD closes SS timing" results on other netlist variants in this project,
+which fully closed (some reaching positive slack) at 4.5V — this specific
+placed netlist just falls a little short at that exact voltage.
+
+**Since this was only tested at 4.5V, 5.0V should be tried next** — the
+existing 4.5V lib is `gf180mcu_fd_sc_mcu7t5v0__ss_125C_4v50.lib`; a
+`ss_125C_5v00.lib` (or nearest available step above 4.5V) may close this
+residual −1.13 ns violation outright, given how close TNS already is to flat.
+Not yet attempted — confirm the liberty file exists in
+`/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/` before
+submitting.
 
 **B10. reg_bank dead control-state trim. Tiny, behaviour-preserving.**
 Two stored control bits have no consumer in current RTL:

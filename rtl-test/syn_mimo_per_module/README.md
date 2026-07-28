@@ -8,7 +8,7 @@ overhead are not included.
 
 - Script: `rtl-test/scripts/run_synth_trouper_top_breakdown.sh`
 - Output: `rtl-test/syn_mimo_per_module/out_trouper_top_current_fd/stat_hier.txt`
-- Job: SGE `3683`
+- Job: SGE `3687` (prior baseline: job `3683`, 2026-07-28, pre-register-removal — see "History")
 - Library: `gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib`
 - Date: `2026-07-28`
 
@@ -16,7 +16,7 @@ overhead are not included.
 
 | Top | Cells | Area (µm²) | Seq fraction |
 |---|---:|---:|---:|
-| `trouper_top` | 32,613 | **935,082.7584** | **41.51%** |
+| `trouper_top` | 32,466 | **927,281.0176** | **41.32%** |
 
 ## Top-level submodule areas
 
@@ -24,17 +24,25 @@ Sorted by total contribution to `trouper_top` from the hierarchical `stat` repor
 
 | Rank | Submodule | Instances | Area each (µm²) | Total (µm²) | % of chip |
 |---:|---|---:|---:|---:|---:|
-| 1 | `sd_decimator_poly` | 1 | ~340,000* | ~340,000 | 36.4% |
-| 2 | `training_acc` | 1 | 146,224.4672 | 146,224.4672 | 15.6% |
-| 3 | `sc_detector` | 1 | ~119,000† | ~119,000 | 12.7% |
-| 4 | `psram_buf_ctrl` | 1 | 74,092.3904 | 74,092.3904 | 7.9% |
-| 5 | `sd_remod` | 1 | 60,879.4816 | 60,879.4816 | 6.5% |
-| 6 | `mrc_combiner` | 1 | 55,902.9632 | 55,902.9632 | 6.0% |
-| 7 | `reg_bank` | 1 | 43,017.1392 | 43,017.1392 | 4.6% |
+| 1 | `sd_decimator_poly` | 1 | ~340,000* | ~340,000 | 36.7% |
+| 2 | `training_acc` | 1 | 145,849.088 | 145,849.088 | 15.7% |
+| 3 | `sc_detector` | 1 | ~119,000† | ~119,000 | 12.8% |
+| 4 | `psram_buf_ctrl` | 1 | 74,063.8528 | 74,063.8528 | 8.0% |
+| 5 | `sd_remod` | 1 | 60,879.4816 | 60,879.4816 | 6.6% |
+| 6 | `mrc_combiner` | 1 | 56,041.2608 | 56,041.2608 | 6.0% |
+| 7 | `reg_bank` | 1 | 38,872.6016 | 38,872.6016 | 4.2% |
 | 8 | `dc_removal` | 1 | ~37,000‡ | ~37,000 | 4.0% |
 | 9 | `packet_ctrl_fsm` | 1 | 36,378.8544 | 36,378.8544 | 3.9% |
 | 10 | `spi_slave` | 1 | 9,096.9088 | 9,096.9088 | 1.0% |
-| 11 | `trouper_top` (local glue) | - | 14,352.2176 | 14,352.2176 | 1.5% |
+| 11 | `trouper_top` (local glue) | - | 10,960.6336 | 10,960.6336 | 1.2% |
+
+`training_acc`, `psram_buf_ctrl`, and `mrc_combiner` shifted by a few hundred
+µm² (≤0.26% each) versus job 3683 despite unchanged RTL — this is ABC
+technology-mapping run-to-run noise, not a real cut; `sd_decimator_poly`,
+`sc_detector`, `sd_remod`, `packet_ctrl_fsm`, `spi_slave`, and `dc_removal`
+came back bit-identical. Only `reg_bank` (−4,144.5376 µm², −9.6%) and
+`trouper_top` local glue (−3,391.584 µm², −23.6%) moved for a real reason:
+see "History".
 
 `*` `sd_decimator_poly` own cells are 265,937.5040 µm²; plus child submodules
 `sd_decimator_poly_hb2_mac` (18,448.4608), `sd_decimator_poly_hb1_mac`
@@ -80,3 +88,14 @@ see `planning/decimator-hb-migration-impact-plan.md`) and subsequent area cuts
 totals and block names since the original 2026-06-18 measurement (job 1965,
 748K µm² total, `sd_decimator_cic_tdm8` at 207.8K/27.8%). Do not compare
 absolute area numbers across the rename without checking the date.
+
+**2026-07-28, job 3687 (same day as 3683):** removed the obsolete
+`RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` register block
+(`0x10`–`0x18`) from `reg_bank.v`/`trouper_top.v` — Trouper has no SX1257
+SPI/control outputs, so these only mirrored software-written values with no
+hardware consumer (`planning/area-reduction-roadmap.md` lever B9). Cut
+~7,536 µm² combined from `reg_bank` + `trouper_top` local glue, ~7,801.74 µm²
+(−0.83%) off total synthesized area once the small unrelated ABC-noise moves
+in `training_acc`/`psram_buf_ctrl`/`mrc_combiner` are netted in. See
+`planning/Register Map.md` and `planning/Trouper Chip Specification.md`
+(TRPR-AGC-003, REMOVED) for the register-map side of this change.

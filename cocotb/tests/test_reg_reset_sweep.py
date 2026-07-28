@@ -3,7 +3,7 @@ test_reg_reset_sweep.py -- full register-map reset-value sweep for reg_bank.
 
 Traceability (planning/Traceability.md): TRPR-REG-001 ("All registers per
 map: reset values, R/W permissions") was previously only spot-checked
-(tb_trouper_spi.v: SF/MIMO/COMB_CFG/RX_GAIN/TACC_WINDOW) rather than swept.
+(tb_trouper_spi.v: SF/MIMO/COMB_CFG/TACC_WINDOW) rather than swept.
 The 2026-07-06 ACTIVE_STATUS (0x1D) reset-value error -- Register Map.md said
 0x0F, RTL reset was 0x10 -- was found by hand and shows a full sweep pays for
 itself. Writing this sweep found a second one directly: PSRAM_DBG_CTRL
@@ -23,8 +23,8 @@ Map.md's Reset column, both:
      (2).
 
 Deliberately excluded from the "dirty" pass: W1P/enable bits that trigger
-side-effecting FSMs if written (RX_GAIN_CTRL 0x18, WGT_CTRL 0x1E,
-TACC_NOISE_TRIG 0x1F, PSRAM_CTRL 0x70, PSRAM_DBG_CTRL 0x75) -- these are
+side-effecting FSMs if written (WGT_CTRL 0x1E, TACC_NOISE_TRIG 0x1F,
+PSRAM_CTRL 0x70, PSRAM_DBG_CTRL 0x75) -- these are
 covered by their own functional tests elsewhere and are not needed to prove
 the reset sweep. 0x7F is never written (permanently reserved SPI escape
 code) but is still read to confirm it returns 0x00 like any other
@@ -61,14 +61,6 @@ REG_RESET.update({
     0x0D: 0xCC,  # SC_THR_LO
     0x0E: 0x02,  # SC_HITS_REQ
     0x0F: 0x10,  # COMB_CFG (REMOD_BACKOFF_SHIFT=1 at [5:4])
-    0x10: 0x3E,  # RX_GAIN_SHADOW_0
-    0x11: 0x3E,  # RX_GAIN_SHADOW_1
-    0x12: 0x3E,  # RX_GAIN_SHADOW_2
-    0x13: 0x3E,  # RX_GAIN_SHADOW_3
-    0x14: 0x3E,  # RX_GAIN_ACTIVE_0
-    0x15: 0x3E,  # RX_GAIN_ACTIVE_1
-    0x16: 0x3E,  # RX_GAIN_ACTIVE_2
-    0x17: 0x3E,  # RX_GAIN_ACTIVE_3
     0x1D: 0x10,  # ACTIVE_STATUS (mode=0, antenna_en=0x1)
     0x27: 0x08,  # TACC_WINDOW_SYMS
     0x75: 0x80,  # PSRAM_DBG_CTRL: DBG_BUSY held until qe_init_done, unset at reset
@@ -81,7 +73,6 @@ REG_RESET.update({
 DIRTY_ADDRS = (
     [0x03]                       # IRQ_CLEAR (W1P, harmless with nothing set)
     + [0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F]
-    + [0x10, 0x11, 0x12, 0x13]
     + [0x27]
     + list(range(0x30, 0x40))     # W shadow bank
     + [0x72, 0x73, 0x74]          # PSRAM_DBG_ADDR_{LO,MID,HI}

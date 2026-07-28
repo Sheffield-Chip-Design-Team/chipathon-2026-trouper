@@ -289,7 +289,7 @@ Disable EMA (`ALPHA_SHIFT=0`) for mobile deployments where channel coherence tim
 
 ### 4. Initial Gain Setting
 
-Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set `RX_GAIN_SHADOW_n` via SPI and pulse `RX_GAIN_COMMIT` during bring-up, before the first packet. (There is no `CPU_RESET` — Trouper has no on-chip CPU; corrected 2026-07-26.)
+Start at full gain (G1 + BB_MAX on all SX1257s) for maximum weak-signal sensitivity. The AGC loop converges within 1–3 packets via the `IRQ_CORR_LOCK` path. For a known deployment, pre-set the SX1257 gain directly (board-level SPI master) during bring-up, before the first packet — Trouper has no on-chip gain-shadow/commit register to stage this through (removed 2026-07-28). (There is no `CPU_RESET` — Trouper has no on-chip CPU; corrected 2026-07-26.)
 
 ---
 

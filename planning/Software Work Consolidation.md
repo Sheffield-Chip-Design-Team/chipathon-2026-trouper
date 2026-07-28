@@ -126,7 +126,7 @@ Firmware is not allowed to be the only path for baseline RX, but it is still a m
 
 ### Follow-on firmware
 
-- AGC loop using `ENERGY_*` snapshots and `RX_GAIN_*`
+- AGC loop using `ENERGY_*` snapshots (gain is applied externally — no on-chip `RX_GAIN_*` register)
 - EMA smoothing of channel estimates
 - branch masking / branch health policy
 - TX preparation / restore sequencing for TDD cases
