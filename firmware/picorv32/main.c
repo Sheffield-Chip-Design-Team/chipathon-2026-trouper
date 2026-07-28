@@ -349,7 +349,9 @@ int main(void)
         if (irq_bits & IRQ_NOISE_READY)   update_noise_floor_fw();
         if (irq_bits & IRQ_TRAINING_DONE) handle_training_done();
         /* CORR_LOCK / PACKET_DONE: no on-chip action in this image; AGC gain
-         * stepping remains host/Grouper-side (planning/Register Map.md 0x18). */
+         * stepping remains entirely host/Grouper-side, with no on-chip gain
+         * register at all (RX_GAIN_SHADOW/ACTIVE/CTRL at 0x10-0x18 removed
+         * 2026-07-28, see planning/blocks/AGC.md). */
 
         reg_write8(REG_IRQ_CLEAR, irq_bits);
     }
