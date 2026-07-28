@@ -1,10 +1,15 @@
 #!/bin/bash
 set -euo pipefail
+
+RTL_ROOT=${RTL_ROOT:-/foss/designs/lora-mimo}
+if [ ! -d "$RTL_ROOT/src" ] && [ -d /foss/designs/src ]; then RTL_ROOT=/foss/designs; fi
+echo "RTL_ROOT=$RTL_ROOT"
+RT=$RTL_ROOT/rtl-test
 export HLAB_SGE_URL=http://nas.home:4783
-LOG=/foss/designs/lora-mimo/rtl-test/ol_trouper_top_1150_clkmid.log
+LOG=$RT/ol_trouper_top_1150_clkmid.log
 exec > >(tee "$LOG") 2>&1
 echo "=== ol_trouper_top config_trial_top_1150_clkmid (IQ_CLK mid-East) START $(date --iso-8601=seconds) ==="
-cd /foss/designs/lora-mimo/rtl-test
+cd $RT
 /foss/tools/bin/librelane --pdk gf180mcuD --scl gf180mcu_fd_sc_mcu7t5v0 \
     --skip Magic.SpiceExtraction \
     ol_trouper_top/config_trial_top_1150_clkmid.json

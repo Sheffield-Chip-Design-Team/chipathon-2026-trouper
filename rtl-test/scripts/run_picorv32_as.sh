@@ -1,10 +1,15 @@
 #!/bin/bash
 set -euo pipefail
+
+RTL_ROOT=${RTL_ROOT:-/foss/designs/lora-mimo}
+if [ ! -d "$RTL_ROOT/src" ] && [ -d /foss/designs/src ]; then RTL_ROOT=/foss/designs; fi
+echo "RTL_ROOT=$RTL_ROOT"
+RT=$RTL_ROOT/rtl-test
 OVR=/tmp/pdk_overlay_as_sc
-LOG=/foss/designs/lora-mimo/rtl-test/ol_picorv32_as_mcu7t3v3_pnr.log
+LOG=$RT/ol_picorv32_as_mcu7t3v3_pnr.log
 exec > >(tee "$LOG") 2>&1
 echo "=== picorv32-on-as_sc_mcu7t3v3 START $(date --iso-8601=seconds) on $(hostname) ==="
-cd /foss/designs/lora-mimo/rtl-test
+cd $RT
 ./stage_as_scl.sh "$OVR"
 echo "--- staged; launching librelane ---"
 # Skip OpenROAD.CTS: as_sc clock buffers (clkbuff_4/8/12) and even regular buff_*

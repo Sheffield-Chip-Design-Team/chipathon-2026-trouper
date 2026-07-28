@@ -119,6 +119,12 @@ This applies to **every** LibreLane invocation against this repo's designs now
 `run_synth_trouper_top_breakdown.sh` script doesn't need this because it's pure
 Yosys with its own `$OUT`/`$RUN_DIR` handling, not a LibreLane flow.
 
+**Host-side path:** `$RUN_DIR`/`/foss/runs` resolves on the host to
+`/srv/eda/runs/<user>/<--project value>/...` — a sibling of `/srv/eda/designs/`
+and `/srv/eda/logs/`. Confirmed by inspection: `hqsub --project synth_area ...`
+produced `/srv/eda/runs/timothyn-dev/synth_area/trouper_top_src_20260728_v3/`.
+See the "Complete example" below for how this plays out end to end.
+
 ## NFS symlinks for P&R run outputs
 
 Source files (`.v`, `config.json`, `pnr.sdc`) are tracked in git under `rtl-test/`.
@@ -208,9 +214,10 @@ echo "Submitted job $JOB_ID"
 hqwait "$JOB_ID"
 
 # 5. Check outcome (result.txt was written under $RUN_DIR inside the
-#    container, not under the read-only /foss/designs mount — read it back
-#    via the job's log, or check hqlog/hqsub --help for the host-side path
-#    $RUN_DIR resolves to if you need the raw file)
+#    container, not under the read-only /foss/designs mount. On the host,
+#    $RUN_DIR resolves to /srv/eda/runs/<user>/<--project value>/... — a
+#    sibling of /srv/eda/designs/ and /srv/eda/logs/ — so the raw file here
+#    would be at /srv/eda/runs/timothyn-dev/lora-mimo/result.txt)
 EXIT=$(hqstat --json --all | python3 -c \
     "import json,sys; jobs=json.load(sys.stdin); m=[j for j in jobs if j['id']==$JOB_ID]; print(m[0]['exit_code'] if m else '')")
 if [ "$EXIT" != "0" ]; then

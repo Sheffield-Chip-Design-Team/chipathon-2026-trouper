@@ -4,11 +4,16 @@
 # Tests how far util can be pushed before the GF180 DRT density wall breaks
 # routing — the top has +38ns slack so this is a pure routability probe.
 set -euo pipefail
+
+RTL_ROOT=${RTL_ROOT:-/foss/designs/lora-mimo}
+if [ ! -d "$RTL_ROOT/src" ] && [ -d /foss/designs/src ]; then RTL_ROOT=/foss/designs; fi
+echo "RTL_ROOT=$RTL_ROOT"
+RT=$RTL_ROOT/rtl-test
 CFG="${1:?usage: $0 <config_basename>}"
-LOG=/foss/designs/lora-mimo/rtl-test/ol_mimo_${CFG}.log
+LOG=$RT/ol_mimo_${CFG}.log
 exec > >(tee "$LOG") 2>&1
 echo "=== trouper_top ${CFG} START $(date --iso-8601=seconds) on $(hostname) ==="
-cd /foss/designs/lora-mimo/rtl-test
+cd $RT
 # Skip Magic.SpiceExtraction: on these SRAM macros it emits 36 "Illegal overlap
 # between obsv2 and metal2" feedbacks (router Metal2 abutting the macros' own
 # Metal2 OBS at pin edges) which deferred-error the flow. They are an LVS-

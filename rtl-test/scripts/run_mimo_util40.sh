@@ -1,2 +1,2 @@
 #!/bin/bash
-exec /foss/designs/lora-mimo/rtl-test/run_mimo_util_sweep.sh config_util40
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_mimo_util_sweep.sh" config_util40
