@@ -98,7 +98,7 @@ hqsub --name <block>-regression --cpus 4 --mem 8G \
   /srv/eda/designs/$USER/<block>_regression.sh
 ```
 
-Poll to completion per the `sge-job` skill (`hqstat --json`, terminal states
+Poll to completion per the `hlab-sge` skill (`hqstat --json` or `hqwait`, terminal states
 `DONE`/`FAILED`/`CANCELLED`). Prefer `Bash` with `run_in_background: true` running the poll loop
 rather than sleeping in the foreground.
 
