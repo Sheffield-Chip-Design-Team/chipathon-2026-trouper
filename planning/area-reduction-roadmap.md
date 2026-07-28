@@ -726,6 +726,28 @@ shadow bytes + 4× active bytes + 1 commit bit, all 8-bit-wide registers) at
 ~74.6 µm²/flop (`dffrnq` unit area, per the decimator flop-cost note in §1)
 ≈ 4,849 µm², within noise of the measured delta.
 
+**4.5V SS-corner STA reload (job 3701, 2026-07-28):** same routed netlist as
+job 3699 (identical `.nl.v`/`.spef`/`.sdc` — only the liberty voltage
+changed, `ss_125C_3v00` → `ss_125C_4v50`), reusing the "VDD closes SS timing"
+technique documented elsewhere in this project. Result: **WNS −18.18 ns →
+−1.13 ns**, **TNS −6,496.9 ns → −3.18 ns**. TNS essentially flattens — nearly
+the entire chip meets timing at 4.5V — but the corner does **not fully
+close**: one residual −1.13 ns violation remains, on a different critical
+path than the 3.0V run (`_60551_ → _62568_`, a `clkinv`/`nand2`/`nand2`/`nor4`
+chain — raising voltage pulled in the `training_armed` cone that dominated at
+3.0V, and this path was next in line). This is consistent with prior
+"VDD closes SS timing" results on other netlist variants in this project,
+which fully closed (some reaching positive slack) at 4.5V — this specific
+placed netlist just falls a little short at that exact voltage.
+
+**Since this was only tested at 4.5V, 5.0V should be tried next** — the
+existing 4.5V lib is `gf180mcu_fd_sc_mcu7t5v0__ss_125C_4v50.lib`; a
+`ss_125C_5v00.lib` (or nearest available step above 4.5V) may close this
+residual −1.13 ns violation outright, given how close TNS already is to flat.
+Not yet attempted — confirm the liberty file exists in
+`/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/` before
+submitting.
+
 **B10. reg_bank dead control-state trim. Tiny, behaviour-preserving.**
 Two stored control bits have no consumer in current RTL:
 
