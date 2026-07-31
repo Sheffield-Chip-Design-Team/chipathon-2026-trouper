@@ -120,8 +120,7 @@ module tb_pcfsm_b6_equiv;
                 r_W_valid_set, r_W_missed_packet, r_W_missed_q, r_packet_phase, r_packet_active,
                 d_W_valid_set, d_W_missed_packet, d_W_missed_q, d_packet_phase, d_packet_active);
             if (errors > 20) begin
-                $display("TB: FAIL (too many mismatches)");
-                $finish;
+                $fatal(1, "TB: FAIL (too many mismatches)");
             end
         end
     end
@@ -197,9 +196,7 @@ module tb_pcfsm_b6_equiv;
                 guard = guard - 1;
             end
             if (guard == 0) begin
-                $display("TB: FAIL guard timeout (ref never ended packet) pkt=%0d scen=%0d sf=%0d", pkt, scen, sf);
-                errors = errors + 1;
-                $finish;
+                $fatal(1, "TB: FAIL guard timeout (ref never ended packet) pkt=%0d scen=%0d sf=%0d", pkt, scen, sf);
             end
 
             // drop lock + training_done (sc_clr model), small drain
@@ -212,6 +209,14 @@ module tb_pcfsm_b6_equiv;
 
     initial begin
         repeat (5) @(posedge clk);
+        // Keep the randomized timing_ref = sample_count - back_off stimulus
+        // inside the old absolute-deadline reference's valid domain. Starting
+        // from zero can wrap timing_ref near 2^32 on the first packet: B6 is
+        // deliberately wrap-immune but the frozen reference is not, so that
+        // compares a known behavioral improvement rather than the timeout
+        // rewrite's intended in-domain equivalence.
+        @(negedge clk);
+        sample_count = 32'h0010_0000;
         rst_n = 1;
         repeat (10) @(posedge clk);
 
@@ -221,15 +226,14 @@ module tb_pcfsm_b6_equiv;
         if (errors == 0)
             $display("TB: PASS — %0d packets, all outputs bit-identical every cycle", n_pkts);
         else
-            $display("TB: FAIL — %0d mismatches over %0d packets", errors, n_pkts);
+            $fatal(1, "TB: FAIL — %0d mismatches over %0d packets", errors, n_pkts);
         $finish;
     end
 
     // absolute watchdog
     initial begin
         repeat (4000) #1_000_000; // 4 s sim time (SF12 timeout packets are long)
-        $display("TB: FAIL watchdog");
-        $finish;
+        $fatal(1, "TB: FAIL watchdog");
     end
 
 endmodule
