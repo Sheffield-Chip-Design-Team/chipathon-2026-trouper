@@ -16,4 +16,4 @@ See the `sge-job` skill (`.claude/skills/sge-job/SKILL.md`) for submitting, poll
 
 ## Block cocotb regression
 
-See the `block-regression` skill (`.claude/skills/block-regression/SKILL.md`) for running the full cocotb suite for a specific `src/` block via SGE (NFS sync, block → suite mapping, special-arg suites like `trouper_capture`). Currently onboarded: `psram_buf_ctrl`.
+See the `block-regression` skill (`.claude/skills/block-regression/SKILL.md`) for running the full cocotb suite for a specific `src/` block via SGE (NFS sync, block → suite mapping, special-arg suites like `trouper_capture`). Currently onboarded: `psram_buf_ctrl`, `packet_ctrl_fsm`, `spi_slave`, and `reg_bank`.
