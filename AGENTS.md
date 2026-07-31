@@ -4,6 +4,8 @@
 
 planning/Trouper Chip Specification.md should be precise
 
+Read CLAUDE.md
+
 ## Running LibreLane (P&R)
 
 See the `pnr-run` skill (`.claude/skills/pnr-run/SKILL.md`) for Docker invocation, FD vs AS standard cells, and reading WNS/DRC results.
