@@ -94,3 +94,60 @@ critical at the corner it was targeting (3.0 V); a full re-PnR targeting
 question (how much margin to require between "guaranteed worst-case" and
 "realistic operating window"), not something OpenSTA resolves on its own.
 See `planning/Open Risks.md` item 1.
+
+## 2026-07-31 — first real 4.5 V-targeted full P&R closes clean (not just a reload)
+
+Baseline for this round: `config_current_signoff.json` full signoff, job 3733,
+`ss_125C_3v00` WNS **−18.18 ns** (worse starting point than the item-39 netlist
+used in the 2026-07-13 entry above). An OpenSTA liberty-swap reload of that
+exact netlist (`ss_125C_3v00` → `ss_125C_4v50`, no re-optimization, job 3736)
+landed at **−1.13 ns**, TNS −3.18 — a ~17 ns delta consistent with prior
+reloads, but for the first time landing *short* of MET because the 3.0 V
+starting point was worse.
+
+Two real full P&R runs against `STA_CORNERS` swapped to `max_ss_125C_4v50`
+(same die 1200×1100, same `pnr_32m_scoped_v25_b6.sdc`, same
+`config_current_signoff*.json` base, only the SS corner + LIB entry changed):
+
+| Run | Config | `PL/GRT_RESIZER_SETUP_SLACK_MARGIN` | `ss_125C_4v50` WNS | TNS | DRC | LVS |
+|---|---|---|---|---|---|---|
+| Job 3737 | `config_current_signoff_4v50.json` | none (bare corner swap) | **−2.74 ns** | (nonzero, fails) | — | — |
+| Job 3738 | `config_current_signoff_4v50_margin.json` | 9.0 ns | **0.0 ns (MET), worst slack +3.17 ns** | **0** | **0** | **clean** |
+
+Job 3738 is a genuine full-signoff pass, not a reload trick: worst setup
+slack +3.17 ns at `ss_125C_4v50`, 0 setup TNS at all three `STA_CORNERS`
+(`nom_tt_025C_3v30`, `ss_125C_4v50`, `ff_n40C_3v60`), Magic DRC 0 errors, LVS
+clean, 84.9% utilization — same die size as the current 3.0 V signoff.
+
+This confirms the "bare swap under-drives, `~9 ns` resizer margin recovers
+it" pattern (previously only shown at older die sizes/SDC — `config_ss45_
+margin.json`/`config_current_signoff_bigger_margin.json`, both on the stale
+1300–1380×1100 / `pnr_32m_scoped_v20.sdc` combination) now reproduces on the
+**current** 1200×1100 / `v25_b6` signoff baseline. Configs, run scripts, and
+raw run directories:
+
+- `rtl-test/ol_trouper_top/config_current_signoff_4v50.json` (bare)
+- `rtl-test/ol_trouper_top/config_current_signoff_4v50_margin.json` (+9 ns margin)
+- Run dirs: `/srv/eda/runs/timothyn-dev/lora-mimo/3737/trouper_top_4v50_bare/run`,
+  `/srv/eda/runs/timothyn-dev/lora-mimo/3738/trouper_top_4v50_margin/run`
+
+**Cross-check (job 3739):** reloading job 3738's 4.5V+9ns-margin-optimized
+netlist back against the original `ss_125C_3v00` liberty gives worst slack
+**−12.08 ns**, TNS −3344.61 — better than the 3.0 V baseline (−18.18 ns, job
+3733) by ~6 ns (the extra setup buffering the resizer added while targeting
+4.5 V partially carries over), but nowhere near closing 3.0 V outright. The
+two corners need genuinely different drive strength, not just "more
+buffers everywhere":
+
+| Netlist optimized for | WNS @ `ss_125C_3v00` | WNS @ `ss_125C_4v50` |
+|---|---|---|
+| 3.0 V (job 3733 baseline) | −18.18 ns | −1.13 ns (reload, job 3736) |
+| 4.5 V + 9 ns margin (job 3738) | −12.08 ns (reload, job 3739) | **+3.17 ns MET** |
+
+**Not yet checked:** hold margin at the fast corner (`ff_n40C_3v60`) with the
+extra setup buffering the 9 ns margin adds — worst hold in job 3738 was
++0.164 ns at `ff_n40C_3v60` (positive, but noticeably tighter than typical;
+worth a dedicated look before treating this as fully signed off). Still an
+open corner-*policy* decision (3.0 V vs 4.5 V/dual-rail) per Open Risks item 1,
+not a closed risk — this entry only proves 4.5 V P&R closure is now
+demonstrated end-to-end on the current baseline, with a repeatable recipe.

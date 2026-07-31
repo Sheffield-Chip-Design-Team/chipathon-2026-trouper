@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "sdc": "pnr_32m_scoped_v25_b6.sdc",
+  "groups": {
+    "sc_clear": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "sc_detector clear/re-arm stability assertion"},
+    "sc_quasi_static": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SF/BW write-lock plus SC boundary assertion"},
+    "pcfsm_quasi_static": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "packet-control configuration load assertion"},
+    "pcfsm_latched_timing_ref": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "packet_ctrl_fsm ST_ACQ_SETUP timing-ref latch assertion"},
+    "pcfsm_mval": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "packet-control M_val quasi-static assertion"},
+    "training_window": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "training-window configuration assertion"},
+    "timing_ref_hits": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SC hit-request quasi-static assertion"},
+    "timing_ref_config": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SF/BW write-lock plus timing-ref assertion"},
+    "psram_barrel_shift": {"setup": 2, "hold": 1, "min_through": 0, "min_endpoint": 1, "proof": "PSRAM configuration settle assertion"},
+    "paced_dsp": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 0, "proof": "decimator/SC/training/combiner pacing assertions"},
+    "regbank_write": {"setup": 2, "hold": 1, "min_through": 1, "min_endpoint": 0, "proof": "ce_16m write-bus assertion"}
+  }
+}
