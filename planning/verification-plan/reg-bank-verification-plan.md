@@ -1,0 +1,171 @@
+# Register Bank — Verification Plan
+
+**DUT:** `src/control/reg_bank.v` (mirrored to `rtl-test/rtl/reg_bank.v`)
+
+**Scope:** the complete 7-bit register map, reset/read/write/side-effect policy,
+the CE-gated byte-bus interface, packed control/status mappings, write locks,
+W1P/W1C behavior, and sticky IRQ aggregation.
+
+**Inputs reviewed:** `planning/Register Map.md`, `planning/Trouper Chip
+Specification.md` (§4.13 TRPR-REG-001..007 and §4.14 TRPR-IRQ-001..006),
+`planning/Traceability.md`, `planning/Open Risks.md` (#16),
+`src/top/trouper_top.v`, the current RTL, `cocotb/reg_reset_sweep`, the
+register-focused full-top cocotb suites, and
+`rtl-test/tb/tb_trouper_spi.v`, `tb_trouper_grp_arb.v`, and
+`tb_trouper_two_packet.v`.
+
+This is the block-level closure tracker for `reg_bank`. It does not supersede
+the functional verification plans for blocks whose controls and status happen
+to be exposed through the register map.
+
+---
+
+## 1. Current methodology, and the path to constrained random
+
+**Today:** reset values and common register policies have substantial directed
+integration coverage, but the register bank has no standalone exhaustive oracle
+or formal checker. R/W permissions are only spot-checked, hardware-status decode
+has not been driven exhaustively, and read/CE timing is inferred through
+top-level tests rather than checked directly.
+
+- **Full-top cocotb simulation** — `cocotb/reg_reset_sweep` reads all 128
+  addresses at power-on and after dirtying safely writable registers. Other
+  suites verify packet-active write locks, W-shadow locking, IRQ use, PSRAM
+  debug behavior, and block-specific W1P actions through SPI.
+- **Legacy directed simulation** — `tb_trouper_spi.v` checks representative
+  masks, RO/WO behavior, reserved addresses, clamps, and self-clearing controls.
+  `tb_trouper_grp_arb.v` verifies Grouper access and priority at the top-level
+  bus mux. `tb_trouper_two_packet.v` exercises sticky IRQ behavior.
+- **No standalone block-level oracle or formal checker** — no direct harness
+  drives every status input and checks all decoded bytes, output ports, pulse
+  lifetimes, precedence rules, or the registered read handshake.
+- **No merged code or functional coverage** — closure is scenario-based rather
+  than measured.
+
+The active order is:
+
+1. Resolve the `PSRAM_CTRL[2]` register-map/RTL conflict in row #4.
+2. Add a standalone harness and checked-in table-driven register-map oracle.
+3. Close exhaustive decode, permission, side-effect, and CE/read-timing gaps.
+4. Add formal properties for legal writes, W1P width, write locks, reserved
+   addresses, and IRQ stickiness.
+5. Instrument line/toggle/branch coverage, measure the directed baseline, and
+   add constrained-random stimulus for sparse crosses.
+
+### 1a. Coverage model
+
+At minimum, collect:
+
+- all 128 addresses crossed with `{read, write}` and access class
+  `{RO, WO, RW, W1P, W1C, reserved}`;
+- each writable field crossed with reset, zero, ones, walking-one,
+  walking-zero, and a non-symmetric pattern;
+- every hardware-status input bit toggled independently and in meaningful
+  combinations at its decoded address;
+- all multi-byte fields crossed with first/middle/last byte and positive,
+  negative, and non-symmetric values;
+- `{write-gated register} × {packet_active 0/1}` for `SF_CFG`, `BW_CFG`,
+  `SC_FORCE_LOCK`, `PSRAM_EN`, and both replay-delay bytes;
+- `{W-shadow address 0x30..0x3F} × {W_VALID 0/1}` and
+  `{rejected-write, W1C-clear, simultaneous reject+clear}`;
+- `{IRQ bit 0..4} × {set only, clear only, set+clear same CE edge}` and
+  `irq_out` transitions; confirm top-level reserved bits 7:5 remain tied low;
+- read and write behavior at both `clk_en` phases, including held and
+  back-to-back requests;
+- every W1P crossed with single-cycle `we`, two-core-cycle SPI `we`, and held
+  `we`.
+
+---
+
+## 2. List of tests
+
+`Type`: **SPEC-SIM** = directed test of a numbered requirement;
+**EDGE-SIM** = robustness/precedence test found by RTL review;
+**FORMAL** = assertion/property proof; **INTERFACE** = behavior partly owned by
+`trouper_top.v`.
+
+| # | Test | Type | Testbench | Spec / gap | Status |
+|---|---|---|---|---|---|
+| 1 | Full 0x00–0x7F reset-value sweep at power-on and after dirty/reset | SPEC-SIM | `cocotb/reg_reset_sweep` | TRPR-REG-001 | ✅ done (job 3319); intentionally excludes resetless training accumulators 0x40–0x6F |
+| 2 | Exhaustive address/access-permission/mask sweep | SPEC-SIM | new standalone `cocotb/reg_bank` with checked-in map oracle | TRPR-REG-001/004/005 | 🟨 partial — `tb_trouper_spi.v` spot-checks permissions and masks; add every address and prove writes cannot perturb unrelated registers |
+| 3 | Fixed IDs and all reserved addresses read zero/write ignored | SPEC-SIM | `tb_trouper_spi.v`; standalone sweep | TRPR-REG-004 | 🟨 partial — representative reserved addresses and 0x7F are covered; exhaust all 22 reserved slots |
+| 4 | All RW field storage, reserved-bit masking, and packed output mapping | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ⚠️ test gap + spec/RTL issue — `PSRAM_CTRL[2]` is documented “reserved, write 0” but current RTL stores/reads it and `tb_trouper_spi.v` expects that behavior; resolve before fixing the oracle |
+| 5 | Every RO/status input decode and reserved-bit zeroing | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ⬜ new — directly drive packet, training, SC, Z-pair/Z-diagonal, and PSRAM inputs with non-symmetric patterns |
+| 6 | Multi-byte big-endian ordering and truncation | SPEC-SIM | standalone suite; retain weight/training/SC integration tests | TRPR-REG-003 | 🟨 partial — functional flows cover the main fields; add an exhaustive byte-lane oracle for `[31:8]`, 23-bit, 18-bit, 16-bit, and 128-bit mappings |
+| 7 | `TACC_WINDOW_SYMS` clamp for all inputs | SPEC-SIM | standalone suite; `tb_trouper_spi.v` | Register Map 0x27 | 🟨 partial — 0→8 and normal 12 covered; sweep 0..15 and reserved high bits |
+| 8 | Packet-active write locks | SPEC-SIM | `cocotb/sc_force_lock`, `bypass_e2e`, `replay_delay`; direct sweep | Register Map 0x09/0x0A/0x19/0x70/0x77/0x78 | 🟨 partial — integration paths exist; add a table-driven direct check of blocked and ungated fields |
+| 9 | W-shadow accept/reject lock, sticky rejection, W1C clear, and re-arm | SPEC-SIM | `cocotb/w_shadow_lock` | Register Map 0x1E/0x30–0x3F | ✅ done |
+| 10 | W-shadow reject and W1C clear on the same CE edge | EDGE-SIM | standalone suite | RTL precedence | ⬜ new — confirm a new rejection wins and bit0=0 causes no W_COMMIT |
+| 11 | All four W1P fields assert for one CE period and self-clear | SPEC-SIM | standalone suite; `spi_cdc`, `noise_trig`, `psram_ops` | TRPR-REG-006 | 🟨 partial — all actions are functionally exercised; add cycle-exact port checks |
+| 12 | A two-core-cycle `we` causes exactly one CE write/W1P event | EDGE-SIM + FORMAL | `cocotb/spi_cdc`; formal checker | CE integration contract | ✅ simulation (job 3352); ⬜ formal |
+| 13 | IRQ sticky set/hold/selective-W1C and aggregated output | SPEC-SIM | block-specific IRQ tests; standalone suite | TRPR-REG-007, TRPR-IRQ-001..006 | 🟨 partial — add independent bits 0..4, level-held source/clear behavior, reserved bits, and no-spontaneous-clear checks |
+| 14 | Simultaneous `irq_set` and `IRQ_CLEAR` precedence | EDGE-SIM | standalone suite | RTL expression `(status \| set) & ~clear` | ⬜ new — define whether clear wins for the same bit on one CE edge, then pin it |
+| 15 | `irq_out` and both top-level IRQ outputs | SPEC-SIM / INTERFACE | standalone suite plus top-level IRQ test | TRPR-IRQ-003/004 | ⬜ direct check — require `irq_out==OR(IRQ_STATUS)` and top-level `IRQ_OUT==IRQ_GROUPER` until all bits clear |
+| 16 | Combinational `peek_rdata` and registered one-wait-state read protocol | SPEC-SIM + FORMAL | standalone suite | register-bus interface | ⬜ new — check address changes, stable `rdata`, exact `ready` behavior, and held/back-to-back reads |
+| 17 | `clk_en` phase and reset interruption | EDGE-SIM | standalone suite | 16 MHz CE contract | ⬜ new — sweep writes, reads, and events around enabled/disabled edges |
+| 18 | Grouper byte-bus reachability and ready timing | SPEC-SIM / INTERFACE | `tb_trouper_grp_arb.v`; extend with cycle assertions | TRPR-REG-002 | 🟨 partial — functional reachability is done; add exact request/acknowledge and held-request timing |
+| 19 | Full property set, non-vacuous | FORMAL | new `formal/reg_bank_formal.sv` + `.sby` | TRPR-REG-001/004/006/007 | ⬜ new — prove reset, legal writes/masks, W1P duration, IRQ causality, write locks, and reserved-address immutability |
+
+### 2a. Directed closure order
+
+1. Resolve row #4.
+2. Build the standalone harness and map oracle; use it for #2–#8, #10–#11,
+   and #13–#17.
+3. Strengthen Grouper bus timing coverage in #18.
+4. Add and prove the formal checker in #19.
+5. Merge code and functional coverage, then randomize until §1a is closed or
+   waived.
+
+---
+
+## 3. Regression commands
+
+Run inside the chipathon26 EDA container:
+
+```bash
+for d in reg_reset_sweep w_shadow_lock sc_force_lock noise_trig psram_ops \
+         w_missed bypass_e2e spi_cdc; do
+  (cd cocotb/$d && make) || echo "FAILED: $d"
+done
+
+# From rtl-test/:
+iverilog -g2005 -o /tmp/tb_trouper_spi.vvp \
+  tb/tb_trouper_spi.v \
+  ../src/top/trouper_top.v ../src/decimator/sd_decimator_poly.v \
+  ../src/frontend/dc_removal.v ../src/frontend/sc_detector.v \
+  ../src/combiner/training_acc.v ../src/combiner/mrc_combiner.v \
+  ../src/control/packet_ctrl_fsm.v ../src/control/psram_buf_ctrl.v \
+  ../src/control/spi_slave.v ../src/control/reg_bank.v \
+  ../src/remod/sd_remod.v
+vvp /tmp/tb_trouper_spi.vvp
+
+iverilog -g2005 -o /tmp/tb_trouper_grp_arb.vvp \
+  tb/tb_trouper_grp_arb.v \
+  ../src/top/trouper_top.v ../src/decimator/sd_decimator_poly.v \
+  ../src/frontend/dc_removal.v ../src/frontend/sc_detector.v \
+  ../src/combiner/training_acc.v ../src/combiner/mrc_combiner.v \
+  ../src/control/packet_ctrl_fsm.v ../src/control/psram_buf_ctrl.v \
+  ../src/control/spi_slave.v ../src/control/reg_bank.v \
+  ../src/remod/sd_remod.v
+vvp /tmp/tb_trouper_grp_arb.vvp
+```
+
+Add the standalone and formal commands when implemented. Run this regression
+before merging changes to `reg_bank.v`, `Register Map.md`, or
+`trouper_top.v`'s CE latch, register arbiter, or IRQ wiring.
+
+---
+
+## 4. Explicit non-goals and interface boundaries
+
+- Arithmetic correctness of status producers belongs to their source blocks;
+  this plan verifies byte mapping, access policy, and control outputs.
+- Training results at 0x40–0x6F intentionally have unspecified power-on values.
+  Test their decode with driven inputs or after an arm event, not as reset zero.
+- Firmware sequencing and legal operating ranges are outside this block except
+  for masks, clamps, and write locks implemented in RTL.
+- SPI framing and CDC belong to `spi-slave-verification-plan.md`; the SPI CDC
+  suite remains here only because it verifies CE-accepted bank writes.
+- Arbitration, CE write-bus latching, IRQ source edge conversion/pulse
+  stretching, and the second IRQ output live in `trouper_top.v`. They are
+  interface checks, not internal `reg_bank` logic.
