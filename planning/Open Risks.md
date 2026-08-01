@@ -82,12 +82,98 @@ design is closeable at 4.5V, not that a naive 4.5V P&R run will land there
 for free. `ss_125C_5v00` is not a characterized liberty corner in this PDK
 (only 1.62V/3.0V/4.5V exist for SS at both 125°C and −40°C).
 
+**2026-07-31 — first real 4.5 V-targeted full P&R closes clean (not a reload):**
+on the current signoff baseline (job 3733, `ss_125C_3v00` WNS −18.18 ns), a
+bare `ss_125C_4v50` corner-swap P&R (job 3737) still fails at −2.74 ns, but
+adding a 9 ns `PL/GRT_RESIZER_SETUP_SLACK_MARGIN` (job 3738) produces a clean
+full signoff: WNS 0.0/TNS 0 at all three `STA_CORNERS`, worst slack +3.17 ns
+at `ss_125C_4v50`, DRC 0, LVS clean, same 1200×1100 die/84.9% util. First
+time the "9 ns margin recovers the bare-swap under-drive" pattern has been
+reproduced on the current die/SDC baseline rather than an older one. Hold at
+`ff_n40C_3v60` is positive but tight (+0.164 ns) and not yet separately
+re-checked. Still a corner-policy decision, not a closed risk. See
+`planning/5v-core-voltage-strategy.md` §2026-07-31.
+
 **See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items),
-`planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation),
+`planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation,
+§2026-07-31 full-P&R closure),
 `planning/area-reduction-roadmap.md` (§"RAISE SS ONLY" voltage probe).
 
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
+
+### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
+
+**Blocks:** timing signoff using any `set_multicycle_path` exception.
+
+The current 32 MHz closure strategy relies on MCP=3 for paced DSP cones and
+selected quasi-static writes, plus MCP=2 for the CE-gated register-bank write
+path.  This is only valid when the RTL guarantees the advertised settle window
+*and* the SDC resolves to precisely the intended post-synthesis/post-route
+paths.  That second condition is not yet a signoff gate: hierarchy and net
+names change during synthesis, and previous SDC revisions have had both
+silent no-op collections (`STA-0361`/`STA-0472`) and overly broad endpoint
+exceptions that temporarily hid a genuine one-cycle path.  The B6 integration
+run also records an `iq_samp_cnt -> u_pcfsm.pkt_cnt` cluster suggesting that a
+v25_b6 load-arc exception partially misses.
+
+**Required closure evidence, for every signoff SDC revision:**
+
+- Run an automated audit on both the synthesized and routed netlist.  It SHALL
+  fail if any SDC collection used by an MCP is empty, changes unexpectedly
+  between stages, or produces `STA-0361`/`STA-0472`/"no valid objects".
+- Emit the fully resolved MCP-covered startpoint/endpoint arcs and retain them
+  with the signoff artefacts; review that no fast-changing sibling input is
+  relaxed by a broad `-through` or endpoint scope.
+- For each exception, cite an RTL assertion, formal proof, or directed
+  simulation demonstrating that the receiver cannot consume the value before
+  the claimed 2- or 3-cycle settling window.  The proof must cover reset,
+  re-arm, and configuration-write boundaries.
+- Report unrelaxed single-cycle timing separately, so a scope miss is visible
+  as a failing cone rather than being confused with a closed MCP path.
+
+Until this audit passes, scoped MCP may be used for exploration but is not
+sufficient evidence for tapeout timing closure.  See
+`src/config/pnr_32m_scoped_v25_b6.sdc` and
+`planning/b4-b6-area-cuts-2026-07.md` §4.1/§3.1.
+
+**2026-07-31 implementation:** `rtl-test/ol_trouper_top/mcp_audit.tcl` now
+loads the active SDC against a supplied synthesized or routed netlist and
+emits every named MCP collection for independent review.
+`rtl-test/scripts/run_mcp_audit.sh` runs it via `hqsub`/SGE (an earlier
+version used a local `docker run` that could not reach P&R artifacts living
+on NFS — fixed same day) and `audit_mcp.py` fails closed on empty/missing
+collections, STA-0361/0472, or a changed reviewed baseline.
+
+**2026-07-31 first real evidence + baselines approved (jobs 3740/3741 synth,
+3742/3743 route):** ran against the current signoff netlist (job 3733,
+`config_current_signoff.json`, `06-yosys-synthesis/trouper_top.nl.v` for
+synth and `final/nl/trouper_top.nl.v` + `final/spef/max/trouper_top.max.spef`
+for route). All 11 groups resolved to non-empty collections at or above the
+manifest minimums at both stages, no `STA-0361`/`STA-0472`/"no valid
+objects", and — notably — the resolved through-net and endpoint-register
+names are **byte-identical between the synth and route evidence files**
+(`diff` clean), i.e. no scope drift introduced by placement/routing/CTS for
+this netlist. Both stage baselines reviewed and approved
+(`mcp_audit_baseline.json`). This confirms the SDC's collections resolve to
+real, non-trivial, stable objects — it does **not** confirm the RTL settling
+claims themselves (still needs the per-group formal/assertion/simulation
+evidence named in `mcp_audit_manifest.json`'s `proof` field, none of which
+exist yet).
+
+**2026-07-31 `iq_samp_cnt -> u_pcfsm.pkt_cnt` lead RESOLVED (not a scoping
+bug):** chased using the new audit evidence. `packet_ctrl_fsm.v:98-104`'s own
+comment and the SDC's v21 header (`pnr_32m_scoped_v25_b6.sdc:143-149`) both
+explicitly state this arc is *intentionally* left at honest single-cycle
+because it depends on the live `sample_count`/`iq_samp_cnt` operand, not a
+quasi-static one. The audit confirms `pcfsm_timeout_regs` (the endpoint
+covering `pkt_cnt`) resolves to exactly the intended 63 down-counter bits,
+and no MCP group's `-through` collection touches `iq_samp_cnt`/`sample_count`
+on a path into `u_pcfsm.*`. The `-6.65`/`-9.61 ns` STA hits on this cluster
+are genuine, deliberately-unrelaxed SS timing debt — same class as the
+`u_psram` QSPI residual and `training_armed → Zdiag`/`Zpair` arcs already
+tracked under item 1. See `planning/b4-b6-area-cuts-2026-07.md`
+§2026-07-31 follow-up.
 
 ---
 
@@ -161,6 +247,42 @@ and honest-MCP work that the voltage path would otherwise unblock.
 **See:** `planning/area-reduction-roadmap.md` §2 (voltage analysis); `planning/Pinout.md`
 (split-rail supply note); `planning/5v-core-voltage-strategy.md`.
 **Found:** 2026-07-04 (voltage-corner + external-part datasheet review).
+
+### 44. 4.5 V-core signoff is now P&R-proven but NOT a decided architecture — gate before canonicalizing
+
+2026-07-31: a full P&R targeting `ss_125C_4v50` with a 9 ns
+`PL/GRT_RESIZER_SETUP_SLACK_MARGIN` closes clean on the current 1200×1100
+signoff baseline — WNS 0.0/TNS 0 at all `STA_CORNERS`, worst slack +3.17 ns,
+DRC 0, LVS clean (job 3738; see `planning/5v-core-voltage-strategy.md`
+§2026-07-31). A bare corner swap without the margin still fails (−2.74 ns,
+job 3737). This is real signoff-quality evidence that the 4.5 V-core
+contingency (item 27) *can* close 32 MHz outright — but it does not, by
+itself, make 4.5 V the production core voltage. Do not let
+`config_current_signoff_4v50_margin.json` or its SDC become the canonical
+signoff config/SDC until all of the following are resolved:
+
+1. **IO voltage crossing** — same open question as item 27: GF180 `bi_*`
+   split-rail core>pad down-shift is uncharacterized (no PDK IO databook), and
+   the high-speed bidirectional PSRAM QSPI rules out auto-direction external
+   translators as a fallback.
+2. **Power budget** — P∝V²; 4.5 V vs 3.3 V is roughly ~1.9× dynamic power,
+   not checked against any board/thermal budget.
+3. **Hold margin re-verification** — job 3738's worst hold at
+   `ff_n40C_3v60` was +0.164 ns: positive, but thin, and not yet separately
+   stress-tested with the 9 ns margin's extra setup buffering in place.
+4. **Explicit team sign-off on the rail decision** — per the 2026-07-04
+   project framing, uniform 3.3 V is the stated *aim*; the 4.5–5 V core is a
+   *contingency* only. Adopting it is a tapeout-architecture decision, not a
+   config-file change.
+
+**Action:** treat `config_current_signoff_4v50_margin.json` as a validated
+candidate only. Keep `config_current_signoff.json` /
+`pnr_32m_scoped_v25_b6.sdc` (3.0 V) canonical until 1–4 above are closed and
+someone with authority over the tapeout architecture makes the call.
+**Blocks:** nothing yet (informational gate) — but prevents item 1 from being
+quietly "closed" by a voltage change nobody explicitly approved.
+**See:** item 1, item 27, `planning/5v-core-voltage-strategy.md` §2026-07-31.
+**Found:** 2026-07-31.
 
 ### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption
 

@@ -180,6 +180,25 @@ Functional gate: all 6 suites PASS on the merged RTL (jobs 3483/3485 — equiv
 TB, 18/18 sweep, w_shadow_lock, w_missed, replay_delay 8/8, weight-gen
 oracle bit-exact).
 
+**2026-07-31 follow-up RESOLVED — not a scoping miss.** Re-derived from three
+independent sources against the real audit evidence (jobs 3740/3742, see
+Open Risks item 43): (1) `packet_ctrl_fsm.v:98-104`'s own comment states the
+`iq_samp_cnt`-driven `elapsed_c` term feeding `pkt_load`/`pkt_cnt` "stays
+honestly single-cycle... the same depth class as the 32-bit comparators this
+change deletes" — deliberately unrelaxed by RTL design; (2) the SDC's v21
+header (`pnr_32m_scoped_v25_b6.sdc:143-149`) explicitly leaves every path
+from a fast-changing operand including `sample_count` (= `iq_samp_cnt`) at
+honest single-cycle "where STA will now correctly flag it if it is a real
+violation"; (3) audit evidence confirms `pcfsm_timeout_regs` (the endpoint
+set covering `pkt_cnt`) resolves to exactly 63 registers
+(`acq_cnt[19:0]`+`wpend_cnt[19:0]`+`pkt_cnt[22:0]`, bit-exact) with no
+`-through` collection in any MCP group — including the broad `paced_dsp`
+wildcard — touching `iq_samp_cnt`/`sample_count` on a path into `u_pcfsm.*`.
+The cluster is genuine, intentionally-unrelaxed single-cycle SS timing debt,
+same class as the `u_psram` QSPI residual and `training_armed → Zdiag`/
+`Zpair` arcs already tracked under Open Risk item 1. No SDC fix needed here;
+closing this follow-up.
+
 ## 5. State / next steps
 
 - **MERGED TO MAIN 2026-07-19 (`b47474d`)** via the `b4-b6-integration`
