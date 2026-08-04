@@ -823,6 +823,15 @@ Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
+**Resolved:** 2026-08-04, regression job 3863. `trouper_top.v` now captures each completed SPI
+write in a one-entry pending slot and commits it after the higher-priority
+Grouper byte cycle releases. The byte-cycle contract requires release before a
+second SPI data byte completes (≥ 800 ns at 10 MHz). Because pin-level SPI has
+no WAIT response and the register bank has one combinational read port,
+TRPR-SPS-007 now explicitly rejects a read byte whose MISO snapshot overlaps
+`GRP_RE=1`; the host retries the complete read frame. Directed cases 3a/3b/4a
+in `tb_trouper_grp_arb.v` cover priority, write preservation, and read recovery.
+
 ### 42. Packet-control FSM misses directed coverage for late weight commit and training timeout
 
 The current verification matrix explicitly leaves two functional cases

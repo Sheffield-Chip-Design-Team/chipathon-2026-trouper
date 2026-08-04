@@ -10,8 +10,8 @@ External-memory subsystem for the Trouper receive chain. One shared QPI engine s
 > Superseded content note: earlier revisions of this document described a W_COMMIT-triggered
 > rewind replay, a JTAG/QPI pad mux, functional sample-width selection, and a 16 MHz controller-clock
 > constraint. None of these exist: replay is margin-timed continuous-delay, the four SIO pads
-> are dedicated (JTAG removed, spec §4.16), storage is fixed 8 bytes/sample (the retained
-> `PSRAM_CTRL[2]` readback bit is inert), and the
+> are dedicated (JTAG removed, spec §4.16), storage is fixed 8 bytes/sample
+> (`PSRAM_CTRL[2]` is reserved, ignores writes, and reads zero), and the
 > controller runs at 32 MHz.
 
 ---

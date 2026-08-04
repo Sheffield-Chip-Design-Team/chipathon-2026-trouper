@@ -225,7 +225,8 @@ module reg_bank (
                     8'h70: begin
                                if (!packet_active) psram_ctrl[0] <= wdata[0]; // PSRAM_EN: blocked during active packet
                                psram_ctrl[1] <= wdata[1];
-                               psram_ctrl[2] <= wdata[2];
+                               // Bit [2] is reserved: ignore writes and retain
+                               // its reset value of zero.
                                psram_ctrl[3] <= wdata[3];
                            end
                     8'h72: psram_dbg_addr[7:0]   <= wdata;
@@ -380,7 +381,7 @@ module reg_bank (
             8'h6E: rdata_next = zdiag_3[23:16];
             8'h6F: rdata_next = zdiag_3[15:8];
             // --- PSRAM control / status / debug readback ---
-            8'h70: rdata_next = {4'h0, psram_ctrl};
+            8'h70: rdata_next = {4'h0, psram_ctrl[3], 1'b0, psram_ctrl[1:0]};
             8'h71: rdata_next = psram_status_rb;
             8'h72: rdata_next = psram_dbg_addr[7:0];
             8'h73: rdata_next = psram_dbg_addr[15:8];

@@ -7,11 +7,11 @@
 // Exercises:
 //   1. GRP write while SPI idle lands in reg_bank (read back over SPI)
 //   2. SPI write while GRP idle still works (baseline regression)
-//   3. GRP write overlapping a concurrent SPI write to a different address:
-//      GRP's value must land; the colliding SPI write must NOT corrupt it
-//   4. GRP read pulse overlapping a concurrent SPI read: SPI must still
-//      shift out data for ITS OWN requested address afterwards, and must
-//      not get permanently wedged by the contention
+//   3. A GRP write that covers the complete synchronized SPI write event:
+//      GRP wins first and the pending SPI write is committed after GRP releases
+//   4. GRP read overlapping the SPI MISO-load window: the colliding SPI read
+//      byte is rejected/undefined by contract, and a retry after GRP_RE drops
+//      must return the SPI-requested address
 //   5. Bus returns to normal SPI-only operation after contention clears
 //
 // Run (from rtl-test/):
@@ -217,38 +217,44 @@ module tb_trouper_grp_arb;
         spi_read(ADDR_SF, rd); check("2. SPI write baseline", rd, 8'h0C);
         spi_write(ADDR_SF, 8'h07);   // restore
 
-        // ---- 3. Contention: SPI write to ADDR_SF racing a GRP write to
-        //         ADDR_MIMO. GRP must win for its own address; the SPI write
-        //         collision must not corrupt GRP's value.               ----
+        // ---- 3. Contention: hold GRP_WE over the complete two-cycle
+        //         synchronized SPI write strobe. Grouper takes the active
+        //         register-bank slots; the one-entry arbiter pending slot must
+        //         preserve and subsequently commit the SPI write.       ----
         fork
             begin
                 spi_write(ADDR_SF, 8'h0E);
             end
             begin
-                // Delay so the GRP write's CE-latching window overlaps the
-                // SPI byte-shift (SPI frame is ~16 SCK periods = 2000 ns).
-                #700;
-                grp_write(ADDR_MIMO, 8'hF1);
+                wait (dut.spi_reg_we === 1'b1);
+                grp_addr = ADDR_MIMO; grp_wdata = 8'hF1; grp_we = 1'b1;
+                repeat (8) @(posedge clk);
+                grp_we = 1'b0;
             end
         join
 
         spi_read(ADDR_MIMO, rd); check("3a. GRP write survives SPI collision", rd, 8'hF1);
+        spi_read(ADDR_SF,   rd); check("3b. pending SPI write preserved", rd, 8'h0E);
         grp_write(ADDR_MIMO, 8'hF0);   // restore
 
-        // ---- 4. Read-side contention: GRP read pulse overlapping an SPI
-        //         read frame. After contention, SPI must still return ITS
-        //         own requested register correctly (no permanent wedge).  ----
+        // ---- 4. Read-side contention: this SPI wire protocol has no WAIT
+        //         response. A GRP_RE overlapping the single shared read port
+        //         therefore rejects that SPI byte by contract. Do not consume
+        //         the colliding result; retry after GRP_RE deasserts.     ----
         spi_write(ADDR_SF, 8'h0B);      // distinct known value to detect corruption
         fork
             begin
                 spi_read(ADDR_SF, rd);
             end
             begin
-                #700;
-                grp_read_pulse(ADDR_MIMO, 2);
+                // Cover the command's eighth rising edge and the following
+                // falling edge where the SPI MISO shifter snapshots read data.
+                #900;
+                grp_read_pulse(ADDR_MIMO, 8);
             end
         join
-        check("4a. SPI read survives GRP read collision", rd, 8'h0B);
+        spi_read(ADDR_SF, rd);
+        check("4a. rejected SPI read succeeds on retry", rd, 8'h0B);
 
         // ---- 5. Bus returns to normal SPI-only operation post-contention ----
         spi_write(ADDR_SF, 8'h07);      // restore

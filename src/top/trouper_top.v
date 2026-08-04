@@ -644,34 +644,72 @@ module trouper_top (
     );
 
     // =========================================================================
-    // Register bus arbiter: Grouper (GRP_*) has priority over SPI slave
+    // Register bus arbiter: Grouper (GRP_*) has priority over SPI slave.
+    //
+    // A completed SPI write is a short clk-domain event and cannot be stalled
+    // back at the serial pins.  Capture it in a one-entry pending slot until
+    // the in-progress Grouper byte cycle releases the register bank.  The
+    // Grouper byte-cycle contract requires that it release before a second SPI
+    // data byte completes (>= 800 ns at 10 MHz), so this slot cannot overflow.
     // =========================================================================
     wire grp_active = GRP_WE | GRP_RE;
 
-    wire [7:0] rb_addr_c  = grp_active ? GRP_ADDR :
-                            (spi_reg_we ? spi_reg_wr_addr : spi_reg_rd_addr);
-    wire [7:0] rb_wdata_c = grp_active ? GRP_WDATA : spi_reg_wdata;
-    wire       rb_we_c    = grp_active ? GRP_WE    : spi_reg_we;
+    reg        spi_reg_we_d;
+    reg        spi_wr_pending;
+    reg [7:0]  spi_wr_pending_addr;
+    reg [7:0]  spi_wr_pending_data;
+    wire       spi_wr_new = spi_reg_we & ~spi_reg_we_d;
 
     // CE-latched WRITE bus: addr/wdata/we are sampled TOGETHER on a CE edge and
     // captured by the CE-gated reg_bank on the next CE edge, so the whole write
-    // decode is a consistent, genuine 2-cycle path (honest MCP=2).  spi_reg_we
-    // is 2 cycles wide → spans one CE edge → reg_bank writes ONCE (W1P safe).
+    // decode is a consistent, genuine 2-cycle path (honest MCP=2).
     reg [7:0] rb_addr, rb_wdata;
     reg       rb_we;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            spi_reg_we_d       <= 1'b0;
+            spi_wr_pending     <= 1'b0;
+            spi_wr_pending_addr <= 8'd0;
+            spi_wr_pending_data <= 8'd0;
             rb_addr <= 8'd0; rb_wdata <= 8'd0; rb_we <= 1'b0;
-        end else if (ce_16m) begin
-            rb_addr  <= rb_addr_c;
-            rb_wdata <= rb_wdata_c;
-            rb_we    <= rb_we_c;
+        end else begin
+            spi_reg_we_d <= spi_reg_we;
+
+            if (spi_wr_new) begin
+                spi_wr_pending      <= 1'b1;
+                spi_wr_pending_addr <= spi_reg_wr_addr;
+                spi_wr_pending_data <= spi_reg_wdata;
+            end
+
+            if (ce_16m) begin
+                if (grp_active) begin
+                    rb_addr  <= GRP_ADDR;
+                    rb_wdata <= GRP_WDATA;
+                    rb_we    <= GRP_WE;
+                end else if (spi_wr_pending) begin
+                    rb_addr       <= spi_wr_pending_addr;
+                    rb_wdata      <= spi_wr_pending_data;
+                    rb_we         <= 1'b1;
+                    spi_wr_pending <= 1'b0;
+                end else if (spi_wr_new) begin
+                    // Direct dispatch when the event and a free CE slot align.
+                    rb_addr       <= spi_reg_wr_addr;
+                    rb_wdata      <= spi_reg_wdata;
+                    rb_we         <= 1'b1;
+                    spi_wr_pending <= 1'b0;
+                end else begin
+                    rb_we <= 1'b0;
+                end
+            end
         end
     end
 
     // READ address is COMBINATIONAL (separate port) so the peek read has no CE
     // latency — reads always see the current address.  The host holds rd_addr
     // stable for the whole transaction, so the peek decode is quasi-static.
+    // There is only one combinational read port: a concurrent Grouper read
+    // takes priority and makes that SPI read byte invalid; the SPI host retries
+    // the complete read frame after GRP_RE deasserts.
     wire [7:0] rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr;
     wire       rb_re    = GRP_RE;
 

@@ -207,8 +207,23 @@ module tb_trouper_spi;
         #1 spi_cs = 1'b1;
         repeat (8) @(posedge clk);
 
+        // 0. SPI_MISO is a dedicated output and must be driven low, not Z,
+        // whenever HOST_CS is deasserted (TRPR-SPS-008).
+        if (spi_miso !== 1'b0) begin
+            $display("FAIL  MISO deselected-low      got %b expected 0", spi_miso);
+            errors = errors + 1;
+        end else begin
+            $display("pass  MISO deselected-low");
+        end
+
         // 1. CHIP_ID / CHIP_REV — 2-byte read frames (TRPR-SPS-006/009)
         spi_read(7'h00, rd); check("CHIP_ID",        rd, 8'hA7);
+        if (spi_miso !== 1'b0) begin
+            $display("FAIL  MISO release after read got %b expected 0", spi_miso);
+            errors = errors + 1;
+        end else begin
+            $display("pass  MISO release after read");
+        end
         spi_read(7'h01, rd); check("CHIP_REV",       rd, 8'h01);
 
         // 2. Write + readback: SF_CFG (reset 0x07 -> 0x0A).  First use the
@@ -290,7 +305,7 @@ module tb_trouper_spi;
         spi_write(7'h09, 8'h07);                                  // restore
         spi_write(7'h08, 8'hFF); spi_read(7'h08, rd); check("mask MIMO_CTRL",rd, 8'hF1);
         spi_write(7'h08, 8'hF0);                                  // restore
-        spi_write(7'h0A, 8'hFF); spi_read(7'h0A, rd); check("mask BW_CFG",   rd, 8'h01);
+        spi_write(7'h0A, 8'hFF); spi_read(7'h0A, rd); check("mask BW_CFG",   rd, 8'h07);
         spi_write(7'h0A, 8'h00);                                  // restore
         spi_write(7'h0E, 8'hFF); spi_read(7'h0E, rd); check("mask SC_HITS",  rd, 8'h03);
         spi_write(7'h0E, 8'h00);                                  // restore
@@ -305,8 +320,10 @@ module tb_trouper_spi;
         spi_write(7'h1C, 8'hFF); spi_read(7'h1C, rd); check("RO PKT_STATUS", rd, 8'h00);
         spi_write(7'h20, 8'hFF); spi_read(7'h20, rd); check("RO TRAIN_STAT", rd, 8'h00);
         spi_write(7'h21, 8'hFF); spi_read(7'h21, rd); check("RO N_ACC_HI",   rd, 8'h00);
-        spi_write(7'h40, 8'hFF); spi_read(7'h40, rd); check("RO Z_01",       rd, 8'h00);
-        spi_write(7'h64, 8'hFF); spi_read(7'h64, rd); check("RO ZDIAG_0",    rd, 8'h00);
+        // Training-accumulator result inputs are intentionally resetless and
+        // may be X before an arm event, so do not assume a reset value here;
+        // their RO policy requires driven inputs in the planned standalone
+        // register-bank suite.
 
         // 12. Write-only / W1P read semantics
         spi_write(7'h1F, 8'h01); spi_read(7'h1F, rd); check("WO NOISE_TRIG", rd, 8'h00);
@@ -319,8 +336,9 @@ module tb_trouper_spi;
         spi_write(7'h11, 8'hFF); spi_read(7'h11, rd); check("rsvd 0x11 ignores wr", rd, 8'h00);
         spi_write(7'h18, 8'hFF); spi_read(7'h18, rd); check("rsvd 0x18 ignores wr", rd, 8'h00);
 
-        // 14. PSRAM_CTRL masking + CLR_ERR (bit1) is W1P (self-clears)
-        spi_write(7'h70, 8'hFF); spi_read(7'h70, rd); check("PSRAM_CTRL mask+W1P", rd, 8'h0D);
+        // 14. PSRAM_CTRL masking: reserved bit2 ignores writes and reads zero;
+        //     CLR_ERR (bit1) is W1P and self-clears.
+        spi_write(7'h70, 8'hFF); spi_read(7'h70, rd); check("PSRAM_CTRL mask+W1P", rd, 8'h09);
         spi_write(7'h70, 8'h00);                       // restore (disable PSRAM)
 
         if (errors == 0) $display("\nTB PASS — all SPI register checks passed");

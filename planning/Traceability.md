@@ -348,13 +348,13 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 | TRPR-SPS-004 | Max SPI clock 10 MHz | A | all tbs run 8 MHz (under max) | ✅ (analysis; no at-speed 10 MHz sim, margin covered by STA) |
 | TRPR-SPS-005 | CS/SCK synchronisers (async domain) | I | inspection; POR frame-flop fix verified (Open Risks #26, closed 2026-07-02) | ✅ |
 | TRPR-SPS-006 | `CHIP_ID` = 0xA7 | T | `tb_trouper_spi.v`, every cocotb test's settle read | ✅ |
-| TRPR-SPS-007 | Grouper-priority arbitration, SPI stalls | T | `tb_trouper_grp_arb.v` (write/read collision cases) | ✅ |
-| TRPR-SPS-008 | `SPI_MISO` tri-state while CS high | T | — | ❌ No test samples MISO with CS de-asserted. Board-level relevance only (shared SPI bus); cheap to add to `tb_trouper_spi.v`. |
+| TRPR-SPS-007 | Grouper priority; pending SPI write; colliding-read retry | T | `tb_trouper_grp_arb.v` (full-strobe write overlap and MISO-load read overlap) | ✅ job 3863 |
+| TRPR-SPS-008 | Dedicated `SPI_MISO` drives low while CS high | T | `tb_trouper_spi.v` (idle and post-read release checks) | ✅ job 3863 |
 | TRPR-SPS-009 | Read-data timing (addr latched on 8th SCK edge) | T | `tb_trouper_spi.v` (the 2026-06-12 one-byte-late bug's regression) | ✅ |
 | TRPR-SPS-010 | Burst auto-increment mod 128; `0x76` exception | T | `tb_trouper_spi.v` (16-byte burst + 0x7E→0x00 wrap) | ⚠️ Auto-increment fully tested. The `0x76` no-increment *exception* is proven only via repeated single-transaction reads (`test_psram_ops.py` drains 8 bytes that way, job 3313) — never inside one continuous CS-low burst. |
 | TRPR-SPS-011 | `0x7F` reserved (protocol escape) | I | `tb_trouper_spi.v` | ✅ |
 
-**Open items:** SPS-008 MISO tri-state check; SPS-010 in-burst 0x76 case.
+**Open item:** SPS-010 in-burst 0x76 case.
 
 ---
 
@@ -419,7 +419,7 @@ All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace
 |---|---|---|---|---|
 | TRPR-INT-001/007/008 | Fabric exists; one shared map; byte-only transactions | I | `tb_trouper_grp_arb.v` + all SPI suites | ✅ |
 | TRPR-INT-002 | Grouper path reaches full register map, same semantics | T | `tb_trouper_grp_arb.v` (GRP write → SPI readback and vice versa) | ✅ |
-| TRPR-INT-003 | Arbiter: Grouper priority, SPI stalls mid-cycle | T | `tb_trouper_grp_arb.v` (collision cases 3a/4a) | ✅ |
+| TRPR-INT-003 | Arbiter: Grouper priority, SPI-write pending slot, read retry | T | `tb_trouper_grp_arb.v` (collision cases 3a/3b/4a) | ✅ |
 | TRPR-INT-004 | Grouper idle/reset → SPI-only operation clean | T | every cocotb suite (GRP inputs tied off in `tb_trouper_cocotb.v`) | ✅ (continuously exercised) |
 | TRPR-INT-005 | IRQ line to Grouper on any status bit | T | — | ⚠️ = IRQ-003 pin-level gap. |
 | TRPR-INT-006 | Single 32 MHz clock; control plane CE-gated to 16 MHz effective (no `CLK_16M` net) | I | CE-gating verified by the SPI-write timing work (`[[project_ce16_partition]]`, all register suites) | ✅ Spec reworded 2026-07-06 to the implemented single-clock + clock-enable architecture (was written against a two-clock `CLK_16M` scheme that never shipped; this also retires the corresponding item of Open Risks #24's clock-architecture drift). |
@@ -432,5 +432,5 @@ All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace
 1. ~~Two false/stale documentation claims~~ — **RESOLVED 2026-07-06**: REG-005 reworded to the deliberate custom-RTL + map-as-source-of-truth discipline; WGN-008's `DBG_MISSED_PKTS` clarified as a firmware variable; `CLAUDE.md` block list corrected.
 2. ~~DCR-015's "open RTL gap" is stale~~ — **RESOLVED 2026-07-06**: spec reworded to the warm-up-provided hold-off.
 3. ~~FBC-002 and INT-006 describe plumbing that doesn't exist~~ — **RESOLVED 2026-07-06**: both reworded to the shipped plumbing (`sc_lock`-latched pointer; single-clock + CE). `buf_freeze` itself was deleted from the RTL 2026-07-26 (Open Risks #25).
-4. **Cheap test adds:** pin-level `IRQ_OUT`/`IRQ_GROUPER` asserts (IRQ-003/004/INT-005), MISO tri-state (SPS-008), in-burst 0x76 non-increment (SPS-010). (Full reset register sweep for REG-001 closed 2026-07-06.)
+4. **Cheap test adds:** pin-level `IRQ_OUT`/`IRQ_GROUPER` asserts (IRQ-003/004/INT-005) and in-burst 0x76 non-increment (SPS-010). (MISO deselected-low coverage for SPS-008 closed in job 3863; full reset register sweep for REG-001 closed 2026-07-06.)
 5. **Stale standalone tbs:** `tb_sqnr*.v` predate the HB migration (DEC-003) — regenerate against `sd_decimator_poly` or retire in favor of the migration-record analysis.
