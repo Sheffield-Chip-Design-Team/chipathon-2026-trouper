@@ -19,6 +19,21 @@ module tb_trouper_cocotb (
     wire        psram_ce_n;
     wire [3:0]  psram_sio_out, psram_sio_oe, psram_sio_in;
 
+    // Grouper inter-chip bus (GRP_*). Not brought out as a top-level cocotb
+    // port -- almost every suite never touches it and relies on it being
+    // tied low, exactly as it was wired below before these signals existed.
+    // Declaring them as regs initialized to 0 keeps that tie-low behaviour
+    // identical for every other suite while giving the SPI/Grouper
+    // arbitration test in test_spi_cdc.py a hierarchical handle
+    // (dut.GRP_ADDR/.GRP_WDATA/.GRP_WE/.GRP_RE) it can drive directly, the
+    // same way existing tests already reach into dut.u_dut.u_spi.* signals.
+    reg  [7:0] GRP_ADDR  = 8'h00;
+    reg  [7:0] GRP_WDATA = 8'h00;
+    reg        GRP_WE    = 1'b0;
+    reg        GRP_RE    = 1'b0;
+    wire [7:0] GRP_RDATA;
+    wire       GRP_READY;
+
     trouper_top u_dut (
         .IQ_CLK        (IQ_CLK),
         .RESETB        (RESETB),
@@ -50,33 +65,33 @@ module tb_trouper_cocotb (
         .SPI_SCK       (SPI_SCK),
         .SPI_MOSI      (SPI_MOSI),
         .SPI_MISO      (SPI_MISO),
-                .GRP_ADDR_0 (1'b0),
-        .GRP_ADDR_1 (1'b0),
-        .GRP_ADDR_2 (1'b0),
-        .GRP_ADDR_3 (1'b0),
-        .GRP_ADDR_4 (1'b0),
-        .GRP_ADDR_5 (1'b0),
-        .GRP_ADDR_6 (1'b0),
-        .GRP_ADDR_7 (1'b0),
-                .GRP_WDATA_0 (1'b0),
-        .GRP_WDATA_1 (1'b0),
-        .GRP_WDATA_2 (1'b0),
-        .GRP_WDATA_3 (1'b0),
-        .GRP_WDATA_4 (1'b0),
-        .GRP_WDATA_5 (1'b0),
-        .GRP_WDATA_6 (1'b0),
-        .GRP_WDATA_7 (1'b0),
-        .GRP_WE        (1'b0),
-        .GRP_RE        (1'b0),
-                .GRP_RDATA_0 (),
-        .GRP_RDATA_1 (),
-        .GRP_RDATA_2 (),
-        .GRP_RDATA_3 (),
-        .GRP_RDATA_4 (),
-        .GRP_RDATA_5 (),
-        .GRP_RDATA_6 (),
-        .GRP_RDATA_7 (),
-        .GRP_READY     (),
+                .GRP_ADDR_0 (GRP_ADDR[0]),
+        .GRP_ADDR_1 (GRP_ADDR[1]),
+        .GRP_ADDR_2 (GRP_ADDR[2]),
+        .GRP_ADDR_3 (GRP_ADDR[3]),
+        .GRP_ADDR_4 (GRP_ADDR[4]),
+        .GRP_ADDR_5 (GRP_ADDR[5]),
+        .GRP_ADDR_6 (GRP_ADDR[6]),
+        .GRP_ADDR_7 (GRP_ADDR[7]),
+                .GRP_WDATA_0 (GRP_WDATA[0]),
+        .GRP_WDATA_1 (GRP_WDATA[1]),
+        .GRP_WDATA_2 (GRP_WDATA[2]),
+        .GRP_WDATA_3 (GRP_WDATA[3]),
+        .GRP_WDATA_4 (GRP_WDATA[4]),
+        .GRP_WDATA_5 (GRP_WDATA[5]),
+        .GRP_WDATA_6 (GRP_WDATA[6]),
+        .GRP_WDATA_7 (GRP_WDATA[7]),
+        .GRP_WE        (GRP_WE),
+        .GRP_RE        (GRP_RE),
+                .GRP_RDATA_0 (GRP_RDATA[0]),
+        .GRP_RDATA_1 (GRP_RDATA[1]),
+        .GRP_RDATA_2 (GRP_RDATA[2]),
+        .GRP_RDATA_3 (GRP_RDATA[3]),
+        .GRP_RDATA_4 (GRP_RDATA[4]),
+        .GRP_RDATA_5 (GRP_RDATA[5]),
+        .GRP_RDATA_6 (GRP_RDATA[6]),
+        .GRP_RDATA_7 (GRP_RDATA[7]),
+        .GRP_READY     (GRP_READY),
         .IRQ_OUT       (IRQ_OUT),
         .IRQ_GROUPER   ()
     );

@@ -59,6 +59,27 @@ Common flags:
   this when a project has large generated/output content next to its inputs that isn't
   worth changing the daemon config for.
 
+**Never submit concurrently from two worktrees (or any two working directories) against
+the same `--project` name.** The snapshot destination is keyed by `<user>/<project>`, not
+by the local directory you ran `hqsub` from — two overlapping submits under the same
+project both hash/copy into that one NFS location with no locking of their own, so one
+submit's in-flight copy can be partially overwritten by the other's, and the job that gets
+staged may run against a corrupted mix of both trees. Serialize with `hqwait` between them
+so one snapshot finishes staging before the next begins:
+
+```bash
+id=$(hqsub --project lora-mimo --name from-worktree-a build.sh | awk '{print $NF}')
+hqwait "$id"   # must return before a second worktree submits under the same --project
+```
+
+Before submitting under a shared `--project`, check whether another submit against it is
+already in flight — `hqstat --all --json` and filter for jobs in `STAGING`/`PENDING` state
+whose name or script path indicates the same project. There's no per-project lock to query
+directly, so this check is best-effort: a job already past `STAGING` into `RUNNING` is no
+longer a staging risk, but one still `STAGING` (or one submitted moments ago that hasn't
+shown up in `hqstat` yet) means you must hold off and `hqwait` on it first rather than
+submitting anyway.
+
 `hqsub` prints the assigned job ID. For interactive or GUI work, use `hqlogin` instead —
 `hqsub` is batch-only.
 

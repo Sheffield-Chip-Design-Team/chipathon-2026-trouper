@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/guard-worktrees-rm.py",
+            "statusMessage": "Checking for unsafe .claude/worktrees deletion..."
+          }
+        ]
+      }
+    ]
+  }
+}

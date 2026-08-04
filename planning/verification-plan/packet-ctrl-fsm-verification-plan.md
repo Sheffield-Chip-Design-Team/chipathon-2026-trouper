@@ -23,9 +23,10 @@ the system test plan or the PSRAM controller's separate verification plan.
 
 **Today:** the main requirement paths have integration coverage, and a non-vacuous
 formal checker proves the FSM's structural invariants. Directed coverage is not yet
-closed: Open Risk #42 correctly identifies the missing acquisition-timeout and
-mid-payload-commit tests, and RTL review adds boundary-precedence and deadline-extreme
-cases that the existing tests do not isolate.
+fully closed: Open Risk #42's acquisition-timeout and mid-payload-commit tests are now
+closed (rows #7/#8), but row #14's packet-deadline-precedence spec/RTL question remains
+open, and RTL review's boundary-precedence and deadline-extreme cases (rows #9–#12/
+#18–#20) are closed but not yet coverage-instrumented.
 
 - **Full-top cocotb simulation** — `cocotb/w_missed`, `cocotb/bypass_e2e`,
   `cocotb/sc_force_lock`, `cocotb/trouper_top`, and PSRAM/capture suites instantiate
@@ -57,8 +58,9 @@ cases that the existing tests do not isolate.
 There is no code-coverage merge, no functional-coverage model, and no
 coverage-directed constrained-random cocotb test. The active order is:
 
-1. Close the directed gaps in rows #7–#12 and #18–#20 before broad randomization.
-   These cases have crisp expected results and include requirement-boundary behavior.
+1. ~~Close the directed gaps in rows #7–#12 and #18–#20 before broad randomization.
+   These cases have crisp expected results and include requirement-boundary behavior.~~
+   ✅ Done — rows #9–#12/#18–#20 in SGE job 3719, rows #7/#8 in SGE job 3893.
 2. Instrument Verilator line/toggle/branch coverage and measure the existing regression
    as a baseline.
 3. Add functional coverpoints for state transitions, event/state crossings, deadline
@@ -105,8 +107,8 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
 | 4 | `training_done` transition and IRQ | SPEC-SIM / INTERFACE | `test_weight_gen_spi_flow.py` | TRPR-PCF-003 | ✅ done — W_PENDING ordering inferred from event/readback flow; row #2/#16 close the cycle/state detail |
 | 5 | On-time `W_commit` in W_PENDING | SPEC-SIM | `test_weight_gen_spi_flow.py`, `test_capture_playback.py` | TRPR-PCF-004 | ✅ done — `W_VALID` and combined output observed |
 | 6 | No commit: W-pending timeout, bypass, miss IRQ/sticky, packet done | SPEC-SIM | `cocotb/w_missed` → `test_w_missed_packet.py` | TRPR-PCF-005/007/008/009/010 | ✅ done (jobs 3305/3310) |
-| 7 | Acquisition timeout with no `training_done` | SPEC-SIM | extend `cocotb/w_missed` or new standalone suite | TRPR-PCF-001/005/010; Open Risk #42 | ⬜ new — prove direct ACQ→PAYLOAD transition, one-cycle miss pulse, sticky readback, bypass behavior, no TRAINING_DONE IRQ, and eventual packet done |
-| 8 | Late `W_commit` during PAYLOAD_ACTIVE | EDGE-SIM | extend `cocotb/w_missed` | Open Risk #42; documented W-commit behavior | ⬜ new — first enter payload through a miss, then write weights/commit; prove `W_VALID` asserts, sticky miss remains historical for that packet, bypass→MRC switch is burst-atomic, and only the remainder combines |
+| 7 | Acquisition timeout with no `training_done` | SPEC-SIM | extend `cocotb/w_missed` → `test_w_missed_on_acq_timeout` | TRPR-PCF-001/005/010; Open Risk #42 | ✅ done — `u_tacc.training_done` forced low every clock so the only exit from `ST_PREAMBLE_ACQ` is the `acq_cnt==0` branch; a clock-accurate watch (after a 7-symbol coarse wait) directly observes the transition never passing through `packet_phase==2`/W_PENDING and `W_missed_packet` pulsing for exactly 1 clock, then confirms sticky `PACKET_STATUS[7]`/`WGT_CTRL[3]` readback, `PACKET_STATUS.TRAINING_DONE`/`IRQ_STATUS.TRAINING_DONE` staying clear, bypass payload output, `PACKET_DONE`, and sticky-bit clear at the next lock (SGE job 3893; full-block regression re-confirmation job 3895) |
+| 8 | Late `W_commit` during PAYLOAD_ACTIVE | EDGE-SIM | extend `cocotb/w_missed` → `test_w_commit_late_during_payload` | Open Risk #42; documented W-commit behavior | ✅ done — enters `ST_PAYLOAD_ACTIVE` via the same W-pending-timeout miss as row #6, then commits weights mid-payload; confirms `WGT_CTRL.W_VALID`/`PACKET_STATUS.W_VALID` assert, the sticky `W_MISSED_PACKET` mirror stays set (historical, not cleared by the late commit), and a clock-accurate watch of `u_comb.use_mrc_r`/`u_comb.state` shows exactly one bypass→MRC transition coincident with `state==1` (i.e. immediately following a `state==0` `x_valid` burst start — burst-atomic, no mid-burst glitch); only the post-commit pairings then diverge from the raw antenna sample (20/20 differed) while the pre-commit pairings stayed bit-exact bypass (SGE job 3893; full-block regression re-confirmation job 3895) |
 | 9 | Commit before packet / in IDLE | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_commit_before_packet_in_idle`; corroborated by `tb_pcfsm_b6_equiv.v` scenario 3 | W-commit state table | ✅ done — exactly one `W_valid_set` pulse, pending clear, no next-packet miss, and `W_valid` clear at packet end checked cycle-by-cycle (SGE job 3719) |
 | 10 | Commit during ACQ_SETUP or PREAMBLE_ACQ | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_commit_during_acquisition_is_deferred` | sticky `W_commit_pending` protocol | ✅ done — separate ACQ_SETUP and PREAMBLE injections remain pending without skipping acquisition and are consumed only after W_PENDING entry (SGE job 3719) |
 | 11 | Same-cycle precedence at acquisition deadline | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_training_done_wins_at_acquisition_deadline` | RTL branch priority | ✅ done — `training_done` with `acq_cnt==0` enters W_PENDING and suppresses pulse/sticky miss (SGE job 3719) |
@@ -122,8 +124,8 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
 | 21 | B6 equivalence to absolute-deadline reference | DIFF-SIM | `rtl-test/tb/tb_pcfsm_b6_equiv.v` | B6 area cut | ✅ done — 40 randomized packets, all outputs compared every clock (jobs 3463/3471, re-run job 3712); harness hardened 2026-07-31 to keep randomized `timing_ref` inside the frozen reference's non-wrap-safe validity domain and use `$fatal` for a nonzero failure exit; retain as a change detector, not the golden requirements oracle |
 | 22 | Mode/antenna latch is packet-atomic | SPEC-SIM | `cocotb/bypass_e2e` → `test_mimo_ctrl_deferred_latch` | TRPR-PCF-006 | ✅ done (job 3315) |
 | 23 | Mode 1 lowest-enabled-antenna passthrough | INTERFACE/SYSTEM | `cocotb/bypass_e2e` mode-1 cases | TRPR-PCF-011 | ✅ done (job 3304) — routing is top-level/combiner behavior; the FSM only supplies the latched mode/mask |
-| 24 | Firmware absent: no deadlock | SPEC-SIM | `cocotb/w_missed`, two-packet tests | TRPR-PCF-010 | ✅ done for the W_PENDING-timeout path; row #7 closes the no-training path |
-| 25 | Miss pulse causality and sticky lifetime | FORMAL + SPEC-SIM | formal `a_wmissed_*`; `cocotb/w_missed` | TRPR-PCF-005/009 | ✅ done for W-pending miss; row #7 must corroborate the acquisition-miss source |
+| 24 | Firmware absent: no deadlock | SPEC-SIM | `cocotb/w_missed`, two-packet tests | TRPR-PCF-010 | ✅ done — W_PENDING-timeout path plus the row #7 no-training acquisition-timeout path (SGE job 3893), both reach `PACKET_DONE` and re-arm |
+| 25 | Miss pulse causality and sticky lifetime | FORMAL + SPEC-SIM | formal `a_wmissed_*`; `cocotb/w_missed` | TRPR-PCF-005/009 | ✅ done — W-pending miss plus row #7's direct clock-accurate 1-cycle-pulse observation of the acquisition-miss source (SGE job 3893) |
 | 26 | `PACKET_STATUS`/`WGT_CTRL` live readback | INTERFACE | `cocotb/w_missed`, weight-flow test | TRPR-PCF-009 | 🟨 partial — active, phases 0/2/3, pending, training, missed and W_VALID=0 are direct; add `PACKET_STATUS.W_VALID=1` and phase-1 reads to the successful-commit test |
 | 27 | Mid-packet forced/repeated lock cannot re-latch or glitch phase | INTERFACE/SYSTEM | `cocotb/sc_force_lock` → `test_sc_force_lock_blocked_during_packet` | Open Risk #25 structural contract | ✅ done at the register interface; `sc_detector` owns the level-held-lock guarantee |
 | 28 | Full formal property set, non-vacuous | FORMAL | `formal/packet_ctrl_fsm_formal.sv` + `.sby` | TRPR-PCF-001/002/005/008/009; B6 invariants | ✅ done (depth 40, reported job 3487); re-run after any RTL or assumption change and confirm checker cells/properties remain in the prepared design |
@@ -135,9 +137,11 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
    ✅ Done (`cocotb/packet_ctrl_fsm`: rows #1/#2 in SGE job 3710 and rows
    #9–#12/#18–#20 in SGE job 3719). Direct ports avoid the long decimator/SC
    latency and allow exact same-cycle event placement.
-2. Extend `cocotb/w_missed` for acquisition timeout (#7) and late mid-payload commit
+2. ~~Extend `cocotb/w_missed` for acquisition timeout (#7) and late mid-payload commit
    (#8), because those cases need observable top-level bypass/MRC, sticky register, and
-   IRQ behavior.
+   IRQ behavior.~~
+   ✅ Done (`cocotb/w_missed` → `test_w_missed_on_acq_timeout` / `test_w_commit_late_during_payload`,
+   SGE job 3893; full-block regression re-confirmation job 3895).
 3. Resolve row #14 before declaring TRPR-PCF-007 closed for all legal register values.
    A test written to the current SHALL will fail the present RTL when the packet deadline
    expires before the FSM reaches PAYLOAD_ACTIVE.
@@ -183,11 +187,16 @@ Any change to the PCFSM port list must be mirrored in
 in `rtl-test/tb/tb_pcfsm_b6_equiv.v`. The frozen
 `rtl-test/tb/packet_ctrl_fsm_ref.v` should otherwise remain unchanged.
 
-**Last full run:** SGE job 3861, 2026-08-04 — all targets passed:
-standalone 9/9, `w_missed` 1/1, `bypass_e2e` 5/5, `sc_force_lock` 2/2,
-`trouper_top` 18/18, formal k-induction PASS with the 30-check property module
-retained in the prepared design, and B6 differential simulation PASS for 40
-randomized packets.
+**Last full run:** SGE job 3895, 2026-08-04 — all targets passed:
+standalone 9/9, `w_missed` 3/3 (now including rows #7/#8's
+`test_w_missed_on_acq_timeout` / `test_w_commit_late_during_payload`,
+SGE job 3893), `bypass_e2e` 5/5, `sc_force_lock` 2/2, `trouper_top` 18/18,
+formal k-induction PASS with the checker instance confirmed present in the
+prepared design, and B6 differential simulation PASS for 40 randomized
+packets. The real-capture legacy tests (`test_weight_gen_spi_flow.py`,
+`test_capture_two_packet.py`) were not re-run this session — unaffected by
+the rows #7/#8 change and already closed against jobs 3286/3273; their
+capture dataset is external to the self-contained regression above.
 
 **Last targeted standalone run:** SGE job 3719, 2026-07-31 — all 9 tests passed,
 including directed closure of rows #9–#12/#18–#20.
