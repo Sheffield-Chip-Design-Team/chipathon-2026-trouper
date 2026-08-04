@@ -380,6 +380,51 @@ async def test_read_side_effect(dut):
         assert addr == 0x76, f"{tag}: dst reg_re #{i} address drifted to 0x{addr:02X}"
 
 
+@cocotb.test()
+async def test_read_side_effect_continuous_burst(dut):
+    """Continuous CS-low read burst at PSRAM_DBG_DATA (0x76): a single command
+    byte followed directly by many data bytes under one HOST_CS assertion --
+    unlike test_read_side_effect above, which re-asserts CS for every byte
+    pair. NO_INC_ADDR must hold cur_addr at 0x76 for every byte of the burst
+    (the burst auto-increment path is never taken), and each data byte must
+    still produce exactly one reg_re event even though the burst runs past
+    the 8-byte debug buffer boundary where AUTO_INC (DBG_CTRL bit 1, set by
+    _enable_psram_dbg) kicks off a refetch and dbg_busy stalls the PSRAM-side
+    data (that stall is a psram_buf_ctrl content concern, not a transport
+    one -- reg_re/cur_addr must not glitch because of it)."""
+    tag = "read_side_effect_continuous_burst"
+    await _bringup(dut)
+    # Scoreboard attached after setup for the same reason as test_read_side_effect.
+    await _enable_psram_dbg(dut)
+    sb = _attach_scoreboard(dut)
+
+    half_ns = 50.0  # 10 MHz
+    n_reads = 16    # spans the 8-byte dbg_buf boundary (dbg_idx wraps once)
+    tx_bytes = [0x80 | (0x76 & 0x7F)] + [0xFF] * n_reads
+    rx, bits = await spi_frame(dut, tx_bytes, half_ns,
+                                cs_lead_ns=half_ns, cs_trail_ns=half_ns)
+    assert bits == 8 * (1 + n_reads), f"{tag}: frame truncated ({bits} bits)"
+
+    await _settle(dut, 64)
+
+    assert len(sb.src_reads) == n_reads, (
+        f"{tag}: expected {n_reads} source read events from one continuous "
+        f"burst, saw {len(sb.src_reads)}")
+    for i, addr in enumerate(sb.src_reads):
+        assert addr == 0x76, (
+            f"{tag}: source read #{i} address drifted to 0x{addr:02X} -- "
+            f"NO_INC_ADDR must hold for the whole burst, not just across "
+            f"separate frames")
+    sb.check_read_chain(tag)
+    for i, addr in enumerate(sb.dst_re):
+        assert addr == 0x76, f"{tag}: dst reg_re #{i} address drifted to 0x{addr:02X}"
+
+    # Slave must still work normally afterward.
+    await spi_write(dut, SAFE_ADDR, 0x5C)
+    got = await spi_read(dut, SAFE_ADDR)
+    assert got == 0x5C, f"{tag}: slave did not recover after continuous burst"
+
+
 # ---------------------------------------------------------------------------
 # 5. Reset interruption tests
 # ---------------------------------------------------------------------------

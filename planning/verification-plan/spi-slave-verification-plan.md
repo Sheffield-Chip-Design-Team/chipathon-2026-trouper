@@ -25,16 +25,18 @@ permissions, and control/status semantics belong to the separate
 ## 1. Current methodology, and the path to constrained random
 
 **Today:** normal SPI transactions and the persistent-toggle CDC have strong
-directed integration coverage. The MISO-drive and Grouper-arbitration
-requirement conflicts are resolved. Verification is not closed because the
-0x76 continuous-burst exception is untested, there is no standalone protocol
-oracle or formal checker, and 10 MHz physical timing remains unsigned off.
+directed integration coverage, including the 0x76 continuous-burst exception.
+The MISO-drive and Grouper-arbitration requirement conflicts are resolved.
+Verification is not closed because there is no standalone protocol oracle or
+formal checker, and 10 MHz physical timing remains unsigned off.
 
-- **Full-top cocotb simulation** — `cocotb/spi_cdc` has eight scenarios with a
+- **Full-top cocotb simulation** — `cocotb/spi_cdc` has nine scenarios with a
   three-level scoreboard requiring completed SPI bytes, synchronized
   `reg_we`/`reg_re`, and CE-accepted writes to match one-for-one. It covers
   randomized SCK/core phase, 10 MHz operation, minimum CS spacing, continuous
-  writes, reset interruption, aborted frames, read side effects, and W1P
+  writes, reset interruption, aborted frames, read side effects (both
+  separate-transaction and continuous CS-low burst at 0x76, the latter
+  spanning the PSRAM debug engine's AUTO_INC refetch boundary), and W1P
   exactly-once delivery.
 - **Legacy directed simulation** — `tb_trouper_spi.v` covers Mode 0 at 10 MHz,
   first-data-byte timing, ordinary burst access, modulo-128 wrap, and 0x7F.
@@ -50,7 +52,9 @@ oracle or formal checker, and 10 MHz physical timing remains unsigned off.
 
 The active order is:
 
-1. Extend the existing CDC suite for the continuous 0x76 burst.
+1. ~~Extend the existing CDC suite for the continuous 0x76 burst.~~ Done (job
+   3865) — see `test_read_side_effect_continuous_burst` in
+   `cocotb/spi_cdc/test_spi_cdc.py`.
 2. Add a standalone SPI harness and independent protocol model.
 3. Add formal event-conservation and mailbox properties.
 4. Instrument and close code/functional coverage.
@@ -88,11 +92,11 @@ owned outside `spi_slave`.
 
 | # | Test | Type | Testbench | Spec / gap | Status |
 |---|---|---|---|---|---|
-| 1 | Mode-0, MSB-first single write/read and 2-byte first-data-byte timing | SPEC-SIM | `tb_trouper_spi.v`; `cocotb/spi_cdc` | TRPR-SPS-001/002/003/006/009 | 🟨 partial — the legacy test is written for 10 MHz and guards the former one-byte-late bug, but its stale `BW_CFG` expectation must be updated before a current rerun |
+| 1 | Mode-0, MSB-first single write/read and 2-byte first-data-byte timing | SPEC-SIM | `tb_trouper_spi.v`; `cocotb/spi_cdc` | TRPR-SPS-001/002/003/006/009 | ✅ done (job 3865) — the reg-bank reserved-bit alignment (commit `78e8c6b`) had already corrected the legacy test's `BW_CFG` mask expectation to `0x07`; reran `tb_trouper_spi.v` at 10 MHz clean (all 42 checks, including the one-byte-late-bug guard and the 2-byte CHIP_ID first-data-byte timing check) plus `cocotb/spi_cdc` (9/9) |
 | 2 | First transaction after reset, without warm-up | EDGE-SIM | cocotb bring-up; `test_reset_interruption` | Open Risk #26; TRPR-SPS-005 | ✅ done |
 | 3 | Completed write survives immediate legal CS deassertion exactly once | SPEC-SIM | `test_back_to_back_min_cs`, `test_randomized_clock_phase` | Open Risk #15; TRPR-SPS-003/005 | ✅ done (job 3352) |
 | 4 | Continuous burst write/read, increment, and modulo-128 wrap | SPEC-SIM | `test_continuous_burst`; `tb_trouper_spi.v` | TRPR-SPS-010 | ✅ done for ordinary addresses and 0x7E→0x7F→0x00 |
-| 5 | Continuous CS-low read burst at 0x76 holds address and emits one read-side-effect event per byte | SPEC-SIM | extend `cocotb/spi_cdc` with PSRAM model | TRPR-SPS-010 | ⬜ new — existing read-side-effect test uses separate two-byte transactions |
+| 5 | Continuous CS-low read burst at 0x76 holds address and emits one read-side-effect event per byte | SPEC-SIM | extend `cocotb/spi_cdc` with PSRAM model | TRPR-SPS-010 | ✅ done (job 3865) — added `test_read_side_effect_continuous_burst` to `cocotb/spi_cdc/test_spi_cdc.py`: one CS-low frame, 16 consecutive data-byte reads of 0x76 (spanning the PSRAM debug engine's 8-byte `dbg_buf`/AUTO_INC refetch boundary), asserting `cur_addr` stays pinned at 0x76 and exactly one `reg_re` fires per byte throughout |
 | 6 | Dedicated MISO drives low while CS is high | SPEC-SIM / INTERFACE | `tb_trouper_spi.v` idle and post-read checks | TRPR-SPS-008 | ✅ resolved (job 3863) — selected pinout dedicates MISO to Trouper; requirement now matches the deterministic-low RTL (tri-state/OE is not required) |
 | 7 | Randomized SCK/core phase, CS timing, and supported-rate sweep | SPEC-SIM / CDC | `test_randomized_clock_phase`, `test_clock_limit_sweep` | TRPR-SPS-004/005 | ✅ RTL simulation (job 3352) — 100 kHz, 1/8/10 MHz required; 12 MHz diagnostic |
 | 8 | Abort CS at every command/data bit and reset during frame/CDC/write extension | EDGE-SIM | `test_aborted_frame`, `test_reset_interruption` | TRPR-SPS-001/005 | ✅ done (job 3352) |
@@ -110,8 +114,12 @@ owned outside `spi_slave`.
 
 ### 2a. Directed closure order
 
-1. Add the continuous 0x76 burst test in #5 and refresh the legacy regression
-   in #1.
+1. ~~Add the continuous 0x76 burst test in #5 and refresh the legacy
+   regression in #1.~~ Done (job 3865): #5's `test_read_side_effect_continuous_burst`
+   passes, and #1's legacy `tb_trouper_spi.v` reran clean at 10 MHz — its
+   `BW_CFG` mask expectation was already corrected to `0x07` by the reg-bank
+   reserved-bit alignment (commit `78e8c6b`), so no test edit was needed there,
+   only the rerun.
 2. Build the standalone protocol model for #11–#14.
 3. Add the formal checker in #15 and verify non-vacuity.
 4. Merge code and functional coverage, then randomize until §1a closes.
