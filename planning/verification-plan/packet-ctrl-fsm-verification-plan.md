@@ -107,18 +107,18 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
 | 6 | No commit: W-pending timeout, bypass, miss IRQ/sticky, packet done | SPEC-SIM | `cocotb/w_missed` → `test_w_missed_packet.py` | TRPR-PCF-005/007/008/009/010 | ✅ done (jobs 3305/3310) |
 | 7 | Acquisition timeout with no `training_done` | SPEC-SIM | extend `cocotb/w_missed` or new standalone suite | TRPR-PCF-001/005/010; Open Risk #42 | ⬜ new — prove direct ACQ→PAYLOAD transition, one-cycle miss pulse, sticky readback, bypass behavior, no TRAINING_DONE IRQ, and eventual packet done |
 | 8 | Late `W_commit` during PAYLOAD_ACTIVE | EDGE-SIM | extend `cocotb/w_missed` | Open Risk #42; documented W-commit behavior | ⬜ new — first enter payload through a miss, then write weights/commit; prove `W_VALID` asserts, sticky miss remains historical for that packet, bypass→MRC switch is burst-atomic, and only the remainder combines |
-| 9 | Commit before packet / in IDLE | EDGE-SIM | standalone test; corroborate `tb_pcfsm_b6_equiv.v` scenario 3 | W-commit state table | 🟨 partial — differential test covers it; add requirement-level checks for one `W_valid_set` pulse, pending clear, use on the next packet, and clear at packet end |
-| 10 | Commit during ACQ_SETUP or PREAMBLE_ACQ | EDGE-SIM | standalone test | sticky `W_commit_pending` protocol | ⬜ new — commit must remain pending, must not skip acquisition, and must be consumed after entry to W_PENDING |
-| 11 | Same-cycle precedence at acquisition deadline | EDGE-SIM | standalone test | RTL branch priority | ⬜ new — `training_done` on the cycle `acq_cnt==0` must win over the acquisition-timeout/miss branch |
-| 12 | Same-cycle precedence at weight deadline | EDGE-SIM + FORMAL | standalone test; formal missed-cause property | RTL branch priority | ⬜ new — a pending commit on the cycle `wpend_cnt==0` must win, set valid, and suppress the miss pulse |
+| 9 | Commit before packet / in IDLE | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_commit_before_packet_in_idle`; corroborated by `tb_pcfsm_b6_equiv.v` scenario 3 | W-commit state table | ✅ done — exactly one `W_valid_set` pulse, pending clear, no next-packet miss, and `W_valid` clear at packet end checked cycle-by-cycle (SGE job 3719) |
+| 10 | Commit during ACQ_SETUP or PREAMBLE_ACQ | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_commit_during_acquisition_is_deferred` | sticky `W_commit_pending` protocol | ✅ done — separate ACQ_SETUP and PREAMBLE injections remain pending without skipping acquisition and are consumed only after W_PENDING entry (SGE job 3719) |
+| 11 | Same-cycle precedence at acquisition deadline | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_training_done_wins_at_acquisition_deadline` | RTL branch priority | ✅ done — `training_done` with `acq_cnt==0` enters W_PENDING and suppresses pulse/sticky miss (SGE job 3719) |
+| 12 | Same-cycle precedence at weight deadline | EDGE-SIM + FORMAL | `cocotb/packet_ctrl_fsm` → `test_pending_commit_wins_at_weight_deadline`; formal missed-cause property | RTL branch priority | ✅ done — a previously captured pending commit with `wpend_cnt==0` sets valid, enters payload, clears pending, and suppresses pulse/sticky miss (SGE job 3719) |
 | 13 | Packet timeout, IDLE return, PACKET_DONE, and re-arm | SPEC-SIM | `cocotb/w_missed`; `test_capture_two_packet.py` | TRPR-PCF-007/008/010 | ✅ done for a normal deadline later than acquisition/weight deadlines |
 | 14 | Packet deadline earlier than acquisition or W-pending deadline | SPEC-SIM / ANALYSIS | standalone test | TRPR-PCF-007 | ⚠️ spec/RTL issue — the RTL tests `pkt_cnt==0` only in PAYLOAD_ACTIVE, so a short `PKT_TIMEOUT_SYMS` cannot force IDLE while still in ACQ/W_PENDING; define whether the requirement or RTL must change, then lock the decision with a regression |
 | 15 | Back-to-back packets and sticky clear at next lock | SPEC-SIM | `test_capture_two_packet.py`; `cocotb/w_missed` | TRPR-PCF-002/008/010 | ✅ done (real-capture job 3273; sticky re-lock path in jobs 3305/3310) |
 | 16 | `packet_phase`, active outputs, and legal-state lockstep | FORMAL + SPEC-SIM | formal phase/active assertions; `cocotb/packet_ctrl_fsm`, `cocotb/w_missed`, `cocotb/sc_force_lock` | TRPR-PCF-001/002/008/009 | ✅ done — formal proves lockstep globally; standalone simulation directly observes internal ACQ_SETUP with public phase 1, and integration tests read phases 0/1/2/3 |
 | 17 | `packet_active_ps` mirrors `packet_active` | FORMAL + DIFF-SIM | formal `a_ps_mirror`; `tb_pcfsm_b6_equiv.v` | physical fanout split | ✅ done |
-| 18 | Counter formula and tick-edge checks at representative configurations | SPEC-SIM | new standalone test with Python model | TRPR-PCF-001/007; B6 behavior | ⬜ new — compare exact `acq_cnt`, `wpend_cnt`, and `pkt_cnt` loads/decrements/fire edges, including `iq_tick` on setup and long gaps without ticks |
-| 19 | Counter/configuration extremes | EDGE-SIM | standalone constrained-directed test | width/clamp review | ⬜ new — raw `tacc_window_syms=0`, 8, 15; `pkt_timeout_syms=0/255`; SF7/shift1 and SF12/shift2; already-expired loads |
-| 20 | `sample_count` wrap and low-20-bit elapsed wrap | EDGE-SIM + FORMAL | standalone test; formal elapsed proof | B6 wrap-immunity claim | ⬜ new simulation — formal proves the bounded modular subtraction, but no directed regression crosses either wrap boundary |
+| 18 | Counter formula and tick-edge checks at representative configurations | SPEC-SIM | `cocotb/packet_ctrl_fsm` → `test_counter_formula_tick_and_fire_edges` | TRPR-PCF-001/007; B6 behavior | ✅ done — independently calculated exact loads, setup-edge tick correction, no-tick holds, tick decrements, and zero-fire edges for all three counters at representative configurations (SGE job 3719) |
+| 19 | Counter/configuration extremes | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_counter_configuration_extremes` | width/clamp review | ✅ done — raw `tacc_window_syms=0`, 8, 15; `pkt_timeout_syms=0/255`; SF7/shift1 and SF12/shift2; setup tick; maximum spans; and already-expired clamp-to-zero loads (SGE job 3719) |
+| 20 | `sample_count` wrap and low-20-bit elapsed wrap | EDGE-SIM + FORMAL | `cocotb/packet_ctrl_fsm` → `test_sample_count_and_elapsed_wrap`; formal elapsed proof | B6 wrap-immunity claim | ✅ done — exact loads and first post-load tick checked across a low-20-bit wrap and a full-32-bit `sample_count` wrap (SGE job 3719) |
 | 21 | B6 equivalence to absolute-deadline reference | DIFF-SIM | `rtl-test/tb/tb_pcfsm_b6_equiv.v` | B6 area cut | ✅ done — 40 randomized packets, all outputs compared every clock (jobs 3463/3471, re-run job 3712); harness hardened 2026-07-31 to keep randomized `timing_ref` inside the frozen reference's non-wrap-safe validity domain and use `$fatal` for a nonzero failure exit; retain as a change detector, not the golden requirements oracle |
 | 22 | Mode/antenna latch is packet-atomic | SPEC-SIM | `cocotb/bypass_e2e` → `test_mimo_ctrl_deferred_latch` | TRPR-PCF-006 | ✅ done (job 3315) |
 | 23 | Mode 1 lowest-enabled-antenna passthrough | INTERFACE/SYSTEM | `cocotb/bypass_e2e` mode-1 cases | TRPR-PCF-011 | ✅ done (job 3304) — routing is top-level/combiner behavior; the FSM only supplies the latched mode/mask |
@@ -130,10 +130,11 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
 
 ### 2a. Directed closure order
 
-1. ~~Implement one standalone block-level cocotb harness and Python reference model.~~
-   ✅ Done for rows #1/#2 (`cocotb/packet_ctrl_fsm`, SGE job 3710). Reuse it for
-   rows #9–#12/#18–#20; direct ports avoid the long decimator/SC latency and allow
-   exact same-cycle event placement.
+1. ~~Implement one standalone block-level cocotb harness and Python reference model,
+   then close rows #9–#12/#18–#20 on it.~~
+   ✅ Done (`cocotb/packet_ctrl_fsm`: rows #1/#2 in SGE job 3710 and rows
+   #9–#12/#18–#20 in SGE job 3719). Direct ports avoid the long decimator/SC
+   latency and allow exact same-cycle event placement.
 2. Extend `cocotb/w_missed` for acquisition timeout (#7) and late mid-payload commit
    (#8), because those cases need observable top-level bypass/MRC, sticky register, and
    IRQ behavior.
@@ -182,10 +183,14 @@ Any change to the PCFSM port list must be mirrored in
 in `rtl-test/tb/tb_pcfsm_b6_equiv.v`. The frozen
 `rtl-test/tb/packet_ctrl_fsm_ref.v` should otherwise remain unchanged.
 
-**Last full run:** SGE job 3712, 2026-07-31 — all targets passed:
-standalone 2/2, `w_missed` 1/1, `bypass_e2e` 5/5, `sc_force_lock` 2/2,
-`trouper_top` 18/18, formal k-induction PASS, and B6 differential simulation
-PASS for 40 randomized packets.
+**Last full run:** SGE job 3861, 2026-08-04 — all targets passed:
+standalone 9/9, `w_missed` 1/1, `bypass_e2e` 5/5, `sc_force_lock` 2/2,
+`trouper_top` 18/18, formal k-induction PASS with the 30-check property module
+retained in the prepared design, and B6 differential simulation PASS for 40
+randomized packets.
+
+**Last targeted standalone run:** SGE job 3719, 2026-07-31 — all 9 tests passed,
+including directed closure of rows #9–#12/#18–#20.
 
 ---
 
