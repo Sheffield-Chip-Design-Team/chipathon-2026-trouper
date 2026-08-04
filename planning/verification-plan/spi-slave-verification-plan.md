@@ -25,10 +25,10 @@ permissions, and control/status semantics belong to the separate
 ## 1. Current methodology, and the path to constrained random
 
 **Today:** normal SPI transactions and the persistent-toggle CDC have strong
-directed integration coverage. Verification is not closed because the 0x76
-continuous-burst exception is untested, two requirements conflict with or
-exceed the current integration, there is no standalone protocol oracle or
-formal checker, and 10 MHz physical timing remains unsigned off.
+directed integration coverage. The MISO-drive and Grouper-arbitration
+requirement conflicts are resolved. Verification is not closed because the
+0x76 continuous-burst exception is untested, there is no standalone protocol
+oracle or formal checker, and 10 MHz physical timing remains unsigned off.
 
 - **Full-top cocotb simulation** — `cocotb/spi_cdc` has eight scenarios with a
   three-level scoreboard requiring completed SPI bytes, synchronized
@@ -50,12 +50,11 @@ formal checker, and 10 MHz physical timing remains unsigned off.
 
 The active order is:
 
-1. Resolve the MISO-drive and arbitration issues in rows #6 and #10.
-2. Extend the existing CDC suite for the continuous 0x76 burst.
-3. Add a standalone SPI harness and independent protocol model.
-4. Add formal event-conservation and mailbox properties.
-5. Instrument and close code/functional coverage.
-6. Complete CDC/RDC, STA, gate-level, and bench signoff.
+1. Extend the existing CDC suite for the continuous 0x76 burst.
+2. Add a standalone SPI harness and independent protocol model.
+3. Add formal event-conservation and mailbox properties.
+4. Instrument and close code/functional coverage.
+5. Complete CDC/RDC, STA, gate-level, and bench signoff.
 
 ### 1a. Coverage model
 
@@ -94,11 +93,11 @@ owned outside `spi_slave`.
 | 3 | Completed write survives immediate legal CS deassertion exactly once | SPEC-SIM | `test_back_to_back_min_cs`, `test_randomized_clock_phase` | Open Risk #15; TRPR-SPS-003/005 | ✅ done (job 3352) |
 | 4 | Continuous burst write/read, increment, and modulo-128 wrap | SPEC-SIM | `test_continuous_burst`; `tb_trouper_spi.v` | TRPR-SPS-010 | ✅ done for ordinary addresses and 0x7E→0x7F→0x00 |
 | 5 | Continuous CS-low read burst at 0x76 holds address and emits one read-side-effect event per byte | SPEC-SIM | extend `cocotb/spi_cdc` with PSRAM model | TRPR-SPS-010 | ⬜ new — existing read-side-effect test uses separate two-byte transactions |
-| 6 | MISO release behavior while CS is high | SPEC-SIM / INTERFACE | pad-aware test after requirement resolution | TRPR-SPS-008 | ⚠️ spec/RTL issue — RTL actively drives 0 and the top exposes no MISO OE; decide whether the dedicated pad permits “drive low” and revise the SHALL, or add tri-state/OE |
+| 6 | Dedicated MISO drives low while CS is high | SPEC-SIM / INTERFACE | `tb_trouper_spi.v` idle and post-read checks | TRPR-SPS-008 | ✅ resolved (job 3863) — selected pinout dedicates MISO to Trouper; requirement now matches the deterministic-low RTL (tri-state/OE is not required) |
 | 7 | Randomized SCK/core phase, CS timing, and supported-rate sweep | SPEC-SIM / CDC | `test_randomized_clock_phase`, `test_clock_limit_sweep` | TRPR-SPS-004/005 | ✅ RTL simulation (job 3352) — 100 kHz, 1/8/10 MHz required; 12 MHz diagnostic |
 | 8 | Abort CS at every command/data bit and reset during frame/CDC/write extension | EDGE-SIM | `test_aborted_frame`, `test_reset_interruption` | TRPR-SPS-001/005 | ✅ done (job 3352) |
 | 9 | Source-byte ↔ synchronized-event ↔ accepted-write conservation | EDGE-SIM + FORMAL | all `cocotb/spi_cdc` scoreboard tests; formal checker | CDC mailbox contract | ✅ simulation (job 3352); ⬜ formal proof |
-| 10 | Grouper priority with preservation or defined rejection of overlapping SPI access | SPEC-SIM / INTERFACE | extend `tb_trouper_grp_arb.v` with long/phase-swept overlaps | TRPR-SPS-007; Open Risk #16 | ⚠️ spec/RTL issue — current mux has no SPI queue, stall, or retry; existing test proves Grouper wins and recovery, not preservation of the masked SPI access |
+| 10 | Grouper priority with preservation or defined rejection of overlapping SPI access | SPEC-SIM / INTERFACE | `tb_trouper_grp_arb.v` full-strobe write overlap and MISO-load read overlap | TRPR-SPS-007; Open Risk #16 | ✅ resolved (job 3863) — one-entry pending slot preserves a completed SPI write until the Grouper byte cycle releases; an overlapping SPI read is explicitly invalid and retried because pin-level SPI has no WAIT response |
 | 11 | Read byte remains stable despite live-status or Grouper-address changes | EDGE-SIM | standalone suite plus top-level contention case | asynchronous peek/MISO contract | ⬜ new — current MISO shifter snapshots once per byte; define and verify byte atomicity |
 | 12 | SCK while deselected, runt frames, and repeated command-only frames | EDGE-SIM | standalone suite | frame-reset robustness | 🟨 partial — partial frames are swept; add deselected clocks and command-only recovery |
 | 13 | All source events sufficiently separated at 10 MHz | FORMAL / ANALYSIS | formal assumptions plus CDC report | toggle-event distinguishability | ⬜ new — prove/assume legal byte spacing exceeds synchronizer latency |
@@ -111,13 +110,12 @@ owned outside `spi_slave`.
 
 ### 2a. Directed closure order
 
-1. Resolve rows #6 and #10.
-2. Add the continuous 0x76 burst test in #5 and refresh the legacy regression
+1. Add the continuous 0x76 burst test in #5 and refresh the legacy regression
    in #1.
-3. Build the standalone protocol model for #11–#14.
-4. Add the formal checker in #15 and verify non-vacuity.
-5. Merge code and functional coverage, then randomize until §1a closes.
-6. Complete CDC/STA/gate/bench rows #16–#19.
+2. Build the standalone protocol model for #11–#14.
+3. Add the formal checker in #15 and verify non-vacuity.
+4. Merge code and functional coverage, then randomize until §1a closes.
+5. Complete CDC/STA/gate/bench rows #16–#19.
 
 ---
 

@@ -207,8 +207,23 @@ module tb_trouper_spi;
         #1 spi_cs = 1'b1;
         repeat (8) @(posedge clk);
 
+        // 0. SPI_MISO is a dedicated output and must be driven low, not Z,
+        // whenever HOST_CS is deasserted (TRPR-SPS-008).
+        if (spi_miso !== 1'b0) begin
+            $display("FAIL  MISO deselected-low      got %b expected 0", spi_miso);
+            errors = errors + 1;
+        end else begin
+            $display("pass  MISO deselected-low");
+        end
+
         // 1. CHIP_ID / CHIP_REV — 2-byte read frames (TRPR-SPS-006/009)
         spi_read(7'h00, rd); check("CHIP_ID",        rd, 8'hA7);
+        if (spi_miso !== 1'b0) begin
+            $display("FAIL  MISO release after read got %b expected 0", spi_miso);
+            errors = errors + 1;
+        end else begin
+            $display("pass  MISO release after read");
+        end
         spi_read(7'h01, rd); check("CHIP_REV",       rd, 8'h01);
 
         // 2. Write + readback: SF_CFG (reset 0x07 -> 0x0A).  First use the
