@@ -401,7 +401,7 @@ In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 | --- | --- | --- |
 | [0] | `PSRAM_EN` | 0 = disabled (default); 1 = enable same-packet PSRAM buffering/replay. The **device is mandatory on the board** — "optional" applies to this register default only, never to the hardware; reset-default 0 exists so firmware can own the ≥150 µs power-up delay before enabling. Normal operation sets it to 1 after tPU (policy stated in full at TRPR-PSR-009). Write ignored while `PACKET_ACTIVE` — like `SF_CFG`/`BW_CFG`, toggling this mid-packet would leave `psram_buf_ctrl`'s `buf_active` set with `psram_en` now 0, an inconsistent state its own logic assumes can't happen. |
 | [1] | `PSRAM_CLR_ERR` | Write 1 to clear the four sticky PSRAM error flags — `OVERFLOW` and `REPLAY_MISSED` (0x71[6]/[5]), `SAMPLE_SKIP` (0x71[2]) and `W_COMMIT_LATE` (0x1E[4]); self-clears. (Corrected 2026-07-26: this row listed only the first two.) |
-| [2] | — | **Reserved, write 0.** The current `reg_bank` retains and reads this bit, but no downstream RTL consumes it; it has no functional effect. Storage is fixed at 8 bytes/sample (int8 I/Q × 4 branches) per TRPR-PSR-005. |
+| [2] | — | **Reserved, write 0.** Writes are ignored and readback is always zero. Storage is fixed at 8 bytes/sample (int8 I/Q × 4 branches) per TRPR-PSR-005. |
 | [3] | `QSPI_OWNER` | 0 = Trouper `psram_buf_ctrl` owns the APS6404L pads for capture/replay (default); 1 = ownership transferred away from the replay controller for a future firmware-managed external-memory mode. Ownership changes take effect only when the PSRAM controller is idle. |
 | [7:4] | — | Reserved |
 

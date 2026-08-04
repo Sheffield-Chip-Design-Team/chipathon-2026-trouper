@@ -44,7 +44,9 @@ top-level tests rather than checked directly.
 
 The active order is:
 
-1. Resolve the `PSRAM_CTRL[2]` register-map/RTL conflict in row #4.
+1. ✅ Resolved 2026-07-31: `PSRAM_CTRL[2]` is reserved, ignores writes, and
+   reads zero; the register map remains authoritative and the legacy SPI test
+   pins the behavior.
 2. Add a standalone harness and checked-in table-driven register-map oracle.
 3. Close exhaustive decode, permission, side-effect, and CE/read-timing gaps.
 4. Add formal properties for legal writes, W1P width, write locks, reserved
@@ -89,7 +91,7 @@ At minimum, collect:
 | 1 | Full 0x00–0x7F reset-value sweep at power-on and after dirty/reset | SPEC-SIM | `cocotb/reg_reset_sweep` | TRPR-REG-001 | ✅ done (job 3319); intentionally excludes resetless training accumulators 0x40–0x6F |
 | 2 | Exhaustive address/access-permission/mask sweep | SPEC-SIM | new standalone `cocotb/reg_bank` with checked-in map oracle | TRPR-REG-001/004/005 | 🟨 partial — `tb_trouper_spi.v` spot-checks permissions and masks; add every address and prove writes cannot perturb unrelated registers |
 | 3 | Fixed IDs and all reserved addresses read zero/write ignored | SPEC-SIM | `tb_trouper_spi.v`; standalone sweep | TRPR-REG-004 | 🟨 partial — representative reserved addresses and 0x7F are covered; exhaust all 22 reserved slots |
-| 4 | All RW field storage, reserved-bit masking, and packed output mapping | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ⚠️ test gap + spec/RTL issue — `PSRAM_CTRL[2]` is documented “reserved, write 0” but current RTL stores/reads it and `tb_trouper_spi.v` expects that behavior; resolve before fixing the oracle |
+| 4 | All RW field storage, reserved-bit masking, and packed output mapping | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | 🟨 partial — `PSRAM_CTRL[2]` conflict resolved 2026-07-31: writes are ignored and readback is zero, pinned by `tb_trouper_spi.v` (job 3721); exhaustive standalone checks of every RW field/output mapping remain to be added |
 | 5 | Every RO/status input decode and reserved-bit zeroing | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ⬜ new — directly drive packet, training, SC, Z-pair/Z-diagonal, and PSRAM inputs with non-symmetric patterns |
 | 6 | Multi-byte big-endian ordering and truncation | SPEC-SIM | standalone suite; retain weight/training/SC integration tests | TRPR-REG-003 | 🟨 partial — functional flows cover the main fields; add an exhaustive byte-lane oracle for `[31:8]`, 23-bit, 18-bit, 16-bit, and 128-bit mappings |
 | 7 | `TACC_WINDOW_SYMS` clamp for all inputs | SPEC-SIM | standalone suite; `tb_trouper_spi.v` | Register Map 0x27 | 🟨 partial — 0→8 and normal 12 covered; sweep 0..15 and reserved high bits |

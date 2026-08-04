@@ -754,13 +754,13 @@ Two stored control bits have no consumer in current RTL:
 - `MIMO_CTRL.MODE[1]` is reset to zero, is never written (`reg_bank.v` writes
   only `mimo_mode[0]`), and `mrc_combiner` consumes only `active_mode[0]`.
   Narrow `mimo_mode` to one bit and tie the upper active-mode/readback bit low.
-- `PSRAM_CTRL.SAMPLE_WIDTH` (`0x70[2]`) is stored and read back but
-  `rb_psram_ctrl[2]` has no downstream reference. Remove that flop and return
-  zero for the reserved bit.
+- `PSRAM_CTRL.SAMPLE_WIDTH` (`0x70[2]`) had no downstream reference. Completed
+  2026-07-31: writes are ignored and the reserved bit returns zero, allowing
+  synthesis to remove the constant-zero flop.
 
 This saves only two flops, so no placed-area claim is warranted; its value is
-eliminating false configuration surface. Update `Register Map.md` and the chip
-specification to call `0x70[2]` reserved before taking it.
+eliminating false configuration surface. `Register Map.md` already defines
+`0x70[2]` as reserved; the RTL now matches it.
 
 **B11. narrow the ineffective high nibble of `SC_THR`. Tiny ABI change.**
 `sc_detector` consumes only `sc_thr[11:0]`, while `reg_bank` stores and returns
