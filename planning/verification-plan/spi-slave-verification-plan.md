@@ -31,14 +31,18 @@ Grouper-arbitration requirement conflicts are resolved. Verification is not
 closed because there is no formal checker yet, and 10 MHz physical timing
 remains unsigned off.
 
-- **Full-top cocotb simulation** — `cocotb/spi_cdc` has nine scenarios with a
+- **Full-top cocotb simulation** — `cocotb/spi_cdc` has eleven scenarios with a
   three-level scoreboard requiring completed SPI bytes, synchronized
   `reg_we`/`reg_re`, and CE-accepted writes to match one-for-one. It covers
   randomized SCK/core phase, 10 MHz operation, minimum CS spacing, continuous
   writes, reset interruption, aborted frames, read side effects (both
   separate-transaction and continuous CS-low burst at 0x76, the latter
-  spanning the PSRAM debug engine's AUTO_INC refetch boundary), and W1P
-  exactly-once delivery.
+  spanning the PSRAM debug engine's AUTO_INC refetch boundary), W1P
+  exactly-once delivery, and (closing row #11's top-level half) a concurrent
+  Grouper read/write pulse to a different address landing mid-MISO-shift of
+  an in-flight SPI read byte, via the real `trouper_top.v` arbiter wiring
+  (`cocotb/hdl/tb_trouper_cocotb.v` now exposes a drivable `GRP_*` handle for
+  this, additive and tied-0 by default like before for every other suite).
 - **Standalone cocotb simulation** — `cocotb/spi_slave` instantiates
   `spi_slave.v` directly (not `trouper_top.v`), serviced by an independent
   dict-backed register stub (not `reg_bank.v`). `spi_slave_model.py` is a
@@ -119,7 +123,7 @@ owned outside `spi_slave`.
 | 8 | Abort CS at every command/data bit and reset during frame/CDC/write extension | EDGE-SIM | `test_aborted_frame`, `test_reset_interruption` | TRPR-SPS-001/005 | ✅ done (job 3352) |
 | 9 | Source-byte ↔ synchronized-event ↔ accepted-write conservation | EDGE-SIM + FORMAL | all `cocotb/spi_cdc` scoreboard tests; formal checker | CDC mailbox contract | ✅ simulation (job 3352); ⬜ formal proof |
 | 10 | Grouper priority with preservation or defined rejection of overlapping SPI access | SPEC-SIM / INTERFACE | `tb_trouper_grp_arb.v` full-strobe write overlap and MISO-load read overlap | TRPR-SPS-007; Open Risk #16 | ✅ resolved (job 3863) — one-entry pending slot preserves a completed SPI write until the Grouper byte cycle releases; an overlapping SPI read is explicitly invalid and retried because pin-level SPI has no WAIT response |
-| 11 | Read byte remains stable despite live-status or Grouper-address changes | EDGE-SIM | standalone suite plus top-level contention case | asynchronous peek/MISO contract | 🟨 partial (job 3868) — `test_byte_atomicity_live_status_change` in `cocotb/spi_slave/test_spi_slave.py` proves the standalone-DUT half: a live register value change injected at every bit position from the load instant (bit 8) through the last shifted bit (bit 16) never appears in the byte already in flight, and is visible on the very next independent read. The Grouper-address-change top-level contention case named by the row is not covered — still open |
+| 11 | Read byte remains stable despite live-status or Grouper-address changes | EDGE-SIM | standalone suite plus top-level contention case | asynchronous peek/MISO contract | ✅ done (job 3879, full regression job 3883) — standalone half unchanged from job 3868 (`test_byte_atomicity_live_status_change`). Top-level half closed by two new `cocotb/spi_cdc/test_spi_cdc.py` tests exercising the real `trouper_top.v` arbiter wiring (`rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr`, `grp_active = GRP_WE \| GRP_RE` — a single shared combinational peek port): `test_grp_re_addr_change_during_miso_shift` and `test_grp_we_addr_change_during_miso_shift` inject a Grouper read or write pulse to a *different* address (0x30, vs. the in-flight SPI read's 0x0B) at every bit position from the load instant (bit 8) through the last shifted bit (bit 16) of an in-flight SPI read data byte; both prove the byte already latched into `spi_slave`'s `miso_shreg` is never corrupted (it only samples `reg_rdata` once, at load), and that the very next independent SPI read of the SPI-requested address recovers correctly. The write variant additionally proves the Grouper write itself lands and is visible on the next independent SPI read of the Grouper-touched address — the address change is not silently dropped by the arbiter. `cocotb/hdl/tb_trouper_cocotb.v` was extended (additively; GRP_* default to the same tied-0 state every other suite already relied on) to give cocotb a drivable handle onto the previously-tied-off `GRP_*` bus. The load-instant collision itself (bit 8 raced *before* settling) is the different, already-resolved row #10 case and is not what these tests probe — `spi_frame`'s new `mid_bit_hook` fires only after that bit's negedge has fully settled, matching the standalone suite's methodology. Full block regression (`spi_cdc` 11/11, `psram_ops` 3/3, `spi_slave` 6/6, `tb_trouper_spi.v` PASS, `tb_trouper_grp_arb.v` PASS) reran clean alongside it (job 3883) |
 | 12 | SCK while deselected, runt frames, and repeated command-only frames | EDGE-SIM | standalone suite | frame-reset robustness | ✅ done (job 3868) — `test_deselected_clock_no_effect` (64 SCK toggles at CS high produce no `reg_we`/`reg_re`, slave still works afterward) and `test_command_only_frame_recovery` (write-only and read-only command-only frames, plus 20 repeated command-only frames, produce no event and leave the slave clean for the next transaction) added to `cocotb/spi_slave/test_spi_slave.py`; partial-frame sweep from row #8 (`test_aborted_frame`) already covered the rest |
 | 13 | All source events sufficiently separated at 10 MHz | FORMAL / ANALYSIS | formal assumptions plus CDC report | toggle-event distinguishability | ⬜ new — unchanged; this is a formal/CDC-report row, out of scope for the cocotb standalone suite added for #11/#12/#14, and deferred to row #15's formal effort |
 | 14 | Standalone randomized protocol reference-model regression | EDGE-SIM | new `cocotb/spi_slave` | coverage gap | ✅ done (job 3868) — new `cocotb/spi_slave` instantiates `spi_slave.v` directly against an independent dict-backed register stub (not `reg_bank.v`); `spi_slave_model.py` is a from-spec Python oracle (command decode, 7-bit address progression incl. modulo-128 wrap and the 0x76 no-increment exception, and the read-vs-write event-timing asymmetry) cross-checked bit/byte-wise against the DUT over a deterministic wrap/no-inc case, 150 randomized legal frames, and 80 randomized constrained aborts; full existing regression (`spi_cdc` 9/9 job 3869, `psram_ops` 3/3 job 3869, `tb_trouper_spi.v`/`tb_trouper_grp_arb.v` job 3870) reran clean alongside it |
@@ -140,9 +144,12 @@ owned outside `spi_slave`.
 2. ~~Build the standalone protocol model for #11–#14.~~ Done (job 3868):
    `cocotb/spi_slave` + `spi_slave_model.py` close #14, close #12, and close
    the standalone-DUT half of #11 (MISO byte-atomicity under a live register
-   change). #11's top-level Grouper-address-change contention case is not
-   covered by this standalone suite and remains open. #13 is a formal/
-   analysis row, untouched by this step, and stays open pending step 3.
+   change). ~~#11's top-level Grouper-address-change contention case.~~ Done
+   (job 3879, full regression job 3883): two new `cocotb/spi_cdc` tests drive
+   a concurrent Grouper read/write pulse to a different address during an
+   in-flight SPI read's MISO shift-out via the real `trouper_top.v` arbiter
+   wiring, closing #11 in full. #13 is a formal/analysis row, untouched by
+   this step, and stays open pending step 3.
 3. Add the formal checker in #15 and verify non-vacuity, and prove #13's
    legal byte-spacing bound alongside it.
 4. Merge code and functional coverage, then randomize until §1a closes.
