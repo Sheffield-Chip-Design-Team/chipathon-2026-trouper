@@ -1,0 +1,20 @@
+# ----- ------ ----- ----- ------ ----- ----- ------ -----
+# Chipathon 2026: Project configuration
+# LICENSE: Apache License Version 2.0
+# http://www.apache.org/licenses/
+# ----- ------ ----- ----- ------ ----- ----- ------ -----
+
+# data will be pulled from main branch of the repo.
+# please be sure that the main branch contains the data you want to submit.
+# This file will be updated with more information later
+
+# ======================================================
+# Project metadata (used for documentation / review)
+# ======================================================
+project:
+  title: "LoRa MRC Implementation"          # Project title (e.g. "Simple CPU", "PLL", "ADC")
+  team: "A40 Trouper"                       # Your Team name
+  discord: "newmantimothyj"                 # Optional: Discord username (for support / communication)
+  description: "DSP Hardware implementation of MRC for LoRa standard"  # Short one-line description
+  lvs_config: "lvs_config.json"
+
