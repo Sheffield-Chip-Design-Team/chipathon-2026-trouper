@@ -34,6 +34,8 @@ Scenario -> test function map:
     9. Grouper address-change contention (top-level half of row #11)
                                              -> test_grp_re_addr_change_during_miso_shift
                                                 test_grp_we_addr_change_during_miso_shift
+   10. rb_we/rb_addr/rb_wdata CE-gated settle property (Open Risks.md #43,
+       `regbank_write` MCP group)            -> test_regbank_write_bus_ce_gated
 
 Safe (no-side-effect, plain-storage) registers used as CDC test payloads:
 0x0B (PKT_TIMEOUT_SYMS), 0x30-0x3F (W shadow bank) -- none of these gate on
@@ -770,3 +772,86 @@ async def test_grp_we_addr_change_during_miso_shift(dut):
             f"{tag}: inject@bit {inject_bit_idx}: Grouper write to 0x{GRP_ADDR_B:02X} "
             f"not reflected on next independent SPI read -- got 0x{got_b:02X}, "
             f"expected 0x{V_B:02X}")
+
+
+# ---------------------------------------------------------------------------
+# 10. rb_we/rb_addr/rb_wdata CE-gated settle property
+# (Open Risks.md #43, `regbank_write` MCP group: src/config/
+#  pnr_32m_scoped_v25_b6.sdc:342-344, MCP=2 setup / MCP=1 hold, scope =
+#  {rb_we, rb_addr[*], rb_wdata[*]}.)
+#
+# trouper_top.v ~667-701 assigns rb_addr/rb_wdata/rb_we ONLY inside
+# `if (ce_16m)` of the single always @(posedge clk) block that stages both
+# the SPI and Grouper write sources; every other cycle the block takes no
+# branch that touches those regs, so they structurally cannot change value
+# except on a clock edge that samples ce_16m==1 going in. That is exactly
+# the "receiver cannot consume the relaxed value before the claimed 2-cycle
+# settle window" claim the MCP audit (item 43) requires a citable proof for.
+# This monitor asserts the converse directly: any observed change on
+# rb_we/rb_addr/rb_wdata must be paired with ce_16m==1 sampled the instant
+# before that edge (RESETB low is exempted -- the synchronous reset clears
+# these regs unconditionally, which is a legitimate reset transition, not a
+# settle-window violation).
+# ---------------------------------------------------------------------------
+
+async def _rb_write_bus_ce_monitor(dut, violations):
+    """Record any rb_we/rb_addr/rb_wdata change not preceded by ce_16m==1."""
+    prev_we    = int(dut.u_dut.rb_we.value)
+    prev_addr  = int(dut.u_dut.rb_addr.value)
+    prev_wdata = int(dut.u_dut.rb_wdata.value)
+    while True:
+        ce_before_edge  = int(dut.u_dut.ce_16m.value)
+        rstn_before_edge = int(dut.RESETB.value)
+        await RisingEdge(dut.IQ_CLK)
+        we    = int(dut.u_dut.rb_we.value)
+        addr  = int(dut.u_dut.rb_addr.value)
+        wdata = int(dut.u_dut.rb_wdata.value)
+        changed = (we != prev_we) or (addr != prev_addr) or (wdata != prev_wdata)
+        if changed and rstn_before_edge == 1 and ce_before_edge != 1:
+            violations.append(
+                f"rb_we/rb_addr/rb_wdata changed ({prev_we},0x{prev_addr:02X},"
+                f"0x{prev_wdata:02X}) -> ({we},0x{addr:02X},0x{wdata:02X}) on an "
+                f"edge NOT gated by ce_16m -- breaks the regbank_write MCP=2 "
+                f"settle-window claim")
+        prev_we, prev_addr, prev_wdata = we, addr, wdata
+
+
+@cocotb.test()
+async def test_regbank_write_bus_ce_gated(dut):
+    """Structural CE-gating proof for the `regbank_write` MCP group across
+    reset, back-to-back SPI writes, and a Grouper write interleaved with an
+    SPI write -- the two sources that both feed rb_we/rb_addr/rb_wdata."""
+    tag = "regbank_write_bus_ce_gated"
+    await _bringup(dut)
+
+    violations = []
+    cocotb.start_soon(_rb_write_bus_ce_monitor(dut, violations))
+
+    half_ns = 50.0  # 10 MHz SPI
+
+    # -- reset asserted mid-write: bus must only ever move on a ce_16m edge,
+    #    both while the write frame is in flight and while reset holds/releases.
+    for reset_at_bit in (3, 11, 15):
+        await spi_frame(dut, [SAFE_ADDR & 0x7F, 0x5A], half_ns,
+                         reset_at_bit=reset_at_bit)
+        await _release_reset(dut)
+        await _settle(dut, 16)
+
+    # -- back-to-back SPI writes, minimum CS spacing.
+    for i in range(64):
+        await spi_frame(dut, [SAFE_ADDR & 0x7F, i & 0xFF], half_ns,
+                         cs_lead_ns=half_ns, cs_trail_ns=half_ns)
+    await _settle(dut, 16)
+
+    # -- Grouper write interleaved with an in-flight SPI write (both sources
+    #    stage into the same rb_addr/rb_wdata/rb_we regs).
+    for inject_bit_idx in (4, 8, 12):
+        def hook(dut_, bit_idx, _target=inject_bit_idx):
+            if bit_idx == _target:
+                cocotb.start_soon(_grp_pulse_we(dut_, GRP_ADDR_B, 0x33))
+        await spi_frame(dut, [SAFE_ADDR & 0x7F, 0x66], half_ns,
+                         cs_lead_ns=half_ns, cs_trail_ns=half_ns,
+                         mid_bit_hook=hook)
+        await _settle(dut, 16)
+
+    assert not violations, f"{tag}: {len(violations)} violation(s):\n" + "\n".join(violations)

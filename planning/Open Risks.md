@@ -199,8 +199,36 @@ All 8 testcases (2/block) PASS: SGE job 4083 (`mcp-paced-dsp-settle-v2`,
 `cocotb/mcp_decimator_settle/run_regression_sge.sh`). Manifest's `paced_dsp`
 group `proof` field updated accordingly
 (`rtl-test/ol_trouper_top/mcp_audit_manifest.json`). This closes the
-settling-proof obligation for `paced_dsp` only — the other 10 MCP groups in
-the manifest (`regbank_write` included) remain open.
+settling-proof obligation for `paced_dsp` only — the other 9 MCP groups in
+the manifest remain open (see `regbank_write` closure immediately below).
+
+**2026-08-09 `regbank_write` group settling proof CLOSED:** added
+`test_regbank_write_bus_ce_gated` to `cocotb/tests/test_spi_cdc.py`, covering
+the `regbank_write` MCP group (SDC lines ~347-354: MCP=2 setup / MCP=1 hold,
+scope = `{rb_we, rb_addr[*], rb_wdata[*]}`). `trouper_top.v` (~667-701)
+assigns `rb_addr`/`rb_wdata`/`rb_we` only inside `if (ce_16m)` of the single
+`always @(posedge clk)` block that stages both the SPI and Grouper write
+sources, and `reg_bank` is instantiated with `.clk_en(ce_16m)` — a structural
+guarantee, not a settling-time argument, that the write bus cannot change
+except on a `ce_16m`-gated edge. The test adds a background clock-edge
+monitor asserting the converse directly (any observed change on
+`rb_we`/`rb_addr`/`rb_wdata` must be paired with `ce_16m==1` sampled on the
+preceding edge, `RESETB` transitions exempted) across three scenarios: reset
+asserted mid-write-frame (bits 3/11/15), 64 back-to-back minimum-spacing SPI
+writes, and a Grouper write (`GRP_WE`) injected mid-frame against an in-flight
+SPI write — the two sources that both feed this bus. PASS: SGE job 4120
+(`spi_cdc_regbank_write3`, `make -C cocotb/spi_cdc
+TESTCASE=test_regbank_write_bus_ce_gated`). Manifest's `regbank_write` group
+`proof` field updated accordingly. This closes the settling-proof obligation
+for `regbank_write` only — the remaining 9 MCP groups in the manifest stay
+open.
+
+(Note: an earlier attempt at this same test, SGE job 4091, failed in 2s on a
+`cd: No such file or directory` — submitted with `--project
+lora-mimo-reg_bank` instead of this repo's required `--project lora-mimo`,
+which mounts the container at the wrong path per `sge-job` skill's
+documented convention. Not an RTL or test issue; job 4120 resubmitted
+correctly and passed on the same script/test.)
 
 ---
 
