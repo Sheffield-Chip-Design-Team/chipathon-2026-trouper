@@ -24,6 +24,9 @@ build/
 .ruff_cache/
 .claude/settings.local.json
 
+# IDE
+.idea/
+
 # Scratch / local-only working files
 /tmp/
 
