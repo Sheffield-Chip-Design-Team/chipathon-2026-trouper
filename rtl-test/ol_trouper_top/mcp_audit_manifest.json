@@ -11,7 +11,7 @@
     "timing_ref_hits": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SC hit-request quasi-static assertion"},
     "timing_ref_config": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SF/BW write-lock plus timing-ref assertion"},
     "psram_barrel_shift": {"setup": 2, "hold": 1, "min_through": 0, "min_endpoint": 1, "proof": "PSRAM configuration settle assertion"},
-    "paced_dsp": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 0, "proof": "decimator/SC/training/combiner pacing assertions"},
+    "paced_dsp": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 0, "proof": "cocotb/tests/test_mcp_decimator_settle.py, test_mcp_sc_settle.py, test_mcp_tacc_settle.py, test_mcp_mrc_settle.py (settle-gating + reset-mid-burst re-arm, 8/8 PASS, SGE job 4083, 2026-08-09)"},
     "regbank_write": {"setup": 2, "hold": 1, "min_through": 1, "min_endpoint": 0, "proof": "ce_16m write-bus assertion"}
   }
 }

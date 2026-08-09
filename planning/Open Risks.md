@@ -175,6 +175,33 @@ are genuine, deliberately-unrelaxed SS timing debt — same class as the
 tracked under item 1. See `planning/b4-b6-area-cuts-2026-07.md`
 §2026-07-31 follow-up.
 
+**2026-08-09 `paced_dsp` group settling proof CLOSED:** added four unit-level
+cocotb benches (`cocotb/mcp_decimator_settle/`, `cocotb/mcp_sc_settle/`,
+`cocotb/mcp_tacc_settle/`, `cocotb/mcp_mrc_settle/`, tests
+`cocotb/tests/test_mcp_decimator_settle.py`, `test_mcp_sc_settle.py`,
+`test_mcp_tacc_settle.py`, `test_mcp_mrc_settle.py`), one per block in the
+`paced_dsp` scope (`u_dec.* u_sc.* u_tacc.* u_comb.*`, SDC lines ~336-344).
+Each bench runs the DUT directly (no trouper_top wrapper) and uses a
+background clock-edge monitor to assert the block's MCP-relaxed consumed
+result register (`hb1_hold_i/q`+`iq_out_i/q` for the decimator gated by
+`hb1_wait`/`hb2_wait`; `tdm_mul_r` for sc_detector gated by `tdm_wait`;
+`mul_out`/`mulB_out` for training_acc gated by `tdm_wait`/`pipe_active`;
+`prod_i_r`/`prod_q_r`+`y_i`/`y_q` for mrc_combiner gated by `mac_wait`) never
+changes unless its wait counter held its terminal `MAC_WAIT`/`TDM_WAIT` count
+(2, i.e. 3 cycles) on the immediately preceding edge, plus a reset-mid-burst
+case per block confirming the pacing counters clear and re-arm cleanly with
+no stale/glitched result latched. training_acc's `mul_out`/`mulB_out` are
+deliberately resetless (same pattern as `Zpair_*`/`Zdiag_*`); the test
+documents this and instead asserts the *consuming* counters (`tdm_active`/
+`acc_active`) clear and that a post-reset training window still produces a
+bit-exact `Zdiag_0`, proving no stale product leaks into a live Z register.
+All 8 testcases (2/block) PASS: SGE job 4083 (`mcp-paced-dsp-settle-v2`,
+`cocotb/mcp_decimator_settle/run_regression_sge.sh`). Manifest's `paced_dsp`
+group `proof` field updated accordingly
+(`rtl-test/ol_trouper_top/mcp_audit_manifest.json`). This closes the
+settling-proof obligation for `paced_dsp` only — the other 10 MCP groups in
+the manifest (`regbank_write` included) remain open.
+
 ---
 
 ## High
