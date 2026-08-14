@@ -1,6 +1,8 @@
 # Config-settle discipline for the quasi-static MCP groups
 
-**Status:** §4a-4d IMPLEMENTED and verified (2026-08-15). reg_bank 13/13 on
+**Status:** §4a-4d IMPLEMENTED and verified; 9 of 11 manifest groups now
+carry a passing proof (all but `sc_clear` and `psram_barrel_shift`).
+(2026-08-15.) reg_bank 13/13 on
 both simulators (jobs 4353/4356); all 18 trouper_top-level suites PASS (4357,
 4359); mcp_pcfsm_settle 4/4 (4362); full packet_ctrl_fsm block regression 7/7
 including formal and the B6 equivalence TB (job 4365). Committed f1aa262.
@@ -230,8 +232,8 @@ terms added to any wide register in `sc_detector` or `training_acc`.**
 | # | Test | Where | Proves | Status |
 |---|---|---|---|---|
 | 1 | writes to 0x09/0x0A/0x0B/0x0E/0x27 rejected while `!RX_HOLD`, accepted while `RX_HOLD`, sticky bit sets and W1C clears, and `RX_HOLD` does not override `packet_active` | `cocotb/reg_bank` | the gate is enforced, not documented | ✅ **done** — `cocotb/tests/test_reg_bank_rx_hold.py`, 6 tests, full suite 13/13 PASS (SGE job 4353) |
-| 2 | `sc_lock` cannot assert while `RX_HOLD`, including via `SC_FORCE_LOCK` | `cocotb/sc_force_lock` | the mutual exclusion holds | — |
-| 3 | background monitor: no MCP'd config net changes on any cycle where the detector can lock | `cocotb/mcp_cfg_hold_settle` (new) | the settling property itself, for 5 groups | — |
+| 2 | `sc_lock` cannot assert while `RX_HOLD`, including via `SC_FORCE_LOCK` | `cocotb/mcp_cfg_hold_settle` | the mutual exclusion holds | ✅ **done** — `test_no_lock_while_held`, with a post-release control so the no-lock result is not vacuous (job 4368) |
+| 3 | background monitor: no MCP'd config net changes on any cycle where the detector can lock | `cocotb/mcp_cfg_hold_settle` | the settling property itself, for 5 groups | ✅ **done** — 3/3 PASS (job 4368), 3 config changes / 2 releases observed; also pins that re-asserting RX_HOLD mid-packet does NOT re-open the window, and that refusals latch `CFG_WR_REJECTED` |
 | 4 | Grouper back-to-back config-write → `RX_HOLD` release at minimum cadence; first capture ≥3 cycles after the change | `cocotb/spi_cdc` (has the GRP handle already) | §5's tight case | — |
 | 5 | existing `test_mcp_pcfsm_settle` flips both FAILs to PASS | `cocotb/mcp_pcfsm_settle` | §4d | ✅ **done** — 4/4 PASS (job 4362); monitor now also asserts the dwell holds the counters, so the capture predicate is validated not assumed |
 | 6 | `psram_barrel_shift` settle bench | new, mirrors #5 | the one already-sound group | — |

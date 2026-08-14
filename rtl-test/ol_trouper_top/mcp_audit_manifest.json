@@ -2,16 +2,82 @@
   "version": 1,
   "sdc": "pnr_32m_scoped_v25_b6.sdc",
   "groups": {
-    "sc_clear": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "sc_detector clear/re-arm stability assertion"},
-    "sc_quasi_static": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SF/BW write-lock plus SC boundary assertion"},
-    "pcfsm_quasi_static": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "packet-control configuration load assertion"},
-    "pcfsm_latched_timing_ref": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "packet_ctrl_fsm ST_ACQ_SETUP timing-ref latch assertion"},
-    "pcfsm_mval": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "packet-control M_val quasi-static assertion"},
-    "training_window": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "training-window configuration assertion"},
-    "timing_ref_hits": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SC hit-request quasi-static assertion"},
-    "timing_ref_config": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 1, "proof": "SF/BW write-lock plus timing-ref assertion"},
-    "psram_barrel_shift": {"setup": 2, "hold": 1, "min_through": 0, "min_endpoint": 1, "proof": "PSRAM configuration settle assertion"},
-    "paced_dsp": {"setup": 3, "hold": 2, "min_through": 1, "min_endpoint": 0, "proof": "cocotb/tests/test_mcp_decimator_settle.py, test_mcp_sc_settle.py, test_mcp_tacc_settle.py, test_mcp_mrc_settle.py (settle-gating + reset-mid-burst re-arm, 8/8 PASS, SGE job 4083, 2026-08-09)"},
-    "regbank_write": {"setup": 2, "hold": 1, "min_through": 1, "min_endpoint": 0, "proof": "cocotb/tests/test_spi_cdc.py::test_regbank_write_bus_ce_gated (rb_we/rb_addr/rb_wdata CE-gated settle monitor across reset-mid-write, back-to-back SPI writes, and SPI/Grouper write interleaving; PASS, SGE job 4120, 2026-08-09)"}
+    "sc_clear": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "sc_detector clear/re-arm stability assertion"
+    },
+    "sc_quasi_static": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "pcfsm_quasi_static": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_pcfsm_settle.py (ST_ACQ_SETUP 4-cycle dwell, capture at u+4; adversarial config write before/at the lock edge) -- SGE job 4362, 4/4; plus cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "pcfsm_latched_timing_ref": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_pcfsm_settle.py (ST_ACQ_SETUP 4-cycle dwell, capture at u+4; adversarial config write before/at the lock edge) -- SGE job 4362, 4/4; plus cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "pcfsm_mval": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_pcfsm_settle.py (ST_ACQ_SETUP 4-cycle dwell, capture at u+4; adversarial config write before/at the lock edge) -- SGE job 4362, 4/4; plus cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "training_window": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "timing_ref_hits": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "timing_ref_config": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "proof": "cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "psram_barrel_shift": {
+      "setup": 2,
+      "hold": 1,
+      "min_through": 0,
+      "min_endpoint": 1,
+      "proof": "PSRAM configuration settle assertion"
+    },
+    "paced_dsp": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 0,
+      "proof": "cocotb/tests/test_mcp_decimator_settle.py, test_mcp_sc_settle.py, test_mcp_tacc_settle.py, test_mcp_mrc_settle.py (settle-gating + reset-mid-burst re-arm, 8/8 PASS, SGE job 4083, 2026-08-09)"
+    },
+    "regbank_write": {
+      "setup": 2,
+      "hold": 1,
+      "min_through": 1,
+      "min_endpoint": 0,
+      "proof": "cocotb/tests/test_spi_cdc.py::test_regbank_write_bus_ce_gated (rb_we/rb_addr/rb_wdata CE-gated settle monitor across reset-mid-write, back-to-back SPI writes, and SPI/Grouper write interleaving; PASS, SGE job 4120, 2026-08-09)"
+    }
   }
 }

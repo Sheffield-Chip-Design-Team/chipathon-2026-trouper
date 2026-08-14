@@ -237,10 +237,16 @@ dwells 4 cycles in `ST_ACQ_SETUP` for the two operands firmware cannot protect
 (`lat_timing_ref`, `M_val`). `test_mcp_pcfsm_settle` now 4/4 (job 4362), full
 `packet_ctrl_fsm` block regression 7/7 incl. formal and the B6 equivalence TB
 (job 4365), all 18 top-level suites PASS (4357/4359), reg_bank 13/13 on both
-simulators (4353/4356). This closes the settling obligation for
-`pcfsm_quasi_static`, `pcfsm_mval` and `pcfsm_latched_timing_ref`; manifest
-`proof` fields are NOT yet updated for the other groups, whose benches (§8
-tests 2-4, 6 of the design doc) remain outstanding.
+simulators (4353/4356). This closes the settling obligation for `pcfsm_quasi_static`, `pcfsm_mval`
+and `pcfsm_latched_timing_ref`. **2026-08-15:** the RX_HOLD mutual-exclusion
+bench (`cocotb/mcp_cfg_hold_settle/`, job 4368, 3/3) additionally closes
+`sc_quasi_static`, `timing_ref_hits`, `timing_ref_config` and
+`training_window` -- it asserts both halves of the interlock (no lock while
+held, including via `SC_FORCE_LOCK`; no config net changes while the detector
+is live) plus the §5 release-ordering obligation. **9 of the 11 manifest
+groups now carry a passing proof**; only `sc_clear` (unsound for an unrelated
+reason -- 1-cycle `packet_done_pulse`) and `psram_barrel_shift` (already sound,
+bench not yet written) remain.
 
 **Superseded candidate fix:** delay the counter load by 3 cycles.
 Once `packet_active` is 1 at u, no further config write can land (given the
