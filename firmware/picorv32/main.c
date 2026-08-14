@@ -339,6 +339,16 @@ static void handle_training_done(void)
 #ifndef ASIC_REG_TESTMEM
 int main(void)
 {
+    /* RX_HOLD (0x1A[0]) is SET out of reset: the SC detector is held cleared
+     * and cannot lock until firmware releases it, so without this the loop
+     * below would poll an IRQ_STATUS that never changes.  This image writes no
+     * gated config (SF/BW/timeouts are host-provisioned over SPI before the
+     * CPU is released), so it only needs the release half of the bracket --
+     * anything that DOES write those registers must use
+     * asic_cfg_begin()/asic_cfg_commit() around them.  See
+     * planning/Firmware Spec.md §0 and planning/mcp-config-settle-gate-design.md. */
+    asic_cfg_commit();
+
     for (;;) {
         uint8_t irq_bits = reg_read8(REG_IRQ_STATUS);
         if (irq_bits == 0u) continue;

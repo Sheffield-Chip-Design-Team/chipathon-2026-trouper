@@ -34,16 +34,31 @@ enum {
     REG_IRQ_STATUS       = 0x02,   /* R  sticky sources */
     REG_IRQ_CLEAR        = 0x03,   /* W  write-1-to-clear */
 
-    /* RX / modem config (0x08-0x0F) */
+    /* RX / modem config (0x08-0x0F).
+     * NOTE: SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ and (below)
+     * TACC_WINDOW_SYMS are GATED — hardware rejects writes unless RX_HOLD is
+     * set and no packet is active. See REG_RX_HOLD and asic_cfg_begin(). */
     REG_MIMO_CTRL        = 0x08,   /* [0] MODE, [7:4] ANTENNA_EN */
-    REG_SF_CFG           = 0x09,   /* [3:0] SF 7-12 */
-    REG_BW_CFG           = 0x0A,
+    REG_SF_CFG           = 0x09,   /* [3:0] SF 7-12                  (gated) */
+    REG_BW_CFG           = 0x0A,   /* [0] bw_sel, [2:1] sc_ant_sel   (gated) */
+    REG_PKT_TIMEOUT_SYMS = 0x0B,   /* packet timeout in symbols      (gated) */
+    REG_SC_HITS_REQ      = 0x0E,   /* [1:0] locks after value+1 hits (gated) */
     REG_COMB_CFG         = 0x0F,   /* [2:0] COMB_POST_GAIN_SHIFT, [5:4] REMOD_BACKOFF_SHIFT */
+
+    /* Receiver hold / config interlock (0x1A).
+     * [0] RX_HOLD: 1 = SC detector held disabled AND the gated config
+     *     registers are writable; 0 = detector may lock, those writes are
+     *     refused.  SET OUT OF RESET — the receiver comes up disabled and
+     *     firmware MUST clear it before any packet can be detected.
+     * [1] CFG_WR_REJECTED: RO sticky, write 1 to clear.  Set when a gated
+     *     write was dropped, i.e. the driver got the sequence wrong. */
+    REG_RX_HOLD          = 0x1A,
 
     /* Packet / weight-path / training control (0x1C-0x23) */
     REG_PACKET_STATUS    = 0x1C,   /* [0]ACTIVE [3:1]PHASE [4]TRAINING_DONE [5]W_PENDING [6]W_VALID [7]W_MISSED */
     REG_WGT_CTRL         = 0x1E,   /* [0]W_COMMIT(W1P) [1]W_VALID [2]W_PENDING [3]W_MISSED [4]W_COMMIT_LATE [5]W_WR_REJECTED */
     REG_TACC_NOISE_TRIG  = 0x1F,   /* [0] W1P arm noise accumulation */
+    REG_TACC_WINDOW_SYMS = 0x27,   /* [3:0] window in symbols, <8 clamps to 8 (gated) */
     REG_TRAINING_STATUS  = 0x20,   /* [0]TRAINING_DONE [1]TRAINING_ARMED */
     REG_N_ACC_HI         = 0x21,   /* samples [17:16] (bits[1:0]) */
     REG_N_ACC_MID        = 0x22,   /* samples [15:8] */
@@ -82,6 +97,11 @@ enum {
 enum { WGT_CTRL_W_COMMIT = 1u << 0 };
 
 enum {
+    RX_HOLD_BIT             = 1u << 0,  /* 1 = detector held, config writable */
+    RX_HOLD_CFG_WR_REJECTED = 1u << 1   /* RO sticky, W1C */
+};
+
+enum {
     PACKET_STATUS_ACTIVE_BIT        = 1u << 0,
     PACKET_STATUS_TRAINING_DONE_BIT = 1u << 4,
     PACKET_STATUS_W_PENDING_BIT     = 1u << 5,
@@ -91,6 +111,54 @@ enum {
 
 static inline uint8_t reg_read8(uint32_t offset)              { return ASIC_REG(offset); }
 static inline void    reg_write8(uint32_t offset, uint8_t v)  { ASIC_REG(offset) = v; }
+
+/* ---------------------------------------------------------------------------
+ * Config interlock (RX_HOLD, 0x1A).
+ *
+ * The gated registers (SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ,
+ * TACC_WINDOW_SYMS) may only be written while the SC detector is held
+ * disabled.  That makes "config writable" and "detector able to lock"
+ * mutually exclusive, which is what lets the timing constraints assume a
+ * quasi-static source cannot change near the edge that captures it
+ * (Open Risks #43, planning/mcp-config-settle-gate-design.md).
+ *
+ * RX_HOLD is SET out of reset, so the receiver starts disabled:
+ *
+ *     asic_cfg_begin();                      // hold (no-op after reset)
+ *     reg_write8(REG_SF_CFG, 9);
+ *     reg_write8(REG_BW_CFG, 0);
+ *     ...
+ *     if (asic_cfg_write_rejected()) { ... } // optional: catch a bad sequence
+ *     asic_cfg_commit();                     // release -> detector can lock
+ *
+ * Reconfiguring later needs the same bracket: once released, gated writes are
+ * DROPPED (silently, apart from the sticky CFG_WR_REJECTED bit).  Note the
+ * hold alone is not sufficient mid-packet -- writes also require
+ * PACKET_STATUS.ACTIVE == 0.
+ * ------------------------------------------------------------------------ */
+static inline void asic_cfg_begin(void)
+{
+    reg_write8(REG_RX_HOLD, RX_HOLD_BIT);
+}
+
+static inline void asic_cfg_commit(void)
+{
+    reg_write8(REG_RX_HOLD, 0u);
+}
+
+static inline int asic_cfg_write_rejected(void)
+{
+    return (reg_read8(REG_RX_HOLD) & RX_HOLD_CFG_WR_REJECTED) != 0u;
+}
+
+/* Clearing the sticky bit is a read-modify-write: reg_bank takes rx_hold from
+ * wdata[0] on EVERY write to 0x1A, so a bare `write(RX_HOLD_CFG_WR_REJECTED)`
+ * would clear the flag and silently release the hold at the same time. */
+static inline void asic_cfg_clear_rejected(void)
+{
+    uint8_t hold = (uint8_t)(reg_read8(REG_RX_HOLD) & RX_HOLD_BIT);
+    reg_write8(REG_RX_HOLD, (uint8_t)(hold | RX_HOLD_CFG_WR_REJECTED));
+}
 
 /* Big-endian 16-bit at [hi, hi+1] */
 static inline uint16_t reg_read16_be(uint32_t hi)
