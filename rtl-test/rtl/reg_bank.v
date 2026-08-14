@@ -93,6 +93,12 @@ module reg_bank (
     output reg         psram_dbg_rd_trig, // W1P
     // Manual SC lock override (bring-up / catastrophic-detector-failure escape hatch)
     output reg         sc_force_lock,  // 0x19[0]: W1P — blocked while packet_active
+    // 0x1A[0]: level.  1 = SC detector held disabled (ORed into sc_clr at the
+    // top level) AND the quasi-static config registers are writable.  0 = the
+    // detector can lock and those writes are rejected.  The two are mutually
+    // exclusive by construction, which is what makes the scoped-MCP settling
+    // exceptions sound — see planning/mcp-config-settle-gate-design.md.
+    output reg         rx_hold,
     // Training accumulator
     output reg         noise_trig,     // 0x1F[0]: W1P — firmware-triggered noise measurement
     output reg [3:0]   tacc_window_syms, // 0x27[3:0]: accumulation endpoint in symbols from timing_ref
@@ -115,6 +121,12 @@ module reg_bank (
     // Sticky: a 0x30-0x3F write was dropped by the W_valid write-lock
     // (WGT_CTRL[5] readback, W1C via WGT_CTRL write with bit[5] set)
     reg w_wr_rejected;
+    // RX_HOLD (0x1A[0]) and its rejected-write flag (0x1A[1]).  See
+    // planning/mcp-config-settle-gate-design.md: holding the detector disabled
+    // is what makes "config writable" and "detector able to lock" mutually
+    // exclusive, which is what the scoped-MCP settling exceptions actually
+    // need (Open Risks #43).
+    reg cfg_wr_rejected;
 
     assign w_shadow[127:120] = w_shadow_r[0];  assign w_shadow[119:112] = w_shadow_r[1];
     assign w_shadow[111:104] = w_shadow_r[2];  assign w_shadow[103:96]  = w_shadow_r[3];
@@ -152,6 +164,22 @@ module reg_bank (
     // -----------------------------------------------------------------------
     integer i;
 
+    // The five quasi-static config registers whose MCP exceptions depend on
+    // the rx_hold interlock.  SC_THR (0x0C/0x0D) is deliberately absent: it
+    // appears in no MCP group and times honestly single-cycle.
+    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) ||
+                           (addr == 8'h0B) || (addr == 8'h0E) ||
+                           (addr == 8'h27);
+
+    // BOTH conditions are required, and rx_hold does NOT imply !packet_active:
+    // firmware may assert RX_HOLD mid-packet, which holds sc_clr and clears the
+    // detector but leaves packet_ctrl_fsm's packet_active high until its own
+    // timeout.  Dropping the packet_active term would re-open the mid-packet
+    // config-change hole closed by Open Risks #31/#32 (sc_detector/training_acc
+    // consume sf/sample_shift live during a packet).  Caught by
+    // test_packet_active_gate_smoke.
+    wire cfg_wr_ok = rx_hold && !packet_active;
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mimo_mode        <= 2'h0;
@@ -176,6 +204,12 @@ module reg_bank (
                                               // 8-it compute (~1140) + readout/IRQ
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
             w_wr_rejected    <= 1'b0;
+            // Held out of reset: the receiver comes up disabled and firmware
+            // must configure, then release.  Chosen so a driver that ignores
+            // the sequence fails loudly (never locks) instead of silently
+            // losing config writes.
+            rx_hold          <= 1'b1;
+            cfg_wr_rejected  <= 1'b0;
         end else if (clk_en) begin
             // Auto-clear write-1-pulse outputs (held one CE period = 2 clocks,
             // safely caught by 32 MHz consumers; we is 2 cycles wide so each
@@ -194,6 +228,19 @@ module reg_bank (
             else if (we && addr == 8'h1E && wdata[5])
                 w_wr_rejected <= 1'b0;
 
+            // Quasi-static config write-lock (Open Risks #43).  These five
+            // registers feed the scoped-MCP cones captured at the sc_lock /
+            // ST_ACQ_SETUP edges; the exceptions are only sound if the source
+            // cannot change near that capture.  Accepting the write ONLY while
+            // rx_hold (detector cannot lock) guarantees that structurally.
+            // Rejection is latched so firmware can detect an out-of-sequence
+            // driver -- a dropped write is otherwise invisible (cf. Open Risks
+            // #16 and the W_MISSED_PACKET readback bug).
+            if (we && !cfg_wr_ok && cfg_locked_addr)
+                cfg_wr_rejected <= 1'b1;
+            else if (we && addr == 8'h1A && wdata[1])
+                cfg_wr_rejected <= 1'b0;
+
             if (we) begin
                 case (addr)
                     // --- RX / modem configuration ---
@@ -201,24 +248,33 @@ module reg_bank (
                                mimo_mode[0] <= wdata[0];
                                antenna_en   <= wdata[7:4];
                            end
-                    8'h09: if (!packet_active) sf_cfg <= wdata[3:0]; // blocked during active packet
-                    8'h0A: if (!packet_active) begin // blocked during active packet
+                    // 0x09/0x0A/0x0B/0x0E/0x27 are gated on cfg_wr_ok =
+                    // rx_hold && !packet_active.  0x09/0x0A previously carried
+                    // the packet_active half only; 0x0B/0x0E/0x27 had no gate
+                    // at all.  See cfg_wr_ok above and Open Risks #43.
+                    8'h09: if (cfg_wr_ok) sf_cfg <= wdata[3:0];
+                    8'h0A: if (cfg_wr_ok) begin
                         bw_sel     <= wdata[0];
                         sc_ant_sel <= wdata[2:1];
                     end
-                    8'h0B: pkt_timeout_syms <= wdata;
+                    8'h0B: if (cfg_wr_ok) pkt_timeout_syms <= wdata;
                     8'h0C: sc_thr[15:8]     <= wdata;
                     8'h0D: sc_thr[7:0]      <= wdata;
-                    8'h0E: sc_hits_req      <= wdata[1:0];
+                    8'h0E: if (cfg_wr_ok) sc_hits_req <= wdata[1:0];
                     8'h0F: begin
                                comb_post_gain_shift <= wdata[2:0];
                                remod_backoff_shift  <= wdata[5:4];
                            end
                     8'h19: if (!packet_active) sc_force_lock <= wdata[0]; // blocked during active packet
+                    // RX_HOLD is intentionally NOT self-gated: firmware must
+                    // always be able to re-assert the hold to reconfigure.
+                    // Bit [1] is the W1C for cfg_wr_rejected, handled above.
+                    8'h1A: rx_hold <= wdata[0];
                     // --- Packet / weight / training control ---
                     8'h1E: w_commit_pulse   <= wdata[0];
                     8'h1F: noise_trig       <= wdata[0];
-                    8'h27: tacc_window_syms <= (wdata[3:0] < 4'd8) ? 4'd8 : wdata[3:0];
+                    8'h27: if (cfg_wr_ok)
+                               tacc_window_syms <= (wdata[3:0] < 4'd8) ? 4'd8 : wdata[3:0];
                     // --- W shadow bank 0x30–0x3F: indexed write below (outside
                     //     the case) so the W_valid lock is one shared enable term ---
                     // --- PSRAM / debug window ---
@@ -281,6 +337,7 @@ module reg_bank (
             8'h0E: rdata_next = {6'h0, sc_hits_req};
             8'h0F: rdata_next = {2'h0, remod_backoff_shift, 1'b0, comb_post_gain_shift};
             8'h19: rdata_next = 8'h00;                              // SC_FORCE_LOCK (WO)
+            8'h1A: rdata_next = {6'h0, cfg_wr_rejected, rx_hold};   // RX_HOLD / CFG_WR_REJECTED
             // --- Packet / weight / training control ---
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,
                             training_done_rb, packet_phase, packet_active};

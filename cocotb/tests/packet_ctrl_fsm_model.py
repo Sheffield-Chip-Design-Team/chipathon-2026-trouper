@@ -18,6 +18,7 @@ ST_PREAMBLE_ACQ = 1
 ST_W_PENDING = 2
 ST_PAYLOAD_ACTIVE = 3
 ST_ACQ_SETUP = 4
+DWELL_LAST = 3      # packet_ctrl_fsm captures when setup_cnt == 3
 
 MASK20 = (1 << 20) - 1
 MASK23 = (1 << 23) - 1
@@ -29,6 +30,7 @@ MASK32 = (1 << 32) - 1
 class PacketCtrlFsmModel:
     state: int = ST_IDLE
     sc_lock_prev: int = 0
+    setup_cnt: int = 0
     lat_timing_ref: int = 0
     acq_cnt: int = 0
     wpend_cnt: int = 0
@@ -113,32 +115,39 @@ class PacketCtrlFsmModel:
                 self.packet_active = 1
                 self.packet_active_ps = 1
                 self.packet_phase = 1
+                self.setup_cnt = 0
                 self.state = ST_ACQ_SETUP
 
         elif old_state == ST_ACQ_SETUP:
+            # 4-cycle dwell (Open Risks #43 / design doc S4d): the counter load
+            # captures a cone the scoped SDC relaxes to MCP=3, so it may only
+            # fire once every operand has been quiet for 3 edges. Capturing on
+            # the last dwell cycle puts the load at u+4.
             self.packet_phase = 1
+            if self.setup_cnt != DWELL_LAST:
+                self.setup_cnt += 1
+            else:
+                shift = inputs["sf"] + inputs["sample_shift"]
+                tacc_eff = inputs["tacc_window_syms"] or 1
+                tacc_span = tacc_eff << shift
+                acq_span = tacc_span + 2 * old_m
+                wpend_span = tacc_span + 5 * old_m
+                pkt_span = (inputs["pkt_timeout_syms"] << shift) & ((1 << 22) - 1)
+                elapsed = (
+                    (inputs["sample_count"] & MASK20)
+                    - (self.lat_timing_ref & MASK20)
+                ) & MASK20
 
-            shift = inputs["sf"] + inputs["sample_shift"]
-            tacc_eff = inputs["tacc_window_syms"] or 1
-            tacc_span = tacc_eff << shift
-            acq_span = tacc_span + 2 * old_m
-            wpend_span = tacc_span + 5 * old_m
-            pkt_span = (inputs["pkt_timeout_syms"] << shift) & ((1 << 22) - 1)
-            elapsed = (
-                (inputs["sample_count"] & MASK20)
-                - (self.lat_timing_ref & MASK20)
-            ) & MASK20
-
-            self.acq_cnt = self._clamped_load(
-                acq_span, elapsed, inputs["iq_tick"], 20
-            )
-            self.wpend_cnt = self._clamped_load(
-                wpend_span, elapsed, inputs["iq_tick"], 20
-            )
-            self.pkt_cnt = self._clamped_load(
-                pkt_span, elapsed, inputs["iq_tick"], 23
-            )
-            self.state = ST_PREAMBLE_ACQ
+                self.acq_cnt = self._clamped_load(
+                    acq_span, elapsed, inputs["iq_tick"], 20
+                )
+                self.wpend_cnt = self._clamped_load(
+                    wpend_span, elapsed, inputs["iq_tick"], 20
+                )
+                self.pkt_cnt = self._clamped_load(
+                    pkt_span, elapsed, inputs["iq_tick"], 23
+                )
+                self.state = ST_PREAMBLE_ACQ
 
         elif old_state == ST_PREAMBLE_ACQ:
             self.packet_phase = 1
@@ -190,6 +199,7 @@ class PacketCtrlFsmModel:
         """Return every modeled RTL register used by the standalone checker."""
         return {
             "state": self.state,
+            "setup_cnt": self.setup_cnt,
             "sc_lock_prev": self.sc_lock_prev,
             "lat_timing_ref": self.lat_timing_ref,
             "acq_cnt": self.acq_cnt,

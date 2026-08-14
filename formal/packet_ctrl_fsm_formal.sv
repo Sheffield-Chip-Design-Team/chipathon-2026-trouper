@@ -47,6 +47,7 @@ module packet_ctrl_fsm_formal (
 
     // internals
     input  wire [2:0]  state,
+    input  wire [1:0]  setup_cnt,
     input  wire        sc_lock_prev,
     input  wire [31:0] lat_timing_ref,
     input  wire [19:0] acq_cnt,
@@ -118,6 +119,7 @@ module packet_ctrl_fsm_formal (
     // Shared previous-value trackers
     // -----------------------------------------------------------------------
     reg [2:0]  state_q;
+    reg [1:0]  setup_cnt_q;
     reg        lock_edge_q;     // ST_IDLE sc_lock rising edge (packet start)
     reg        training_done_q;
     reg        W_commit_pending_q;
@@ -131,6 +133,7 @@ module packet_ctrl_fsm_formal (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state_q            <= ST_IDLE;
+            setup_cnt_q        <= 2'd0;
             lock_edge_q        <= 1'b0;
             training_done_q    <= 1'b0;
             W_commit_pending_q <= 1'b0;
@@ -143,6 +146,7 @@ module packet_ctrl_fsm_formal (
             lat_q              <= 32'd0;
         end else begin
             state_q            <= state;
+            setup_cnt_q        <= setup_cnt;
             lock_edge_q        <= (state == ST_IDLE && sc_lock && !sc_lock_prev);
             training_done_q    <= training_done;
             W_commit_pending_q <= W_commit_pending;
@@ -171,7 +175,10 @@ module packet_ctrl_fsm_formal (
         if (rst_n) begin
             case (state_q)
                 ST_IDLE:           a_legal_from_idle:    assert (state == ST_IDLE || state == ST_ACQ_SETUP);
-                ST_ACQ_SETUP:      a_legal_from_setup:   assert (state == ST_PREAMBLE_ACQ);
+                // The S4d dwell (Open Risks #43) holds ST_ACQ_SETUP for
+                // SETUP_DWELL cycles before capturing; a_setup_completes below
+                // pins that it always terminates, so this stays a real bound.
+                ST_ACQ_SETUP:      a_legal_from_setup:   assert (state == ST_ACQ_SETUP || state == ST_PREAMBLE_ACQ);
                 ST_PREAMBLE_ACQ:   a_legal_from_acq:     assert (state == ST_PREAMBLE_ACQ || state == ST_W_PENDING || state == ST_PAYLOAD_ACTIVE);
                 ST_W_PENDING:      a_legal_from_wpend:   assert (state == ST_W_PENDING || state == ST_PAYLOAD_ACTIVE);
                 ST_PAYLOAD_ACTIVE: a_legal_from_payload: assert (state == ST_PAYLOAD_ACTIVE || state == ST_IDLE);
@@ -184,7 +191,15 @@ module packet_ctrl_fsm_formal (
     // any counter load consumes it (#39 structure).
     always @(posedge clk)
         if (rst_n && state == ST_ACQ_SETUP)
-            a_setup_entry_cause: assert (state_q == ST_IDLE && lock_edge_q);
+            a_setup_entry_cause: assert ((state_q == ST_IDLE && lock_edge_q) ||
+                                         state_q == ST_ACQ_SETUP);
+
+    // The dwell terminates: on its last cycle the load fires and the FSM
+    // leaves. Replaces the old "exactly one cycle" guarantee that
+    // a_legal_from_setup used to carry on its own.
+    always @(posedge clk)
+        if (rst_n && state_q == ST_ACQ_SETUP && setup_cnt_q == 2'd3)
+            a_setup_completes: assert (state == ST_PREAMBLE_ACQ);
 
     // lat_timing_ref frame: written only on the lock edge.
     always @(posedge clk)
@@ -225,13 +240,14 @@ module packet_ctrl_fsm_formal (
     // a_setup_entry_cause the previous cycle was the lock edge, where
     // m_lock_delta_bounded pinned (sample_count - timing_ref) <= 2^17 and the
     // RTL latched lat_timing_ref <= timing_ref; sample_count has advanced by
-    // at most 1 since (m_sample_count_increment). Hence the true 32-bit
-    // elapsed is <= 2^17 + 1 and its top 12 bits are zero — the RTL's
+    // at most SETUP_DWELL=4 since (m_sample_count_increment; the S4d dwell
+    // widened this from 1). Hence the true 32-bit
+    // elapsed is <= 2^17 + 4 and its top 12 bits are zero — the RTL's
     // elapsed_c = sample_count[19:0] - lat_timing_ref[19:0] is exact.
     // -----------------------------------------------------------------------
     always @(posedge clk)
         if (rst_n && state == ST_ACQ_SETUP)
-            a_elapsed_fits_20bit: assert ((sample_count - lat_timing_ref) <= 32'd131073);
+            a_elapsed_fits_20bit: assert ((sample_count - lat_timing_ref) <= 32'd131076);
 
     // -----------------------------------------------------------------------
     // D. Down-counter frame: each counter changes only via the ST_ACQ_SETUP

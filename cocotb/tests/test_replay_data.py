@@ -43,7 +43,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver
+from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver, release_rx_hold
 from test_bypass_e2e import _reset_and_lock
 from test_replay_delay import (PKT_TIMEOUT_SYMS, _wait_irq,
                                _wait_replay_active, _watch_monotonic_replay)
@@ -268,6 +268,7 @@ async def _reset_and_lock_sfbw(dut, sf, bw_khz, tag, *, replay_delay):
     await spi_write(dut, 0x0C, 0x01)   # sc_thr[15:8] -- 1 hit fires lock
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)   # sc_hits_req = 0
+    await release_rx_hold(dut)
 
     # Replay margin (must land before lock: write-gated !packet_active)
     await spi_write(dut, 0x77, replay_delay & 0xFF)

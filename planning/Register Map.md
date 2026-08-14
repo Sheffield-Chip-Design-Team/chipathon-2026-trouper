@@ -42,7 +42,8 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **Reserved** (`0x10`–`0x18`) | | | | | |
 | `0x10`–`0x18` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below) |
 | `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`) |
-| `0x1A`–`0x1B` | — | — | — | — | Reserved |
+| `0x1A` | `RX_HOLD` | R/W | `0x01` | Schmidl-Cox / config interlock | [0] `RX_HOLD` (level): 1 = SC detector held disabled (ORed into `sc_clr`) and the gated config registers are writable; 0 = detector may lock and those writes are refused. **Set out of reset — firmware must configure, then clear it to receive.** [1] `CFG_WR_REJECTED` RO sticky, W1C: a gated config write was dropped |
+| `0x1B` | — | — | — | — | Reserved |
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |

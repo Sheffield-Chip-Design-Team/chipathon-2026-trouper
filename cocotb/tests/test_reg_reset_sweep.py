@@ -61,6 +61,10 @@ REG_RESET.update({
     0x0D: 0xCC,  # SC_THR_LO
     0x0E: 0x02,  # SC_HITS_REQ
     0x0F: 0x10,  # COMB_CFG (REMOD_BACKOFF_SHIFT=1 at [5:4])
+    0x1A: 0x01,  # RX_HOLD: SET out of reset -- the receiver comes up disabled
+                 # and firmware must configure then release it. See
+                 # planning/mcp-config-settle-gate-design.md §4a; the reset
+                 # value is deliberate (fail-loud), not an oversight.
     0x1D: 0x10,  # ACTIVE_STATUS (mode=0, antenna_en=0x1)
     0x27: 0x08,  # TACC_WINDOW_SYMS
     0x75: 0x80,  # PSRAM_DBG_CTRL: DBG_BUSY held until qe_init_done, unset at reset
@@ -135,6 +139,15 @@ async def test_reset_sweep_after_dirty(dut):
 
     for addr in DIRTY_ADDRS:
         await spi_write(dut, addr, 0xFF)
+
+    # RX_HOLD (0x1A) is dirtied LAST and with 0x00, not 0xFF: its reset value is
+    # 1, so 0xFF would leave it unchanged and prove nothing, and clearing it
+    # earlier would make the gated config registers above (0x09/0x0A/0x0B/0x0E/
+    # 0x27) reject their dirty writes and silently weaken this test. Clearing it
+    # here checks the safety-relevant direction -- that reset re-asserts the
+    # hold rather than leaving the receiver enabled with the config interlock
+    # dropped.
+    await spi_write(dut, 0x1A, 0x00)
 
     await _reset(dut)
     await _sweep_and_check(dut, "post-dirty reset")

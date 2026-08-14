@@ -43,6 +43,20 @@ module packet_ctrl_fsm_ref (
     localparam ST_ACQ_SETUP      = 3'd4;
 
     reg [2:0] state;
+    // Mirrors the DUT's ST_ACQ_SETUP dwell (Open Risks #43 / design doc S4d).
+    // This TB's claim is that the B6 down-counter refactor is equivalent to the
+    // old absolute-deadline scheme -- NOT that the setup phase is one cycle. The
+    // 4-cycle dwell is a separate, intentional change applied to both sides so
+    // the comparison keeps isolating the B6 refactor.
+    //
+    // It matters only for an ALREADY-EXPIRED deadline: a tick-driven fire
+    // instant is preserved exactly by the DUT's remaining-ticks arithmetic
+    // (elapsed grows, the load shrinks), but a clamped-to-zero load fires on
+    // first evaluation in the consuming state, which the dwell moves by 3
+    // cycles. Unreachable in the real system (acq_span >= 10*M once reg_bank
+    // clamps tacc_window_syms >= 8, vs timing_ref at most ~4*M in the past),
+    // but this TB drives pcfsm directly with out-of-spec values to probe it.
+    reg [1:0] setup_cnt;
 
     // Latched packet parameters
     reg [31:0] lat_timing_ref;
@@ -80,6 +94,7 @@ module packet_ctrl_fsm_ref (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state            <= ST_IDLE;
+            setup_cnt        <= 2'd0;
             sc_lock_prev     <= 1'b0;
             lat_timing_ref   <= 32'd0;
             acq_timeout_q    <= 32'd0;
@@ -131,21 +146,21 @@ module packet_ctrl_fsm_ref (
                         buf_freeze        <= 1'b1;
                         packet_active     <= 1'b1;
                         packet_phase      <= 3'd1;
+                        setup_cnt <= 2'd0;
                         state <= ST_ACQ_SETUP;
                     end
                 end
 
                 ST_ACQ_SETUP: begin
-                    // lat_timing_ref was latched last cycle and will not
-                    // change again until the next sc_lock edge (many
-                    // thousands of cycles away) -- so this arc genuinely
-                    // tolerates a multicycle SDC exception, unlike the old
-                    // same-edge compute from live timing_ref.
-                    packet_phase    <= 3'd1;
-                    acq_timeout_q   <= acq_timeout_next;
-                    wpend_timeout_q <= wpend_timeout_next;
-                    pkt_end_q       <= lat_timing_ref + pkt_span_next;
-                    state           <= ST_PREAMBLE_ACQ;
+                    packet_phase    <= 3'd1;   // every dwell cycle, as the DUT does
+                    if (setup_cnt != 2'd3) begin
+                        setup_cnt <= setup_cnt + 2'd1;
+                    end else begin
+                        acq_timeout_q   <= acq_timeout_next;
+                        wpend_timeout_q <= wpend_timeout_next;
+                        pkt_end_q       <= lat_timing_ref + pkt_span_next;
+                        state           <= ST_PREAMBLE_ACQ;
+                    end
                 end
 
                 ST_PREAMBLE_ACQ: begin

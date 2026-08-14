@@ -35,7 +35,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver
+from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver, release_rx_hold
 
 
 async def _read_be32(dut, base):
@@ -75,6 +75,7 @@ async def test_sc_dbg_flags_readback(dut):
     await spi_write(dut, 0x0C, 0x01)   # SC_THR = 0x01CC-ish low threshold
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x01)   # SC_HITS_REQ=1 -> 2 consecutive hits
+    await release_rx_hold(dut)
 
     # -- 1. baseline: PSRAM still disabled -> no delay line -> no evals yet --
     for addr, name in ((0x24, "SC_STAT_HI"), (0x25, "SC_STAT_LO"),
@@ -171,6 +172,7 @@ async def test_low_energy_hit_suppression(dut):
     await spi_write(dut, 0x0C, 0x01)   # same permissive threshold every lock test uses
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)   # 1 hit would lock -- strictest setting
+    await release_rx_hold(dut)
 
     await spi_write(dut, 0x70, 0x01)
     init_ok = False

@@ -50,6 +50,33 @@ async def spi_write(dut, addr, data):
     await Timer(500, unit="ns")
 
 
+async def release_rx_hold(dut):
+    """Clear RX_HOLD (0x1A[0]) so the SC detector can lock.
+
+    RX_HOLD is SET out of reset: the receiver comes up disabled, which is what
+    makes "config writable" and "detector able to lock" mutually exclusive and
+    lets the scoped-MCP settling exceptions hold vacuously (Open Risks #43,
+    planning/mcp-config-settle-gate-design.md §4a).
+
+    ORDER MATTERS. Call this AFTER writing SF_CFG (0x09), BW_CFG (0x0A),
+    PKT_TIMEOUT_SYMS (0x0B), SC_HITS_REQ (0x0E) and TACC_WINDOW_SYMS (0x27):
+    once the hold is released those writes are refused by hardware and the DUT
+    silently keeps its previous configuration. Ungated registers (SC_THR,
+    MIMO_CTRL, COMB_CFG, PSRAM, replay margin) may be written either side.
+    """
+    await spi_write(dut, 0x1A, 0x00)
+
+
+async def assert_rx_hold(dut):
+    """Re-assert RX_HOLD (0x1A[0]) to re-enter configuration.
+
+    Needed to reconfigure BETWEEN packets: once released, the gated config
+    registers are refused, so the sequence is hold -> write -> release. This is
+    the firmware contract the design assumes (see release_rx_hold).
+    """
+    await spi_write(dut, 0x1A, 0x01)
+
+
 async def spi_read(dut, addr):
     dut.HOST_CS.value = 0
     await Timer(SCK_HALF, unit="ns")
@@ -175,6 +202,7 @@ async def run_scenario(dut, sf, bw_khz, *, full):
     await spi_write(dut, 0x0C, 0x01)   # sc_thr[15:8]
     await spi_write(dut, 0x0D, 0x00)   # sc_thr[7:0]
     await spi_write(dut, 0x0E, 0x00)   # sc_hits_req = 0
+    await release_rx_hold(dut)         # all gated config written; let the detector run
 
     # -- enable PSRAM ---------------------------------------------------------
     await spi_write(dut, 0x70, 0x01)

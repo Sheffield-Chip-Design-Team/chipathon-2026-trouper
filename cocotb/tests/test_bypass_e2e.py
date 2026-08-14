@@ -57,7 +57,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write, spi_burst_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, spi_burst_write, release_rx_hold
 
 # Per-antenna CW amplitudes. ant0 must stay at 31: the sc_detector keys on
 # branch 0 only and its e_slice guard needs A^2*256/1024 >> 91 at SF7/BW250
@@ -160,6 +160,10 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
 
     if pkt_timeout_syms is not None:
         await spi_write(dut, 0x0B, pkt_timeout_syms & 0xFF)
+
+    # All gated config (0x09/0x0A/0x0B/0x0E) is in; release the hold so the
+    # detector can lock. Must come after those writes -- see release_rx_hold.
+    await release_rx_hold(dut)
 
     # MIMO_CTRL: [0]=MODE, [7:4]=ANTENNA_EN -- must land before sc_lock so
     # packet_ctrl_fsm latches active_mode/active_antenna_en from the shadow

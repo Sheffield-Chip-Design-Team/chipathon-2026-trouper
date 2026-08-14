@@ -37,7 +37,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, release_rx_hold
 from test_noise_trig import _StimMode, _noise_or_cw_driver
 
 QUIESCE_CLKS = 128    # burst is 44 clks; owner must fully release well within this
@@ -119,6 +119,7 @@ async def test_qspi_owner_handover(dut):
     await spi_write(dut, 0x0C, 0x01)
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)
+    await release_rx_hold(dut)
 
     # Small replay margin so REPLAY_ACTIVE lands inside the phase-3 polling
     # window (replay starts at training_done + REPLAY_DELAY_SAMPLES now, not
