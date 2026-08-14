@@ -1,7 +1,10 @@
 # Config-settle discipline for the quasi-static MCP groups
 
-**Status:** §4a-4c IMPLEMENTED and verified (2026-08-14, SGE job 4353,
-reg_bank suite 13/13). §4d and tests 2-6 outstanding.
+**Status:** §4a-4d IMPLEMENTED and verified (2026-08-15). reg_bank 13/13 on
+both simulators (jobs 4353/4356); all 18 trouper_top-level suites PASS (4357,
+4359); mcp_pcfsm_settle 4/4 (4362); full packet_ctrl_fsm block regression 7/7
+including formal and the B6 equivalence TB (job 4365). Committed f1aa262.
+Tests 2-4 and 6 in §8 remain outstanding.
 **Closes:** Open Risks #43 settling-proof obligations for 6 of the 9 open MCP
 groups, at ~2 flops, with no new logic in any 32 MHz timing-critical block.
 **Evidence this is needed:** `cocotb/mcp_pcfsm_settle/` (SGE job 4351, 2 of 4
@@ -230,7 +233,7 @@ terms added to any wide register in `sc_detector` or `training_acc`.**
 | 2 | `sc_lock` cannot assert while `RX_HOLD`, including via `SC_FORCE_LOCK` | `cocotb/sc_force_lock` | the mutual exclusion holds | — |
 | 3 | background monitor: no MCP'd config net changes on any cycle where the detector can lock | `cocotb/mcp_cfg_hold_settle` (new) | the settling property itself, for 5 groups | — |
 | 4 | Grouper back-to-back config-write → `RX_HOLD` release at minimum cadence; first capture ≥3 cycles after the change | `cocotb/spi_cdc` (has the GRP handle already) | §5's tight case | — |
-| 5 | existing `test_mcp_pcfsm_settle` flips both FAILs to PASS | `cocotb/mcp_pcfsm_settle` | §4d | — |
+| 5 | existing `test_mcp_pcfsm_settle` flips both FAILs to PASS | `cocotb/mcp_pcfsm_settle` | §4d | ✅ **done** — 4/4 PASS (job 4362); monitor now also asserts the dwell holds the counters, so the capture predicate is validated not assumed |
 | 6 | `psram_barrel_shift` settle bench | new, mirrors #5 | the one already-sound group | — |
 
 Manifest `proof` fields in `rtl-test/ol_trouper_top/mcp_audit_manifest.json` are

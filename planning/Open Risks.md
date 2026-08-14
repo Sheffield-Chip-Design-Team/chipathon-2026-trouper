@@ -229,7 +229,20 @@ cannot affect it), and `sc_clear` needs separate treatment. Full design,
 release-ordering argument, verification and contract changes:
 `planning/mcp-config-settle-gate-design.md`.
 
-**Candidate fix (not yet implemented):** delay the counter load by 3 cycles.
+**2026-08-15 — FIXED and verified (commit f1aa262).** `RX_HOLD` (0x1A[0], set
+out of reset) ORs into the level-sensitive `sc_clr` and gates writes to
+0x09/0x0A/0x0B/0x0E/0x27 on `rx_hold && !packet_active`, making "config
+writable" and "detector able to lock" mutually exclusive; `packet_ctrl_fsm`
+dwells 4 cycles in `ST_ACQ_SETUP` for the two operands firmware cannot protect
+(`lat_timing_ref`, `M_val`). `test_mcp_pcfsm_settle` now 4/4 (job 4362), full
+`packet_ctrl_fsm` block regression 7/7 incl. formal and the B6 equivalence TB
+(job 4365), all 18 top-level suites PASS (4357/4359), reg_bank 13/13 on both
+simulators (4353/4356). This closes the settling obligation for
+`pcfsm_quasi_static`, `pcfsm_mval` and `pcfsm_latched_timing_ref`; manifest
+`proof` fields are NOT yet updated for the other groups, whose benches (§8
+tests 2-4, 6 of the design doc) remain outstanding.
+
+**Superseded candidate fix:** delay the counter load by 3 cycles.
 Once `packet_active` is 1 at u, no further config write can land (given the
 0x0B/0x27 write-locks the design adds), so every source is stable from u+1 —
 `M_val` included, one stage behind `sf`. Capturing at u+4 therefore leaves the
