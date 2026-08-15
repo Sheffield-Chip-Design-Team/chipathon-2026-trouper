@@ -244,9 +244,7 @@ bench (`cocotb/mcp_cfg_hold_settle/`, job 4368, 3/3) additionally closes
 `training_window` -- it asserts both halves of the interlock (no lock while
 held, including via `SC_FORCE_LOCK`; no config net changes while the detector
 is live) plus the §5 release-ordering obligation. **9 of the 11 manifest
-groups now carry a passing proof**; only `sc_clear` (unsound for an unrelated
-reason -- 1-cycle `packet_done_pulse`) and `psram_barrel_shift` (already sound,
-bench not yet written) remain.
+groups now carry a passing proof**; **2026-08-15 (later):** `psram_barrel_shift` closed too (`cocotb/mcp_psram_bshift_settle/`, job 4372, 3/3 -- the `sf == sf_prev` gate genuinely buys the 2 cycles its MCP=2 claims, verified including a run with `sf` changing every cycle where no load occurs at all). That leaves **`sc_clear` as the only open group, and it should be DELETED rather than proven**: its source `packet_done_pulse` is a registered 1-cycle pulse into synchronous-clear registers that sample every cycle, so the capture is at t+1 and there is no 3-cycle window to grant -- but the cone MEETS without the exception, +3.94 ns at `max_ss_125C_3v00` (job 4374) and +13.29 ns at `max_ss_125C_4v50` (job 4373) across all 148 endpoint cells. The exception has been carrying risk for no timing benefit. Action: delete `pnr_32m_scoped_v25_b6.sdc:101-102` and the group's manifest entry -- NOT done here because that file currently carries unrelated in-flight uncommitted edits in the same region.
 
 **Superseded candidate fix:** delay the counter load by 3 cycles.
 Once `packet_active` is 1 at u, no further config write can land (given the

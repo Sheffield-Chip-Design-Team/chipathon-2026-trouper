@@ -7,7 +7,7 @@
       "hold": 2,
       "min_through": 1,
       "min_endpoint": 1,
-      "proof": "sc_detector clear/re-arm stability assertion"
+      "proof": "EXCEPTION UNNECESSARY -- remove it rather than prove it. Source packet_done_pulse is a registered 1-cycle pulse into synchronous-clear registers that sample every cycle, so the capture is at t+1 and no 3-cycle window exists to grant; but the cone MEETS with the MCP withdrawn: worst of 148 endpoint cells +3.94 ns at max_ss_125C_3v00 (SGE job 4374) and +13.29 ns at max_ss_125C_4v50 (job 4373), measured on job 3738's routed netlist with the MCP-free SDC. Closes on deleting the two set_multicycle_path lines (pnr_32m_scoped_v25_b6.sdc:101-102) and this group's manifest entry."
     },
     "sc_quasi_static": {
       "setup": 3,
