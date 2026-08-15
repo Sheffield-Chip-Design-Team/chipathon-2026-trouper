@@ -2,13 +2,6 @@
   "version": 1,
   "sdc": "pnr_32m_scoped_v25_b6.sdc",
   "groups": {
-    "sc_clear": {
-      "setup": 3,
-      "hold": 2,
-      "min_through": 1,
-      "min_endpoint": 1,
-      "proof": "EXCEPTION UNNECESSARY -- remove it rather than prove it. Source packet_done_pulse is a registered 1-cycle pulse into synchronous-clear registers that sample every cycle, so the capture is at t+1 and no 3-cycle window exists to grant; but the cone MEETS with the MCP withdrawn: worst of 148 endpoint cells +3.94 ns at max_ss_125C_3v00 (SGE job 4374) and +13.29 ns at max_ss_125C_4v50 (job 4373), measured on job 3738's routed netlist with the MCP-free SDC. Closes on deleting the two set_multicycle_path lines (pnr_32m_scoped_v25_b6.sdc:101-102) and this group's manifest entry."
-    },
     "sc_quasi_static": {
       "setup": 3,
       "hold": 2,
@@ -63,7 +56,7 @@
       "hold": 1,
       "min_through": 0,
       "min_endpoint": 1,
-      "proof": "PSRAM configuration settle assertion"
+      "proof": "cocotb/tests/test_mcp_psram_bshift_settle.py (unit-level on psram_buf_ctrl): the sf==sf_prev && sample_shift==sample_shift_prev load gate (psram_buf_ctrl.v:314) is asserted to buy the 2 cycles this group's MCP=2 claims -- a background monitor checks operand stability across the 2 edges preceding every del_offset_r/del_n_r load and the arithmetic of the loaded value, plus a run with sf changing every cycle where no load occurs at all, plus reset re-arm. 3/3 PASS, SGE job 4372."
     },
     "paced_dsp": {
       "setup": 3,
