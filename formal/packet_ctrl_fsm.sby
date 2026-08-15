@@ -10,5 +10,5 @@ read_verilog -sv -formal packet_ctrl_fsm.v packet_ctrl_fsm_formal.sv
 prep -top packet_ctrl_fsm
 
 [files]
-../rtl-test/rtl/packet_ctrl_fsm.v
+../src/control/packet_ctrl_fsm.v
 packet_ctrl_fsm_formal.sv

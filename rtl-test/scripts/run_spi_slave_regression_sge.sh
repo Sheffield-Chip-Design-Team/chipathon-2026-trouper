@@ -10,7 +10,6 @@ mkdir -p "$WORK_ROOT"
 cp -a "$DESIGN_ROOT/src" "$WORK_ROOT/"
 cp -a "$DESIGN_ROOT/cocotb" "$WORK_ROOT/"
 mkdir -p "$WORK_ROOT/rtl-test"
-cp -a "$DESIGN_ROOT/rtl-test/rtl" "$WORK_ROOT/rtl-test/"
 cp -a "$DESIGN_ROOT/rtl-test/tb" "$WORK_ROOT/rtl-test/"
 
 FAILED=""
