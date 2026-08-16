@@ -261,3 +261,62 @@ if [ "$EXIT" != "0" ]; then
     cat /srv/eda/logs/$USER/job-$JOB_ID.e >&2
 fi
 ```
+
+## Judging a long job: is it running, or hung?
+
+For anything measured in tens of minutes, the question "is this still making
+progress?" comes up before the job ends. Getting it wrong is expensive in both
+directions: cancelling a healthy job wastes the run, and waiting on a wedged one
+wastes the afternoon.
+
+### Never use these as liveness signals
+
+- **Log size or mtime.** Job logs are capped at **2 MiB**, so a long job can stop
+  growing while perfectly healthy. Worse, many tests log only on *events* — a
+  cocotb run that waits ~2 s of simulated time between packets legitimately
+  prints nothing for 98% of its wall-clock. Observed 2026-08-16: job 4409 wrote
+  nothing for 11 minutes mid-run and then passed.
+- **`docker ps` on one node.** The job may be on another worker. Checking only
+  the local box has already produced a wrong "job is dead" call.
+- **`hqstat`.** It does not display `STAGING` jobs and reports "No jobs found"
+  for completed ones. A freshly submitted job is routinely invisible here.
+
+### Use progress artifacts on the filesystem instead
+
+Read incremental state under the run dir. Most job types already emit it:
+
+| job type | progress artifact |
+|---|---|
+| P&R (LibreLane/OpenROAD) | numbered step folders appearing in the run dir |
+| multi-point sweeps | a summary file appended per point (e.g. `sweep_summary.txt`) |
+| formal (SymbiYosys) | per-property output |
+| characterization | per-point result files |
+| **long single-shot sims** | **usually nothing — needs instrumentation** |
+
+Prefer these over the log in all cases: they are immune to the 2 MiB cap and
+need no parsing. A sweep that appends one line per point can be read mid-run to
+see exactly how far it got.
+
+If a job type has no incremental artifact, add a minimal one rather than logging
+more: a `progress.txt` under `$RUN_DIR` carrying a phase, a **monotonic
+quantity**, and the **denominator** (e.g. `0.20 s / 2.075 s (10%)`), rewritten
+at bounded intervals. Bound the number of writes so the log cap can never
+consume the verdict. A wall-clock heartbeat is not enough on its own — it proves
+the wrapper is alive, not that the work advanced; always include a quantity that
+comes from the job itself.
+
+For test-side instrumentation of cocotb sims, see the `block-regression` skill.
+
+### Checking a job's true state
+
+`hqstat` is unreliable (above). `hqdel <id>` prints the real state in its
+confirmation prompt, so it doubles as a **read-only probe** when answered `n`:
+
+```bash
+echo n | hqdel 4402      # -> "Cancel job 4402 (name, RUNNING)? [y/N]: Aborted!"
+```
+
+Also note `hqsub` can time out (`Request to .../api/jobs timed out after 180s`)
+while the job **was** created — staging is synchronous and can outlast the HTTP
+request. Do not retry blindly; probe first, or you create a duplicate (observed
+2026-08-16: jobs 4393/4394).

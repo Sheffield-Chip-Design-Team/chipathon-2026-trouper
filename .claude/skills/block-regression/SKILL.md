@@ -173,6 +173,53 @@ Also run every legacy/differential target in the mapping row. In particular,
 the explicit `TB: PASS` marker (and reject any `TB: FAIL` marker), not trust process exit
 alone; the testbench historically used `$finish` on failure and could otherwise false-green.
 
+### 4b. Long suites — emit progress, and check it correctly
+
+Most suites here finish in seconds; a few run for tens of minutes
+(`capture_two_packet` ~14 min, `trouper_capture` sweeps, anything spanning more
+than one packet). For those, "is it hung or just slow?" comes up mid-run.
+
+**Checking:** never judge from log size/mtime — job logs are capped at 2 MiB,
+and event-driven tests legitimately print nothing for most of their wall-clock
+(`capture_two_packet` logged nothing for 11 minutes and then passed). See the
+`sge-job` skill for the full checking convention and the `hqdel`-as-read-only-
+probe trick.
+
+**Instrumenting:** a long cocotb sim usually has no incremental artifact at all,
+so add one. Heartbeat on **simulation-time milestones**, not wall-clock, and
+include a quantity that comes from the DUT:
+
+```python
+# ~10 lines total regardless of runtime; bounded so the 2 MiB log cap can
+# never swallow the verdict at the end.
+next_mark = 0.0
+...
+    t_ns = cocotb.utils.get_sim_time("ns")
+    if t_ns >= next_mark:
+        dut._log.info(f"{tag}: {t_ns/1e6:.0f} ms / {total_ns/1e6:.0f} ms "
+                      f"({100*t_ns/total_ns:.0f}%), poll={poll_i}")
+        next_mark += total_ns / 10
+```
+
+Three rules, each of which failed in practice without it:
+
+1. **Bound the line count** (~10–20 for the whole run). Unbounded progress
+   output loses the result to the log cap — the end of the log is where the
+   verdict lives.
+2. **Include the denominator.** `0.20 s / 2.075 s (10%)` lets a human compute an
+   ETA from a single line. Extrapolating an ETA from one early sample is
+   unreliable — a 2%-progress reading suggested ~1 h for a run that took 845 s.
+3. **Include a DUT-sourced quantity** (poll index, `sample_count`, capture
+   position). A wall-clock heartbeat only proves the coroutine is alive, not
+   that the simulation advanced.
+
+Do **not** shorten a long window just to speed a suite up without checking what
+the elapsed time covers. `capture_two_packet`'s ~4.07 M-sample inter-packet gap
+is load-bearing: `dc_removal` settles across it, `psram_buf_ctrl` pointers
+advance and wrap, and `sc_detector`'s counters accumulate — the last is where
+the double-count bug hid, since its error grew with elapsed samples. Dropping
+`--trace` is the legitimate speed-up (845 s vs ~52 min, zero coverage cost).
+
 ### 5. Report
 
 Summarize as a table: suite → PASS/FAIL/error, one row per suite in the block's mapping row
