@@ -72,5 +72,14 @@
       "min_endpoint": 0,
       "proof": "cocotb/tests/test_spi_cdc.py::test_regbank_write_bus_ce_gated (rb_we/rb_addr/rb_wdata CE-gated settle monitor across reset-mid-write, back-to-back SPI writes, and SPI/Grouper write interleaving; PASS, SGE job 4120, 2026-08-09)"
     }
+  },
+  "withdrawn_groups": {
+    "sc_clear": {
+      "status": "WITHDRAWN in SDC v26 (2026-08-15) -- not proven, deleted",
+      "why_unsound": "packet_done_pulse is a registered 1-cycle pulse into synchronous-clear registers that sample every cycle; capture is at t+1, so no 3-cycle settling window exists to grant",
+      "measured_cost": "zero WNS, -32.87 ns TNS (~1% of -3246). Controlled A/B on config_current_signoff: job 4376 (withdrawn) WNS -20.117533 / TNS -3278.66 vs job 4377 (restored, SDC-only delta) WNS -20.117533 / TNS -3245.79. WNS identical to 12 d.p.; the critical path is u_remod.s3_i[2], which the exception never covered.",
+      "correction": "an earlier +3.94 ns MET figure for this cone was measured on job 3738's 9ns-setup-margin netlist and does NOT represent config_current_signoff, where these paths violate at up to -5.35 ns. The withdrawal decision stands on the WNS/TNS A/B above, not on that figure.",
+      "rejected_alternative": "stretching the pulse to >=3 cycles -- would add flops and a dedicated signal (packet_done_pulse also drives packet_end into u_psram and an IRQ set bit) to recover ~1% of TNS"
+    }
   }
 }
