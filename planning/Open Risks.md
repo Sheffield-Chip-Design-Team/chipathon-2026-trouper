@@ -531,6 +531,24 @@ synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
 `spi_slave.v:159-202`; `planning/Pinout.md` (inter-project wire note).
 **Found:** 2026-07-05 (Grouper bus clocking review).
 
+**2026-08-16 — OWNED BY GROUPER TEAM, scheduled.** The Grouper team will build a
+**bridge with proper CDC plus a 32-bit → 8-bit width conversion** in the week of
+2026-08-17. This resolves the root cause on their side of the link, so no CDC
+synchronizer is to be added inside `trouper_top` — doing so would double-
+synchronize. Corroborating evidence that the two clocks are genuinely
+independent: `ip/chipathon-2026-grouper/src/chip_core.sv:10` declares its own
+top-level `input wire clk`, and the Grouper tree already carries a synchronizer
+primitive at `src/rtl/sync.sv`.
+
+**Trouper-side obligations that remain ours:**
+- Agree the bridge's handshake contract (ready/valid vs the current
+  `GRP_WE`/`GRP_RE` + "hold ≥ 2 clocks" convention) and update Open Risk #16,
+  which documents that undocumented hold requirement as the arbitration symptom.
+- Confirm the 32→8 conversion's byte order and address mapping against
+  `planning/Register Map.md` (7-bit map, 24-bit Z readback at `[31:8]` — a
+  32-bit bridge word maps onto that packing non-trivially).
+- Re-verify `reg_bank` arbitration against the bridge once its RTL lands.
+
 ### 38. Host SPI 10 MHz timing is not constrained or signed off — CDC portion FIXED, SDC portion open
 
 **Partially fixed 2026-07-12:** the persistent toggle/mailbox CDC (commits

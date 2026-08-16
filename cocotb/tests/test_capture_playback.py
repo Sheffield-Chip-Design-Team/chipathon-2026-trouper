@@ -37,8 +37,8 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import (, release_rx_hold
-    CLK_NS, spi_read, spi_write, spi_burst_write,
+from test_trouper_top import (
+    CLK_NS, spi_read, spi_write, spi_burst_write, release_rx_hold,
 )
 import iq_capture
 
