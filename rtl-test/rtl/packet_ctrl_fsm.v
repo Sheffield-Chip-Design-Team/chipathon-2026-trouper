@@ -42,11 +42,12 @@ module packet_ctrl_fsm (
     localparam ST_PREAMBLE_ACQ   = 3'd1;
     localparam ST_W_PENDING      = 3'd2;
     localparam ST_PAYLOAD_ACTIVE = 3'd3;
-    // One dedicated cycle between sc_lock and ST_PREAMBLE_ACQ that loads
-    // the acq/wpend/pkt down-counters from the already-registered
-    // lat_timing_ref instead of combinationally from the live timing_ref
-    // input -- see Open Risk #39 (dishonest single-cycle timing_ref -> adder
-    // -> timeout-register arc).
+    // Dedicated state between sc_lock and ST_PREAMBLE_ACQ that loads the
+    // acq/wpend/pkt down-counters from the already-registered lat_timing_ref
+    // instead of combinationally from the live timing_ref input -- see Open
+    // Risk #39 (dishonest single-cycle timing_ref -> adder -> timeout-register
+    // arc).  It dwells for 4 cycles and captures on the last (setup_cnt, Open
+    // Risks #43 / design doc S4d); it was a single cycle before that.
     localparam ST_ACQ_SETUP      = 3'd4;
 
     reg [2:0] state;
@@ -71,6 +72,18 @@ module packet_ctrl_fsm (
     reg [19:0] wpend_cnt;
     reg [22:0] pkt_cnt;
     reg [14:0] M_val;   // 2^(SF+shift) <= 16384 -> 15 bits (was 32)
+    // ST_ACQ_SETUP dwell counter (Open Risks #43,
+    // planning/mcp-config-settle-gate-design.md §4d).  The counter-load cone
+    // below is captured at ONE edge per packet, and the scoped SDC relaxes it
+    // to MCP=3 -- which is only sound if every operand has been quiet for the
+    // 3 preceding edges.  The last config write can land on the sc_lock edge u
+    // itself (reg_bank samples packet_active as 0 there), so sf/sample_shift
+    // settle at u and M_val -- one register stage behind them -- at u+1.
+    // Capturing on the 4th cycle in ST_ACQ_SETUP puts the load at u+4, leaving
+    // u+1/u+2/u+3 quiet.  lat_timing_ref (latched at u) is covered by the same
+    // dwell; it is the operand firmware discipline CANNOT protect, which is
+    // why this counter exists even with the RX_HOLD interlock in place.
+    reg [1:0]  setup_cnt;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) M_val <= 15'd256; // SF7 + shift=1 (250 kHz default)
         else        M_val <= 15'd1 << ({1'b0, sf} + {3'b0, sample_shift});
@@ -117,6 +130,7 @@ module packet_ctrl_fsm (
         if (!rst_n) begin
             state            <= ST_IDLE;
             sc_lock_prev     <= 1'b0;
+            setup_cnt        <= 2'd0;
             lat_timing_ref   <= 32'd0;
             acq_cnt          <= 20'd0;
             wpend_cnt        <= 20'd0;
@@ -178,6 +192,7 @@ module packet_ctrl_fsm (
                     if (sc_lock && !sc_lock_prev) begin
                         W_missed_q        <= 1'b0;
                         lat_timing_ref    <= timing_ref;
+                        setup_cnt         <= 2'd0;   // arm the ST_ACQ_SETUP dwell
                         active_mode       <= mode_shadow;
                         active_antenna_en <= antenna_en_shadow;
                         packet_active     <= 1'b1;
@@ -188,16 +203,30 @@ module packet_ctrl_fsm (
                 end
 
                 ST_ACQ_SETUP: begin
-                    // lat_timing_ref was latched last cycle and will not
-                    // change again until the next sc_lock edge (many
-                    // thousands of cycles away) -- so this arc genuinely
-                    // tolerates a multicycle SDC exception, unlike the old
-                    // same-edge compute from live timing_ref.
+                    // Dwell 4 cycles, capturing on the last one, so the load
+                    // cone's operands have been stable for the 3 edges the
+                    // scoped SDC's MCP=3 assumes (see setup_cnt above).  The
+                    // old single-cycle version captured at u+1, giving
+                    // lat_timing_ref and M_val only ONE settled cycle --
+                    // measured by cocotb/mcp_pcfsm_settle (Open Risks #43).
+                    //
+                    // Delaying is arithmetically free: the counters hold
+                    // REMAINING ticks, recomputed here from the live
+                    // sample_count, so a later load yields a proportionally
+                    // smaller remainder and the absolute fire instant is
+                    // unchanged.  The decrement block above deliberately
+                    // excludes ST_ACQ_SETUP, so the counters simply hold
+                    // during the dwell and this branch keeps sole write
+                    // access to them.
                     packet_phase    <= 3'd1;
-                    acq_cnt         <= acq_load;
-                    wpend_cnt       <= wpend_load;
-                    pkt_cnt         <= pkt_load;
-                    state           <= ST_PREAMBLE_ACQ;
+                    if (setup_cnt == 2'd3) begin
+                        acq_cnt     <= acq_load;
+                        wpend_cnt   <= wpend_load;
+                        pkt_cnt     <= pkt_load;
+                        state       <= ST_PREAMBLE_ACQ;
+                    end else begin
+                        setup_cnt   <= setup_cnt + 2'd1;
+                    end
                 end
 
                 ST_PREAMBLE_ACQ: begin
@@ -285,6 +314,7 @@ module packet_ctrl_fsm (
     packet_ctrl_fsm_formal u_pcfsm_formal (
         .clk              (clk),
         .rst_n            (rst_n),
+        .setup_cnt        (setup_cnt),
         .sample_count     (sample_count),
         .iq_tick          (iq_tick),
         .sf               (sf),

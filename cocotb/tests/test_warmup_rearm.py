@@ -45,7 +45,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 from cocotb.utils import get_sim_time
 
-from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver
+from test_trouper_top import CLK_NS, spi_read, spi_write, sdm_driver, release_rx_hold, assert_rx_hold
 
 CLK_PER_IQ = 64
 PKT_TIMEOUT_SYMS = 20
@@ -85,6 +85,7 @@ async def _reset_lock_first_packet(dut, *, sf, bw_khz, tag):
     await spi_write(dut, 0x0D, 0x00)   # sc_thr[7:0]
     await spi_write(dut, 0x0E, 0x00)   # sc_hits_req -- 1 hit fires lock
     await spi_write(dut, 0x0B, PKT_TIMEOUT_SYMS)  # short packet, before lock
+    await release_rx_hold(dut)
 
     await spi_write(dut, 0x70, 0x01)   # PSRAM_EN
     init_ok = False
@@ -131,8 +132,15 @@ async def _rearm_and_relock(dut, *, new_sf, new_bw_khz, tag):
         f"{tag}: del_rdy not set from the completed first packet -- baseline invalid"
 
     t_change_start = get_sim_time(unit="ns")
+    # Reconfiguring BETWEEN packets now requires re-entering the configuration
+    # state: RX_HOLD was released during bring-up, and while it is clear the
+    # gated registers (0x09/0x0A) refuse writes. This hold -> write -> release
+    # sequence is the firmware contract itself, so exercising it here is the
+    # point, not a workaround (planning/mcp-config-settle-gate-design.md §9).
+    await assert_rx_hold(dut)
     await spi_write(dut, 0x09, new_sf & 0x0F)
     await spi_write(dut, 0x0A, 0 if new_bw_khz == 250 else 1)
+    await release_rx_hold(dut)
 
     sf_rb = await spi_read(dut, 0x09) & 0x0F
     bw_rb = await spi_read(dut, 0x0A) & 0x01

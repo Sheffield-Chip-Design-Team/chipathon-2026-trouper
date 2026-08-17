@@ -108,6 +108,23 @@ async def _reset_between_cases(dut, model: PacketCtrlFsmModel, tag: str) -> None
     await _cycle(dut, model, f"{tag}: idle")
 
 
+# ST_ACQ_SETUP holds for SETUP_DWELL cycles and captures on the last one, so the
+# counter-load cone's operands have been quiet for the 3 edges the scoped SDC's
+# MCP=3 assumes (Open Risks #43, design doc S4d). Before that change the state
+# lasted exactly one clock, which is what these tests used to assert.
+SETUP_DWELL = 4
+
+
+async def _run_setup_dwell(dut, model: PacketCtrlFsmModel, tag: str) -> None:
+    """Advance through ST_ACQ_SETUP, checking it holds then loads."""
+    for i in range(SETUP_DWELL - 1):
+        await _cycle(dut, model, f"{tag}: setup dwell {i}")
+        assert int(dut.state.value) == ST_ACQ_SETUP, \
+            f"{tag}: left ST_ACQ_SETUP after {i + 1} cycle(s), expected a " \
+            f"{SETUP_DWELL}-cycle dwell"
+    await _cycle(dut, model, f"{tag}: setup load")
+
+
 async def _lock_and_load(
     dut,
     model: PacketCtrlFsmModel,
@@ -117,7 +134,7 @@ async def _lock_and_load(
     sample_count: int,
     setup_iq_tick: int = 0,
 ) -> None:
-    """Take one lock edge and the following counter-load/setup edge."""
+    """Take one lock edge and the ST_ACQ_SETUP dwell up to the load edge."""
     dut.timing_ref.value = timing_ref
     dut.sample_count.value = sample_count
     dut.sc_lock.value = 1
@@ -126,7 +143,7 @@ async def _lock_and_load(
 
     dut.sc_lock.value = 0
     dut.iq_tick.value = setup_iq_tick
-    await _cycle(dut, model, f"{tag}: setup")
+    await _run_setup_dwell(dut, model, tag)
     assert int(dut.state.value) == ST_PREAMBLE_ACQ
 
 
@@ -260,9 +277,9 @@ async def test_lock_setup_and_parameter_latching(dut):
     dut.sample_count.value = locked_timing_ref + 38
     dut.iq_tick.value = 1
 
-    await _cycle(dut, model, "setup loads counters")
+    await _run_setup_dwell(dut, model, "setup loads counters")
     assert int(dut.state.value) == ST_PREAMBLE_ACQ, \
-        "ST_ACQ_SETUP did not last exactly one clock"
+        f"ST_ACQ_SETUP did not last exactly {SETUP_DWELL} clocks"
     assert int(dut.packet_phase.value) == 1
     assert int(dut.lat_timing_ref.value) == locked_timing_ref, \
         "live timing_ref was re-latched during ST_ACQ_SETUP"
@@ -348,7 +365,7 @@ async def test_commit_during_acquisition_is_deferred(dut):
             assert int(dut.state.value) == ST_ACQ_SETUP
             dut.sc_lock.value = 0
             dut.W_commit.value = 1
-            await _cycle(dut, model, "setup commit: capture and load")
+            await _run_setup_dwell(dut, model, "setup commit: capture and load")
         else:
             await _lock_and_load(
                 dut,

@@ -54,7 +54,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, release_rx_hold
 from test_bypass_e2e import _reset_and_lock
 from test_noise_trig import _StimMode, _noise_or_cw_driver
 
@@ -153,6 +153,7 @@ async def test_dbg_readback_content(dut):
     await spi_read(dut, 0x09)
     await spi_write(dut, 0x09, sf & 0x0F)
     await spi_write(dut, 0x0A, 0)
+    await release_rx_hold(dut)
 
     await spi_write(dut, 0x70, 0x01)
     init_ok = False
@@ -235,6 +236,7 @@ async def test_dbg_readback_multisample_stream(dut):
     await spi_read(dut, 0x09)
     await spi_write(dut, 0x09, sf & 0x0F)
     await spi_write(dut, 0x0A, 0)
+    await release_rx_hold(dut)
 
     await spi_write(dut, 0x70, 0x01)
     init_ok = False

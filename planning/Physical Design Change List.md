@@ -134,7 +134,9 @@ Topology outcomes:
 - `970` `2x2-low-open`: failed on `clkbuf_3_0_0`, `clkbuf_3_2_0`, `clkbuf_3_6_0` access
 - `971` `2x2-staggered`: failed on `clkbuf_2_1_0` access
 - `972` `t-shape`: failed on `clkbuf_2_2_0` and `clkbuf_2_0_0` access
-- `973` `l-shape`: failed on `delaybuf_0_clk_32m` access
+- `973` `l-shape`: failed on `delaybuf_0_clk_32m` access — **superseded 2026-08-16**: a
+  1100×1100 + 550×550 L (job 4392) routes DRC-clean at WNS −14.59 ns, better than the
+  1200×1100 baseline. See `lshape-1100-550-floorplan-2026-08.md`
 - `974` `top-row`: completed, but not clean
 - `975` `3plus1`: failed on `clkbuf_3_0_0` and `clkbuf_3_5_0` access
 - `976` `edge-cols`: failed on `clkbuf_3_7_0` access

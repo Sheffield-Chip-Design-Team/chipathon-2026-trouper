@@ -38,7 +38,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
 from test_trouper_top import (
-    CLK_NS, spi_read, spi_write, spi_burst_write,
+    CLK_NS, spi_read, spi_write, spi_burst_write, release_rx_hold,
 )
 import iq_capture
 
@@ -159,6 +159,7 @@ async def test_capture_playback(dut):
     await spi_write(dut, 0x0C, 0x01)
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)
+    await release_rx_hold(dut)
 
     # -- enable PSRAM + wait INIT_DONE ---------------------------------------
     await spi_write(dut, 0x70, 0x01)

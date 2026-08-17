@@ -10,5 +10,5 @@ read_verilog -sv -formal psram_buf_ctrl.v psram_buf_ctrl_formal.sv
 prep -top psram_buf_ctrl
 
 [files]
-../rtl-test/rtl/psram_buf_ctrl.v
+../src/control/psram_buf_ctrl.v
 psram_buf_ctrl_formal.sv

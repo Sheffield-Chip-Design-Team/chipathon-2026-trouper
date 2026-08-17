@@ -47,6 +47,13 @@ PYTHONPATH    := $(TESTS)
 export CAPTURE_NPY
 export CAPTURE_SF
 export CAPTURE_BW
+# CAPTURE_STAGE/CAPTURE_GAINS work when passed as `make VAR=...` (GNU make
+# exports command-line variables to recipe shells) but NOT when set as plain
+# shell env, which is a silent-skip trap: an unexported CAPTURE_GAINS leaves
+# gains flat and test_capture_playback quietly skips its ZDIAG rank assertion.
+# List them explicitly so both invocation styles behave the same.
+export CAPTURE_STAGE
+export CAPTURE_GAINS
 export CAPTURE_START
 export CAPTURE_NSAMP
 export CAPTURE_SNRDB

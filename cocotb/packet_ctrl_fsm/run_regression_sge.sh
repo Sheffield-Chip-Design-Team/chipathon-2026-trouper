@@ -31,12 +31,12 @@ done
 
 echo "=== formal/packet_ctrl_fsm.sby ==="
 FORMAL_OUT="$RUN_OUT/formal_work"
-mkdir -p "$FORMAL_OUT/formal" "$FORMAL_OUT/rtl-test/rtl"
+mkdir -p "$FORMAL_OUT/formal" "$FORMAL_OUT/src/control"
 cp -a "$DESIGN_ROOT/formal/packet_ctrl_fsm.sby" \
       "$DESIGN_ROOT/formal/packet_ctrl_fsm_formal.sv" \
       "$FORMAL_OUT/formal/"
-cp -a "$DESIGN_ROOT/rtl-test/rtl/packet_ctrl_fsm.v" \
-      "$FORMAL_OUT/rtl-test/rtl/"
+cp -a "$DESIGN_ROOT/src/control/packet_ctrl_fsm.v" \
+      "$FORMAL_OUT/src/control/"
 (
     cd "$FORMAL_OUT/formal"
     sby -f packet_ctrl_fsm.sby
@@ -57,7 +57,7 @@ verilator --binary --timing -Wno-fatal -sv \
     --top-module tb_pcfsm_b6_equiv \
     "$DESIGN_ROOT/rtl-test/tb/tb_pcfsm_b6_equiv.v" \
     "$DESIGN_ROOT/rtl-test/tb/packet_ctrl_fsm_ref.v" \
-    "$DESIGN_ROOT/rtl-test/rtl/packet_ctrl_fsm.v"
+    "$DESIGN_ROOT/src/control/packet_ctrl_fsm.v"
 rc=$?
 if [ "$rc" -eq 0 ]; then
     EQUIV_LOG="$EQUIV_OUT/equiv.log"

@@ -1,17 +1,17 @@
 {
     "DESIGN_NAME": "trouper_top",
     "VERILOG_FILES": [
-        "dir::../rtl/dc_removal.v",
-        "dir::../rtl/trouper_top.v",
-        "dir::../rtl/mrc_combiner.v",
-        "dir::../rtl/packet_ctrl_fsm.v",
-        "dir::../rtl/psram_buf_ctrl.v",
-        "dir::../rtl/reg_bank.v",
-        "dir::../rtl/sc_detector.v",
-        "dir::../rtl/sd_decimator_poly.v",
-        "dir::../rtl/sd_remod.v",
-        "dir::../rtl/spi_slave.v",
-        "dir::../rtl/training_acc.v"
+        "dir::../../src/frontend/dc_removal.v",
+        "dir::../../src/top/trouper_top.v",
+        "dir::../../src/combiner/mrc_combiner.v",
+        "dir::../../src/control/packet_ctrl_fsm.v",
+        "dir::../../src/control/psram_buf_ctrl.v",
+        "dir::../../src/control/reg_bank.v",
+        "dir::../../src/frontend/sc_detector.v",
+        "dir::../../src/decimator/sd_decimator_poly.v",
+        "dir::../../src/remod/sd_remod.v",
+        "dir::../../src/control/spi_slave.v",
+        "dir::../../src/combiner/training_acc.v"
     ],
     "CLOCK_PORT": "IQ_CLK",
     "CLOCK_PERIOD": 31.25,

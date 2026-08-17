@@ -14,6 +14,7 @@ evidence, don't delete) or as new ones are found.
 | High | Does not block tapeout mechanically, but a real functional/yield/deployment failure mode if not addressed |
 | Moderate | Affects a non-critical feature, a margin, or a documented-vs-verified mismatch; tapeout can proceed without it |
 | Low | Tooling, documentation, or future-feature gap |
+| Deferred | Accepted limitation with a known fix that is explicitly not being pursued; re-opened only when its stated trigger is met |
 
 ---
 
@@ -94,6 +95,34 @@ reproduced on the current die/SDC baseline rather than an older one. Hold at
 re-checked. Still a corner-policy decision, not a closed risk. See
 `planning/5v-core-voltage-strategy.md` §2026-07-31.
 
+**2026-08-14 — voltage does NOT substitute for the MCP exceptions (job 4349).**
+The 4.5 V closure (job 3738) was always measured with the scoped MCP SDC; the
+obvious follow-up question — does 4.5 V close *honestly* — had never been asked.
+Answered by reloading 3738's own routed netlist + SPEF and re-timing it under an
+MCP-free SDC derived from `pnr_32m_scoped_v25_b6.sdc` (22 `set_multicycle_path`
+statements withdrawn, async/debug false paths and all clock/IO constraints kept
+— `rtl-test/scripts/gen_honest_sdc.py`, `rtl-test/ol_trouper_top/honest_sta.tcl`):
+
+| SDC | `max_ss_125C_4v50` setup WNS | TNS | hold WNS |
+|---|---|---|---|
+| scoped v25_b6 (control) | **+3.174 ns** | 0 | +0.962 ns |
+| MCP-free (honest) | **−22.84 ns** | −5922 ns | +0.962 ns |
+
+The control reproduces job 3738's recorded +3.17 ns exactly, so the harness is
+faithful. **Conclusion: raising the core rail does not retire the multicycle
+exceptions — it is additive to them, not a replacement.** Item 43's remaining
+settling proofs are therefore unavoidable on every path, 3.0 V or 4.5 V.
+Withdrawing the MCP *hold* exceptions changed no hold slack (+0.962 ns
+unchanged at ss, +0.162 ns at ff), so nothing was being hidden on that side.
+
+Usefully, the honest violations land almost entirely inside the cones the
+exceptions already cover — worst two, traced through the netlist:
+`rb_sf_cfg[2] → u_pcfsm.acq_cnt[4]` at −22.84 ns (the `pcfsm_quasi_static` /
+`pcfsm_mval` groups) and `u_dec.hb1_stream[0] → u_dec.hb1_hold_i[3][2]` at
+−22.13 ns (`paced_dsp`, whose settling proof is already closed). That is
+evidence the exceptions are load-bearing and correctly targeted rather than
+papering over unrelated debt.
+
 **See:** `planning/ss-corner-decimator-pacing-closure.md` (Open Items),
 `planning/5v-core-voltage-strategy.md` (§2026-07-05 re-confirmation,
 §2026-07-31 full-P&R closure),
@@ -131,6 +160,107 @@ v25_b6 load-arc exception partially misses.
   re-arm, and configuration-write boundaries.
 - Report unrelaxed single-cycle timing separately, so a scope miss is visible
   as a failing cone rather than being confused with a closed MCP path.
+
+**2026-08-14 — `pcfsm_quasi_static` and `pcfsm_mval` settle proofs FAIL: the
+exceptions are not justified by the RTL as it stands (job 4351).** New bench
+`cocotb/mcp_pcfsm_settle/` + `cocotb/tests/test_mcp_pcfsm_settle.py`
+(TOPLEVEL = `packet_ctrl_fsm`), 4 tests, 2 PASS / 2 FAIL — and the two
+failures are the finding, not a broken test.
+
+`packet_ctrl_fsm.v` captures the whole quasi-static cone
+(`sf`, `sample_shift`, `pkt_timeout_syms`, `tacc_window_syms`, `M_val` →
+`acq_load`/`wpend_load`/`pkt_load`) at exactly **one** instant per packet, the
+`ST_ACQ_SETUP` edge, which is the cycle *immediately after* the `sc_lock`
+rising edge that sets `packet_active`. `reg_bank.v` gates `sf_cfg`/`bw_sel`
+writes on `!packet_active` (and does not gate `pkt_timeout_syms`/
+`tacc_window_syms` at all, 0x0B/0x27), but `packet_active` only rises **at**
+that same edge, so a host write is still accepted one cycle before it — and
+even on it. Measured:
+
+- `test_pcfsm_config_change_before_lock`: config write one cycle before lock →
+  `M_val` (one pipeline stage behind `sf`) changes on the very edge before the
+  capture. **1 cycle of settling where the SDC granted 3** → `pcfsm_mval`.
+- `test_pcfsm_direct_source_change_at_lock`: write landing on the lock edge →
+  `sf`, `pkt_timeout_syms`, `tacc_window_syms` all move within the window →
+  `pcfsm_quasi_static`.
+- `test_pcfsm_load_settle_normal` (config settled long before lock) and
+  `test_pcfsm_midpacket_change_is_safe` both PASS — the latter usefully
+  **bounds** the hazard: because the cone is single-capture, mid-packet changes
+  to the ungated registers can never be captured. The exposure is only the
+  ~3 cycles before `ST_ACQ_SETUP`.
+
+The SDC's justification for these two groups ("host-writable, kHz-rate,
+long-settled by the time any hit/lock event samples it") is therefore wrong in
+kind: write *rate* is irrelevant, only the distance between the last change and
+the single capture edge matters, and nothing in the RTL enforces that distance.
+Reachability is through the real write path — `reg_bank` sees the combinational
+`packet_active` with no extra pipeline stage (`trouper_top.v:741`), so it reads
+0 at both u−1 and u.
+
+**Caveat:** the bench is unit-level and drives `sf` etc. directly; the
+write-lock it reasons about lives in `reg_bank`. The argument above closes that
+gap by inspection, but an end-to-end version driving real SPI writes (the
+`regbank_write` proof's method) would make reachability airtight.
+
+**2026-08-14 — the defect is family-wide, not pcfsm-specific.** Checking the
+other groups by inspection: `pcfsm_latched_timing_ref` has the same flaw (the
+v24 #39 fix latches `lat_timing_ref` at u and captures it at u+1 — the SDC
+argues stability *after* the capture, which is the wrong side);
+`training_window` and both `timing_ref` groups capture at the `sc_lock`/
+final-hit edge itself, one cycle earlier than pcfsm, so `packet_active` never
+covers them; `sc_quasi_static` captures **continuously** (the correlator runs
+before lock) and so cannot be fixed by delaying any single instant;
+`sc_clear` is unsound for a different reason (a 1-cycle `packet_done_pulse`
+cannot offer a 3-cycle window). `psram_barrel_shift` is the sole group with a
+real structural guarantee (`psram_buf_ctrl.v:314`, `sf == sf_prev`) and needs
+only a bench.
+
+**Chosen route (2026-08-14, area/timing-driven): enforced firmware discipline,
+not per-block settle logic.** `sc_clr` is already level-sensitive
+(`sc_detector.v:492` holds `sc_lock`/`hit_count`/all accumulators cleared while
+high), so a firmware-writable `RX_HOLD` bit ORed into it makes "config writable"
+and "detector able to lock" mutually exclusive — the settling requirement then
+holds vacuously for 6 of the 9 groups at ~4-6 flops, with **no enable terms
+added to any wide register in `sc_detector`/`training_acc`**. Hardware must
+*reject* the gated writes (with a sticky `CFG_WR_REJECTED` bit) or it is a
+convention rather than evidence. Residual RTL: `pcfsm_latched_timing_ref` still
+needs a 4-flop setup-delay counter (it is internal to the FSM and firmware
+cannot affect it), and `sc_clear` needs separate treatment. Full design,
+release-ordering argument, verification and contract changes:
+`planning/mcp-config-settle-gate-design.md`.
+
+**2026-08-15 — FIXED and verified (commit f1aa262).** `RX_HOLD` (0x1A[0], set
+out of reset) ORs into the level-sensitive `sc_clr` and gates writes to
+0x09/0x0A/0x0B/0x0E/0x27 on `rx_hold && !packet_active`, making "config
+writable" and "detector able to lock" mutually exclusive; `packet_ctrl_fsm`
+dwells 4 cycles in `ST_ACQ_SETUP` for the two operands firmware cannot protect
+(`lat_timing_ref`, `M_val`). `test_mcp_pcfsm_settle` now 4/4 (job 4362), full
+`packet_ctrl_fsm` block regression 7/7 incl. formal and the B6 equivalence TB
+(job 4365), all 18 top-level suites PASS (4357/4359), reg_bank 13/13 on both
+simulators (4353/4356). This closes the settling obligation for `pcfsm_quasi_static`, `pcfsm_mval`
+and `pcfsm_latched_timing_ref`. **2026-08-15:** the RX_HOLD mutual-exclusion
+bench (`cocotb/mcp_cfg_hold_settle/`, job 4368, 3/3) additionally closes
+`sc_quasi_static`, `timing_ref_hits`, `timing_ref_config` and
+`training_window` -- it asserts both halves of the interlock (no lock while
+held, including via `SC_FORCE_LOCK`; no config net changes while the detector
+is live) plus the §5 release-ordering obligation. **9 of the 11 manifest
+groups now carry a passing proof**; **2026-08-15 (later):** `psram_barrel_shift` closed too (`cocotb/mcp_psram_bshift_settle/`, job 4372, 3/3 -- the `sf == sf_prev` gate genuinely buys the 2 cycles its MCP=2 claims, verified including a run with `sf` changing every cycle where no load occurs at all). That leaves **`sc_clear` as the only open group, and it should be DELETED rather than proven**: its source `packet_done_pulse` is a registered 1-cycle pulse into synchronous-clear registers that sample every cycle, so the capture is at t+1 and there is no 3-cycle window to grant -- and it has been hiding genuinely violating paths rather than relaxing a real settling window. **Withdrawn in SDC v26 (commit d7c21bd).** **2026-08-16 -- correction:** an earlier reading of this cone as "+3.94 ns MET at `max_ss_125C_3v00`" (job 4374) was measured on job 3738's netlist, built with `PL/GRT_RESIZER_SETUP_SLACK_MARGIN=9` for the 4.5 V experiment; that netlist is heavily buffered and does **not** represent `config_current_signoff`, where these paths violate at up to -5.35 ns (job 4376). The withdrawal instead rests on a controlled A/B with the exception restored and everything else byte-identical (job 4377, `config_ctl_scclr.json` + `pnr_32m_ctl_scclr.sdc`): **WNS unchanged to 12 decimal places** (-20.117533 either way -- the critical path is `u_remod.s3_i[2]`, which the exception never covered) and **TNS -32.87 ns, ~1% of -3246**. Withdrawal therefore costs no critical path, and the pulse-stretch alternative stays rejected: it would add flops and a dedicated signal to recover 1% of TNS.
+
+**Superseded candidate fix:** delay the counter load by 3 cycles.
+Once `packet_active` is 1 at u, no further config write can land (given the
+0x0B/0x27 write-locks the design adds), so every source is stable from u+1 —
+`M_val` included, one stage behind `sf`. Capturing at u+4 therefore leaves the
+3 preceding edges quiet. The loads are computed as *remaining* ticks from the
+live `sample_count` (`packet_ctrl_fsm.v:88-108`), so delaying them is
+arithmetically self-correcting rather than a timing shift. Costs 3 cycles
+(~94 ns) of packet-start latency against a ≥8 µs symbol, but it is a change to a verified
+FSM and needs the full `packet_ctrl_fsm` regression.
+
+**2026-08-14 — this item is on the critical path at every core voltage
+(job 4349, see item 1).** Re-timing the 4.5 V routed netlist with the MCP
+exceptions withdrawn gives WNS −22.84 ns / TNS −5922 ns against +3.17 ns with
+them. The 4.5 V contingency therefore cannot be used to sidestep these proofs;
+whichever rail is chosen, the 9 unproven groups below still gate signoff.
 
 Until this audit passes, scoped MCP may be used for exploration but is not
 sufficient evidence for tapeout timing closure.  See
@@ -174,6 +304,61 @@ are genuine, deliberately-unrelaxed SS timing debt — same class as the
 `u_psram` QSPI residual and `training_armed → Zdiag`/`Zpair` arcs already
 tracked under item 1. See `planning/b4-b6-area-cuts-2026-07.md`
 §2026-07-31 follow-up.
+
+**2026-08-09 `paced_dsp` group settling proof CLOSED:** added four unit-level
+cocotb benches (`cocotb/mcp_decimator_settle/`, `cocotb/mcp_sc_settle/`,
+`cocotb/mcp_tacc_settle/`, `cocotb/mcp_mrc_settle/`, tests
+`cocotb/tests/test_mcp_decimator_settle.py`, `test_mcp_sc_settle.py`,
+`test_mcp_tacc_settle.py`, `test_mcp_mrc_settle.py`), one per block in the
+`paced_dsp` scope (`u_dec.* u_sc.* u_tacc.* u_comb.*`, SDC lines ~336-344).
+Each bench runs the DUT directly (no trouper_top wrapper) and uses a
+background clock-edge monitor to assert the block's MCP-relaxed consumed
+result register (`hb1_hold_i/q`+`iq_out_i/q` for the decimator gated by
+`hb1_wait`/`hb2_wait`; `tdm_mul_r` for sc_detector gated by `tdm_wait`;
+`mul_out`/`mulB_out` for training_acc gated by `tdm_wait`/`pipe_active`;
+`prod_i_r`/`prod_q_r`+`y_i`/`y_q` for mrc_combiner gated by `mac_wait`) never
+changes unless its wait counter held its terminal `MAC_WAIT`/`TDM_WAIT` count
+(2, i.e. 3 cycles) on the immediately preceding edge, plus a reset-mid-burst
+case per block confirming the pacing counters clear and re-arm cleanly with
+no stale/glitched result latched. training_acc's `mul_out`/`mulB_out` are
+deliberately resetless (same pattern as `Zpair_*`/`Zdiag_*`); the test
+documents this and instead asserts the *consuming* counters (`tdm_active`/
+`acc_active`) clear and that a post-reset training window still produces a
+bit-exact `Zdiag_0`, proving no stale product leaks into a live Z register.
+All 8 testcases (2/block) PASS: SGE job 4083 (`mcp-paced-dsp-settle-v2`,
+`cocotb/mcp_decimator_settle/run_regression_sge.sh`). Manifest's `paced_dsp`
+group `proof` field updated accordingly
+(`rtl-test/ol_trouper_top/mcp_audit_manifest.json`). This closes the
+settling-proof obligation for `paced_dsp` only — the other 9 MCP groups in
+the manifest remain open (see `regbank_write` closure immediately below).
+
+**2026-08-09 `regbank_write` group settling proof CLOSED:** added
+`test_regbank_write_bus_ce_gated` to `cocotb/tests/test_spi_cdc.py`, covering
+the `regbank_write` MCP group (SDC lines ~347-354: MCP=2 setup / MCP=1 hold,
+scope = `{rb_we, rb_addr[*], rb_wdata[*]}`). `trouper_top.v` (~667-701)
+assigns `rb_addr`/`rb_wdata`/`rb_we` only inside `if (ce_16m)` of the single
+`always @(posedge clk)` block that stages both the SPI and Grouper write
+sources, and `reg_bank` is instantiated with `.clk_en(ce_16m)` — a structural
+guarantee, not a settling-time argument, that the write bus cannot change
+except on a `ce_16m`-gated edge. The test adds a background clock-edge
+monitor asserting the converse directly (any observed change on
+`rb_we`/`rb_addr`/`rb_wdata` must be paired with `ce_16m==1` sampled on the
+preceding edge, `RESETB` transitions exempted) across three scenarios: reset
+asserted mid-write-frame (bits 3/11/15), 64 back-to-back minimum-spacing SPI
+writes, and a Grouper write (`GRP_WE`) injected mid-frame against an in-flight
+SPI write — the two sources that both feed this bus. PASS: SGE job 4120
+(`spi_cdc_regbank_write3`, `make -C cocotb/spi_cdc
+TESTCASE=test_regbank_write_bus_ce_gated`). Manifest's `regbank_write` group
+`proof` field updated accordingly. This closes the settling-proof obligation
+for `regbank_write` only — the remaining 9 MCP groups in the manifest stay
+open.
+
+(Note: an earlier attempt at this same test, SGE job 4091, failed in 2s on a
+`cd: No such file or directory` — submitted with `--project
+lora-mimo-reg_bank` instead of this repo's required `--project lora-mimo`,
+which mounts the container at the wrong path per `sge-job` skill's
+documented convention. Not an RTL or test issue; job 4120 resubmitted
+correctly and passed on the same script/test.)
 
 ---
 
@@ -239,9 +424,29 @@ strategy collapses; the fallback (uniform 5 V chip + external PCB level translat
 hard for the **high-speed bidirectional QSPI** (PSRAM `SIO[3:0]`, up to 133 MHz, direction
 reverses mid-transaction — auto-direction translators do not cope).
 
-**Action (bench/SPICE/foundry, not PnR):** confirm GF180 `bi_*` split-rail level-shift
-(5 V core / 3.6 V pad) via IO-cell SPICE + foundry/databook before committing the voltage
-path.
+**2026-08-14 — SPICE half CLOSED, structural half still open (SGE job 4347).**
+Transistor-level characterisation of `gf180mcu_fd_io__bi_24t` (the cell the shared
+padring instantiates) over 63 scenarios — both directions, 3 corners × 3 temps,
+5 rail splits — in `characterization/io_levelshift/` (`RESULTS.md`). **The
+down-shift works:** every output scenario drives PAD to exactly the pad rail
+(3.600 V at 4.5/3.6) with zero static current, at every split and corner —
+the specific failure this item feared does not occur. The up-shift also reaches
+the full core rail everywhere; its cost is *static current in the input receiver*,
+which scales with the split and binds at ff/125 °C: 19.5 µA/pad at 4.5/3.6,
+64.4 µA at 4.5/3.3, and 182 µA at 5.0/3.3 (the only failing case, against a
+100 µA/pad budget). Receiver trip point stays 0.965–1.165 V throughout, well
+inside the 0.4–2.4 V a 3.3 V driver guarantees. **Recommended split if the
+contingency is taken: 4.5 V core / 3.6 V pad** — narrowest split that still buys
+`ss_125C_4v50` closure, ~30× less crowbar than 5.0/3.3. Note the PDK's own
+`pfet_06v0` W bin does not cover `bi_24t`'s 120 µm pad devices; the deck extends
+it (documented deviation, `README.md`).
+
+**Action (bench/foundry, not PnR — SPICE now done):** the remaining unknowns are
+structural, not functional: ESD/latch-up across the split rail, power-on
+sequencing (which rail rises first, and shifter behaviour while one is at 0 V),
+and pad-ring IR drop. Confirm with foundry/databook before committing the
+voltage path. Also cross-check `bi_t` (fits the stock model bin) to
+independently rule out the extended-W deviation.
 **Blocks:** committing the split-rail 5 V-core SS-closure strategy (item 1); the die-shrink
 and honest-MCP work that the voltage path would otherwise unblock.
 **See:** `planning/area-reduction-roadmap.md` §2 (voltage analysis); `planning/Pinout.md`
@@ -261,10 +466,16 @@ itself, make 4.5 V the production core voltage. Do not let
 `config_current_signoff_4v50_margin.json` or its SDC become the canonical
 signoff config/SDC until all of the following are resolved:
 
-1. **IO voltage crossing** — same open question as item 27: GF180 `bi_*`
-   split-rail core>pad down-shift is uncharacterized (no PDK IO databook), and
-   the high-speed bidirectional PSRAM QSPI rules out auto-direction external
-   translators as a fallback.
+1. **IO voltage crossing** — **partially closed 2026-08-14** (job 4347, see item
+   27): the functional question is answered — `bi_24t` down-shifts correctly with
+   core above pad at every corner, and 4.5 V core / 3.6 V pad passes on levels,
+   timing and static current (19.5 µA/pad worst case). What remains is
+   structural, not functional: ESD/latch-up, power-on rail sequencing, and
+   pad-ring IR drop, none of which a single-cell sim can answer, plus the
+   still-true fact that there is no PDK IO databook. The high-speed
+   bidirectional PSRAM QSPI still rules out auto-direction external translators
+   as a fallback. Use 3.6 V for the pad ring, not 3.3 V — the wider 4.5/3.3
+   split triples the receiver crowbar current.
 2. **Power budget** — P∝V²; 4.5 V vs 3.3 V is roughly ~1.9× dynamic power,
    not checked against any board/thermal budget.
 3. **Hold margin re-verification** — job 3738's worst hold at
@@ -319,6 +530,24 @@ synchronizer (2-3 FF handshake, matching the SPI pattern) on `GRP_WE`/
 **See:** Open Risk #16 (arbitration symptom); `trouper_top.v:69,593-616`;
 `spi_slave.v:159-202`; `planning/Pinout.md` (inter-project wire note).
 **Found:** 2026-07-05 (Grouper bus clocking review).
+
+**2026-08-16 — OWNED BY GROUPER TEAM, scheduled.** The Grouper team will build a
+**bridge with proper CDC plus a 32-bit → 8-bit width conversion** in the week of
+2026-08-17. This resolves the root cause on their side of the link, so no CDC
+synchronizer is to be added inside `trouper_top` — doing so would double-
+synchronize. Corroborating evidence that the two clocks are genuinely
+independent: `ip/chipathon-2026-grouper/src/chip_core.sv:10` declares its own
+top-level `input wire clk`, and the Grouper tree already carries a synchronizer
+primitive at `src/rtl/sync.sv`.
+
+**Trouper-side obligations that remain ours:**
+- Agree the bridge's handshake contract (ready/valid vs the current
+  `GRP_WE`/`GRP_RE` + "hold ≥ 2 clocks" convention) and update Open Risk #16,
+  which documents that undocumented hold requirement as the arbitration symptom.
+- Confirm the 32→8 conversion's byte order and address mapping against
+  `planning/Register Map.md` (7-bit map, 24-bit Z readback at `[31:8]` — a
+  32-bit bridge word maps onto that packing non-trivially).
+- Re-verify `reg_bank` arbitration against the bridge once its RTL lands.
 
 ### 38. Host SPI 10 MHz timing is not constrained or signed off — CDC portion FIXED, SDC portion open
 
@@ -677,61 +906,6 @@ util, a smaller hold-fix scope, or die growth.
 
 ## Moderate
 
-### 9. SC Detector acquisition is single-antenna at any instant (no diversity at lock time)
-
-`sc_detector.v` correlates only one antenna branch's `cur_i0/q0` / `del_i0/q0`
-at a time via `psram_buf_ctrl`'s delay line; the `Sum_j` incoherent 4-branch
-combine that `planning/DSP Flow.md` Stage 5 specifies is not implemented. If
-the currently-selected antenna is in a deep Rayleigh fade, the gateway fails
-to acquire the packet even when the other 3 antennas have strong signal —
-the array provides no diversity gain for detection, only for post-lock MRC
-combining. Confirmed both via measured-IQ playback (Rayleigh seed 7 vs 10)
-and a Monte-Carlo sweep (`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/
-branch SNR, P(lock) with the selected antenna in deep fade is 0% single-
-antenna vs 52% for the spec-intended combine). A spec-faithful fix (serial
-4-channel TDM correlator, ~+20 k µm², no clock-period cost) is designed but
-not implemented, pending an area-headroom check against the floorplan.
-
-**Mitigation added 2026-07-11:** `BW_CFG.sc_ant_sel` (`reg_bank` 0x0A[2:1])
-lets firmware pick *which* single antenna feeds the correlator, instead of
-the old hardcoded antenna 0 — cheap (a byte-lane mux + address offset in
-`psram_buf_ctrl.v`, no measurable area cost), verified bit-exact
-(`cocotb/sc_ant_sel/test_sc_ant_sel.py`, SGE job 3328). This does **not**
-close the underlying risk: the correlator is still single-antenna at any
-instant, so acquisition still fails if the *currently selected* antenna is
-the one in deep fade. It only means firmware can route around a
-known-bad branch (e.g. after a noise-mode `Z_kk` energy scan) instead of
-being permanently stuck on antenna 0. Firmware-side selection policy is not
-yet designed. See `planning/Register Map.md` `0x0A`.
-
-**Related mitigation added 2026-07-12 (different failure mode):**
-`SC_FORCE_LOCK` (`reg_bank` 0x19[0], W1P) manually asserts `sc_lock`,
-bypassing the correlator's hit-count logic entirely. This does not address
-the ant0-fade diversity gap above — it is a bring-up / catastrophic
-correlator-failure escape hatch for the case where `sc_detector` itself is
-suspected non-functional (not just fed a faded antenna), so the rest of the
-chain (`packet_ctrl_fsm` → PSRAM → combiner → IRQ) can still be exercised.
-A forced lock has no verified preamble edge to anchor `timing_ref` on, so it
-is not useful for recovering a real packet, only for proving downstream
-logic is alive. Register-only for now; a physical `sc_lock_in` pin (the
-NR2/3 cascade OR-lock scheme, `planning/NR2-multi-ASIC-cascade.md`) is
-deliberately deferred — the pinout is at its 26-pad budget
-(`planning/Pinout.md`) with no spare pad to bond. See `planning/Register
-Map.md` `0x19`; regression `cocotb/sc_force_lock/test_sc_force_lock.py`
-(SGE job 3356, 2/2 PASS: forced entry into `ST_PREAMBLE_ACQ` from IDLE, and
-the `PACKET_ACTIVE` write-gate confirmed to block a second force mid-packet).
-
-**Does not block tapeout** — silicon works correctly whenever the selected
-antenna is not the faded branch; this is a robustness/diversity gap, not a
-functional bug.
-**Decision 2026-07-06:** the full 4-branch correlator deliberately DEFERRED —
-no die-area headroom for the ~+20 k µm² cost at the current floorplan.
-Revisit only if an area budget opens up (e.g. after further area cuts or a
-die-size change); until then, `sc_ant_sel` is the accepted interim
-mitigation and the diversity gap itself stays an accepted, documented
-limitation.
-**See:** `planning/sc-detector-ant0-fading-risk.md`.
-
 ### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
 
 At 1380×1100, `root_only` NDR preserved clock SI at no timing cost. Below
@@ -1060,6 +1234,81 @@ regression coverage; item 4 is confirmed working as intended.
 will validate items 1 and 3 against a real PSRAM part and real RESETB
 behavior — sim can characterize the digital logic's assumptions but not the
 analog reset/power-rail behavior itself.
+
+---
+
+## Deferred
+
+### 9. SC Detector acquisition is single-antenna at any instant (no diversity at lock time) — DEFERRED 2026-07-06, re-scoped 2026-08-14
+
+`sc_detector.v` correlates only one antenna branch's `cur_i0/q0` / `del_i0/q0`
+at a time via `psram_buf_ctrl`'s delay line; the `Sum_j` incoherent 4-branch
+combine that `planning/DSP Flow.md` Stage 5 specifies is not implemented. If
+the currently-selected antenna is in a deep Rayleigh fade, the gateway fails
+to acquire the packet even when the other 3 antennas have strong signal —
+the array provides no diversity gain for detection, only for post-lock MRC
+combining. Confirmed both via measured-IQ playback (Rayleigh seed 7 vs 10)
+and a Monte-Carlo sweep (`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/
+branch SNR, P(lock) with the selected antenna in deep fade is 0% single-
+antenna vs 52% for the spec-intended combine). A spec-faithful fix (serial
+4-channel TDM correlator, ~+20 k µm², no clock-period cost) is designed but
+not implemented, pending an area-headroom check against the floorplan.
+
+**Mitigation added 2026-07-11:** `BW_CFG.sc_ant_sel` (`reg_bank` 0x0A[2:1])
+lets firmware pick *which* single antenna feeds the correlator, instead of
+the old hardcoded antenna 0 — cheap (a byte-lane mux + address offset in
+`psram_buf_ctrl.v`, no measurable area cost), verified bit-exact
+(`cocotb/sc_ant_sel/test_sc_ant_sel.py`, SGE job 3328). This does **not**
+close the underlying risk: the correlator is still single-antenna at any
+instant, so acquisition still fails if the *currently selected* antenna is
+the one in deep fade. It only means firmware can route around a
+known-bad branch (e.g. after a noise-mode `Z_kk` energy scan) instead of
+being permanently stuck on antenna 0. Firmware-side selection policy is not
+yet designed. See `planning/Register Map.md` `0x0A`.
+
+**Related mitigation added 2026-07-12 (different failure mode):**
+`SC_FORCE_LOCK` (`reg_bank` 0x19[0], W1P) manually asserts `sc_lock`,
+bypassing the correlator's hit-count logic entirely. This does not address
+the ant0-fade diversity gap above — it is a bring-up / catastrophic
+correlator-failure escape hatch for the case where `sc_detector` itself is
+suspected non-functional (not just fed a faded antenna), so the rest of the
+chain (`packet_ctrl_fsm` → PSRAM → combiner → IRQ) can still be exercised.
+A forced lock has no verified preamble edge to anchor `timing_ref` on, so it
+is not useful for recovering a real packet, only for proving downstream
+logic is alive. Register-only for now; a physical `sc_lock_in` pin (the
+NR2/3 cascade OR-lock scheme, `planning/NR2-multi-ASIC-cascade.md`) is
+deliberately deferred — the pinout is at its 26-pad budget
+(`planning/Pinout.md`) with no spare pad to bond. See `planning/Register
+Map.md` `0x19`; regression `cocotb/sc_force_lock/test_sc_force_lock.py`
+(SGE job 3356, 2/2 PASS: forced entry into `ST_PREAMBLE_ACQ` from IDLE, and
+the `PACKET_ACTIVE` write-gate confirmed to block a second force mid-packet).
+
+**Does not block tapeout** — silicon works correctly whenever the selected
+antenna is not the faded branch; this is a robustness/diversity gap, not a
+functional bug.
+**Decision 2026-07-06:** the full 4-branch correlator deliberately DEFERRED —
+no die-area headroom for the ~+20 k µm² cost at the current floorplan.
+Revisit only if an area budget opens up (e.g. after further area cuts or a
+die-size change); until then, `sc_ant_sel` is the accepted interim
+mitigation and the diversity gap itself stays an accepted, documented
+limitation.
+**See:** `planning/sc-detector-ant0-fading-risk.md`.
+
+**Deferred state (2026-08-14):** moved out of Moderate into this section. The
+fix is designed and costed (~+20 k µm² serial 4-channel TDM correlator, no
+clock-period cost) and is *not* to be re-proposed, re-costed, or re-explored
+except when the re-open trigger below fires.
+
+**Re-open trigger:** a signed-off floorplan with ≥ 20 k µm² of spare cell area
+against the then-current die (e.g. after a further area-cut milestone, a die-size
+increase, or the 4.5 V-core decision in item 44 freeing utilisation headroom).
+Whoever hits that trigger re-files this as Moderate with the measured headroom
+number attached.
+
+**Until then, accepted as-is:** `sc_ant_sel` (0x0A[2:1]) is the shipped
+mitigation, the firmware-side branch-selection policy is the only outstanding
+work item, and the detection-diversity gap is a documented silicon limitation
+rather than an open action.
 
 ---
 

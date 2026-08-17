@@ -2,7 +2,8 @@
 
 ## SC detector — antenna-0-only detection (deep-fade single point of failure)
 
-**Open design risk.** `sc_detector` runs on antenna 0 only; the cross-branch
+**DEFERRED** (not an action item — see `planning/Open Risks.md` §Deferred item 9;
+re-open only on ≥ 20 k µm² spare cell area). `sc_detector` runs on antenna 0 only; the cross-branch
 incoherent combine (`Σ_j |c_j|²`) in the DSP Flow spec is not implemented, so a
 deep fade on ant0 blocks `sc_lock` even when ants 1–3 are strong. Found via
 `rtl-test/cocotb_trouper_capture` measured-IQ Rayleigh playback (seed 7 fails,

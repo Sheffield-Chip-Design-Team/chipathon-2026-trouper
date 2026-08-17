@@ -259,6 +259,7 @@ module trouper_top (
     wire              psram_del_valid;               // pulses when cur/del pair ready
     wire        sc_lock;    // declared here to avoid forward-reference; driven by u_sc
     wire        rb_sc_force_lock; // manual SC lock override (SC_FORCE_LOCK 0x19); declared here to avoid forward-reference
+    wire        rb_rx_hold;       // RX_HOLD (0x1A[0]); declared here to avoid forward-reference
 
     // =========================================================================
     // Stage 3b: Schmidl-Cox preamble detector
@@ -283,7 +284,14 @@ module trouper_top (
         .sample_shift   (rb_sample_shift),
         .sc_thr         (rb_sc_thr),
         .sc_hits_req    (rb_sc_hits_req),
-        .sc_clr         (packet_done_pulse),  // re-arm detector when packet FSM returns to IDLE
+        // Re-arm the detector when the packet FSM returns to IDLE, and hold it
+        // cleared for as long as firmware asserts RX_HOLD.  sc_clr is
+        // level-sensitive (sc_detector.v:492 holds sc_lock/hit_count/all
+        // accumulators cleared while high), so the hold makes "config
+        // writable" and "detector able to lock" mutually exclusive -- the
+        // interlock the scoped-MCP settling exceptions rely on (Open Risks
+        // #43, planning/mcp-config-settle-gate-design.md).
+        .sc_clr         (packet_done_pulse | rb_rx_hold),
         .sc_lock_force  (rb_sc_force_lock),
         .sc_lock        (sc_lock),
         .timing_ref     (timing_ref),
@@ -788,6 +796,7 @@ module trouper_top (
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
         .sc_force_lock   (rb_sc_force_lock),
+        .rx_hold         (rb_rx_hold),
         .noise_trig      (rb_noise_trig),
         .tacc_window_syms (rb_tacc_window_syms),
         .replay_delay_samples (rb_replay_delay_samples)

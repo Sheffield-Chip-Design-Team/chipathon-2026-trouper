@@ -38,7 +38,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, release_rx_hold
 
 
 async def _reset(dut):
@@ -52,6 +52,9 @@ async def _reset(dut):
     await Timer(4 * CLK_NS, unit="ns")
     dut.RESETB.value = 1
     await Timer(8 * CLK_NS, unit="ns")
+    # RX_HOLD is set out of reset and holds sc_clr, which suppresses even a
+    # forced lock -- release it so SC_FORCE_LOCK can do its job.
+    await release_rx_hold(dut)
 
 
 @cocotb.test()

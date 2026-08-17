@@ -122,12 +122,55 @@ The firmware must be able to read:
 
 ## Deliverables
 
+## 0. Config interlock — RX_HOLD (`0x1A`) — READ THIS FIRST
+
+**The receiver comes up disabled.** `RX_HOLD` (`0x1A[0]`) is **set out of
+reset**: it holds the SC detector cleared, so no packet can be detected until
+firmware clears it. A driver that configures the chip and then waits for a lock
+will wait forever.
+
+`RX_HOLD` also gates configuration. These registers are writable **only** while
+`RX_HOLD == 1` *and* `PACKET_STATUS.ACTIVE == 0`; outside that window hardware
+**drops the write** and latches `CFG_WR_REJECTED` (`0x1A[1]`, RO sticky, W1C):
+
+| Addr | Register |
+|---|---|
+| `0x09` | `SF_CFG` |
+| `0x0A` | `BW_CFG` (`bw_sel`, `sc_ant_sel`) |
+| `0x0B` | `PKT_TIMEOUT_SYMS` |
+| `0x0E` | `SC_HITS_REQ` |
+| `0x27` | `TACC_WINDOW_SYMS` |
+
+**Required sequence, at boot and for every later reconfiguration:**
+
+```c
+asic_cfg_begin();                  /* RX_HOLD = 1 (no-op straight after reset) */
+reg_write8(REG_SF_CFG, sf);
+reg_write8(REG_BW_CFG, bw);
+/* ... remaining gated writes ... */
+if (asic_cfg_write_rejected())     /* optional but recommended */
+    /* sequence bug: a gated write was dropped */;
+asic_cfg_commit();                 /* RX_HOLD = 0 -> detector may lock */
+```
+
+Helpers are in `firmware/picorv32/asic_regs.h`. Note `asic_cfg_clear_rejected()`
+is a read-modify-write: `reg_bank` takes `rx_hold` from `wdata[0]` on *every*
+write to `0x1A`, so clearing the sticky bit naively would release the hold too.
+
+**Why it exists:** it makes "config writable" and "detector able to lock"
+mutually exclusive, which is what allows the 32 MHz timing constraints to treat
+these registers as quasi-static (Open Risks #43,
+`planning/mcp-config-settle-gate-design.md`). It is enforced in hardware, not a
+convention — the write is refused, not merely discouraged.
+
 ## 1. Minimal Bring-Up Firmware
 
 This is the first milestone and must be delivered before AGC or software weights.
 
 ### Required behavior
 - boot from SPI-loaded image
+- **clear `RX_HOLD` after writing the gated configuration** (§0) — without this
+  the receiver never locks and every downstream milestone is untestable
 - enter a stable main loop
 - read and clear IRQs
 - update firmware diagnostics registers

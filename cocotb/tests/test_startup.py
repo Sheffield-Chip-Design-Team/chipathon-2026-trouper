@@ -32,7 +32,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, FallingEdge, Timer
 from cocotb.utils import get_sim_time
 
-from test_trouper_top import spi_write, spi_read, sdm_driver, CLK_NS
+from test_trouper_top import spi_write, spi_read, sdm_driver, CLK_NS, release_rx_hold
 
 TPU_NS = 150_000.0   # APS6404L datasheet minimum power-up time before RSTEN
 TRST_NS = 50.0        # APS6404L datasheet minimum RST->next-command gap
@@ -238,6 +238,7 @@ async def test_sc_correlator_idle_until_del_rdy(dut):
     await spi_write(dut, 0x0C, 0x01)
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)
+    await release_rx_hold(dut)
     await spi_write(dut, 0x70, 0x01)  # PSRAM_EN
 
     init_ok = False

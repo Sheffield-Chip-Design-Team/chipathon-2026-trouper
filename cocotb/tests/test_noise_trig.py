@@ -38,7 +38,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, release_rx_hold
 
 
 class _StimMode:
@@ -147,6 +147,7 @@ async def test_noise_trig_functional(dut):
     await spi_write(dut, 0x0C, 0x01)   # low SC threshold (phase B wants hits)
     await spi_write(dut, 0x0D, 0x00)
     await spi_write(dut, 0x0E, 0x00)
+    await release_rx_hold(dut)
 
     # Let the decimator/DC-removal transient die out
     await Timer(4 * sym_ns, unit="ns")

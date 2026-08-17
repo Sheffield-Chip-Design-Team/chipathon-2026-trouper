@@ -87,20 +87,28 @@
 #   through the named quasi-static source (e.g. eval_step's own mul_done-
 #   driven increment at sc_detector.v:426) is untouched and stays honestly
 #   single-cycle.
-set sc_clr_srcs [get_nets {packet_active packet_done_pulse}]
-set sc_clr_regs [get_cells -of_objects \
-    [get_nets -hierarchical {u_sc.sc_lock u_sc.hit_count[*] \
-        u_sc.first_hit_sample[*] u_sc.acc_ci0[*] u_sc.acc_cq0[*] \
-        u_sc.acc_E0cur[*] u_sc.acc_E0del[*] u_sc.sym_cnt[*] u_sc.tdm_busy \
-        u_sc.tdm_wait[*] u_sc.iq_inc_pending u_sc.eval_busy u_sc.mul_start \
-        u_sc.metric_valid_pulse u_sc.sc_hit_dbg u_sc.sc_hit_hold}] \
-    -filter {ref_name =~ *dff*}]
-set_multicycle_path 3 -setup -through $sc_clr_srcs -to $sc_clr_regs
-set_multicycle_path 2 -hold  -through $sc_clr_srcs -to $sc_clr_regs
+# v26 (2026-08-15): the sc_clear exception is WITHDRAWN, not narrowed.
+#
+# It was unsound in a way none of the other groups are: `packet_done_pulse` is
+# a registered ONE-CYCLE pulse (trouper_top.v:594-596) into synchronous-clear
+# registers that sample every cycle, so the capture is at t+1 and there was
+# never a 3-cycle settling window to grant.  It also bought no timing -- with
+# the exception removed the cone MEETS across all 148 endpoint cells:
+#
+#     max_ss_125C_3v00   +3.94 ns    (SGE job 4374)
+#     max_ss_125C_4v50  +13.29 ns    (SGE job 4373)
+#
+# measured on job 3738's routed netlist under an MCP-free SDC
+# (rtl-test/ol_trouper_top/sc_clr_slack.tcl).  A single pulse into clear
+# enables has trivial logic depth despite the 107-flop-bit fanout, so this arc
+# times honestly.  Deleting it removes risk for zero timing cost; the
+# alternative considered and rejected was stretching the pulse to >=3 cycles,
+# which would have needed a dedicated signal (packet_done_pulse also drives
+# packet_end into u_psram and an IRQ set bit).  See Open Risks #43.
 
 set sc_qs_srcs [get_nets -hierarchical {rb_sf_cfg* rb_sample_shift* rb_bw_sel*}]
 set sc_boundary_regs [get_cells -of_objects \
-    [get_nets -hierarchical {u_sc.sym_cnt[*] u_sc.sym_ci0[*] u_sc.sym_cq0[*] \
+    [get_nets -hierarchical {u_sc.sym_cnt[*] \
         u_sc.eval_ci0[*] u_sc.eval_cq0[*] u_sc.eval_E0cur[*] u_sc.eval_E0del[*] \
         u_sc.eval_mag_acc[*] u_sc.eval_e_acc[*] u_sc.eval_step[*] \
         u_sc.eval_busy u_sc.mul_start u_sc.eval_sample_mark[*] \
@@ -215,17 +223,19 @@ set_multicycle_path 2 -hold  -through $tacc_qs_srcs -to $tacc_window_regs
 # subtracted from eval_sample_mark; eval_sample_mark's own path into
 # timing_ref is NOT in this -through list and stays honestly single-cycle.
 set timing_ref_reg [get_cells -of_objects \
-    [get_nets -hierarchical {timing_ref[*] u_sc.timing_ref[*]}] \
+    [get_nets -hierarchical {timing_ref[*]}] \
     -filter {ref_name =~ *dff*}]
-set_multicycle_path 3 -setup -through [get_nets -hierarchical {rb_sc_hits_req*}] -to $timing_ref_reg
-set_multicycle_path 2 -hold  -through [get_nets -hierarchical {rb_sc_hits_req*}] -to $timing_ref_reg
+set timing_ref_hits_srcs [get_nets -hierarchical {rb_sc_hits_req*}]
+set_multicycle_path 3 -setup -through $timing_ref_hits_srcs -to $timing_ref_reg
+set_multicycle_path 2 -hold  -through $timing_ref_hits_srcs -to $timing_ref_reg
 
 # v23: rb_sf_cfg/rb_sample_shift/rb_bw_sel -> timing_ref (see v23 header at
 # top of file). Same $timing_ref_reg endpoint as the v21 rb_sc_hits_req fix
 # immediately above -- this is the OTHER operand of sc_detector.v:449's
 # `sc_off = n_hits_p1 << (sf + sample_shift)` shift, missed by v21/v22.
-set_multicycle_path 3 -setup -through [get_nets -hierarchical {rb_sf_cfg* rb_sample_shift* rb_bw_sel*}] -to $timing_ref_reg
-set_multicycle_path 2 -hold  -through [get_nets -hierarchical {rb_sf_cfg* rb_sample_shift* rb_bw_sel*}] -to $timing_ref_reg
+set timing_ref_cfg_srcs [get_nets -hierarchical {rb_sf_cfg* rb_sample_shift* rb_bw_sel*}]
+set_multicycle_path 3 -setup -through $timing_ref_cfg_srcs -to $timing_ref_reg
+set_multicycle_path 2 -hold  -through $timing_ref_cfg_srcs -to $timing_ref_reg
 #
 # v20 = v19 with the packet_ctrl_fsm MCP scope CORRECTED (same class of bug as
 #   the v15 barrel-shift no-op below). (SUPERSEDED BY v21 ABOVE -- header kept
@@ -311,8 +321,14 @@ set_multicycle_path 1 -hold  -to $bshift_regs
 create_clock -name IQ_CLK -period 31.25 [get_ports IQ_CLK]
 set_clock_uncertainty 0.5 [get_clocks IQ_CLK]
 
-set_input_delay  -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I IQ_DATA_Q SPI_MOSI}]
-set_input_delay  -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I IQ_DATA_Q SPI_MOSI}]
+# IQ vectors are reassembled inside trouper_top; the physical top-level ports
+# are scalar per antenna.  Constrain the actual pad ports, not the internal
+# IQ_DATA_I/Q vector nets (which get_ports cannot see).
+set iq_input_ports [get_ports {IQ_DATA_I_0 IQ_DATA_I_1 IQ_DATA_I_2 IQ_DATA_I_3 \
+                               IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3 \
+                               SPI_MOSI}]
+set_input_delay  -max 2.0 -clock IQ_CLK $iq_input_ports
+set_input_delay  -min 1.0 -clock IQ_CLK $iq_input_ports
 set_output_delay -max 2.0 -clock IQ_CLK [all_outputs]
 set_output_delay -min 0.0 -clock IQ_CLK [all_outputs]
 
@@ -342,6 +358,22 @@ set_multicycle_path 2 -hold  -through $paced_nets
 set rb_write_bus [get_nets {rb_we rb_addr[*] rb_wdata[*]}]
 set_multicycle_path 2 -setup -through $rb_write_bus
 set_multicycle_path 1 -hold  -through $rb_write_bus
+
+# MCP audit contract.  mcp_audit.tcl sources this SDC and reads these named
+# collections; do not make a new set_multicycle_path without adding its group
+# to mcp_audit_manifest.json and this table.
+set mcp_audit_groups {
+    {sc_quasi_static          3 2 sc_qs_srcs           sc_boundary_regs}
+    {pcfsm_quasi_static       3 2 pcfsm_qs_srcs        pcfsm_timeout_regs}
+    {pcfsm_latched_timing_ref 3 2 pcfsm_lat_timing_ref pcfsm_timeout_regs}
+    {pcfsm_mval               3 2 pcfsm_mval           pcfsm_timeout_regs}
+    {training_window          3 2 tacc_qs_srcs         tacc_window_regs}
+    {timing_ref_hits          3 2 timing_ref_hits_srcs timing_ref_reg}
+    {timing_ref_config        3 2 timing_ref_cfg_srcs  timing_ref_reg}
+    {psram_barrel_shift       2 1 {}                   bshift_regs}
+    {paced_dsp                3 2 paced_nets           {}}
+    {regbank_write            2 1 rb_write_bus         {}}
+}
 
 # SPI master, IRQ controller, JTAG TAP stay at MCP=1.
 

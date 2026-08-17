@@ -1,6 +1,11 @@
 # SC Preamble Detector — Antenna-0 Deep-Fade Single Point of Failure
 
-**Status:** Open design risk (found 2026-06-21 via measured-IQ MIMO playback).
+**Status:** **DEFERRED** — accepted silicon limitation, not an open action item
+(found 2026-06-21 via measured-IQ MIMO playback; deferred 2026-07-06, re-filed
+under Open Risks §Deferred 2026-08-14). `sc_ant_sel` (0x0A[2:1]) is the shipped
+mitigation. Re-open only on the trigger in `planning/Open Risks.md` item 9:
+a signed-off floorplan with ≥ 20 k µm² spare cell area. Do not re-propose or
+re-cost the correlator before then.
 **Severity:** High for real multipath deployments; zero impact for line-of-sight
 / equal-power bench tests (which is why it was not caught earlier).
 
@@ -98,8 +103,9 @@ total received power across the array.)
 
 ## Proposed solution (option 1, preferred) — serial 4-channel TDM correlator
 
-**Status: designed, not implemented (2026-06-21). Do not implement yet — pending
-go-ahead and an area-headroom check against the floorplan.**
+**Status: designed, not implemented, DEFERRED (2026-06-21; deferred 2026-07-06).
+Do not implement — blocked on the ≥ 20 k µm² area-headroom trigger in
+`planning/Open Risks.md` item 9.**
 
 Extend the existing single-multiplier TDM correlator to process all four channels
 **serially** (one after the other), reusing the same multiplier rather than adding

@@ -39,7 +39,7 @@ Register cheat sheet: IRQ_STATUS 0x02 [0]=SC_LOCK [1]=TRAINING_DONE
 import cocotb
 from cocotb.triggers import RisingEdge, Timer
 
-from test_trouper_top import CLK_NS, spi_read, spi_write, spi_burst_write
+from test_trouper_top import CLK_NS, spi_read, spi_write, spi_burst_write, release_rx_hold
 from test_bypass_e2e import _reset_and_lock
 
 PKT_TIMEOUT_SYMS = 20
@@ -330,6 +330,7 @@ async def test_noise_mode_does_not_arm_replay(dut):
     await spi_read(dut, 0x00)
     await spi_write(dut, 0x09, sf & 0x0F)
     await spi_write(dut, 0x0A, 0)
+    await release_rx_hold(dut)
     await spi_write(dut, 0x77, 32)     # small margin: broken gate fails fast
     await spi_write(dut, 0x78, 0)
 
