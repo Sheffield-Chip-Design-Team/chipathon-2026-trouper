@@ -100,3 +100,99 @@ would settle it.
 1. Repeat 4392 (n ≥ 3) to separate the WNS delta from repair-lottery noise.
 2. A/B pins-only vs density-only to attribute the gain.
 3. Check the 5-slot padring against the actual pad count before committing.
+
+---
+
+## 2026-08-19 update: upper-left-quadrant pin re-assignment, two blockers found and fixed, PROMOTED to baseline
+
+Job 4392 above validated the L-shape geometry with `io_placement_lshape.cfg`
+pinned to `#S`/`#W` — a convention borrowed wholesale from `io_placement_bl.cfg`
+("board-realistic" pin order chosen for congestion/routability reasons, Open
+Risks #28), unrelated to any padframe quadrant assignment. Once the team's
+actual MPW placement was confirmed as the **upper-left quadrant**, `#S`/`#W`
+turned out to be the wrong edges: in that assignment only the die's **N and W**
+edges are real, bondable padframe boundary — S and E are interior seams facing
+neighbor projects on the shared die. `io_placement_lshape.cfg` needed real
+board-facing pins moved off `#S` onto `#N`, with the Grouper-only inter-project
+bus (`GRP_*`, `IRQ_GROUPER` — no package pads) pushed onto the now-interior
+`#S`/`#E` instead. Floorplan geometry (`DIE_AREA`/`FP_OBSTRUCTIONS`) was
+unaffected — the leg only ever touched S/E, so it was already correctly
+"interior, not at the [true] boundary" once N/W was recognized as the real
+edge pair.
+
+### Blocker 1: `#N` re-pin broke legalization (`DPL-0036` on `input23`)
+
+The straight `#S`→`#N` swap (keeping the old "push `IQ_DATA_{I,Q}_2/3` to the
+far end" ordering) immediately reintroduced the historical `DPL-0036`
+legalization failure (same signature as job 2095) on a single instance,
+`input23`. `PL_MAX_DISPLACEMENT_Y` (200→400) and `PL_TARGET_DENSITY_PCT`
+(78→65) were both tried and **ruled out** — identical failure either way,
+down to the buffer count and iteration table.
+
+Root-caused by reproducing `repair_design.tcl`'s exact `read_current_odb` →
+`buffer_ports -inputs` → `repair_design` → `detailed_placement` sequence
+standalone (had to reconstruct several LibreLane-internal env vars —
+`_TCL_ENV_IN`, `_SDC_IN`, `_LIB_CORNER_N`, `_PNR_EXCLUDED_CELLS` — that aren't
+in the public `_env.tcl`/`config.json`) and dumping the failing instance:
+
+```
+master: gf180mcu_fd_sc_mcu7t5v0__dlyb_1   (input buffer for IQ_DATA_I_3)
+location (um): 1604.12, 1099.72
+die area (um): 0,0 to 1650,1100
+```
+
+**`FP_OBSTRUCTIONS` only blocks cell placement — it does not reshape
+`DIE_AREA`.** The die stays the full 1650×1100 rectangle, so
+`Odb.CustomIOPlacement` spreads `#N` pins proportionally across the *entire*
+1650 µm top edge, not just the 1100 µm span above the real (non-obstructed)
+main square. Any `#N` pin landing past x=1100 sits directly above the NE
+notch — a placement dead zone bounded by the true die edge on two sides, with
+zero legal rows anywhere nearby. This is also, in hindsight, exactly why the
+old S/W config's "push far pins east" trick worked: its far-east pins were on
+the **south** edge, where x>1100 is the leg (legally placeable), not the
+notch. Same ordering trick, opposite edges, opposite outcome.
+
+**Fix:** append a `$16` spacer slot after the `#N` real-pin group in
+`io_placement_lshape.cfg`, so the proportional spread keeps all 23 real `#N`
+pins within the legal x:0–1100 span instead of spilling into the notch.
+
+### Blocker 2: `DRT-1231` clkbuf pin-access (pre-existing, already-documented class)
+
+With legalization fixed, the flow reached detailed routing and failed with
+`[DRT-1231] Pin clkbuf_2_3_0_IQ_CLK_regs/I does not have access point` — the
+same failure class already root-caused and resolved for the v15 SDC back in
+June (`project_drt1231_clkbuf` memory / Gate-0 history): CTS pin-access, not
+density. `CTS_ROOT_BUFFER`/`CTS_CLK_BUFFERS` were already on the known-good
+setting (`clkbuf_16` root, `8/12/16`, no `clkbuf_4`/`20`); the missing piece
+was `DPL_CELL_PADDING` (still `1` here, the resolved recipe uses `3`).
+
+**Fix:** `DPL_CELL_PADDING` 1→3. Cleared `DRT-1231` immediately — detailed
+routing completed on the same run that failed instantly at that step before.
+
+### Result: clean full signoff (job 4496)
+
+| WNS | value | DRC/LVS |
+|---|---|---|
+| `nom_tt_025C_3v30` | 0.0 ns (met) | Magic DRC: 0 |
+| `max_ff_n40C_3v60` | 0.0 ns (met) | KLayout DRC (final iter): 0 |
+| `max_ss_125C_3v00` | −17.96 ns (TNS −5277 ns) | LVS: 0 mismatches (device/net/pin/property) |
+
+SS WNS negative is the chronic `gf180mcu_fd_sc_mcu7t5v0`-at-3V corner issue
+carried by every config in this family, not a regression introduced by this
+work — TT/FF met and DRC/LVS clean is the bar that matters here.
+
+### Promoted to working baseline
+
+`rtl-test/ol_trouper_top/config_lshape_current.json` (copy of
+`config_lshape_1100_550_v26_pins_ymax400_pad3.json`) +
+`io_placement_lshape.cfg` (now N/W-pinned) are the **current L-shape
+baseline**, run via `rtl-test/scripts/run_pnr_lshape_current.sh`. Configs are
+committed to the repo (git-tracked, not LFS — only final GDS/netlist
+artifacts go through LFS, and that promotion is a separate, not-yet-made
+decision — see the session's GDS/LFS discussion). **n = 1** on the exact
+winning config; repeat before treating the WNS numbers as settled, per the
+original trial's repair-lottery caveat above.
+
+**Still open:** the 5-slot-vs-6 padring cost (item 3 in the original "Next"
+list above) — not re-checked against the actual pad budget as part of this
+update.
