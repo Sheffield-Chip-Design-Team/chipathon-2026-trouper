@@ -1068,6 +1068,27 @@ Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
 
 ---
 
+### 46. Trouper's 25-pad / 1200×1100 pinout may not fit a stricter 22-pad / 1117.5×1117.5 allocation — NR=3 fallback validated, NR=4 also reopened via a floorplan fix
+
+Current pinout is 25 pads (23 signal + `VDD_IO` + `VDD_CORE`) against a possible 22-pad
+team allocation. The 1117.5×1117.5 µm square die target initially looked like a hard NR=4
+dead-end (`DPL-0036` placement failure, job 4480), but that was a LibreLane floorplan
+default (`*_MARGIN_MULT`) silently costing 4% of the die, not a structural limit —
+reclaiming it (`config_1117sq_maxarea.json`) gets a **clean NR=4 physical signoff**
+(DRC=0/LVS=0, job 4484), leaving only ordinary timing closure (−4.1 ns TT) still open. A 5V
+retry on top of that fix does not help (job 4486, `DPL-0036` again, later stage). Separately,
+**NR=3** (3 antenna channels instead of 4) also closes both the pin and die-size gap with
+more headroom (jobs 4482/4483): exactly 2 pins recovered, 1117.5² routes clean at 84.7% util
+and SS WNS −11.4 ns. Cost of NR=3: ~9%+ stdcell area saved, ~1.25 dB MRC combining-gain
+loss, one diversity order given up. Preferred path is still an `IRQ_OUT`-removal pin waiver
+to keep NR=4 at the current pin count; if the die-size rule alone is enforced, the
+margin-reclaimed NR=4 config is now the first fallback (keeps 4-antenna MRC), with NR=3 as
+the deeper fallback if timing closure on the reclaimed floorplan doesn't land. **See:**
+`planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md` (full
+records), `planning/Pinout.md`.
+
+---
+
 ## Low
 
 ### 18. PSRAM-replay sample staleness unquantified

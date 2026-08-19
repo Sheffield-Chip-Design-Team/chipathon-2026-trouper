@@ -1,8 +1,18 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pad list. Total: **26 pads** (**23 signal + 3 supply/ground**).
+GF180MCU MIMO ASIC logical pad list. Total: **25 pads** (23 signal + `VDD_IO` + `VDD_CORE`;
+`GND` is a common/shared pad, not counted here).
 
-This pinout is within the Chipathon 2026 per-team allocation limit of **<=26 pads** and matches the current Trouper physical allocation in the chip specification.
+**Allocation status (2026-08-19): possibly tighter than previously assumed.** This doc's
+pinout was drafted against a **<=26 pads** limit; the team's actual assigned budget may be
+**22 pads**, and the signoff die (1200×1100) fails at a stricter **1117.5×1117.5 µm** square
+target with default P&R settings — though a floorplan-margin fix reopens NR=4 there too
+(clean signoff, timing closure still open; see below). If 22 pads is enforced strictly, the
+preferred fix is an `IRQ_OUT`-removal waiver (poll `IRQ_STATUS` over SPI instead, −1 pin —
+low risk, no RTL beyond deleting the pad); a validated NR=3 (3-antenna) fallback also closes
+both the pin and die-size gap if a waiver isn't available. **See:**
+`planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md`, Open Risks
+#46.
 
 **Related:** [System Architecture](System%20Architecture.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md)
 
