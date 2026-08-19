@@ -210,13 +210,22 @@ are in `vivado/arty_dsp_emul.xdc` and `tmp/miso_frontend_pcb_review_2026-07-08.m
 > sample clock). PSRAM is also external (`USE_EXT_PSRAM=1`). The MicroBlaze /
 > UART / Ethernet (100 MHz + 25 MHz MMCM) still run standalone.
 
+> **⚠ J9 manual reset is non-functional on the board as fabricated.** Netlist
+> check against `miso_frontend` commit `97d4322` (2026-08-19) confirms J9 pin 2
+> is still on the `GND` net — the same net R22's pulldown already holds
+> `RFFE_RST` at, so shorting the jumper does nothing (fix would be J9 pin 2 →
+> `+3V3_RF`, never made). Bring-up relies on **POR-only float-reset**
+> (datasheet §6.2.1, and the schematic's own note agrees this is safe); there
+> is no way to issue an on-demand reset pulse mid-session without a bodge wire.
+
 ### 6.1 SX1257 I/Q + SPI + PSRAM
 
 | Function | FPGA pins | Header |
 |----------|-----------|--------|
 | SX1257 I/Q data `hw_iq_i/q[0..3]` | G2 H2 / V11 U13 / V12 V14 / E16 J18 | JD/JC/JC/JB |
 | RFFE SPI to SX1257 (MOSI/MISO)     | E2 / D2 | JD |
-| RFFE NSS address `ss_io[0..1]` (→1G139) | A18 / B18 | JA |
+| RFFE NSS address `ss_io[0..1]` (→139A select) | A18 / B18 | JA |
+| RFFE NSS decoder enable `rffe_nss_en` (→139A 1E-bar, active-low) | J15 | JB |
 | **DSP sample clock** `sx_clk_out` = CLK_OUT_2 | **F4** | JD |
 | External APS6404L PSRAM (SCK/nCE)  | D12 / D13 | JA |
 | PSRAM SIO0..3                       | A11 G13 B11 K16 | JA |

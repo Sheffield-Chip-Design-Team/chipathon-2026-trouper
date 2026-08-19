@@ -225,11 +225,11 @@ connect_bd_net [get_bd_pins clk_wiz_0/clk_out3] [get_bd_ports eth_ref_clk]
 
 # --- AXI Quad SPI (for SX1257) -----------------------------------------------
 # Only 2 select bits: the MISO front-end board decodes chip-select from a 2-bit
-# address (RFFE_NSS_A0/A1 -> on-board SN74LVC1G139), so ss_io[3:2] have no board
+# address (RFFE_NSS_A0/A1 -> on-board SN74LVC139A), so ss_io[3:2] have no board
 # pin. Two bits keeps the SPI_0 interface matched to the constrained pins in the
 # XDC (A18/B18) and avoids unconstrained-port warnings on ss_io[3:2].
 # NOTE: this still emits a ONE-HOT select on the two lines. Reworking firmware to
-# drive a true 2-bit ENCODED address into the 1G139 is the separate open TODO
+# drive a true 2-bit ENCODED address into the 139A is the separate open TODO
 # item (see fpga-emul/TODO.md "2-bit encoded NSS").
 set spi [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_quad_spi:3.2 axi_quad_spi_0]
 set_property -dict [list \
@@ -244,6 +244,32 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
     [get_bd_intf_pins axi_quad_spi_0/AXI_LITE]
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_quad_spi_0/ext_spi_clk]
 make_bd_intf_pins_external [get_bd_intf_pins axi_quad_spi_0/SPI_0]
+
+# --- AXI GPIO (1-bit output) for the NSS decoder enable (SN74LVC139A 1E-bar) -
+# PCB review finding 4 (2026-07-08): the decoder had no enable pin routed, so
+# it could never deselect all four radios. The 2026-07-12 schematic fix
+# replaced the decoder with a 139A (has a per-decoder active-low enable, 1E)
+# and routed 1E to a spare header pin (PCB J7 pin 10 = Arty J15, JB header) —
+# confirmed via netlist export against miso_frontend commit 97d4322
+# (2026-07-13): net RFFE_NSS_nEN ties U6 pin 1 (~1E) to J7.10 and the R21
+# pull-up. That board-side fix had no FPGA-side counterpart until now: this
+# GPIO is that counterpart. Idle/default is HIGH (decoder disabled, all four
+# radios deselected) to match R21's pull-up power-up state; firmware drives it
+# LOW once RFFE SPI is ready to talk to the radios (see rffe_nss_enable() in
+# sw/main.c). Constrained to J15 in arty_dsp_emul.xdc.
+set nss_en_gpio [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_nss_en_0]
+set_property -dict [list \
+    CONFIG.C_GPIO_WIDTH   {1} \
+    CONFIG.C_ALL_OUTPUTS  {1} \
+    CONFIG.C_DOUT_DEFAULT {0x00000001} \
+] $nss_en_gpio
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
+    -config { Clk_master "/clk_wiz_0/clk_out1 (100 MHz)" \
+              Clk_slave  "Auto" Master "/microblaze_0 (Periph)" \
+              intc_ip "Auto" master_apm "0" } \
+    [get_bd_intf_pins axi_gpio_nss_en_0/S_AXI]
+create_bd_port -dir O rffe_nss_en
+connect_bd_net [get_bd_pins axi_gpio_nss_en_0/gpio_io_o] [get_bd_ports rffe_nss_en]
 
 # --- AXI Quad SPI (SPI MASTER driving trouper_top's host-SPI slave) --------
 # Internal-only: standard (1-wire-each) master mode, single slave. Its

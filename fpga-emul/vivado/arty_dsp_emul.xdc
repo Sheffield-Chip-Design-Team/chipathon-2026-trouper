@@ -119,7 +119,7 @@ set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_io1_io}]
 # RFFE_SCK   J5 pin 1 -> JD  D4  — AXI Quad SPI drives SCK internally (no BD port).
 #            The board routes SCK to D4; expose a SCK port in the BD to constrain it.
 #
-# NSS: 2-bit encoded address into the on-board SN74LVC1G139 (review finding 4/6).
+# NSS: 2-bit encoded address into the on-board SN74LVC139A (review finding 4/6).
 # Map the two available select bits to the address pins as a stop-gap; firmware
 # must be reworked to emit a 2-bit code rather than a one-hot select.
 # RFFE_NSS_A0  PCB J8 -> JA  A18
@@ -130,6 +130,14 @@ set_property PACKAGE_PIN B18  [get_ports {SPI_0_0_ss_io[1]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {SPI_0_0_ss_io[1]}]
 # ss_io[2] / ss_io[3]: no longer exist — the BD now builds axi_quad_spi_0 with
 # 2 SS bits (C_NUM_SS_BITS=2), matching the two board pins above.
+#
+# RFFE_NSS_nEN  PCB J7 pin 10 -> JB  J15  — 139A per-decoder enable (1E-bar).
+# Board-side fix for review finding 4 (all-deselect impossible); this is its
+# FPGA-side counterpart (BD port rffe_nss_en, driven by axi_gpio_nss_en).
+# Confirmed via netlist export against miso_frontend commit 97d4322: net
+# RFFE_NSS_nEN = {U6.1 (~1E), R21.2 (pull-up), J7.10}.
+set_property PACKAGE_PIN J15  [get_ports {rffe_nss_en}]
+set_property IOSTANDARD LVCMOS33 [get_ports {rffe_nss_en}]
 
 # ---------------------------------------------------------------------------
 # remod_i / remod_q: NO net on this receive-only PCB. Dropped from the BD (no
