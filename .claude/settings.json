@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/guard-worktrees-rm.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-worktrees-rm.py\"",
             "statusMessage": "Checking for unsafe .claude/worktrees deletion..."
           }
         ]
