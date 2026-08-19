@@ -18,3 +18,67 @@ project:
   description: "DSP Hardware implementation of MRC for LoRa standard"  # Short one-line description
   lvs_config: "lvs_config.json"
 
+# ======================================================
+# Pin definitions (see planning/Pinout.md for the authoritative
+# pad-by-pad description; 23 signal + 1 power pad, upper-left quadrant.
+# VDD_IO removed 2026-08-19: the reference padring ties VDD_CORE/VDD_IO
+# to one net by default (no independent IO rail is actually built), so
+# there is one power pin, not two. GND/VSS is shared across the whole
+# die and is not a per-project pin either — see planning/Pinout.md.)
+# ======================================================
+pins:
+  - name: IQ_DATA_I_0
+    io_type: input_cmos
+  - name: IQ_DATA_Q_0
+    io_type: input_cmos
+  - name: IQ_DATA_I_1
+    io_type: input_cmos
+  - name: IQ_DATA_Q_1
+    io_type: input_cmos
+  - name: IQ_DATA_I_2
+    io_type: input_cmos
+  - name: IQ_DATA_Q_2
+    io_type: input_cmos
+  - name: IQ_DATA_I_3
+    io_type: input_cmos
+  - name: IQ_DATA_Q_3
+    io_type: input_cmos
+
+  - name: IQ_CLK
+    io_type: input_cmos
+  - name: RESETB
+    io_type: input_schmitt
+
+  - name: REMOD_A_I
+    io_type: bidirectional
+  - name: REMOD_A_Q
+    io_type: bidirectional
+
+  - name: PSRAM_SCK
+    io_type: bidirectional_24ma
+  - name: PSRAM_CE_N
+    io_type: bidirectional
+  - name: PSRAM_SIO_0
+    io_type: bidirectional
+  - name: PSRAM_SIO_1
+    io_type: bidirectional
+  - name: PSRAM_SIO_2
+    io_type: bidirectional
+  - name: PSRAM_SIO_3
+    io_type: bidirectional
+
+  - name: HOST_CS
+    io_type: input_schmitt
+  - name: SPI_SCK
+    io_type: input_schmitt
+  - name: SPI_MOSI
+    io_type: input_cmos
+  - name: SPI_MISO
+    io_type: bidirectional
+
+  - name: IRQ_OUT
+    io_type: bidirectional
+
+  - name: VDD_CORE
+    io_type: power
+

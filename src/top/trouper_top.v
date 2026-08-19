@@ -2,12 +2,15 @@
 // Standalone Trouper top-level integration
 // GF180MCU 3.3V 32 MHz — SSCS PICO Chipathon 2026
 //
-// Pad count: 23 signal + 3 power = 26 total (within Chipathon allocation)
+// Pad count: 23 signal + 2 power = 25 total (within Chipathon allocation)
 //            clk/rst×2, IQ×8, remod×2, PSRAM SCK+CE_N×2,
 //            SPI HOST_CS/SCK/MOSI/MISO×4,
 //            IRQ_OUT×1 (dedicated pad) + PSRAM-SIO[3:0]×4 (dedicated).
 //            JTAG/GPIO removed — no TAP in RTL.
-//            VDD_IO/VDD_CORE/GND×3. CS_A removed (SPI master not present).
+//            VDD_CORE/GND×2. No separate VDD_IO pad — the reference PDN
+//            ties the padring to VDD_CORE (see planning/Pinout.md,
+//            planning/5v-core-voltage-strategy.md §2026-08-19).
+//            CS_A removed (SPI master not present).
 //
 // Signal flow:
 //   SX1257[0..3] 1-bit IQ → sd_decimator×4 → dc_removal → psram_buf_ctrl

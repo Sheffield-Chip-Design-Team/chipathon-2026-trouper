@@ -1,16 +1,21 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pad list. Total: **25 pads** (23 signal + `VDD_IO` + `VDD_CORE`;
-`GND` is a common/shared pad, not counted here).
+GF180MCU MIMO ASIC logical pad list. Total: **24 pads** (23 signal + `VDD_CORE`;
+`GND`/`VSS` is shared across the whole die, not a per-project pad, not counted here).
+**`VDD_IO` removed 2026-08-19** — it is the same net as `VDD_CORE` in every current PDN
+config (no independent IO rail is actually built), so it isn't a second pin. See
+`planning/5v-core-voltage-strategy.md` §2026-08-19, Open Risks #27.
 
-**Allocation status (2026-08-19): possibly tighter than previously assumed.** This doc's
-pinout was drafted against a **<=26 pads** limit; the team's actual assigned budget may be
-**22 pads**, and the signoff die (1200×1100) fails at a stricter **1117.5×1117.5 µm** square
-target with default P&R settings — though a floorplan-margin fix reopens NR=4 there too
-(clean signoff, timing closure still open; see below). If 22 pads is enforced strictly, the
-preferred fix is an `IRQ_OUT`-removal waiver (poll `IRQ_STATUS` over SPI instead, −1 pin —
-low risk, no RTL beyond deleting the pad); a validated NR=3 (3-antenna) fallback also closes
-both the pin and die-size gap if a waiver isn't available. **See:**
+**Allocation status (2026-08-19): possibly tighter than previously assumed, but one pin
+closer than before.** This doc's pinout was drafted against a **<=26 pads** limit; the
+team's actual assigned budget may be **22 pads**, and the signoff die (1200×1100) fails at
+a stricter **1117.5×1117.5 µm** square target with default P&R settings — though a
+floorplan-margin fix reopens NR=4 there too (clean signoff, timing closure still open; see
+below). The `VDD_IO` removal above drops the count from 25 to **24**, so the gap to 22 is
+now 2 pins, not 3. Either the `IRQ_OUT`-removal waiver (poll `IRQ_STATUS` over SPI instead,
+−1 pin — low risk, no RTL beyond deleting the pad) needs one more pin cut alongside it, or
+the validated NR=3 (3-antenna) fallback alone (−2 pins) now lands exactly on 22 without the
+waiver. **See:**
 `planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md`, Open Risks
 #46.
 
@@ -20,7 +25,12 @@ both the pin and die-size gap if a waiver isn't available. **See:**
 
 ## Signal pads (23)
 
-All signal pads use **GF180 5 V-capable IO cells**, run at **3.3 V**. `VDD_CORE` and `VDD_IO` are **separate, independently-tunable rails** (NOT tied on-die), both **3.3 V at baseline** and matching all external parts (APS6404L PSRAM, SX1257 ×4, Raspberry Pi host). Keeping them independent is deliberate: if 32 MHz SS timing cannot be closed at 3.3 V, the **contingency** split-rail **5 V core / 3.6 V IO** (SS proven to close at the 4.5 V worst-case corner) can be applied **without a silicon respin**. That path's gating unknown is the GF180 core>pad IO down-shift — see [Open Risks](Open%20Risks.md) #27.
+All signal pads use **GF180 5 V-capable IO cells**, run at **3.3 V**. There is one power
+pad (`VDD_CORE`) and one shared ground (`GND`/`VSS`, not a per-project pad) — see the
+supply section below for why `VDD_IO` isn't a separate listed pad. The `bi_24t` cell itself
+*can* electrically support an independent pad-driver rail (`DVDD`/`DVSS`) at a different
+voltage from its core-logic rail (`VDD`/`VSS`, SPICE-confirmed, Open Risks #27), but nothing
+in the current PDN config uses that capability — full detail in the supply section below.
 
 ### RX data from SX1257 (8 pads, input)
 
@@ -86,15 +96,19 @@ Dedicated PSRAM QPI data nibble. JTAG and GPIO have been removed (no TAP in RTL;
 
 ---
 
-## Supply and ground pads (3 pads)
+## Supply pad (1 pad; GND/VSS shared chip-wide, not a Trouper pad)
 
 | Pad name | Voltage | Count | Description |
 |---|---|---|---|
-| `VDD_IO` | 3.3 V (baseline) | 1 | Pad-ring supply — separate, independently-tunable rail (3.3 V-class externals) |
-| `VDD_CORE` | 3.3 V (baseline) | 1 | Digital core supply — separate, independently-tunable rail |
-| `GND` | 0 V | 1 | Shared ground |
+| `VDD_CORE` | 3.3 V (baseline) | 1 | Core + pad-driver supply. Feeds both the digital core and the padring — there is no separate `VDD_IO` pin; see below. |
+| `GND`/`VSS` | 0 V | — (not counted) | Shared ground across the whole die. The reference IO cell library gives no way to isolate/segment `VSS` even if desired — it is the one rail every pad, every voltage domain, and (per Open Risks #29) every macro on the MPW shares unconditionally. |
 
-> **Voltage plan:** `VDD_CORE` and `VDD_IO` are **separate rails**, both **3.3 V at baseline** (all external parts native 3.3 V). The open item is that 32 MHz SS timing does not close at the 3.0 V slow corner (Open Risks item 1). Because the rails are **independently tunable**, the **contingency** — split-rail **5 V core / 3.6 V IO** — can be applied without a respin: SS proven to close at the 4.5 V worst-case corner (SS = +1.40 ns, DRC/LVS clean), external parts safe at 3.6 V (PSRAM 4.0 V / SX1257 3.9 V / RPi clamp ~3.9 V), gated only on GF180 core>pad IO-cell characterization ([Open Risks](Open%20Risks.md) #27).
+> **Voltage plan (corrected 2026-08-19):** `VDD_CORE` (this pad) also feeds the padring —
+> `VDD_NETS`/`GND_NETS` declare one voltage domain and the reference padring template ties
+> the core PDN ring straight to the padring's power taps, with no secondary DVDD net or
+> extra tap pair instantiated anywhere. 3.3 V baseline (all external parts native 3.3 V),
+> so removing the separate `VDD_IO` pad doesn't change baseline behavior — one voltage
+> either way, now one pin instead of two. The open item is that 32 MHz SS timing does not close at the 3.0 V slow corner (Open Risks item 1). The **contingency** — split-rail **5 V core / 3.6 V IO** — is *not* a config flip: it needs (a) a genuine secondary voltage domain + its own `dvdd`/`dvss` taps added to the PDN (not present in any current config), and (b) the remaining structural unknowns in Open Risks #27 (ESD/latch-up across the split, power-on rail sequencing, pad-ring IR drop) resolved. The cell-level down-shift itself is SPICE-proven safe (SS = +1.40 ns, DRC/LVS clean, `bi_24t` characterization job 4347). Until the PDN split is actually built, raising core voltage raises the pad rail too — external board-level level shifters on every 3.3 V-only-facing pad are the fallback. See [Open Risks](Open%20Risks.md) #27, `planning/5v-core-voltage-strategy.md` §2026-08-19.
 
 ---
 
@@ -116,4 +130,4 @@ The following signals connect Trouper to the Grouper project on the same MPW. Th
 - **AFE chip-select / configuration pins:** Not allocated to Trouper package pads in the current revision.
 - **Additional PSRAM control pins:** Not required. The current allocation uses dedicated `PSRAM_SCK` and `PSRAM_CE_N`, with `PSRAM_SIO[3:0]` on four dedicated data pads.
 - **JTAG / GPIO pins:** Removed. No JTAG TAP is instantiated in the RTL and GPIO was never wired out of the macro; host debug uses the SPI register / PSRAM-readback path. See Trouper Chip Specification §4.16.
-- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock, deferred):** No pad available — the current allocation is already at the 26-pad budget. The internal OR-lock logic these pins would drive already exists as a register (`SC_FORCE_LOCK`, `reg_bank` 0x19, see `planning/Register Map.md` `0x19` and `planning/NR2-multi-ASIC-cascade.md`); if a spare pad opens up (e.g. from a future GPIO/JTAG-style feature removal elsewhere), bond it to `sc_lock_in` OR'd into the same internal `sc_lock_force` signal rather than adding a second mechanism. `IRQ_OUT` cannot double as this pin — it is output-only.
+- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock, deferred):** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads, so there is headroom for one spare pad against the 26-pad ceiling (two, if the assigned team budget really is 22 and NR=3/IRQ_OUT-waiver work closes that gap separately — see the allocation-status note at the top of this doc). Still deferred pending an explicit decision to spend that headroom here rather than as margin, but "no pad available" is no longer the reason. The internal OR-lock logic these pins would drive already exists as a register (`SC_FORCE_LOCK`, `reg_bank` 0x19, see `planning/Register Map.md` `0x19` and `planning/NR2-multi-ASIC-cascade.md`); if this pad is allocated, bond it to `sc_lock_in` OR'd into the same internal `sc_lock_force` signal rather than adding a second mechanism. `IRQ_OUT` cannot double as this pin — it is output-only.

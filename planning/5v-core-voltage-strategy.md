@@ -151,3 +151,117 @@ worth a dedicated look before treating this as fully signed off). Still an
 open corner-*policy* decision (3.0 V vs 4.5 V/dual-rail) per Open Risks item 1,
 not a closed risk — this entry only proves 4.5 V P&R closure is now
 demonstrated end-to-end on the current baseline, with a repeatable recipe.
+
+## 2026-08-19 — reference padring PDN ties VDD_CORE and VDD_IO to one net by default
+
+Correction to the framing in `planning/Pinout.md` (which stated the two rails
+are "separate, independently-tunable... NOT tied on-die... deliberate" — that
+was wrong as a description of what's actually configured, and has been fixed
+in that doc). Traced the chipathon integration reference
+(`ip/sscs-chipathon-2026/resources/Integration/workshop_padring_librelane`)
+and every `rtl-test/ol_trouper_top/*.json` config to see how power actually
+reaches the padring:
+
+- `gf180mcu_ws_io__dvdd` exposes `{DVDD, DVSS, VSS}` (no `VDD` pin);
+  `gf180mcu_ws_io__dvss` exposes `{DVDD, DVSS, VDD}` (no `VSS` pin). The
+  reference pad-ordering spec always places them as one adjacent pair per
+  ring side (4 pairs total, one per edge) — that pair together is the only
+  place *both* the pad-driver rail (`DVDD`/`DVSS`) and the core-logic rail
+  (`VDD`/`VSS`) reach the die from off-chip. 8 physical pads total for the
+  whole design.
+- `config.yaml`: `VDD_NETS: [VDD]`, `GND_NETS: [VSS]` — one voltage domain,
+  no secondary net declared. `PDN_CORE_RING: True` +
+  `PDN_CORE_RING_CONNECT_TO_PADS: True` wires the core PDN ring straight to
+  those same 4 tap pairs.
+- No `brk2`/`brk5` breaker cell appears anywhere in the pad-ordering spec —
+  the whole ring, core and pad rail alike, is one continuous, unsegmented
+  domain as shipped.
+- None of `rtl-test/ol_trouper_top/*.json` declares a second `VDD_NETS`
+  entry, a `DVDD`-class net, or a second `dvdd`/`dvss` tap pair. (Most of
+  those configs are core-block-only P&R runs with no padring instantiated at
+  all — the padring/PDN question hasn't been exercised on a full-chip build
+  yet.)
+
+**What this does and doesn't change:** it doesn't touch §4's cell-level
+finding — job 4347's SPICE characterization of `bi_24t` doing a genuine
+core>pad down-shift still stands, and Open Risks #27 still tracks the
+remaining structural unknowns (ESD/latch-up, sequencing, IR drop) on that
+path. What changes is the layer below it: "the IO cell can do this" and "our
+PDN config does this" are two different claims, and only the first was true.
+Making `VDD_CORE`/`VDD_IO` actually independent means adding a real
+secondary voltage domain to `pdn_cfg.tcl` (the `foreach vdd $::env(VDD_NETS)
+...` secondary-net loop already in the file supports this pattern generically
+— it's unused here) plus a second `dvdd`/`dvss` tap pair wired to it. That's
+unbuilt PDN work, not a flag flip.
+
+**Consequence for "raise the voltage, do we need a level shifter":** yes, as
+things stand today. Push `VDD_CORE` to 4.5–5 V without doing the secondary-
+domain PDN work above and `VDD_IO` rises with it on the same net — every pad
+facing a 3.3 V-only external part (SX1257 ×4, APS6404L PSRAM, RPi SPI host,
+the Grouper-facing signals) needs either the split-rail PDN work finished
+(cell-level proven, integration-level not yet built, structural items in #27
+still open) or external board-level level shifters as the fallback — and #27
+already flags that fallback as hard for the high-speed bidirectional PSRAM
+QSPI bus specifically (auto-direction translators don't cope with mid-
+transaction direction reversal at up to 133 MHz).
+
+**Aside, correcting a framing used earlier in this same voltage discussion:**
+Grouper is not a padring-segment neighbor of Trouper. Per Open Risks #29,
+Grouper and Trouper are two separately hardened MPW macros joined by an
+AHB-Lite bus — not two projects sharing one physical padring. The
+`brk2`/`brk5` ring-segmentation mechanism described in this repo's IO-cell
+notes is real and does work as described for genuinely separate padring
+citizens, but it isn't the mechanism connecting Trouper and Grouper.
+
+## 2026-08-19 — external level-shifter part selection for the (b) fallback
+
+Records the component-level answer for §4's option (b) — "uniform 5 V chip +
+external PCB level translators" — since it's now the documented default
+until the split-rail PDN work above exists. Not signal-specific analog
+detail (belongs in a board/schematic doc if one exists); this is the general
+selection criterion and part families, so the next person doesn't have to
+re-derive it.
+
+**The right category is dual-independent-supply, direction-controlled
+translators, not auto-sensing shifters and not "regulated output" parts.**
+These ICs have two separate power pins — `VCCA` (fixed low side) and `VCCB`
+(variable high side) — supplied externally, not derived internally:
+
+- `VCCA` ties to a fixed 3.3 V rail (SX1257 / APS6404L PSRAM / RPi host, all
+  native 3.3 V).
+- `VCCB` ties to `VDD_CORE` — 3.3 V today, 4.5–5 V if the split-rail
+  contingency is ever adopted.
+- `VCCA = VCCB` (3.3 V/3.3 V) is a normal spec'd operating point on these
+  parts, not an edge case — it just behaves as a buffer/repeater. **This is
+  the practical payoff:** populate the same BOM now; if `VDD_CORE` later
+  moves to 5 V, only the net `VCCB` is tied to changes — no board respin,
+  mirroring the "no silicon respin" property the split-rail contingency
+  itself is chasing.
+
+**Split by bus, matched to what's already in the RTL:**
+
+| Signal group | Requirement | Candidate part family |
+|---|---|---|
+| PSRAM QPI (`SIO[3:0]`, up to 133 MHz, direction reverses mid-transaction) | Explicit `DIR` pin, not auto-sensing | TI `SN74AVC4T774` or Nexperia `74AVC4T245` (quad, one `DIR` per nibble group) |
+| SPI (host + SX1257 ×4, ≤10 MHz host SPI) | Direction-controlled, lower speed | TI `SN74LVC2T45`/`SN74AVC2T245` (dual-bit) or `SN74AVC1T45` per line |
+| Unidirectional (`IQ_CLK`, `IQ_DATA_*`, `RESETB`, `IRQ_OUT`) | Fixed direction, no `DIR` pin needed | Same families, `DIR` tied constant |
+
+**Why the QPI row is the one that matters:** #27 already flags "auto-
+direction translators do not cope" for this bus, and that's confirmed here
+— auto-sensing parts (TXB0108/TXS0108-class) infer direction from bus
+contention/edge timing and can't reliably track a direction reversal
+mid-transaction at QPI speeds. A `DIR`-pin part sidesteps that by not
+inferring anything: drive `DIR` from a real signal. `psram_buf_ctrl.v`
+already generates exactly that signal for the QSPI ownership/direction
+handover (the same signal behind the item-37 `QSPI_OWNER` fix) — wiring it
+to the shifter's `DIR` pin is a direct reuse, not new design work.
+
+**Not yet checked:** propagation delay / max toggle rate at these parts'
+`VCCA=VCCB=3.3V` operating point vs `VCCB=5V` — datasheets typically show
+edges a bit slower nearer the low end of the supported range. Re-verify
+against the PSRAM QPI timing budget once a specific part and voltage
+combination are chosen; this is a small additional timing cost stacking on
+top of the SS-closure margin work, not evaluated yet either way.
+
+**See:** Open Risks #27 (the fallback this documents), `planning/Pinout.md`,
+`ss-corner-decimator-pacing-closure.md` (`u_psram` QSPI engine background).

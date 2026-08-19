@@ -37,16 +37,19 @@ Full pad-by-pad list, direction, and electrical notes: [Pinout](../planning/Pino
 
 ## 2. Power and reset
 
-- `VDD_CORE` and `VDD_IO` are **separate rails**, both **3.3 V at baseline**
-  (matches all four external parts' native voltage). They are independently
-  tunable pads-in-package, not tied on-die — this is deliberate headroom for
-  the 5 V-core contingency (see [Pinout](../planning/Pinout.md) and
-  [Open Risks](../planning/Open%20Risks.md) #27) but at bring-up time you should be
-  running **3.3 V/3.3 V** unless a specific test explicitly calls for the
-  split-rail configuration.
+- There is **one power pad, `VDD_CORE`**, at **3.3 V baseline** (matches all
+  four external parts' native voltage). It feeds both the digital core and
+  the padring — there is no separate `VDD_IO` pad; the reference PDN config
+  ties them to one net (**corrected 2026-08-19**, was previously documented
+  here as two independent rails — see [Pinout](../planning/Pinout.md) and
+  [5V core voltage strategy](../planning/5v-core-voltage-strategy.md)
+  §2026-08-19). The 5 V-core contingency (see
+  [Open Risks](../planning/Open%20Risks.md) #27) would need a genuine second
+  voltage domain built into the PDN first — it isn't a rail you can already
+  dial independently at bring-up.
 - `RESETB` is the **raw, unsynchronized, active-low** reset pin — there is
   no on-chip POR or deglitch circuit (Open Risks #27, item 3). Hold it low
-  through the entire power-up transient of both rails before releasing.
+  through the entire power-up transient before releasing.
 - The very first SPI transaction after `RESETB` release is now safe (Open
   Risks item 26, closed 2026-07-02) — you do **not** need a dummy/throwaway
   read before the first real register access.
