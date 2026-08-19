@@ -289,10 +289,9 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | PSRAM SCK / CE_N | 2 | APS6404L serial clock and active-low chip enable |
 | IRQ_OUT | 1 | Dedicated level-high interrupt to host RPi |
 | PSRAM SIO[3:0] | 4 | PSRAM QPI data bus (dedicated; JTAG/GPIO removed — see [Pinout](Pinout.md)) |
-| VDD_IO | 1 | Pad-ring supply; separate independently-tunable rail, 3.3 V baseline (see [Pinout](Pinout.md)) |
-| VDD_CORE | 1 | Digital core supply; separate independently-tunable rail, 3.3 V baseline — IR drop must be verified in floorplan |
-| GND | 1 | Single pad — place at highest switching-current region |
-| **Total** | **26** | Within the ≤26 per-team allocation limit |
+| VDD_CORE | 1 | Digital core + pad-driver supply, 3.3 V baseline — IR drop must be verified in floorplan. No separate `VDD_IO` pin: the reference PDN config ties the padring to this same net (`planning/5v-core-voltage-strategy.md` §2026-08-19); `VDD_IO` removed from the pinout 2026-08-19. |
+| GND | 1 | Single pad — place at highest switching-current region. Shared across the whole die, not Trouper-private (see [Pinout](Pinout.md)). |
+| **Total** | **25** | Within the ≤26 per-team allocation limit (24 pads per `planning/Pinout.md`, which excludes `GND` as a shared/non-counted pad; this table counts it, hence 25) |
 
 ---
 

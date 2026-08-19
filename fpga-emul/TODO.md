@@ -111,8 +111,25 @@ The MISO front-end test board (AFE) design is at
     arbitration is covered by rtl-test tb_trouper_grp_arb. IRQ_GROUPER unused.
   - `tb_fpga_spi_reg.v` ties spi_sel=0 + ext_* inputs low (internal path). When
     spi_sel=1 the internal master is muxed out; firmware SPI is then a no-op.
+- [x] **NSS decoder enable (1E-bar), FPGA side.** DONE 2026-08-19. The board
+  side of PCB review finding 4 was fixed 2026-07-12 (1G139 → 139A, has a
+  per-decoder enable) and 2026-07-13 (1E routed to a spare header pin, PCB
+  J7.10 = Arty J15) — confirmed by netlist export against miso_frontend
+  commit `97d4322`. That fix had no FPGA-side counterpart until now: added
+  `axi_gpio_nss_en_0` (1-bit output, default HIGH = all-deselected) exposed
+  as BD port `rffe_nss_en`, constrained to J15 in `arty_dsp_emul.xdc`.
+  Firmware `rffe_nss_enable()` in `sw/main.c` drives it low once before the
+  SX1257 init loop and leaves it enabled (the 2-bit address already keeps
+  exactly one decoder output asserted per transaction). Needs a BD/XSA
+  rebuild (`gen_xsa.tcl` + BSP) before firmware picks up
+  `XPAR_AXI_GPIO_NSS_EN_0_BASEADDR`; falls back to `0x00030000` until then.
+  **This is a narrower fix than the I2C-expander plan below** — it only
+  restores all-deselect capability on the existing 139A decoder, using the
+  board's actual current hardware. The I2C-expander item remains open/undone
+  if 4 fully discrete NSS lines are still wanted later.
 - [ ] **NSS + RFFE_RST via I2C IO expander (DECIDED 2026-07-09; supersedes the
-  2-bit-encoded-NSS plan).** Replace the on-board SN74LVC1G139 decoder with an
+  2-bit-encoded-NSS plan; NOT built on the board that shipped — see the 1E-bar
+  fix above for what's actually on hardware).** Replace the on-board SN74LVC1G139 decoder with an
   I2C IO expander (TCA-family, e.g. TCA9535 16-bit) on the daughterboard, driving
   **four discrete active-low NSS lines** plus **RFFE_RST** (and spare bits for RX
   enables). Rationale — all-deselect is essential on a shared-MISO multi-drop SPI

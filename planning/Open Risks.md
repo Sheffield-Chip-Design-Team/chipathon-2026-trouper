@@ -453,6 +453,21 @@ and honest-MCP work that the voltage path would otherwise unblock.
 (split-rail supply note); `planning/5v-core-voltage-strategy.md`.
 **Found:** 2026-07-04 (voltage-corner + external-part datasheet review).
 
+**2026-08-19:** cell-level finding above is unaffected, but the reference padring's PDN
+config ties `VDD_CORE`/`VDD_IO` to one net by default (no secondary domain declared, no
+`brk` cells in the pad spec) — independence must still be built, it isn't already there.
+Corrects `planning/Pinout.md`'s prior "separate, independently-tunable... deliberate"
+framing. **See:** `planning/5v-core-voltage-strategy.md` §2026-08-19.
+
+**2026-08-19 (part selection for the external-translator fallback):** dual-independent-
+supply, direction-controlled translators (`VCCA` fixed 3.3 V, `VCCB` tied to `VDD_CORE`)
+are the right category — `VCCA=VCCB` is a normal operating point, so the same BOM works
+at 3.3 V/3.3 V today and 4.5–5 V/3.3 V later with no board respin. The PSRAM QPI bus needs
+an explicit-`DIR` part (e.g. `SN74AVC4T774`/`74AVC4T245`), driven by `psram_buf_ctrl.v`'s
+existing QSPI ownership signal — auto-sensing shifters (TXB/TXS0108-class) still don't
+cope with its mid-transaction direction reversal, as already noted above. **See:**
+`planning/5v-core-voltage-strategy.md` §"external level-shifter part selection".
+
 ### 44. 4.5 V-core signoff is now P&R-proven but NOT a decided architecture — gate before canonicalizing
 
 2026-07-31: a full P&R targeting `ss_125C_4v50` with a 9 ns
@@ -1068,10 +1083,12 @@ Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
 
 ---
 
-### 46. Trouper's 25-pad / 1200×1100 pinout may not fit a stricter 22-pad / 1117.5×1117.5 allocation — NR=3 fallback validated, NR=4 also reopened via a floorplan fix
+### 46. Trouper's 24-pad / 1200×1100 pinout may not fit a stricter 22-pad / 1117.5×1117.5 allocation — NR=3 fallback validated, NR=4 also reopened via a floorplan fix
 
-Current pinout is 25 pads (23 signal + `VDD_IO` + `VDD_CORE`) against a possible 22-pad
-team allocation. The 1117.5×1117.5 µm square die target initially looked like a hard NR=4
+Current pinout is 24 pads (23 signal + `VDD_CORE`; `VDD_IO` removed 2026-08-19 — it's the
+same net as `VDD_CORE`, not a second pin, see `planning/5v-core-voltage-strategy.md`
+§2026-08-19) against a possible 22-pad team allocation — a 2-pin gap, not 3. NR=3 alone now
+closes it exactly, without also needing the `IRQ_OUT` waiver. The 1117.5×1117.5 µm square die target initially looked like a hard NR=4
 dead-end (`DPL-0036` placement failure, job 4480), but that was a LibreLane floorplan
 default (`*_MARGIN_MULT`) silently costing 4% of the die, not a structural limit —
 reclaiming it (`config_1117sq_maxarea.json`) gets a **clean NR=4 physical signoff**

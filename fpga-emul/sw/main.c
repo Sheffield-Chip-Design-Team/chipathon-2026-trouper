@@ -139,6 +139,22 @@ static void uart_boot_init(void) {
 #define CSM_STATUS_DONE (1u << 0)
 
 /* -----------------------------------------------------------------------
+ * axi_gpio_nss_en_0 — RFFE NSS decoder enable (SN74LVC139A 1E-bar, active
+ * low). Board-side fix for PCB review finding 4 (2026-07-08): the decoder
+ * had no way to deselect all four radios. The board now routes 1E to a
+ * spare header pin (Arty J15); this GPIO is the FPGA-side half of that fix.
+ * Bit0 default is HIGH at power-up (decoder disabled, matching R21's
+ * pull-up) — drive it LOW once RFFE SPI is ready to talk to the radios, see
+ * rffe_nss_enable() below.
+ * ----------------------------------------------------------------------- */
+#ifdef XPAR_AXI_GPIO_NSS_EN_0_BASEADDR
+  #define NSS_EN_BASE  XPAR_AXI_GPIO_NSS_EN_0_BASEADDR
+#else
+  #define NSS_EN_BASE  0x00030000UL   /* fallback -- check Vivado address map */
+#endif
+#define NSS_EN_DATA  (NSS_EN_BASE + 0x00)   /* AXI GPIO channel-1 GPIO_DATA */
+
+/* -----------------------------------------------------------------------
  * Trouper register map (planning/Register Map.md) — 7-bit address space,
  * accessed over SPI via axi_quad_spi_1 (see reg_write/reg_read below).
  * ----------------------------------------------------------------------- */
@@ -766,6 +782,15 @@ static void process_rx(unsigned rlen) {
 #define SX1257_MODE_RX     0x05
 /* FRF for 868 MHz: 0xD90000 */
 
+/* Enable/disable the RFFE NSS decoder (see NSS_EN_* above). All-deselect
+ * (en=0) is the power-on-safe state (matches R21's pull-up); enabling it
+ * once before the first sx1257_write() and leaving it enabled is fine — the
+ * 2-bit address already guarantees exactly one decoder output is asserted
+ * per transaction (review's "shared MISO is safe" finding). */
+static void rffe_nss_enable(u8 en) {
+    Xil_Out32(NSS_EN_DATA, en ? 0u : 1u);  /* active-low: en=1 -> drive 0 */
+}
+
 static void sx1257_write(u8 chip, u8 reg, u8 val) {
     u8 buf[2] = {(u8)(reg|0x80u), val};
     XSpi_SetSlaveSelect(&SpiInst, 1u<<chip);
@@ -915,6 +940,7 @@ int main(void) {
 #else
     {
         u8 chip;
+        rffe_nss_enable(1);   /* decoder live: exactly one radio selected at a time */
         for (chip=0; chip<4; chip++) sx1257_init_chip(chip);
     }
 #endif

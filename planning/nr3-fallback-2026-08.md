@@ -1,7 +1,8 @@
 # NR=3 fallback — pin budget / die size contingency (2026-08-18)
 
 Records a validated fallback in case the Chipathon pin/die rules are enforced strictly:
-**22 pads** (current Trouper pinout is 25: 23 signal + `VDD_IO` + `VDD_CORE`) and a
+**22 pads** (current Trouper pinout is 24: 23 signal + `VDD_CORE` — `VDD_IO` was removed
+2026-08-19, see below) and a
 **1117.5×1117.5 µm square die** (current signoff target is the 1200×1100 rectangle).
 Neither constraint is met by the current NR=4 (4-antenna MRC) design. This doc records
 that dropping to **NR=3** (3 antenna channels) closes both gaps, with real P&R evidence,
@@ -14,13 +15,16 @@ not just estimates — and records what it costs.
 
 ## 1. Pin budget
 
-Current `info.yaml`: 23 signal pads + `VDD_IO` + `VDD_CORE` = 25.
+Current `info.yaml`: 23 signal pads + `VDD_CORE` = **24** (`VDD_IO` removed 2026-08-19).
 
-- `GND` was never a dedicated pad (common ground, per the padframe rules).
-- If `VDD_IO` is a shared/pad-ring rail rather than Trouper-private, that drops one power
-  pad → **24**.
+- `GND`/`VSS` was never a dedicated pad (shared across the whole die, per the padframe
+  rules — see Pinout.md).
+- **Confirmed 2026-08-19** (was speculative when this doc was first written): `VDD_IO` is
+  the same net as `VDD_CORE` in the reference PDN config, not a Trouper-private second pin
+  — dropping it takes the count from 25 to **24**. See
+  `planning/5v-core-voltage-strategy.md` §2026-08-19.
 - Dropping one antenna channel removes exactly `IQ_DATA_I_n` + `IQ_DATA_Q_n` = **2 pins**,
-  landing at **22** — exactly the assigned budget.
+  landing at **22** — exactly the assigned budget, with no `IRQ_OUT` waiver needed on top.
 
 No other pin cut gets there without cost-free tradeoffs: `IRQ_OUT` removal (poll
 `IRQ_STATUS` over SPI instead) is low-risk and was the team's preferred waiver-request
