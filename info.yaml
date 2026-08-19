@@ -18,3 +18,66 @@ project:
   description: "DSP Hardware implementation of MRC for LoRa standard"  # Short one-line description
   lvs_config: "lvs_config.json"
 
+# ======================================================
+# Pin definitions (see planning/Pinout.md for the authoritative
+# pad-by-pad description; 23 signal + 2 power pads, upper-left quadrant)
+# ======================================================
+pins:
+  - name: VDD_IO
+    io_type: power
+
+  - name: IQ_DATA_I_0
+    io_type: input_cmos
+  - name: IQ_DATA_Q_0
+    io_type: input_cmos
+  - name: IQ_DATA_I_1
+    io_type: input_cmos
+  - name: IQ_DATA_Q_1
+    io_type: input_cmos
+  - name: IQ_DATA_I_2
+    io_type: input_cmos
+  - name: IQ_DATA_Q_2
+    io_type: input_cmos
+  - name: IQ_DATA_I_3
+    io_type: input_cmos
+  - name: IQ_DATA_Q_3
+    io_type: input_cmos
+
+  - name: IQ_CLK
+    io_type: input_cmos
+  - name: RESETB
+    io_type: input_schmitt
+
+  - name: REMOD_A_I
+    io_type: bidirectional
+  - name: REMOD_A_Q
+    io_type: bidirectional
+
+  - name: PSRAM_SCK
+    io_type: bidirectional_24ma
+  - name: PSRAM_CE_N
+    io_type: bidirectional
+  - name: PSRAM_SIO_0
+    io_type: bidirectional
+  - name: PSRAM_SIO_1
+    io_type: bidirectional
+  - name: PSRAM_SIO_2
+    io_type: bidirectional
+  - name: PSRAM_SIO_3
+    io_type: bidirectional
+
+  - name: HOST_CS
+    io_type: input_schmitt
+  - name: SPI_SCK
+    io_type: input_schmitt
+  - name: SPI_MOSI
+    io_type: input_cmos
+  - name: SPI_MISO
+    io_type: bidirectional
+
+  - name: IRQ_OUT
+    io_type: bidirectional
+
+  - name: VDD_CORE
+    io_type: power
+
