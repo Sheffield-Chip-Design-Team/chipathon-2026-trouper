@@ -196,3 +196,84 @@ original trial's repair-lottery caveat above.
 **Still open:** the 5-slot-vs-6 padring cost (item 3 in the original "Next"
 list above) — not re-checked against the actual pad budget as part of this
 update.
+
+---
+
+## 2026-08-19 update #2: two more notch leaks found while rendering for a presentation, both fixed
+
+Producing a multi-layer routing render of job 4496's GDS for a presentation
+surfaced two further correctness gaps in the "reserved for Grouper" NE
+notch — neither caught by DRC/LVS/timing, since Trouper's own signoff has no
+way to know that region is supposed to stay empty for a neighbor project.
+Both found by inspecting the actual DEF, not just the image.
+
+### Gap 1: 6 `GRP_*` pins physically inside the notch
+
+`#E` (`io_placement_lshape.cfg`) spreads its pins proportionally across the
+**full** 1100 µm die height, same mechanism as the original `#N` dead-zone
+bug (`FP_OBSTRUCTIONS` doesn't reshape `DIE_AREA`, so `CustomIOPlacement`
+has no notion of the notch). `GRP_ADDR_5/6/7`, `GRP_WE`, `GRP_RE`,
+`GRP_READY` landed at x≈1650, y between 588–1059 — inside the y>550 region
+reserved for Grouper's own silicon.
+
+**Fix:** same pattern as the `#N` fix — append a `$16` spacer after `#E`'s
+real pins in `io_placement_lshape.cfg`, keeping them within y:0–550.
+Verified via DEF: 0 pins in the notch afterward (was 6).
+
+### Gap 2: PDN power straps crossing the notch — `PDN_KEEPOUT_REGION` was a silent no-op
+
+The `pdn_cfg.tcl` guard block that's supposed to obstruct PDN generation in
+the notch (`create_obstruction` on `Metal1`–`Metal5` when
+`PDN_KEEPOUT_REGION` is set) was itself sitting **uncommitted** in the
+working tree — never actually landed in git before this. Worse: even with
+the guard code present, setting `PDN_KEEPOUT_REGION` as a **LibreLane JSON
+config key** (`config_lshape_current.json`) is a silent no-op — it's not a
+registered LibreLane config variable, so it never reaches `$::env(...)`
+inside the Tcl step scripts. Confirmed empirically: job 4497 (JSON-key
+attempt) still had real `STRIPE` shapes on Metal4/Metal5 spanning straight
+through the notch in the final DEF's `SPECIALNETS` (e.g. a Metal5 stripe
+`13440 → 3286080` DBU, the full 1650 µm width).
+
+The actual working precedent was already on record: job 4473
+(`trouper_top_lshape_v27_keepout`, the source of the original multi-color
+reference render) got a genuinely clean notch by **exporting
+`PDN_KEEPOUT_REGION` as a real shell environment variable in the job script
+itself**, before invoking `librelane` — not through the JSON config. That
+process-level env var is inherited by the whole subprocess tree (including
+OpenROAD's Tcl `$::env(...)`), unlike a JSON key LibreLane doesn't
+recognize.
+
+**Fix:** moved `PDN_KEEPOUT_REGION` out of `config_lshape_current.json`
+and into `run_pnr_lshape_current.sh` as `export PDN_KEEPOUT_REGION="1100
+550 1650 1100"`, matching job 4473's proven invocation exactly. Also
+committed the previously-uncommitted `pdn_cfg.tcl` guard block itself — it's
+load-bearing for this fix and needs to actually be in git.
+
+Also worth noting for next time: `add_pdn_stripe`/OpenROAD's PDN generator
+does **not** consult generic Odb routing obstructions the way the router
+and placer do (checked directly: no `add_pdn_obstruction` command exists in
+this OpenROAD build). `create_obstruction` happens to work here specifically
+because `pdn_cfg.tcl` passes it without `-except_pg`, which is documented to
+block PG (power/ground) routing too — that's the actual mechanism, not PDN
+generation being obstruction-aware in general.
+
+### Result: clean full signoff (job 4498), both leaks closed
+
+Verified against the actual DEF, not just the render:
+
+| Check | job 4496/4497 (before) | job 4498 (after) |
+|---|---|---|
+| Pins in notch | 6 | **0** |
+| Metal4/Metal5 stripe segments touching notch | multiple (confirmed via `SPECIALNETS`) | **0** (matches job 4473's clean reference exactly) |
+| `nom_tt_025C_3v30` / `max_ff_n40C_3v60` WNS | 0.0 ns | 0.0 ns (unchanged, met) |
+| `max_ss_125C_3v00` WNS | −17.96 / −20.40 ns | −19.51 ns (same chronic-corner class, not a regression) |
+| Magic DRC / LVS | 0 / 0 mismatches | 0 / 0 mismatches |
+
+`config_lshape_current.json`, `io_placement_lshape.cfg`,
+`run_pnr_lshape_current.sh`, and `pdn_cfg.tcl` are now all committed
+together reflecting job 4498's exact winning setup — this supersedes job
+4496/4497 as the L-shape baseline. Presentation render:
+`reports/trouper_top_lshape_current.png` (via the `gds-plot` skill's
+`raster_gds.sh` — see that skill's "Known issue" for why the KLayout-native
+render path had to be bypassed to get a usable multi-color image in the
+first place).

@@ -47,6 +47,13 @@ set -euo pipefail
 export PDK_ROOT=/foss/pdks
 export PDK=gf180mcuD
 export STD_CELL_LIBRARY=gf180mcu_fd_sc_mcu7t5v0
+# PDN_KEEPOUT_REGION is read by pdn_cfg.tcl as a raw shell env var
+# ($::env(PDN_KEEPOUT_REGION)), NOT a LibreLane config key -- putting it in
+# the JSON config is a silent no-op (confirmed 2026-08-19: job 4497's own
+# _env.tcl for the GeneratePDN step had no trace of it, and PDN stripes/vias
+# crossed straight through the notch despite the JSON key being set). Must
+# be exported here, matching job 4473's proven-working invocation.
+export PDN_KEEPOUT_REGION="1100 550 1650 1100"
 OUT="${RUN_DIR:-/foss/runs}/trouper_top_lshape_current"
 mkdir -p "$OUT/run"
 echo "=== L-shape 1100+550 CURRENT BASELINE P&R START $(date --iso-8601=seconds) on $(hostname) ==="
