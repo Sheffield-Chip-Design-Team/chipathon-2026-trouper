@@ -416,13 +416,19 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         0x18: ('reserved', 0x00),
         # Packet / Weight / Training Control (mostly RO / WO / W1P)
         0x19: ('W1P', 0x00),  # SC_FORCE_LOCK (W1P, reads as 0)
-        # 0x1A: reserved in this reg_bank.v (no case entry in either the write
-        # or read decode -- falls to the `default` no-op / read-0 arms). Note
-        # planning/Register Map.md's per-address table describes an RX_HOLD
-        # register at 0x1A ([0]=HOLD, [1]=CFG_WR_REJECTED W1C) that does NOT
-        # exist in this RTL revision -- that doc content is ahead of/diverged
-        # from this checkout. Modeled as reserved to match the actual DUT.
-        0x1A: ('reserved', 0x00),
+        # 0x1A: RX_HOLD / CFG_WR_REJECTED (Open Risks #43,
+        # planning/mcp-config-settle-gate-design.md). bit[0]=rx_hold is a
+        # plain RW bit (self-gated writes always land, see reg_bank.v case
+        # 8'h1A); bit[1]=cfg_wr_rejected is a sticky flag that this generic
+        # pattern sweep never sets (it only sets on a *rejected write to a
+        # different, cfg-locked address*, and writing wdata[1]=1 here only
+        # clears it, W1C) -- so for the patterns exercised in this sweep
+        # (0x00/0xFF/0xAA/0x55) it always reads back 0 and the readback
+        # collapses to `pattern & 0x01`, fitting the generic RW/mask model.
+        # cfg_wr_rejected's real set/W1C behavior is exhaustively covered by
+        # cocotb/tests/test_reg_bank_rx_hold.py (row #8/#43 interlock, not
+        # this row).
+        0x1A: ('RW', 0x01),
         0x1B: ('reserved', 0x00),
         0x1C: ('RO', 0xFF),  # PACKET_STATUS (all RO)
         0x1D: ('RO', 0xF3),  # ACTIVE_STATUS: [7:4]=ANTENNA_EN, [1:0]=MODE; [3:2] reserved
@@ -599,36 +605,35 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
 
 @cocotb.test()
 async def test_reserved_addresses_zero_and_ignored(dut):
-    """Verify all 22 reserved addresses read zero and writes are ignored.
+    """Verify all 21 reserved addresses read zero and writes are ignored.
 
     Closes verification-plan row #3: "Fixed IDs and all reserved addresses
     read zero/write ignored" (TRPR-REG-004). Exhaustively verifies the
     reserved address slots do not respond to writes.
 
-    NOTE: planning/Register Map.md's per-address table describes an RX_HOLD
-    register at 0x1A that is not present in this checkout's reg_bank.v (no
-    case entry in either the write or read decode -- see the module's
-    `default` arms). This test follows the actual RTL: 0x1A is reserved here
-    (22 reserved addresses total: 4 + 9 + 2 + 6 + 1), matching the doc's own
-    "106 implemented + 22 reserved = 128" occupancy line and its
-    "0x1A-0x1B reserved" summary, even though that summary is inconsistent
-    with the doc's own per-address table (which describes 0x1A as RX_HOLD).
-    That RX_HOLD content appears to belong to a different/later RTL revision
-    than this checkout; reconciling the doc is tracked separately.
+    CORRECTION 2026-08-22: an earlier version of this test modeled 0x1A as
+    reserved, on the belief that this checkout's reg_bank.v had no RX_HOLD
+    register there. That belief was wrong -- current src/control/reg_bank.v
+    (Open Risks #43, planning/mcp-config-settle-gate-design.md) has carried
+    RX_HOLD/CFG_WR_REJECTED at 0x1A since commit f1aa262, which predates the
+    commit that (re-)introduced this stale reserved-address model; the prior
+    green run of this test was against a stale NFS sync, not this RTL (see
+    job 4670 for a reproduction of the failure against a correctly-synced
+    DUT). 0x1A is RW (see row #2's addr_map and test_reg_bank_rx_hold.py) and
+    is excluded here; 21 addresses remain genuinely reserved.
     """
     await _bring_up(dut)
 
-    # 22 reserved slots: this RTL revision has no RX_HOLD register, so 0x1A
-    # is reserved along with 0x1B (see NOTE above).
+    # 21 reserved slots (0x1A is RX_HOLD, a real RW register -- see NOTE above).
     reserved_addrs = [
         0x04, 0x05, 0x06, 0x07,                         # former DEBUG_CTRL/GPIO
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,  # former RX_GAIN_*
-        0x1A, 0x1B,                                       # reserved (no RX_HOLD in this RTL)
+        0x1B,                                            # reserved
         0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,             # reserved for future
         0x7F,                                            # protocol escape
     ]
 
-    assert len(reserved_addrs) == 22, f"Expected 22 reserved addresses, got {len(reserved_addrs)}"
+    assert len(reserved_addrs) == 21, f"Expected 21 reserved addresses, got {len(reserved_addrs)}"
 
     # Test each reserved address with multiple patterns
     patterns = [0x00, 0xFF, 0xAA, 0x55, 0xA5, 0x5A]
