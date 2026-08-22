@@ -24,11 +24,14 @@ to be exposed through the register map.
 
 **Today:** reset values and common register policies have substantial directed
 integration coverage, and a standalone block-level harness now exhaustively
-covers RW field storage, reserved-bit masking, and packed output mapping
-(row #4). Hardware-status decode beyond that has not yet been driven
-exhaustively, byte-lane/clamp/gate depth remain partial, and there is still
-no formal checker; read/CE timing is inferred through top-level tests rather
-than checked directly.
+covers RW field storage, reserved-bit masking, packed output mapping (row #4),
+every RO/status input's decode and reserved-bit zeroing (row #5), multi-byte
+big-endian ordering and truncation (row #6), the TACC_WINDOW_SYMS clamp
+(row #7), and the packet_active write-lock gate matrix (row #8). There is
+still no formal checker; read/CE timing, W1P cycle-exactness, IRQ
+set/clear precedence, and the Grouper bus's exact request/acknowledge timing
+are inferred through top-level tests rather than checked directly (rows
+#10–#18).
 
 - **Full-top cocotb simulation** — `cocotb/reg_reset_sweep` reads all 128
   addresses at power-on and after dirtying safely writable registers. Other
@@ -42,9 +45,14 @@ than checked directly.
   `reg_bank.v` directly (no SPI/CDC framing) and, via the checked-in
   table-driven oracle in `cocotb/tests/reg_bank_map_oracle.py`, exhaustively
   sweeps every plain RW field's storage, reserved-bit masking, and packed
-  hardware control-output mapping (row #4). It does not yet drive every
-  RO/status input, or check pulse-cycle-exact timing, precedence rules, or
-  the registered read handshake — those remain open per rows #5, #11–#17.
+  hardware control-output mapping (row #4); `cocotb/tests/test_reg_bank_ro_status.py`
+  drives every RO/status input and every multi-byte field's byte lanes
+  (rows #5/#6); `cocotb/tests/test_reg_bank_clamp_and_gates.py` exhaustively
+  sweeps the TACC_WINDOW_SYMS clamp and the packet_active write-lock gate
+  matrix (rows #7/#8); `cocotb/tests/test_reg_bank_rx_hold.py` covers the
+  RX_HOLD/CFG_WR_REJECTED MCP-settle interlock (Open Risks #43). It does not
+  yet check pulse-cycle-exact timing, W-shadow/IRQ precedence rules, or the
+  registered read handshake — those remain open per rows #10–#18.
 - **No formal checker** — no property proof yet for legal writes, W1P width,
   write locks, reserved addresses, or IRQ stickiness.
 - **No merged code or functional coverage** — closure is scenario-based rather
@@ -57,7 +65,12 @@ The active order is:
    pins the behavior.
 2. ✅ Resolved: standalone harness and checked-in table-driven register-map
    oracle added (row #4, job 3889); extend it for the remaining rows below.
-3. Close exhaustive decode, permission, side-effect, and CE/read-timing gaps.
+2b. ✅ Resolved: exhaustive RO/status decode, byte-lane/truncation, the
+   TACC_WINDOW_SYMS clamp, and the packet_active gate matrix added (rows
+   #5–#8, job 4672); also corrected a stale-NFS-sync-masked test bug in
+   rows #2/#3's 0x1A modeling in the same pass (see row #3).
+3. Close remaining side-effect precedence and CE/read-timing gaps (rows
+   #10–#18).
 4. Add formal properties for legal writes, W1P width, write locks, reserved
    addresses, and IRQ stickiness.
 5. Instrument line/toggle/branch coverage, measure the directed baseline, and
@@ -98,13 +111,13 @@ At minimum, collect:
 | # | Test | Type | Testbench | Spec / gap | Status |
 |---|---|---|---|---|---|
 | 1 | Full 0x00–0x7F reset-value sweep at power-on and after dirty/reset | SPEC-SIM | `cocotb/reg_reset_sweep` | TRPR-REG-001 | ✅ done (job 3319); intentionally excludes resetless training accumulators 0x40–0x6F |
-| 2 | Exhaustive address/access-permission/mask sweep | SPEC-SIM | standalone `cocotb/reg_bank` with checked-in map oracle | TRPR-REG-001/004/005 | ✅ done (job 4659, `test_exhaustive_address_permission_mask_sweep` in `cocotb/tests/test_reg_bank_rw_map.py`) — exhaustively maps all 128 addresses with their access modes and reserved-bit masks; verifies writes respect masks/permissions and that a write to one address does not perturb others. PASS on this checkout's RTL after four rounds of test-authoring fixes exposed by real SGE runs (see below); RTL unchanged — no bug found. Four **test-model** mismatches were caught and corrected, all against `src/control/reg_bank.v` as currently checked into this worktree/branch: (1) 0x1A was modeled as an `RX_HOLD` R/W register per `planning/Register Map.md`'s per-address table, but this RTL revision has no RX_HOLD field at 0x1A at all (no case arm in either the write or read decode — falls to `default`) — the doc's RX_HOLD content appears to belong to a different/later RTL revision than this branch; corrected to model 0x1A as reserved, matching the actual DUT (see row 3). (2) WGT_CTRL (0x1E) bit 0 (`W_COMMIT`, W1P) has its read-decode arm hardcoded to the literal `1'b0` (same convention as the pure-WO `SC_FORCE_LOCK`/`TACC_NOISE_TRIG` registers) — it never reads back the just-written value; corrected to expect 0x00 always. (3) PSRAM_DBG_CTRL (0x75) bit 0 (`RD_TRIG`, W1P) has the same hardcoded-`1'b0` read-decode pattern; corrected to expect only bit 1 (`AUTO_INC`) to track writes. (4) TACC_WINDOW_SYMS (0x27) clamps writes below 8 up to 8; the sweep's generic mask model didn't account for the clamp; corrected to expect the clamped value. All four are exhaustive-sweep modeling gaps only — the corresponding dedicated per-field tests (`test_wgt_ctrl_field`, `test_psram_dbg_ctrl_field`, `test_tacc_window_syms_field`) already modeled these correctly and passed throughout. Full block regression (`reg_reset_sweep`, `w_shadow_lock`, `sc_force_lock`, `noise_trig`, `psram_ops`, `w_missed`, `bypass_e2e`, `spi_cdc`, `reg_bank` [10/10 tests], `tb_trouper_spi.v`, `tb_trouper_grp_arb.v`) re-ran green after these rows closed (jobs 4659, 4662) — no other test regressed. |
-| 3 | Fixed IDs and all reserved addresses read zero/write ignored | SPEC-SIM | standalone `cocotb/reg_bank` sweep | TRPR-REG-004 | ✅ done (job 4659, `test_reserved_addresses_zero_and_ignored` + `test_fixed_chip_ids` in `cocotb/tests/test_reg_bank_rw_map.py`) — exhaustively verifies all 22 reserved slots (0x04–07, 0x10–18, 0x1A–1B, 0x79–7E, 0x7F) read 0x00 and ignore writes under six patterns each, plus CHIP_ID/CHIP_REV fixed-value checks. PASS; RTL unchanged — no bug found. One **test-authoring** bug was caught and corrected: the initial reserved-address list omitted 0x1A (21 entries) while asserting a count of 22, because it was written against `planning/Register Map.md`'s per-address table describing an `RX_HOLD` register at 0x1A that does not exist in this RTL revision (see row 2) — corrected to include 0x1A, restoring the list to the genuinely-correct 22. `planning/Register Map.md`'s RX_HOLD/0x1A content should be reconciled against this branch's RTL separately (tracked as a doc-vs-RTL gap, not a verification-plan action). |
+| 2 | Exhaustive address/access-permission/mask sweep | SPEC-SIM | standalone `cocotb/reg_bank` with checked-in map oracle | TRPR-REG-001/004/005 | ✅ done (job 4659, `test_exhaustive_address_permission_mask_sweep` in `cocotb/tests/test_reg_bank_rw_map.py`; **corrected 2026-08-22, job 4670/4672** — see the correction note under row #3) — exhaustively maps all 128 addresses with their access modes and reserved-bit masks; verifies writes respect masks/permissions and that a write to one address does not perturb others. Three of the four original "test-model" mismatches this row recorded (WGT_CTRL/PSRAM_DBG_CTRL hardcoded-`1'b0` read arms, TACC_WINDOW_SYMS clamp) still stand and are correct. The fourth — "0x1A has no RX_HOLD field in this RTL revision" — was itself wrong (see row #3); 0x1A is modeled `('RW', 0x01)` now. Full block regression (`reg_reset_sweep`, `w_shadow_lock`, `sc_force_lock`, `noise_trig`, `psram_ops`, `w_missed`, `bypass_e2e`, `spi_cdc`, `reg_bank` [30/30 tests], `tb_trouper_spi.v`, `tb_trouper_grp_arb.v`) is green after the correction (job 4674, 4678). |
+| 3 | Fixed IDs and all reserved addresses read zero/write ignored | SPEC-SIM | standalone `cocotb/reg_bank` sweep | TRPR-REG-004 | ✅ done (`test_reserved_addresses_zero_and_ignored` + `test_fixed_chip_ids` in `cocotb/tests/test_reg_bank_rw_map.py`; **corrected 2026-08-22, job 4670/4672**) — exhaustively verifies all 21 genuinely-reserved slots (0x04–07, 0x10–18, 0x1B, 0x79–7E, 0x7F) read 0x00 and ignore writes under six patterns each, plus CHIP_ID/CHIP_REV fixed-value checks. **Correction:** the row's prior evidence (job 4659) rested on a false premise — it modeled 0x1A as reserved with "no RX_HOLD field in this RTL revision," but `src/control/reg_bank.v` has carried RX_HOLD/CFG_WR_REJECTED at 0x1A since commit f1aa262 (Open Risks #43, `planning/mcp-config-settle-gate-design.md`), which predates job 4659. Reproduced the failure against a correctly-synced DUT (job 4670: `test_reserved_addresses_zero_and_ignored` FAILs, since `rx_hold` reads back 1 out of reset, not 0) before fixing it — job 4659's earlier green run was against a stale NFS sync, not this RTL. Fixed by removing 0x1A from the reserved list (21 entries, not 22) and remodeling it `('RW', 0x01)` in row #2's `addr_map`; 0x1A's real RW/W1C behavior is unaffected and already exhaustively covered by `cocotb/tests/test_reg_bank_rx_hold.py` (job 4353). Re-ran green: job 4672 (standalone suite, 30/30) and job 4674/4678 (full block regression + legacy TBs). RTL unchanged — this was a test/closure-evidence bug, not an RTL bug. |
 | 4 | All RW field storage, reserved-bit masking, and packed output mapping | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ✅ done — new standalone direct-DUT harness (`cocotb/reg_bank`, table-driven oracle in `cocotb/tests/reg_bank_map_oracle.py`, tests in `cocotb/tests/test_reg_bank_rw_map.py`) sweeps reset/all-ones/two non-symmetric patterns plus a full walking-one/walking-zero set across every plain RW field (MIMO_CTRL, SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_THR_HI/LO, SC_HITS_REQ, COMB_CFG, the 16-byte W-shadow bank, PSRAM_DBG_ADDR_{LO,MID,HI}, REPLAY_DELAY_{LO,HI}) plus dedicated checks for WGT_CTRL, PSRAM_CTRL (incl. `PSRAM_CTRL[2]` reserved/inert), PSRAM_DBG_CTRL, the TACC_WINDOW_SYMS clamp, SC_FORCE_LOCK/TACC_NOISE_TRIG W1P pulses, and a packet_active-gate smoke check; storage, reserved-bit masking, and the corresponding hardware control-output port are asserted for every field. 7/7 new tests pass and the full block regression (`reg_reset_sweep`, `w_shadow_lock`, `sc_force_lock`, `noise_trig`, `psram_ops`, `w_missed`, `bypass_e2e`, `spi_cdc`, `reg_bank`, `tb_trouper_spi.v`, `tb_trouper_grp_arb.v`) is green (job 3889). RTL unchanged — no bug found. Remaining exhaustive RO-status decode, byte-lane, and gate-matrix depth are explicitly deferred to rows #5/#6/#8. |
-| 5 | Every RO/status input decode and reserved-bit zeroing | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ⬜ new — directly drive packet, training, SC, Z-pair/Z-diagonal, and PSRAM inputs with non-symmetric patterns |
-| 6 | Multi-byte big-endian ordering and truncation | SPEC-SIM | standalone suite; retain weight/training/SC integration tests | TRPR-REG-003 | 🟨 partial — functional flows cover the main fields; add an exhaustive byte-lane oracle for `[31:8]`, 23-bit, 18-bit, 16-bit, and 128-bit mappings |
-| 7 | `TACC_WINDOW_SYMS` clamp for all inputs | SPEC-SIM | standalone suite; `tb_trouper_spi.v` | Register Map 0x27 | 🟨 partial — 0→8 and normal 12 covered; sweep 0..15 and reserved high bits |
-| 8 | Packet-active write locks | SPEC-SIM | `cocotb/sc_force_lock`, `bypass_e2e`, `replay_delay`; direct sweep | Register Map 0x09/0x0A/0x19/0x70/0x77/0x78 | 🟨 partial — integration paths exist; add a table-driven direct check of blocked and ungated fields |
+| 5 | Every RO/status input decode and reserved-bit zeroing | SPEC-SIM | standalone `cocotb/reg_bank` | TRPR-REG-001 | ✅ done (job 4672, `cocotb/tests/test_reg_bank_ro_status.py`, 8 new tests) — directly drives every packet (PACKET_STATUS 0x1C, ACTIVE_STATUS 0x1D), training (TRAINING_STATUS 0x20, N_ACC 0x21–23), SC (SC_STAT 0x24–25, SC_DBG_FLAGS 0x26, SC_FIRST_HIT 0x28–2B, SC_LOCK_SNAP 0x2C–2F), Z-pair/Z-diagonal (all 6 Z_kl pairs I/Q at 0x40–63, all 4 Z_kk diagonals at 0x64–6F), and PSRAM (PSRAM_STATUS 0x71, PSRAM_DBG_DATA 0x76 incl. the `psram_dbg_busy` gate) hardware-status input with a non-symmetric byte stripe (0x1D/0x62/0xB4/0xC7) plus 0x00/0xFF/other non-symmetric 32-bit values, and asserts every reserved-bit position (PACKET_STATUS has none; ACTIVE_STATUS[3:2], N_ACC_HI[7:2], SC_DBG_FLAGS[7:4]) reads zero regardless of the driven pattern. IRQ_STATUS (0x02) decode/precedence is explicitly left to rows #13–#15 per this row's original scope note; WGT_CTRL's RO mirror and PSRAM_DBG_CTRL's DBG_BUSY mirror were already closed by row #4 and are not repeated. RTL unchanged — no bug found (one test-authoring arithmetic bug in an early draft, caught by job 4671 and fixed before job 4672). |
+| 6 | Multi-byte big-endian ordering and truncation | SPEC-SIM | standalone suite; retain weight/training/SC integration tests | TRPR-REG-003 | ✅ done (job 4672, `cocotb/tests/test_reg_bank_ro_status.py`) — the same row #5 tests double as the byte-lane oracle: N_ACC (18-bit, `test_training_status_and_n_acc_decode`), SC_STAT (16-bit) and the two 32-bit SC debug snapshots SC_FIRST_HIT/SC_LOCK_SNAP (full-width, no truncation) confirm big-endian byte order (byte 0 = MSB) across a spread of values including `0x00000000`/`0xFFFFFFFF`/asymmetric patterns; the six Z_kl pairs and four Z_kk diagonals (`test_zpair_decode`/`test_zdiag_decode`) confirm the `[31:8]` top-24-of-32 truncation specifically with low-byte values (`0x...FF`/`0x...00`/`0x...FE`) chosen so a truncation-vs-alias bug could not hide behind a coincidentally-zero low byte. The 23-bit PSRAM_DBG_ADDR, 16-bit SC_THR/REPLAY_DELAY (RW), and 128-bit W-shadow bank byte-lane independence were already exercised per-byte by row #4's `GENERIC_RW_FIELDS` sweep and the packet_active-gate table in row #8's `test_ungated_fields_unaffected_by_packet_active` (cross-byte reconstruction of PSRAM_DBG_ADDR from 3 independently-written bytes). RTL unchanged — no bug found. |
+| 7 | `TACC_WINDOW_SYMS` clamp for all inputs | SPEC-SIM | standalone suite; `tb_trouper_spi.v` | Register Map 0x27 | ✅ done (job 4672, `cocotb/tests/test_reg_bank_clamp_and_gates.py::test_tacc_window_syms_full_clamp_sweep`) — sweeps every possible write byte 0x00–0xFF (not a sample): confirms the floor-clamp of `wdata[3:0]` to a minimum of 8 for all 256 inputs, and that reserved bits[7:4] never leak into storage, the `tacc_window_syms` output port, or readback. RTL unchanged — no bug found. |
+| 8 | Packet-active write locks | SPEC-SIM | `cocotb/sc_force_lock`, `bypass_e2e`, `replay_delay`; direct sweep | Register Map 0x09/0x0A/0x19/0x70/0x77/0x78 | ✅ done (job 4672, `cocotb/tests/test_reg_bank_clamp_and_gates.py`, 5 new tests) — table-driven direct check of every packet_active-gated register (SF_CFG 0x09, PKT_TIMEOUT_SYMS 0x0B, SC_HITS_REQ 0x0E, TACC_WINDOW_SYMS 0x27, REPLAY_DELAY_LO/HI 0x77/0x78 via a shared table; BW_CFG 0x0A and PSRAM_CTRL.PSRAM_EN 0x70[0] individually, since they pack a gated bit alongside ungated bits in the same register; SC_FORCE_LOCK 0x19 individually as a W1P) and confirms each is blocked while `packet_active=1` and lands once `packet_active=0`. A companion test confirms every ungated register (MIMO_CTRL, SC_THR, COMB_CFG, RX_HOLD, WGT_CTRL.W_COMMIT, TACC_NOISE_TRIG, the W-shadow bank, and the PSRAM_DBG window) is NOT blocked by `packet_active=1`, so the gate has not over-reached. Since commit f1aa262 (Open Risks #43) added a second interlock (`cfg_wr_ok = rx_hold && !packet_active`) covering SF_CFG/BW_CFG/PKT_TIMEOUT_SYMS/SC_HITS_REQ/TACC_WINDOW_SYMS, this suite isolates the packet_active half by holding `rx_hold` at its permissive reset value throughout; the rx_hold half is exhaustively covered separately by `cocotb/tests/test_reg_bank_rx_hold.py` (job 4353). RTL unchanged — no bug found. |
 | 9 | W-shadow accept/reject lock, sticky rejection, W1C clear, and re-arm | SPEC-SIM | `cocotb/w_shadow_lock` | Register Map 0x1E/0x30–0x3F | ✅ done |
 | 10 | W-shadow reject and W1C clear on the same CE edge | EDGE-SIM | standalone suite | RTL precedence | ⬜ new — confirm a new rejection wins and bit0=0 causes no W_COMMIT |
 | 11 | All four W1P fields assert for one CE period and self-clear | SPEC-SIM | standalone suite; `spi_cdc`, `noise_trig`, `psram_ops` | TRPR-REG-006 | 🟨 partial — all actions are functionally exercised; add cycle-exact port checks |
@@ -121,11 +134,15 @@ At minimum, collect:
 
 1. ✅ Resolved: row #4 (standalone `cocotb/reg_bank` harness + checked-in
    table-driven map oracle in `cocotb/tests/reg_bank_map_oracle.py`; job 3889).
-2. Extend the standalone harness and map oracle built for #4; reuse for
-   #2–#3, #5–#8, #10–#11, and #13–#17.
-3. Strengthen Grouper bus timing coverage in #18.
-4. Add and prove the formal checker in #19.
-5. Merge code and functional coverage, then randomize until §1a is closed or
+2. ✅ Resolved: rows #5–#8 (RO/status decode, byte-lane/truncation, the
+   TACC_WINDOW_SYMS clamp, and the packet_active gate matrix) closed via
+   `cocotb/tests/test_reg_bank_ro_status.py` and
+   `cocotb/tests/test_reg_bank_clamp_and_gates.py` (job 4672); rows #2/#3's
+   0x1A modeling corrected in the same pass (job 4670/4672).
+3. Extend the standalone harness and map oracle for #10–#11 and #13–#17.
+4. Strengthen Grouper bus timing coverage in #18.
+5. Add and prove the formal checker in #19.
+6. Merge code and functional coverage, then randomize until §1a is closed or
    waived.
 
 ---
@@ -162,15 +179,22 @@ iverilog -g2005 -o /tmp/tb_trouper_grp_arb.vvp \
 vvp /tmp/tb_trouper_grp_arb.vvp
 ```
 
-The `cocotb/reg_bank` suite above is the new standalone direct-DUT harness
-(row #4); note it instantiates `reg_bank.v` alone (no SPI/CDC framing) and
+The `cocotb/reg_bank` suite above is the standalone direct-DUT harness (rows
+#2–#8); note it instantiates `reg_bank.v` alone (no SPI/CDC framing) and
 holds `clk_en` asserted every cycle — see the module docstring in
 `cocotb/tests/test_reg_bank_rw_map.py` for why that is a safe simplification
-for the RW-storage/masking/output-mapping checks it runs. Add the formal
-command when implemented. On the homelab SGE cluster, `/foss/designs` is
-read-only under the default project — point `SIM_BUILD` /
+for the checks it runs. Its `COCOTB_TEST_MODULES` now covers
+`test_reg_bank_rw_map`, `test_reg_bank_rx_hold`, `test_reg_bank_ro_status`,
+and `test_reg_bank_clamp_and_gates` (30 tests total as of job 4672). Add the
+formal command when implemented. On the homelab SGE cluster, `/foss/designs`
+is read-only under the default project — point `SIM_BUILD` /
 `COCOTB_RESULTS_FILE` at a writable path (e.g. `/foss/runs/...`) as job 3889
 does, or use `--project lora-mimo-reg_bank` per `cocotb/reg_bank/run_sge.sh`.
+Note that `--project lora-mimo-reg_bank` snapshots
+`/srv/eda/designs/<user>/lora-mimo-reg_bank/`, a **separate** directory from
+the plain `/srv/eda/designs/<user>/lora-mimo/` used without `--project` —
+sync to the one matching the `--project` value actually passed to `hqsub`,
+or the job runs against a stale/absent tree.
 Run this regression before merging changes to `reg_bank.v`,
 `Register Map.md`, or `trouper_top.v`'s CE latch, register arbiter, or IRQ
 wiring.
