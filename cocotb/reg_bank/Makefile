@@ -3,6 +3,11 @@
 # the register-bus slave ports directly.
 #
 # Rows covered in planning/verification-plan/reg-bank-verification-plan.md:
+#   #2 exhaustive address/access-permission/mask sweep
+#      (test_reg_bank_rw_map.py::test_exhaustive_address_permission_mask_sweep)
+#   #3 fixed IDs and all reserved addresses read zero/write ignored
+#      (test_reg_bank_rw_map.py::test_reserved_addresses_zero_and_ignored,
+#       test_reg_bank_rw_map.py::test_fixed_chip_ids)
 #   #4 all RW field storage, reserved-bit masking, and packed output mapping
 #      (test_reg_bank_rw_map.py + reg_bank_map_oracle.py)
 #
