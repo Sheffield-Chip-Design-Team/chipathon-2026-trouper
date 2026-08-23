@@ -24,7 +24,7 @@
 		""
 	],
 	"LVS_VERILOG_FILES": [
-		"$UPRJ_ROOT/verilog/gl/trouper_top.pnl.v"
+		"$UPRJ_ROOT/final/pnl/trouper_top.pnl.v"
 	],
-	"LAYOUT_FILE": "$UPRJ_ROOT/gds/$TOP_LAYOUT.gds"
+	"LAYOUT_FILE": "$UPRJ_ROOT/final/gds/$TOP_LAYOUT.gds"
 }
