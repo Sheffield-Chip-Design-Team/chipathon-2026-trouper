@@ -29,7 +29,7 @@ project:
 # ======================================================
 pins:
   - name: VSS
-    io_type: power
+    io_type: ground
 
   - name: IQ_DATA_I_0
     io_type: input_cmos
