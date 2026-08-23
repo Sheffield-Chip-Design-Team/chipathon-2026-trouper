@@ -27,11 +27,12 @@ integration coverage, and a standalone block-level harness now exhaustively
 covers RW field storage, reserved-bit masking, packed output mapping (row #4),
 every RO/status input's decode and reserved-bit zeroing (row #5), multi-byte
 big-endian ordering and truncation (row #6), the TACC_WINDOW_SYMS clamp
-(row #7), and the packet_active write-lock gate matrix (row #8). There is
-still no formal checker; read/CE timing, W1P cycle-exactness, IRQ
-set/clear precedence, and the Grouper bus's exact request/acknowledge timing
-are inferred through top-level tests rather than checked directly (rows
-#10–#18).
+(row #7), the packet_active write-lock gate matrix (row #8), the W-shadow
+reject/W1C-clear precedence (row #10), and cycle-exact assert/self-clear
+timing for all four TRPR-REG-006 W1P fields (row #11). There is still no
+formal checker; read/CE timing, IRQ set/clear precedence, and the Grouper
+bus's exact request/acknowledge timing are inferred through top-level tests
+rather than checked directly (rows #12–#18).
 
 - **Full-top cocotb simulation** — `cocotb/reg_reset_sweep` reads all 128
   addresses at power-on and after dirtying safely writable registers. Other
@@ -50,9 +51,12 @@ are inferred through top-level tests rather than checked directly (rows
   (rows #5/#6); `cocotb/tests/test_reg_bank_clamp_and_gates.py` exhaustively
   sweeps the TACC_WINDOW_SYMS clamp and the packet_active write-lock gate
   matrix (rows #7/#8); `cocotb/tests/test_reg_bank_rx_hold.py` covers the
-  RX_HOLD/CFG_WR_REJECTED MCP-settle interlock (Open Risks #43). It does not
-  yet check pulse-cycle-exact timing, W-shadow/IRQ precedence rules, or the
-  registered read handshake — those remain open per rows #10–#18.
+  RX_HOLD/CFG_WR_REJECTED MCP-settle interlock (Open Risks #43);
+  `cocotb/tests/test_reg_bank_w1p_precedence.py` covers the W-shadow
+  reject/W1C-clear sequential precedence and cycle-exact assert/self-clear
+  timing for all four TRPR-REG-006 W1P fields (rows #10/#11). It does not
+  yet check IRQ set/clear precedence or the registered read handshake --
+  those remain open per rows #12–#18.
 - **No formal checker** — no property proof yet for legal writes, W1P width,
   write locks, reserved addresses, or IRQ stickiness.
 - **No merged code or functional coverage** — closure is scenario-based rather
@@ -69,8 +73,12 @@ The active order is:
    TACC_WINDOW_SYMS clamp, and the packet_active gate matrix added (rows
    #5–#8, job 4672); also corrected a stale-NFS-sync-masked test bug in
    rows #2/#3's 0x1A modeling in the same pass (see row #3).
+2c. ✅ Resolved: W-shadow reject/W1C-clear precedence and cycle-exact W1P
+   assert/self-clear timing for all four TRPR-REG-006 fields added (rows
+   #10–#11, job 4843/4845), via
+   `cocotb/tests/test_reg_bank_w1p_precedence.py`.
 3. Close remaining side-effect precedence and CE/read-timing gaps (rows
-   #10–#18).
+   #12–#18).
 4. Add formal properties for legal writes, W1P width, write locks, reserved
    addresses, and IRQ stickiness.
 5. Instrument line/toggle/branch coverage, measure the directed baseline, and
@@ -119,8 +127,8 @@ At minimum, collect:
 | 7 | `TACC_WINDOW_SYMS` clamp for all inputs | SPEC-SIM | standalone suite; `tb_trouper_spi.v` | Register Map 0x27 | ✅ done (job 4672, `cocotb/tests/test_reg_bank_clamp_and_gates.py::test_tacc_window_syms_full_clamp_sweep`) — sweeps every possible write byte 0x00–0xFF (not a sample): confirms the floor-clamp of `wdata[3:0]` to a minimum of 8 for all 256 inputs, and that reserved bits[7:4] never leak into storage, the `tacc_window_syms` output port, or readback. RTL unchanged — no bug found. |
 | 8 | Packet-active write locks | SPEC-SIM | `cocotb/sc_force_lock`, `bypass_e2e`, `replay_delay`; direct sweep | Register Map 0x09/0x0A/0x19/0x70/0x77/0x78 | ✅ done (job 4672, `cocotb/tests/test_reg_bank_clamp_and_gates.py`, 5 new tests) — table-driven direct check of every packet_active-gated register (SF_CFG 0x09, PKT_TIMEOUT_SYMS 0x0B, SC_HITS_REQ 0x0E, TACC_WINDOW_SYMS 0x27, REPLAY_DELAY_LO/HI 0x77/0x78 via a shared table; BW_CFG 0x0A and PSRAM_CTRL.PSRAM_EN 0x70[0] individually, since they pack a gated bit alongside ungated bits in the same register; SC_FORCE_LOCK 0x19 individually as a W1P) and confirms each is blocked while `packet_active=1` and lands once `packet_active=0`. A companion test confirms every ungated register (MIMO_CTRL, SC_THR, COMB_CFG, RX_HOLD, WGT_CTRL.W_COMMIT, TACC_NOISE_TRIG, the W-shadow bank, and the PSRAM_DBG window) is NOT blocked by `packet_active=1`, so the gate has not over-reached. Since commit f1aa262 (Open Risks #43) added a second interlock (`cfg_wr_ok = rx_hold && !packet_active`) covering SF_CFG/BW_CFG/PKT_TIMEOUT_SYMS/SC_HITS_REQ/TACC_WINDOW_SYMS, this suite isolates the packet_active half by holding `rx_hold` at its permissive reset value throughout; the rx_hold half is exhaustively covered separately by `cocotb/tests/test_reg_bank_rx_hold.py` (job 4353). RTL unchanged — no bug found. |
 | 9 | W-shadow accept/reject lock, sticky rejection, W1C clear, and re-arm | SPEC-SIM | `cocotb/w_shadow_lock` | Register Map 0x1E/0x30–0x3F | ✅ done |
-| 10 | W-shadow reject and W1C clear on the same CE edge | EDGE-SIM | standalone suite | RTL precedence | ⬜ new — confirm a new rejection wins and bit0=0 causes no W_COMMIT |
-| 11 | All four W1P fields assert for one CE period and self-clear | SPEC-SIM | standalone suite; `spi_cdc`, `noise_trig`, `psram_ops` | TRPR-REG-006 | 🟨 partial — all actions are functionally exercised; add cycle-exact port checks |
+| 10 | W-shadow reject and W1C clear on the same CE edge | EDGE-SIM | standalone suite | RTL precedence | ✅ done (job 4843/4845, `cocotb/tests/test_reg_bank_w1p_precedence.py`) — the set (`we && addr[7:4]==4'h3 && w_valid_rb`) and clear (`we && addr==8'h1E && wdata[5]`) conditions are keyed off mutually exclusive addresses, so they cannot literally collide on the register bus's single address/data port in one cycle; this suite instead pins the sequential precedence the "if/else if" ordering promises: a dropped shadow write sets `W_WR_REJECTED`, a 0x1E W1C clears it, and a further dropped write with `W_VALID` still high re-asserts it (the clear does not starve the set branch) — `test_w_wr_rejected_set_then_clear_then_new_rejection_wins`. Confirms `wdata[5]=1`/`wdata[0]=0` clears the flag without ever pulsing `W_COMMIT`, and that a single write with both bits set (`wdata=0x21`) clears the flag AND pulses `W_COMMIT` in the same cycle (`test_w_wr_rejected_clear_and_commit_same_write`), plus that a WGT_CTRL-only write never perturbs the W shadow bank or spuriously sets `W_WR_REJECTED` (`test_w1c_bit_alone_does_not_reject_or_land_shadow_write`). RTL unchanged — no bug found. |
+| 11 | All four W1P fields assert for one CE period and self-clear | SPEC-SIM | standalone suite; `spi_cdc`, `noise_trig`, `psram_ops` | TRPR-REG-006 | ✅ done (job 4843/4845, `cocotb/tests/test_reg_bank_w1p_precedence.py`) — cycle-exact port checks for all four bits named by TRPR-REG-006 (`TACC_NOISE_TRIG` 0x1F[0], `WGT_CTRL.W_COMMIT` 0x1E[0], `PSRAM_CTRL.PSRAM_CLR_ERR` 0x70[1], `PSRAM_DBG_CTRL.RD_TRIG` 0x75[0]): each output is confirmed idle-low before its triggering write, asserts high exactly on the triggering write's clk edge, self-clears on the very next clk edge, and stays low for several further idle cycles (no re-assertion/no multi-cycle stretch) — one test per field plus a cross-trigger isolation test confirming no field's write spuriously pulses any of the other three. (`SC_FORCE_LOCK` 0x19[0] is also W1P in the RTL but is not one of the four bits TRPR-REG-006 names; its pulse shape remains covered functionally by `cocotb/sc_force_lock` and row #8.) Full block regression (`reg_reset_sweep`, `w_shadow_lock`, `sc_force_lock`, `noise_trig`, `psram_ops`, `w_missed`, `bypass_e2e`, `spi_cdc`, standalone `reg_bank` [38/38], `tb_trouper_spi.v`, `tb_trouper_grp_arb.v`) is green (job 4845). RTL unchanged — no bug found. |
 | 12 | A two-core-cycle `we` causes exactly one CE write/W1P event | EDGE-SIM + FORMAL | `cocotb/spi_cdc`; formal checker | CE integration contract | ✅ simulation (job 3352); ⬜ formal |
 | 13 | IRQ sticky set/hold/selective-W1C and aggregated output | SPEC-SIM | block-specific IRQ tests; standalone suite | TRPR-REG-007, TRPR-IRQ-001..006 | 🟨 partial — add independent bits 0..4, level-held source/clear behavior, reserved bits, and no-spontaneous-clear checks |
 | 14 | Simultaneous `irq_set` and `IRQ_CLEAR` precedence | EDGE-SIM | standalone suite | RTL expression `(status \| set) & ~clear` | ⬜ new — define whether clear wins for the same bit on one CE edge, then pin it |
@@ -139,10 +147,14 @@ At minimum, collect:
    `cocotb/tests/test_reg_bank_ro_status.py` and
    `cocotb/tests/test_reg_bank_clamp_and_gates.py` (job 4672); rows #2/#3's
    0x1A modeling corrected in the same pass (job 4670/4672).
-3. Extend the standalone harness and map oracle for #10–#11 and #13–#17.
-4. Strengthen Grouper bus timing coverage in #18.
-5. Add and prove the formal checker in #19.
-6. Merge code and functional coverage, then randomize until §1a is closed or
+3. ✅ Resolved: rows #10–#11 (W-shadow reject/W1C-clear precedence, and
+   cycle-exact assert/self-clear timing for all four TRPR-REG-006 W1P
+   fields) closed via `cocotb/tests/test_reg_bank_w1p_precedence.py`
+   (job 4843/4845).
+4. Extend the standalone harness and map oracle for #13–#17.
+5. Strengthen Grouper bus timing coverage in #18.
+6. Add and prove the formal checker in #19.
+7. Merge code and functional coverage, then randomize until §1a is closed or
    waived.
 
 ---
@@ -185,8 +197,9 @@ holds `clk_en` asserted every cycle — see the module docstring in
 `cocotb/tests/test_reg_bank_rw_map.py` for why that is a safe simplification
 for the checks it runs. Its `COCOTB_TEST_MODULES` now covers
 `test_reg_bank_rw_map`, `test_reg_bank_rx_hold`, `test_reg_bank_ro_status`,
-and `test_reg_bank_clamp_and_gates` (30 tests total as of job 4672). Add the
-formal command when implemented. On the homelab SGE cluster, `/foss/designs`
+`test_reg_bank_clamp_and_gates`, and `test_reg_bank_w1p_precedence`
+(38 tests total as of job 4843/4845). Add the formal command when
+implemented. On the homelab SGE cluster, `/foss/designs`
 is read-only under the default project — point `SIM_BUILD` /
 `COCOTB_RESULTS_FILE` at a writable path (e.g. `/foss/runs/...`) as job 3889
 does, or use `--project lora-mimo-reg_bank` per `cocotb/reg_bank/run_sge.sh`.
