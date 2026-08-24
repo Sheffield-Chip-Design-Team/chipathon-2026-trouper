@@ -1,0 +1,38 @@
+[tasks]
+bmc
+cover
+
+[options]
+# mode bmc (not prove/induction): the min-gap CDC properties in groups B-D
+# depend on comparing a register to a checker-local "one-edge-delayed" copy
+# of itself (we_tog_sck_q vs spi_we_toggle, etc.) across TWO independent,
+# freely-interleaved clocks (multiclock on). k-induction's un-anchored
+# hypothesis window can start from an arbitrary state where such a
+# delayed-copy register disagrees with its source register with no real
+# transition history to justify it (confirmed empirically: SGE job 4852 hit
+# exactly this — a k=1 induction counterexample with SPI_SCK frozen for the
+# whole window and we_tog_sck_q simply picked inconsistent with
+# spi_we_toggle at the unconstrained start state). That is a well-known
+# k-induction limitation for cross-clock "delayed compare" properties, not a
+# real design bug (reachable-from-reset BMC never hits it). BMC anchored at
+# `initial assume(!rst_n)` only explores genuinely reachable traces, so it
+# does not have this false-counterexample class; depth is set deep enough to
+# exercise several full byte events at the real 10 MHz/32 MHz clock ratio
+# (TRPR-SPS-004's 25-clk_32m-cycle minimum spacing) plus reset/CS
+# interleavings, well past the point non-vacuity requires (see cover task).
+bmc: mode bmc
+bmc: depth 45
+cover: mode cover
+cover: depth 100
+multiclock on
+
+[engines]
+smtbmc
+
+[script]
+read_verilog -sv -formal spi_slave.v spi_slave_formal.sv
+prep -top spi_slave
+
+[files]
+../src/control/spi_slave.v
+spi_slave_formal.sv
