@@ -26,10 +26,13 @@ permissions, and control/status semantics belong to the separate
 
 **Today:** normal SPI transactions and the persistent-toggle CDC have strong
 directed integration coverage, including the 0x76 continuous-burst exception,
-and there is now a standalone protocol oracle. The MISO-drive and
-Grouper-arbitration requirement conflicts are resolved. Verification is not
-closed because there is no formal checker yet, and 10 MHz physical timing
-remains unsigned off.
+and there is now a standalone protocol oracle plus a two-clock formal checker
+(`formal/spi_slave_formal.sv`/`.sby`, SGE jobs 4854/4855) proving event
+conservation, mailbox stability, partial-frame suppression, CS frame reset,
+legal address progression, and the row #13 legal-byte-spacing bound. The
+MISO-drive and Grouper-arbitration requirement conflicts are resolved.
+Verification is not closed because 10 MHz physical timing remains unsigned off
+(rows #16-#19) and code/functional coverage is not yet merged.
 
 - **Full-top cocotb simulation** — `cocotb/spi_cdc` has eleven scenarios with a
   three-level scoreboard requiring completed SPI bytes, synchronized
@@ -58,8 +61,10 @@ remains unsigned off.
 - **Legacy directed simulation** — `tb_trouper_spi.v` covers Mode 0 at 10 MHz,
   first-data-byte timing, ordinary burst access, modulo-128 wrap, and 0x7F.
   `tb_trouper_grp_arb.v` covers basic collisions and recovery.
-- **No formal checker yet** — no property proves event conservation or
-  bundled-mailbox stability; row #15 is still open.
+- **Formal checker done** (rows #13/#15, SGE jobs 4854/4855) — event
+  conservation, bundled-mailbox stability, partial-frame suppression, CS frame
+  reset, legal address progression, and the legal-10-MHz-byte-spacing bound are
+  now proved (bounded, reset-anchored BMC; see rows #13/#15 for detail).
 - **No merged code or functional coverage** — closure remains scenario-based.
 - **Physical timing remains open** — Open Risk #38 records that production SDC
   false-paths `SPI_SCK`, so RTL operation at 10 MHz does not prove MOSI
@@ -76,8 +81,9 @@ The active order is:
    contention case is still open) and #14; see `cocotb/spi_slave`. Row #12 is
    fully closed by the same job. Row #13 (formal/analysis) is unaffected and
    remains open, deferred to step 3 below.
-3. Add formal event-conservation and mailbox properties, and row #13's legal
-   byte-spacing proof.
+3. ~~Add formal event-conservation and mailbox properties, and row #13's legal
+   byte-spacing proof.~~ Done (SGE jobs 4854/4855): `formal/spi_slave_formal.sv`/
+   `.sby` closes both #13 and #15 — see their status cells.
 4. Instrument and close code/functional coverage.
 5. Complete CDC/RDC, STA, gate-level, and bench signoff.
 
@@ -121,13 +127,13 @@ owned outside `spi_slave`.
 | 6 | Dedicated MISO drives low while CS is high | SPEC-SIM / INTERFACE | `tb_trouper_spi.v` idle and post-read checks | TRPR-SPS-008 | ✅ resolved (job 3863) — selected pinout dedicates MISO to Trouper; requirement now matches the deterministic-low RTL (tri-state/OE is not required) |
 | 7 | Randomized SCK/core phase, CS timing, and supported-rate sweep | SPEC-SIM / CDC | `test_randomized_clock_phase`, `test_clock_limit_sweep` | TRPR-SPS-004/005 | ✅ RTL simulation (job 3352) — 100 kHz, 1/8/10 MHz required; 12 MHz diagnostic |
 | 8 | Abort CS at every command/data bit and reset during frame/CDC/write extension | EDGE-SIM | `test_aborted_frame`, `test_reset_interruption` | TRPR-SPS-001/005 | ✅ done (job 3352) |
-| 9 | Source-byte ↔ synchronized-event ↔ accepted-write conservation | EDGE-SIM + FORMAL | all `cocotb/spi_cdc` scoreboard tests; formal checker | CDC mailbox contract | ✅ simulation (job 3352); ⬜ formal proof |
+| 9 | Source-byte ↔ synchronized-event ↔ accepted-write conservation | EDGE-SIM + FORMAL | all `cocotb/spi_cdc` scoreboard tests; formal checker | CDC mailbox contract | ✅ simulation (job 3352); ✅ formal proof (SGE job 4854) — closed by row #15's `formal/spi_slave_formal.sv` (`a_we/re_no_new_flip_while_pending`, `a_we/re_credit_bounded`, `a_we/re_edge_has_credit`, `a_mailbox_addr/wdata_correct`) |
 | 10 | Grouper priority with preservation or defined rejection of overlapping SPI access | SPEC-SIM / INTERFACE | `tb_trouper_grp_arb.v` full-strobe write overlap and MISO-load read overlap | TRPR-SPS-007; Open Risk #16 | ✅ resolved (job 3863) — one-entry pending slot preserves a completed SPI write until the Grouper byte cycle releases; an overlapping SPI read is explicitly invalid and retried because pin-level SPI has no WAIT response |
 | 11 | Read byte remains stable despite live-status or Grouper-address changes | EDGE-SIM | standalone suite plus top-level contention case | asynchronous peek/MISO contract | ✅ done (job 3879, full regression job 3883) — standalone half unchanged from job 3868 (`test_byte_atomicity_live_status_change`). Top-level half closed by two new `cocotb/spi_cdc/test_spi_cdc.py` tests exercising the real `trouper_top.v` arbiter wiring (`rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr`, `grp_active = GRP_WE \| GRP_RE` — a single shared combinational peek port): `test_grp_re_addr_change_during_miso_shift` and `test_grp_we_addr_change_during_miso_shift` inject a Grouper read or write pulse to a *different* address (0x30, vs. the in-flight SPI read's 0x0B) at every bit position from the load instant (bit 8) through the last shifted bit (bit 16) of an in-flight SPI read data byte; both prove the byte already latched into `spi_slave`'s `miso_shreg` is never corrupted (it only samples `reg_rdata` once, at load), and that the very next independent SPI read of the SPI-requested address recovers correctly. The write variant additionally proves the Grouper write itself lands and is visible on the next independent SPI read of the Grouper-touched address — the address change is not silently dropped by the arbiter. `cocotb/hdl/tb_trouper_cocotb.v` was extended (additively; GRP_* default to the same tied-0 state every other suite already relied on) to give cocotb a drivable handle onto the previously-tied-off `GRP_*` bus. The load-instant collision itself (bit 8 raced *before* settling) is the different, already-resolved row #10 case and is not what these tests probe — `spi_frame`'s new `mid_bit_hook` fires only after that bit's negedge has fully settled, matching the standalone suite's methodology. Full block regression (`spi_cdc` 11/11, `psram_ops` 3/3, `spi_slave` 6/6, `tb_trouper_spi.v` PASS, `tb_trouper_grp_arb.v` PASS) reran clean alongside it (job 3883) |
 | 12 | SCK while deselected, runt frames, and repeated command-only frames | EDGE-SIM | standalone suite | frame-reset robustness | ✅ done (job 3868) — `test_deselected_clock_no_effect` (64 SCK toggles at CS high produce no `reg_we`/`reg_re`, slave still works afterward) and `test_command_only_frame_recovery` (write-only and read-only command-only frames, plus 20 repeated command-only frames, produce no event and leave the slave clean for the next transaction) added to `cocotb/spi_slave/test_spi_slave.py`; partial-frame sweep from row #8 (`test_aborted_frame`) already covered the rest |
-| 13 | All source events sufficiently separated at 10 MHz | FORMAL / ANALYSIS | formal assumptions plus CDC report | toggle-event distinguishability | ⬜ new — unchanged; this is a formal/CDC-report row, out of scope for the cocotb standalone suite added for #11/#12/#14, and deferred to row #15's formal effort |
+| 13 | All source events sufficiently separated at 10 MHz | FORMAL / ANALYSIS | formal assumptions plus CDC report | toggle-event distinguishability | ✅ done (SGE job 4854, `formal/spi_slave_formal.sv`/`.sby`, `bmc` task) — `m_we_min_byte_spacing`/`m_re_min_byte_spacing` formalize the spec-derived environment assumption (TRPR-SPS-004's 10 MHz max SCK ⇒ ≥25 `clk_32m` cycles between consecutive same-direction toggle events, matching the RTL header comment's "≥25 clk_32m cycles" claim) as `assume (we_gap_cnt/re_gap_cnt >= 25)`, and `a_we_no_new_flip_while_pending`/`a_re_no_new_flip_while_pending` prove that under that bound the 3-stage `clk_32m` toggle synchronizer never has two source events in flight at once — i.e. legal 10 MHz timing cannot produce two source toggles closer together than the synchronizer can distinguish. Proved by bounded, reset-anchored BMC (depth 45, `mode bmc`, not `mode prove`/induction — see row #15's status for why); a signoff-grade CDC/RDC structural report (independent of this bound) remains row #16's job. |
 | 14 | Standalone randomized protocol reference-model regression | EDGE-SIM | new `cocotb/spi_slave` | coverage gap | ✅ done (job 3868) — new `cocotb/spi_slave` instantiates `spi_slave.v` directly against an independent dict-backed register stub (not `reg_bank.v`); `spi_slave_model.py` is a from-spec Python oracle (command decode, 7-bit address progression incl. modulo-128 wrap and the 0x76 no-increment exception, and the read-vs-write event-timing asymmetry) cross-checked bit/byte-wise against the DUT over a deterministic wrap/no-inc case, 150 randomized legal frames, and 80 randomized constrained aborts; full existing regression (`spi_cdc` 9/9 job 3869, `psram_ops` 3/3 job 3869, `tb_trouper_spi.v`/`tb_trouper_grp_arb.v` job 3870) reran clean alongside it |
-| 15 | Full SPI CDC property set, non-vacuous | FORMAL | new `formal/spi_slave_formal.sv` + `.sby` | TRPR-SPS-003/005 | ⬜ new — prove no loss/duplication, mailbox stability, partial-frame suppression, CS frame reset, and legal address progression |
+| 15 | Full SPI CDC property set, non-vacuous | FORMAL | new `formal/spi_slave_formal.sv` + `.sby` | TRPR-SPS-003/005 | ✅ done (SGE jobs 4854 `bmc` PASS, 4855 `cover` PASS) — new two-clock checker (`multiclock on`, SPI_SCK and clk_32m as independent free clocks) instantiated directly in `spi_slave.v` under `ifdef FORMAL, mirroring the psram_buf_ctrl/packet_ctrl_fsm convention. Proves: (A) legal 7-bit address progression (command capture / +1 mod-128 wrap / 0x76 no-increment hold); (B) CS frame reset clears only transaction-local frame state (`spi_shreg`/`spi_bit_cnt`/`have_cmd`/`fp_rw`/`cur_addr`) and never the persistent toggle/mailbox event storage across any HOST_CS-only deassertion (`a_mailbox_persists_we/re`); (C) partial-frame suppression — a toggle can only flip for a genuinely completed byte in the correct role (`a_we/re_toggle_cause`), never a partial byte or wrong direction; (D) row #13's legal-10MHz-byte-spacing assumption plus event conservation under it — no duplication (`a_we/re_no_new_flip_while_pending`), no loss (bounded delivery within 6 clk_32m cycles, `a_we/re_credit_bounded`), no spurious pulses (`a_we/re_edge_has_credit`), and end-to-end mailbox-address/data stability from source latch through the DUT's own `reg_we`/`reg_re`/`reg_wr_addr`/`reg_wdata`/`reg_re_addr` outputs (`a_mailbox_addr/wdata_correct`, `a_re_mailbox_addr_correct`). Non-vacuity: the `u_spi_slave_formal` instance survives through `design_smt2.smt2` (confirmed by grep — not optimized away), and all 6 `cover` points are reachable within depth 100 (job 4855): a completed write delivered (step 58), a completed read delivered (step 58), 0x7E→0x7F→0x00 address wrap (step 34), 0x76 no-increment hold (step 34), mailbox/toggle survives a post-write CS deassert (step 34), and concurrent outstanding write+read credits (step 71) — ruling out a vacuous all-assumptions-unreachable pass. Proved with `mode bmc` (bounded, `initial assume(!rst_n)`-anchored, depth 45), not `mode prove` (BMC+k-induction): an earlier `mode prove` attempt (job 4852) hit a genuine k-induction limitation for this checker's cross-clock "delayed compare" trackers (e.g. `we_tog_sck_q` vs `spi_we_toggle`) — induction's unconstrained hypothesis window can start from an arbitrary, not-reachable-from-reset state where such a tracker already disagrees with its source register with no real transition history (confirmed via the k=1 counterexample trace, SPI_SCK frozen the whole window with `we_tog_sck_q` picked inconsistently at the free starting state) — a well-known limitation for this class of multiclock CDC property, not a real RTL bug; reset-anchored BMC does not have this false-counterexample class. Two real formal-model bugs were found and fixed en route (not RTL bugs): the checker's own frame-domain address/MOSI trackers needed one extra cycle of delay to correctly reconstruct nonblocking-assignment simultaneity, and `have_cmd`/`fp_rw`/`spi_bit_cnt` needed a separate tracker sharing the persistent-event block's `negedge rst_n`-only reset domain (not `spi_frame_arst`), since the real DUT correctly still fires a read-side-effect toggle on an edge where HOST_CS rises coincident with that same completing SCK edge — the checker's first attempt incorrectly zeroed its cause-tracking copy on exactly that legal case. Full block regression (`spi_cdc` 12/12, `psram_ops` 3/3, `spi_slave` 6/6, `tb_trouper_spi.v` PASS, `tb_trouper_grp_arb.v` PASS) reran clean afterward (job 4858), confirming the added `ifdef FORMAL` instantiation in `spi_slave.v`/`rtl-test/rtl/spi_slave.v` changes no synthesizable behavior. |
 | 16 | SPI CDC/RDC structural review | CDC/STA | signoff CDC/RDC tool | TRPR-SPS-005; Open Risk #38 | ⬜ planned — document intentional resets, two-FF toggle synchronizers, and bundled-data crossings |
 | 17 | Explicit 10 MHz SCK constraints and all-corner timing | CDC/STA | production P&R/STA | TRPR-SPS-004/009; Open Risk #38 | ⬜ planned — constrain SCK, MOSI, MISO, clock groups, and mailbox settling; report half-cycle setup/hold and unconstrained endpoints |
 | 18 | Post-synthesis/post-route minimum-CS and first-read-bit simulation | GATE-SIM | netlist/SDF harness | TRPR-SPS-004/005/009 | ⬜ planned |
@@ -150,8 +156,13 @@ owned outside `spi_slave`.
    in-flight SPI read's MISO shift-out via the real `trouper_top.v` arbiter
    wiring, closing #11 in full. #13 is a formal/analysis row, untouched by
    this step, and stays open pending step 3.
-3. Add the formal checker in #15 and verify non-vacuity, and prove #13's
-   legal byte-spacing bound alongside it.
+3. ~~Add the formal checker in #15 and verify non-vacuity, and prove #13's
+   legal byte-spacing bound alongside it.~~ Done (SGE jobs 4854 `bmc` PASS,
+   4855 `cover` PASS, full regression job 4858): `formal/spi_slave_formal.sv`/
+   `.sby` proves event conservation, mailbox stability, partial-frame
+   suppression, CS frame reset, legal address progression, and #13's
+   legal-byte-spacing bound; all 6 cover points reachable, closing both #13
+   and #15 in full.
 4. Merge code and functional coverage, then randomize until §1a closes.
 5. Complete CDC/STA/gate/bench rows #16–#19.
 
@@ -188,9 +199,19 @@ iverilog -g2005 -o /tmp/tb_trouper_grp_arb.vvp \
 vvp /tmp/tb_trouper_grp_arb.vvp
 ```
 
-Add the standalone and formal commands when implemented. Run this regression
-before merging changes to `spi_slave.v`, SPI protocol requirements,
-`trouper_top.v`'s arbiter/read-side-effect wiring, or SPI timing constraints.
+Formal (rows #13/#15), from `formal/`:
+
+```bash
+sby -f spi_slave.sby bmc     # event conservation, mailbox stability, partial-frame
+                             # suppression, CS frame reset, address progression,
+                             # legal byte-spacing bound (mode bmc, not prove -- see
+                             # row #15's status for why)
+sby -f spi_slave.sby cover   # non-vacuity: all 6 cover points must be reachable
+```
+
+Run this regression before merging changes to `spi_slave.v`, SPI protocol
+requirements, `trouper_top.v`'s arbiter/read-side-effect wiring, or SPI timing
+constraints.
 
 ---
 

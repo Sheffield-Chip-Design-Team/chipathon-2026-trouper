@@ -217,4 +217,49 @@ module spi_slave (
         end
     end
 
+`ifdef FORMAL
+    // Formal-only checker instantiation (see formal/spi_slave_formal.sv).
+    // Dead code in every real build: read_verilog defines FORMAL only when
+    // passed `-formal` (yosys's sby-driven proof flow); LibreLane synthesis
+    // and cocotb (Icarus/Verilator) never pass that flag and get SYNTHESIS
+    // instead, so this instantiation never exists outside `sby`. Deliberately
+    // NOT a `bind` — this yosys version silently drops `bind` statements
+    // (confirmed 2026-07-05 by the psram_buf_ctrl checker), which made every
+    // bind-based proof vacuous. Do NOT delete this block (commit 0c0171a did
+    // exactly that to psram_buf_ctrl.v, silently making its sby proof prove
+    // nothing while still reporting PASS).
+    spi_slave_formal u_spi_slave_formal (
+        .clk_32m         (clk_32m),
+        .rst_n           (rst_n),
+        .HOST_CS         (HOST_CS),
+        .SPI_SCK         (SPI_SCK),
+        .SPI_MOSI        (SPI_MOSI),
+        .SPI_MISO        (SPI_MISO),
+        .reg_wr_addr     (reg_wr_addr),
+        .reg_wdata       (reg_wdata),
+        .reg_we          (reg_we),
+        .reg_rd_addr     (reg_rd_addr),
+        .reg_re_addr     (reg_re_addr),
+        .reg_re          (reg_re),
+        .reg_rdata       (reg_rdata),
+        .spi_shreg       (spi_shreg),
+        .spi_bit_cnt     (spi_bit_cnt),
+        .have_cmd        (have_cmd),
+        .fp_rw           (fp_rw),
+        .cur_addr        (cur_addr),
+        .spi_we_toggle   (spi_we_toggle),
+        .spi_re_toggle   (spi_re_toggle),
+        .spi_wr_addr_lat (spi_wr_addr_lat),
+        .spi_wdata_lat   (spi_wdata_lat),
+        .spi_re_addr_lat (spi_re_addr_lat),
+        .spi_we_sync0    (spi_we_sync0),
+        .spi_we_sync1    (spi_we_sync1),
+        .spi_we_sync2    (spi_we_sync2),
+        .spi_re_sync0    (spi_re_sync0),
+        .spi_re_sync1    (spi_re_sync1),
+        .spi_re_sync2    (spi_re_sync2),
+        .reg_we_p        (reg_we_p)
+    );
+`endif
+
 endmodule
