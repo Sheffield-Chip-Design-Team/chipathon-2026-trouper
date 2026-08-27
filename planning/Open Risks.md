@@ -47,6 +47,18 @@ The config-relaxed netlist needed to carry this fix currently **fails
 detailed routing** (DRT-1231 / DRT-0073) on every floorplan tried — the
 current floorplan has no routability headroom to absorb the SDC change.
 
+**2026-08-27 update — current signoff SS WNS is −12.45 ns / TNS −897 ns**
+(job 5122, `config_1650x1100_full_rect`), after the DRV closure (job 5105,
+commit `b75fed9`) and three signoff-only MCP scope-miss fixes (v28–v30,
+commit `4bf56f3`, see item 43). Those groups only correct dishonest
+single-cycle reporting — no physical change, netlist byte-identical to job
+5105. The residual is now cleanly characterized in `final/README.md`: ~140
+paths are the genuine voltage-bound paced-DSP floor (mostly `u_remod`
+OSR=64 MAC, needs ~4.5 V core — item 27 / item 44), the rest are
+quasi-static cones left as documented waivers. This does not close the
+item: 3.0 V SS still fails, and the honest-MCP obligation (item 43) is not
+fully met.
+
 **Blocks:** any honest chip-wide SS signoff; die-shrink work (blocked on the
 same routability issue).
 
@@ -359,6 +371,79 @@ lora-mimo-reg_bank` instead of this repo's required `--project lora-mimo`,
 which mounts the container at the wrong path per `sge-job` skill's
 documented convention. Not an RTL or test issue; job 4120 resubmitted
 correctly and passed on the same script/test.)
+
+**2026-08-27 — signoff SDC split; three more scope-miss cones relaxed
+(v28–v30), and the `iq_samp_cnt → u_pcfsm.pkt_cnt` "deliberate debt" reading
+above is now reversed.** Post-DRV-closure worst-path analysis on job 5105
+found ~730 SS setup violators / TNS −3960 ns, mostly paced or quasi-static
+cones being timed single-cycle because the `paced_dsp` `-through u_*.*`
+wildcards never match their nets — the nets surface post-synthesis under
+top-level array names (`Zpair_q[3][10]`, `comb_y_*`, `iq_samp_cnt[*]`), same
+match-gap class as items 39/40 and the v27 `pcfsm_mval_write` fix.
+
+Fix: `SIGNOFF_SDC_FILE` now points at a new
+`rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6_signoff.sdc` = the P&R SDC +
+three `set_multicycle_path 3 -setup / 2 -hold` groups. `PNR_SDC_FILE` is
+**unchanged**, so the placed+routed netlist is byte-identical to job 5105
+(`def/nl/pnl/lef/spice/vh` all match). Signoff-only because adding any of
+these to the P&R SDC strands the IQ_CLK root clkbuf with no routing access
+point (`DRT-0073`, job 5112 — the same routability-headroom limit item 1
+and item 6 already track). Keeping them out of P&R also keeps the resizer
+building those paths conservatively at single-cycle.
+
+- **`tacc_accumulate`** — `Zpair_i/q[*]`/`Zdiag[*]` accumulator flops (512
+  endpoints). The `training_acc` MAC recurrence, wired out to top-level
+  `Zpair_q[*][*]` array nets for reg_bank readback. Proof: transitive via
+  the shared `active_cycle` gate proven in `test_mcp_tacc_settle.py` (job
+  4083) — the accumulate fires under the same `acc_active && active_cycle`
+  the monitor asserts gates `mul_out`/`mulB_out`. A direct `Zpair`/`Zdiag`
+  endpoint settle assertion would close it fully.
+- **`iq_samp_cnt`** — the top-level 32-bit sample counter (`trouper_top.v:171`,
+  `+1` per `dcr_valid`), 20 endpoints. Proof: new
+  `cocotb/tests/test_mcp_iq_samp_cnt_settle.py` (TOPLEVEL = `trouper_top`),
+  SGE job 5120, 3/3 PASS.
+- **`pcfsm_tick_decrement`** — `$pcfsm_timeout_regs` (`acq_cnt`/`wpend_cnt`/
+  `pkt_cnt`, 63 endpoints). Relaxes the two write arcs the v21/v24
+  `-through` blocks miss: the `sample_count → ST_ACQ_SETUP load` operand,
+  and the `if (iq_tick) cnt <= cnt-1` decrement recurrence. **This is the
+  arc the 2026-07-31 follow-up above called "genuine, deliberately-
+  unrelaxed SS timing debt".** That reading assumed `iq_tick` could be
+  frequent. `test_mcp_iq_samp_cnt_settle.py::test_dcr_valid_single_cycle`
+  (job 5120) now proves `dcr_valid` (= `iq_tick`) is a 1-clock pulse with
+  min spacing 64 IQ_CLK cycles — `sd_decimator_poly.v:348` sets
+  `iq_valid<=4'hf` on `hb2_stream_last` only, `dc_removal.v:110` is a
+  1-cycle registered passthrough — so the decrement recurrence has ~63 idle
+  cycles (21× the 3-cycle budget) and never a back-to-back launch. The load
+  arc gets its 3 settled edges from the `ST_ACQ_SETUP` 4-cycle dwell
+  (proven by `test_mcp_pcfsm_settle.py`, job 4362) and the `− iq_tick`
+  correction term. MCP=3 is honest on both.
+
+All three audited non-vacuous on job 5122's routed netlist via
+`run_mcp_audit.sh --stage route --sdc …_signoff.sdc` (the script gains a
+`--sdc` flag), SGE job 5124, baseline updated
+(`mcp_audit_route.evidence` / `mcp_audit_baseline.json`); resolved endpoint
+counts 512 / 20 / 63 match the RTL register widths exactly. Manifest
+entries carry the full per-group rationale and mark each SIGNOFF-ONLY.
+
+Result (job 5122, same silicon as 5105): **SS setup WNS −15.71 → −12.45 ns,
+TNS −3960 → −897 ns**; nom_tt / max_ff still met; DRC 0, LVS 0; slew/cap
+residual 15/6 unchanged. Committed `4bf56f3` on branch
+`pnr/trouper-drv-closure-t4b`; `final/` regenerated (STA reports + metrics
+only — geometry unchanged). Remaining 229 SS violators and the deliberate
+stop are in `final/README.md` "SS timing residual": ~140 are the genuine
+voltage-bound paced-DSP floor (item 1 / item 27 / item 44 — needs ~4.5 V
+core), the rest are quasi-static cones (`psram_qe_init_done` one-shot,
+`rb_comb_post_gain_shift → comb_y`, residual `timing_ref`) left as
+documented waivers rather than growing the signoff MCP list further. The
+`rb_comb_post_gain_shift → comb_y` cone (−8.59 ns, 14 paths) is the same
+scope-miss class and could be a v31 signoff group if ever wanted.
+
+**Still open:** the settling-proof obligation is now met for `paced_dsp`,
+`regbank_write`, `psram_barrel_shift`, `pcfsm_mval_write`, `tacc_accumulate`,
+`iq_samp_cnt`, `pcfsm_tick_decrement`; `pcfsm_quasi_static` /
+`pcfsm_mval` / `pcfsm_latched_timing_ref` still fail their bench (the
+2026-08-14 finding above) and the `sc_*` / `timing_ref_*` groups still lack
+a dedicated proof.
 
 ---
 
@@ -1103,6 +1188,35 @@ margin-reclaimed NR=4 config is now the first fallback (keeps 4-antenna MRC), wi
 the deeper fallback if timing closure on the reclaimed floorplan doesn't land. **See:**
 `planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md` (full
 records), `planning/Pinout.md`.
+
+---
+
+### 47. Only 2 of 4 padframe quadrants get bonded per package — unconfirmed whether Trouper's quadrant is guaranteed included
+
+New organizer information (2026-08-19, not yet in any planning doc before this): the shared
+padframe holds up to **4 quadrant projects, but only 2 are bonded out to package pins at
+once**. All of this project's floorplan/pinout work (upper-left quadrant assignment,
+clockwise `#N`/`#W` pin ordering, the L-shape/Grouper-notch keepout work) assumes Trouper
+actually gets real package pins in whatever spin is produced. Not yet confirmed with
+organizers whether Trouper's quadrant is guaranteed to be one of the 2 bonded, or whether
+that's still an open assignment/lottery. If Trouper isn't bonded, the pinout is moot for that
+spin (though the die itself is presumably still fabricated and could be bonded in a later
+run). **Action:** confirm bonding-pair assignment with the track lead before treating any
+pin-budget work as final.
+
+### 48. Digital input pins may be shareable between quadrant projects — pin-budget lever not yet evaluated
+
+Same 2026-08-19 organizer update as item 47: "it may be possible to share digital input pins
+between projects." Not yet investigated for this design, but a real candidate exists —
+`IQ_CLK` (external clock reference, a plain digital input with no project-specific timing
+requirement that would prevent sharing) could potentially be bonded to a single shared
+package pin across multiple quadrant projects rather than each project bonding its own copy,
+recovering a pin without any RTL change. This is a materially different, and likely cheaper,
+lever than the `IRQ_OUT`-removal waiver or NR=3 fallback already tracked in item 46 for
+closing the 22-pad/1117.5² budget gap — see `planning/nr3-fallback-2026-08.md`. Needs
+organizer confirmation of exactly which pins are shareable and the mechanics (does the
+project still declare the pin in its own `info.yaml`, or is it wired externally by the
+padframe integrator) before it can be relied on.
 
 ---
 
