@@ -67,6 +67,20 @@
 //   Debug reads are blocked (DBG_BUSY held) while packet_active=1, while
 //   QSPI_OWNER=1 (pad handover), and before qe_init_done.
 //
+// Debug WRITE path (bring-up only — write-verify the device without a live
+// capture stream, e.g. marching / address-in-payload bus-fault patterns):
+//     0x79 PSRAM_DBG_WDATA   W only — one byte per SPI write into an 8-byte
+//                                     shadow; 8 writes fill one line in the
+//                                     same order 0x76 drains (i0,q0,..,i3,q3).
+//                                     Does NOT auto-increment the SPI burst.
+//     0x75[2] WR_TRIG        W1P    — commit the shadow to PSRAM at 0x72-0x74.
+//   Sequence: write 0x72-0x74, write 0x79 ×8, write 0x75[2]=1, poll 0x75[7]=0.
+//   The commit is latched into dbg_wr_pend and serviced from the same S_WRITE
+//   idle slot as debug reads (after capture writes and after a pending fetch),
+//   shares dbg_fetch_busy / DBG_BUSY, and is blocked by the same three gates
+//   (packet_active, QSPI_OWNER, !qe_init_done).  AUTO_INC (0x75[1]) has no
+//   effect on writes — every WR_TRIG commits to the address in 0x72-0x74.
+//
 // Interface must remain QPI (not SPI): at 250 kHz iq_valid rate (128-cycle period),
 // one period must fit both a write (25 cyc QPI) and an SC delay read (19 cyc QPI) = 44 cyc.
 // SPI equivalents are ~96 cyc write + ~104 cyc read = 200 cyc — 1.56× over budget.
@@ -134,7 +148,19 @@ module psram_buf_ctrl (
     input  wire        dbg_rd_trig,
     input  wire        dbg_data_pop,
     output wire        dbg_busy,
-    output wire [7:0]  dbg_data
+    output wire [7:0]  dbg_data,
+    // Debug WRITE port (bring-up only — mirror of the read path above).
+    //   dbg_wdata / dbg_wdata_push : one byte at a time into an 8-byte shadow
+    //     (dbg_wbuf); push is a single-cycle strobe, 8 pushes fill one line in
+    //     the same byte order the read path drains (i0,q0,i1,q1,i2,q2,i3,q3).
+    //   dbg_wr_trig : W1P — commit the shadow to PSRAM at dbg_addr.  Self-gated
+    //     on !dbg_fetch_busy (the 2-cycle reg_bank W1P fires the engine once).
+    //   Serviced from the S_WRITE idle slot after capture writes and pending
+    //   debug reads; shares dbg_fetch_busy / dbg_busy with the read path, so a
+    //   commit in flight holds DBG_BUSY (0x75[7]) exactly like a fetch.
+    input  wire [7:0]  dbg_wdata,
+    input  wire        dbg_wdata_push,
+    input  wire        dbg_wr_trig
 );
 
     // -----------------------------------------------------------------------
@@ -215,6 +241,13 @@ module psram_buf_ctrl (
     reg [63:0]  dbg_buf;
     reg [2:0]   dbg_idx;
 
+    // Debug WRITE staging.  dbg_wbuf assembles bytes MSB-first so that after 8
+    // pushes byte0 sits in [63:56], matching wr_data / the read-drain order.
+    reg         dbg_wr_mode;  // current debug burst is a commit (vs a fetch)
+    reg         dbg_wr_pend;  // latched commit request (WR_TRIG)
+    reg [63:0]  dbg_wbuf;
+    reg [2:0]   dbg_widx;
+
     assign dbg_busy = qspi_owner || packet_active || dbg_fetch_busy || !qe_init_done;
     assign dbg_data = dbg_busy ? 8'h00 :
                       (dbg_idx == 3'd0) ? dbg_buf[63:56] :
@@ -278,6 +311,10 @@ module psram_buf_ctrl (
             dbg_addr_cur   <= 23'd0;
             dbg_buf        <= 64'd0;
             dbg_idx        <= 3'd0;
+            dbg_wr_mode    <= 1'b0;
+            dbg_wr_pend    <= 1'b0;
+            dbg_wbuf       <= 64'd0;
+            dbg_widx       <= 3'd0;
             sck_en         <= 1'b0;
             qspi_owner_eff <= 1'b0;
             ce_n           <= 1'b1;
@@ -392,6 +429,27 @@ module psram_buf_ctrl (
                 dbg_addr_cur   <= dbg_addr;
                 dbg_fetch_busy <= 1'b1;
                 dbg_pend       <= 1'b1;
+            end
+
+            // Debug-write byte assembly: each push shifts one byte into the
+            // shadow (MSB-first).  Independent of the QPI bus — safe to fill
+            // while a prior commit is still draining; that fill lands in the
+            // next line.  dbg_widx is a convenience wrap counter for firmware
+            // that watches it; it is re-zeroed at commit completion.
+            if (dbg_wdata_push) begin
+                dbg_wbuf <= {dbg_wbuf[55:0], dbg_wdata};
+                dbg_widx <= dbg_widx + 3'd1;
+            end
+
+            // WR_TRIG: latch a commit request (same idle-engine gate and
+            // self-gating as RD_TRIG — dbg_fetch_busy is shared).  A trigger
+            // that lands while the engine is busy is dropped, not queued;
+            // firmware polls DBG_BUSY (0x75[7]) before triggering.
+            if (dbg_wr_trig && !dbg_fetch_busy && !packet_active && !qspi_owner
+                && qe_init_done) begin
+                dbg_addr_cur   <= dbg_addr;
+                dbg_fetch_busy <= 1'b1;
+                dbg_wr_pend    <= 1'b1;
             end
 
             case (state)
@@ -565,13 +623,68 @@ module psram_buf_ctrl (
                             sub      <= 6'd0;
                         end else if (dbg_pend && !packet_active && !qspi_owner
                                      && qe_init_done) begin
-                            dbg_pend <= 1'b0;
-                            dbg_mode <= 1'b1;
-                            qpi_busy <= 1'b1;
-                            sub      <= 6'd0;
+                            dbg_pend    <= 1'b0;
+                            dbg_mode    <= 1'b1;
+                            dbg_wr_mode <= 1'b0;
+                            qpi_busy    <= 1'b1;
+                            sub         <= 6'd0;
+                        end else if (dbg_wr_pend && !packet_active && !qspi_owner
+                                     && qe_init_done) begin
+                            // Freeze the shadow for the burst so a concurrent
+                            // push cannot corrupt an in-flight commit (mirrors
+                            // the wr_data latch on the capture path).
+                            dbg_wr_pend <= 1'b0;
+                            dbg_mode    <= 1'b1;
+                            dbg_wr_mode <= 1'b1;
+                            wr_data     <= dbg_wbuf;
+                            qpi_busy    <= 1'b1;
+                            sub         <= 6'd0;
                         end
                     end else begin
-                        if (dbg_mode) begin
+                        if (dbg_mode && dbg_wr_mode) begin
+                            // ---- DEBUG QPI WRITE: CMD 0x02, 8 bytes at
+                            //      dbg_addr_cur, payload from wr_data (frozen
+                            //      copy of dbg_wbuf).  Same wire sequence as the
+                            //      capture write, duplicated here so the
+                            //      timing-critical capture arcs stay untouched.
+                            case (sub)
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
+                            6'd2:  begin sio_out<=dbg_addr_cur[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=dbg_addr_cur[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=dbg_addr_cur[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=dbg_addr_cur[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=dbg_addr_cur[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=dbg_addr_cur[3:0];   sub<=6'd8; end
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            6'd23: begin sio_out<=wr_data[3:0];   sub<=6'd24; end
+                            6'd24: begin
+                                ce_n          <= 1'b1;
+                                sio_oe        <= 4'd0;
+                                dbg_fetch_busy<= 1'b0;
+                                dbg_mode      <= 1'b0;
+                                dbg_wr_mode   <= 1'b0;
+                                dbg_widx      <= 3'd0;
+                                qpi_busy      <= 1'b0;
+                                sub           <= 6'd0;
+                            end
+                            default: sub <= 6'd0;
+                            endcase
+                        end else if (dbg_mode) begin
                             case (sub)
                                 6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd1; end
                                 6'd1:  begin sio_out<=4'hB; sub<=6'd2; end

@@ -13,7 +13,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 - All registers are 8-bit. Multi-byte values are big-endian (MSB at lower address).
 - Addresses not listed here return `0x00` on read and ignore writes.
 - **`0x7F` is permanently reserved** and must never be implemented as a register: the command byte `0x7F` (a write to `0x7F`) is held back as a future protocol-escape code.
-- **Burst access:** while `HOST_CS` stays low after the data byte, each additional data byte accesses the next consecutive address (auto-increment, wrapping modulo 128). Exception: `PSRAM_DBG_DATA` (`0x76`) does not auto-increment — repeated bytes re-read the same data port.
+- **Burst access:** while `HOST_CS` stays low after the data byte, each additional data byte accesses the next consecutive address (auto-increment, wrapping modulo 128). Exception: the PSRAM debug data ports `PSRAM_DBG_DATA` (`0x76`, read) and `PSRAM_DBG_WDATA` (`0x79`, write) do not auto-increment — repeated bytes re-access the same port (`0x76` re-reads the fetched window byte-by-byte; `0x79` pushes successive bytes into the write shadow).
 
 ---
 
@@ -89,21 +89,22 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x67`–`0x69` | `ZDIAG_1` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:8] |
 | `0x6A`–`0x6C` | `ZDIAG_2` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:8] |
 | `0x6D`–`0x6F` | `ZDIAG_3` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:8] |
-| **External Memory (PSRAM)** (`0x70`–`0x78`) | | | | | |
+| **External Memory (PSRAM)** (`0x70`–`0x79`) | | | | | |
 | `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] reserved (inert); [3] `QSPI_OWNER`; [7:4] reserved |
 | `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [1:0] state; [2] `SAMPLE_SKIP`; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
-| `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [7:0] |
-| `0x73` | `PSRAM_DBG_ADDR_MID` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [15:8] |
-| `0x74` | `PSRAM_DBG_ADDR_HI` | R/W | `0x00` | PSRAM Buffer | Debug read byte address [22:16] (bit [7] reserved) |
-| `0x75` | `PSRAM_DBG_CTRL` | R/W | `0x80` | PSRAM Buffer | [0] `RD_TRIG` (strobe, self-clears); [1] `AUTO_INC` (re-arm after 8-byte drain); [7] `DBG_BUSY` (R only — held during fetch, while `packet_active=1` or `QSPI_OWNER=1`, and before `qe_init_done`; reads `1` at power-on since PSRAM init has not run yet) |
+| `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug byte address [7:0] (shared by the read fetch and the write commit) |
+| `0x73` | `PSRAM_DBG_ADDR_MID` | R/W | `0x00` | PSRAM Buffer | Debug byte address [15:8] |
+| `0x74` | `PSRAM_DBG_ADDR_HI` | R/W | `0x00` | PSRAM Buffer | Debug byte address [22:16] (bit [7] reserved) |
+| `0x75` | `PSRAM_DBG_CTRL` | R/W | `0x80` | PSRAM Buffer | [0] `RD_TRIG` (strobe, self-clears); [1] `AUTO_INC` (re-arm read fetch after 8-byte drain; **read only** — no effect on `WR_TRIG`); [2] `WR_TRIG` (strobe, self-clears — commit the `PSRAM_DBG_WDATA` shadow to PSRAM at `PSRAM_DBG_ADDR`); [7] `DBG_BUSY` (R only — held during a fetch **or a commit**, while `packet_active=1` or `QSPI_OWNER=1`, and before `qe_init_done`; reads `1` at power-on since PSRAM init has not run yet) |
 | `0x76` | `PSRAM_DBG_DATA` | R | `0x00` | PSRAM Buffer | Byte window into last fetched 8-byte IQ sample; 8 consecutive reads drain one sample (byte order: i0,q0,i1,q1,i2,q2,i3,q3); address advances by 8 after the eighth read when `AUTO_INC=1`. Never auto-increments the SPI burst address. |
 | `0x77` | `REPLAY_DELAY_LO` | R/W | `0xDC` | PSRAM Buffer | `REPLAY_DELAY_SAMPLES[7:0]` — samples to wait after `TRAINING_DONE` before the delay-line replay starts; write-gated `!packet_active`. Default 1500 (`0x05DC`) ≈ 3 ms covers the measured Grouper rv32emc 8-iteration weight compute plus readout/IRQ overhead |
 | `0x78` | `REPLAY_DELAY_HI` | R/W | `0x05` | PSRAM Buffer | `REPLAY_DELAY_SAMPLES[15:8]`; write-gated `!packet_active` |
-| **Reserved** (`0x79`–`0x7F`) | | | | | |
-| `0x79`–`0x7E` | — | — | — | — | Reserved for future growth |
+| `0x79` | `PSRAM_DBG_WDATA` | W | `0x00` | PSRAM Buffer | Debug **write** byte port (bring-up only). Each SPI write pushes one byte into an 8-byte shadow; 8 writes fill one line, same byte order as `0x76` drains (i0,q0,i1,q1,i2,q2,i3,q3). Does **not** auto-increment the SPI burst address (command byte `0x79` + 8 data bytes = 8 pushes). Reads `0x00`. Commit via `PSRAM_DBG_CTRL.WR_TRIG` (`0x75[2]`). Gated by the same `DBG_BUSY` conditions as reads; no write auto-increment — re-write `0x72`–`0x74` per line. |
+| **Reserved** (`0x7A`–`0x7F`) | | | | | |
+| `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 106 implemented + 22 reserved = 128. (Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 22 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x1A`–`0x1B`, `0x79`–`0x7E` and `0x7F`.)
+**Occupancy:** 107 implemented + 21 reserved = 128. (Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port — moving one address from reserved to implemented; reserved growth slots are now `0x7A`–`0x7E`. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 21 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x1A`–`0x1B`, `0x7A`–`0x7E` and `0x7F`.)
 
 ---
 
@@ -412,7 +413,7 @@ Only meaningful when `PSRAM_CTRL.QSPI_OWNER=0` and `PSRAM_CTRL.PSRAM_EN=1`. Expo
 
 | Bits | Field | Description |
 | --- | --- | --- |
-| [1:0] | `STATE` | Controller state (0 = UNINIT, 1 = QE_INIT, 2 = WRITE, 3 = REPLAY; see `psram_buf_ctrl.v` `state_dbg`). **There is no IDLE encoding** — do not gate anything on one. For debug readback poll `DBG_BUSY` (0x75[7]) instead; it already folds in `QSPI_OWNER`, `packet_active`, an in-flight fetch and `!INIT_DONE`. |
+| [1:0] | `STATE` | Controller state (0 = UNINIT, 1 = QE_INIT, 2 = WRITE, 3 = REPLAY; see `psram_buf_ctrl.v` `state_dbg`). **There is no IDLE encoding** — do not gate anything on one. For debug readback poll `DBG_BUSY` (0x75[7]) instead; it already folds in `QSPI_OWNER`, `packet_active`, an in-flight fetch or commit, and `!INIT_DONE`. |
 | [2] | `SAMPLE_SKIP` | Sticky: an `iq_valid` arrived while the QPI engine was busy and a sample was not captured. Always 0 at 125/250 kHz (timing budget guarantees no skip); non-zero only out of spec. Clear via `PSRAM_CLR_ERR` (0x70[1]) |
 | [3] | `INIT_DONE` | QE init sequence complete |
 | [4] | `REPLAY_ACTIVE` | Replay in progress |
@@ -420,20 +421,29 @@ Only meaningful when `PSRAM_CTRL.QSPI_OWNER=0` and `PSRAM_CTRL.PSRAM_EN=1`. Expo
 | [6] | `OVERFLOW` | Sticky: write pointer lapped read pointer |
 | [7] | `BUF_ACTIVE` | Same-packet capture window active |
 
-### `0x72`–`0x76` — PSRAM Debug Readback Registers
+### `0x72`–`0x76`, `0x79` — PSRAM Debug Access Registers
 
-Available when `PSRAM_DBG_CTRL.DBG_BUSY=0` (0x75[7]) — the single gate, which folds in `QSPI_OWNER`, `packet_active`, an in-flight fetch and `!INIT_DONE`. (There is no `STATE=IDLE`; this line said so until 2026-07-26.) Provides host SPI access to arbitrary PSRAM addresses without requiring Grouper firmware — useful for bring-up and post-capture IQ inspection.
+Available when `PSRAM_DBG_CTRL.DBG_BUSY=0` (0x75[7]) — the single gate, which folds in `QSPI_OWNER`, `packet_active`, an in-flight fetch **or commit**, and `!INIT_DONE`. (There is no `STATE=IDLE`; this line said so until 2026-07-26.) Provides host SPI access to arbitrary PSRAM addresses without requiring Grouper firmware — useful for bring-up and post-capture IQ inspection.
 
-**Access sequence:**
+**Read (fetch) sequence:**
 1. Write 23-bit target byte address to `PSRAM_DBG_ADDR_LO` (`0x72`), `PSRAM_DBG_ADDR_MID` (`0x73`), `PSRAM_DBG_ADDR_HI[6:0]` (`0x74`).
 2. Write `0x01` to `PSRAM_DBG_CTRL` (`0x75`) to strobe `RD_TRIG`. `DBG_BUSY` (bit 7) asserts immediately.
 3. Poll `PSRAM_DBG_CTRL[7]` until clear (~1 µs at 32 MHz).
 4. Read `PSRAM_DBG_DATA` (`0x76`) eight times. Bytes arrive in sample order: i0, q0, i1, q1, i2, q2, i3, q3.
 5. To stream further samples: set `AUTO_INC` (`0x75`[1]=1) before triggering — the address advances by 8 after the eighth read and a new fetch begins automatically.
 
-`DBG_BUSY` is held (and reads of `0x76` return 0x00) while `packet_active=1` or `QSPI_OWNER=1`. Debug reads are serviced in spare sub-cycles between `iq_valid` pulses and do not disrupt normal capture or replay (see TRPR-PSR-017).
+**Write (commit) sequence — bring-up only:**
+1. Write the 23-bit target byte address to `0x72`–`0x74` (same registers as the read path).
+2. Write the 8 payload bytes to `PSRAM_DBG_WDATA` (`0x79`), in order i0, q0, i1, q1, i2, q2, i3, q3. `0x79` is burst-exempt, so a single command byte `0x79` followed by 8 data bytes fills the line; the port ignores any 9th+ byte until the next commit.
+3. Write `0x04` to `PSRAM_DBG_CTRL` (`0x75`) to strobe `WR_TRIG`. `DBG_BUSY` asserts immediately.
+4. Poll `PSRAM_DBG_CTRL[7]` until clear (~1 µs at 32 MHz). The 8 bytes are now in PSRAM.
+5. There is no write auto-increment: to write the next line, repeat from step 1 with a new address. `AUTO_INC` (`0x75[1]`) affects the read fetch only.
 
-`PSRAM_DBG_DATA` is exempt from SPI burst address auto-increment: repeated data bytes in a burst re-read `0x76`, with the port's own internal byte index advancing through the 8-byte sample.
+Typical bring-up use: write an address-encoded pattern (each 8-byte line carries its own address as payload), then read every line back and compare — a single sweep that catches stuck `SIO` bits, quad-line shorts, and address aliasing with the decimator/RF path switched off.
+
+`DBG_BUSY` is held (and reads of `0x76` return 0x00) while `packet_active=1` or `QSPI_OWNER=1`. Debug reads and writes are serviced in spare sub-cycles from the `S_WRITE` idle slot (capture writes take priority; a pending fetch is serviced before a pending commit) and do not disrupt normal capture or replay (see TRPR-PSR-017). A debug access triggered while the free-running circular capture is active still collides with the very next capture write, exactly like the read path — `SAMPLE_SKIP` flags the one dropped sample cleanly (Open Risks #30).
+
+`PSRAM_DBG_DATA` (`0x76`) and `PSRAM_DBG_WDATA` (`0x79`) are exempt from SPI burst address auto-increment: repeated data bytes in a burst re-access the same port, with the port's own internal byte index advancing through the 8-byte line.
 
 ---
 
@@ -455,12 +465,12 @@ The following registers existed in earlier revisions of this map (which spanned 
 | `0x63`–`0x69` | `Z_SHIFT`, `C_POOL`, `CFO_DIAG` | Former allocation; reallocated to live `Z_23`/`ZDIAG` readback. No common shift, pooled phasor, or CFO diagnostic register is implemented. |
 | `0x6A`–`0x6B` | `NOISE_WIN_CTRL`, `TACC_REF_SEL` | Legacy single-ref/noise-enable path; superseded by `TACC_NOISE_TRIG` |
 | `0xB2`–`0xB4` | `PSRAM_PKT_BYTES`, `PSRAM_RD_OFFSET` | Hardwired 0; pointer telemetry never wired |
-| `0xCA`–`0xCD` | `SRAM_DUMP_*` | Frontend SRAMs removed; PSRAM debug readback (`0x72`–`0x76`) replaces this |
+| `0xCA`–`0xCD` | `SRAM_DUMP_*` | Frontend SRAMs removed; PSRAM debug access (`0x72`–`0x76` read, `0x79` write) replaces this |
 | `0x70`–`0x8F`, `0xD4`–`0xDB`, `0xE0`–`0xE7` low bytes | `Z_kl` bits [7:0] | Z readback narrowed to 24-bit under the 128-register constraint |
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed; no TAP in RTL, GPIO never wired out of macro. Addresses now reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x18`, `0x1A`–`0x1B`, `0x79`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x18`, `0x1A`–`0x1B`, `0x7A`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -476,6 +486,6 @@ If a future revision reinstates any of these features, allocate addresses from t
 | `0x30`–`0x3F` | W shadow bank |
 | `0x40`–`0x63` | Z_kl pair readback (24-bit) |
 | `0x64`–`0x6F` | Z_kk diagonal (24-bit) |
-| `0x70`–`0x78` | External memory (PSRAM) control, debug, and replay margin |
-| `0x79`–`0x7E` | Reserved (future growth) |
+| `0x70`–`0x79` | External memory (PSRAM) control, debug read/write, and replay margin |
+| `0x7A`–`0x7E` | Reserved (future growth) |
 | `0x7F` | Permanently reserved (SPI protocol escape) |

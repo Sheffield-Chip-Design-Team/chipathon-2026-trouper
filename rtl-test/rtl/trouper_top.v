@@ -151,6 +151,10 @@ module trouper_top (
     wire        psram_dbg_busy_w;
     wire [7:0]  psram_dbg_data_w;
     wire        psram_replay_active_w;
+    // PSRAM debug-write byte port (0x79): driven straight from the SPI slave
+    // write strobe, bypassing the CE/arbiter exactly like the 0x76 read pop.
+    wire [7:0]  psram_dbg_wdata_w;
+    wire        psram_dbg_wdata_push_w;
 
     // =========================================================================
     // Free-running 32-bit sample counter (for packet_ctrl_fsm)
@@ -192,6 +196,7 @@ module trouper_top (
     wire [22:0] rb_psram_dbg_addr;
     wire        rb_psram_dbg_auto_inc;
     wire        rb_psram_dbg_rd_trig;
+    wire        rb_psram_dbg_wr_trig;
 
     // =========================================================================
     // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128, no FIR.
@@ -513,7 +518,10 @@ module trouper_top (
         .dbg_rd_trig  (rb_psram_dbg_rd_trig),
         .dbg_data_pop (spi_reg_re && (spi_reg_re_addr == 8'h76)),
         .dbg_busy     (psram_dbg_busy_w),
-        .dbg_data     (psram_dbg_data_w)
+        .dbg_data     (psram_dbg_data_w),
+        .dbg_wdata      (psram_dbg_wdata_w),
+        .dbg_wdata_push (psram_dbg_wdata_push_w),
+        .dbg_wr_trig    (rb_psram_dbg_wr_trig)
     );
 
     // Combiner input mux: live decimator IQ during normal/buffering,
@@ -671,6 +679,13 @@ module trouper_top (
     reg [7:0]  spi_wr_pending_data;
     wire       spi_wr_new = spi_reg_we & ~spi_reg_we_d;
 
+    // PSRAM debug-write byte port (0x79): a single-cycle push per completed SPI
+    // write to 0x79, straight off spi_wr_new — same CE/arbiter bypass as the
+    // 0x76 read pop.  The SPI slave holds the burst address at 0x79 (burst-
+    // exempt), so a command byte 0x79 followed by 8 data bytes = 8 pushes.
+    assign psram_dbg_wdata_w      = spi_reg_wdata;
+    assign psram_dbg_wdata_push_w = spi_wr_new && (spi_reg_wr_addr == 8'h79);
+
     // CE-latched WRITE bus: addr/wdata/we are sampled TOGETHER on a CE edge and
     // captured by the CE-gated reg_bank on the next CE edge, so the whole write
     // decode is a consistent, genuine 2-cycle path (honest MCP=2).
@@ -798,6 +813,7 @@ module trouper_top (
         .psram_dbg_addr  (rb_psram_dbg_addr),
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
+        .psram_dbg_wr_trig(rb_psram_dbg_wr_trig),
         .sc_force_lock   (rb_sc_force_lock),
         .rx_hold         (rb_rx_hold),
         .noise_trig      (rb_noise_trig),

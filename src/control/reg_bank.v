@@ -90,7 +90,11 @@ module reg_bank (
     output reg [3:0]   psram_ctrl,
     output reg [22:0]  psram_dbg_addr,
     output reg         psram_dbg_auto_inc,
-    output reg         psram_dbg_rd_trig, // W1P
+    output reg         psram_dbg_rd_trig, // W1P: 0x75[0] — debug fetch
+    output reg         psram_dbg_wr_trig, // W1P: 0x75[2] — debug write commit
+                                          // (payload byte port 0x79 is fed to
+                                          //  psram_buf_ctrl directly from the
+                                          //  SPI slave, like the 0x76 read pop)
     // Manual SC lock override (bring-up / catastrophic-detector-failure escape hatch)
     output reg         sc_force_lock,  // 0x19[0]: W1P — blocked while packet_active
     // 0x1A[0]: level.  1 = SC detector held disabled (ORed into sc_clr at the
@@ -197,6 +201,7 @@ module reg_bank (
             psram_dbg_addr   <= 23'h0;
             psram_dbg_auto_inc <= 1'b0;
             psram_dbg_rd_trig <= 1'b0;
+            psram_dbg_wr_trig <= 1'b0;
             sc_force_lock    <= 1'b0;
             noise_trig       <= 1'b0;
             tacc_window_syms <= 4'd8;
@@ -217,6 +222,7 @@ module reg_bank (
             w_commit_pulse  <= 1'b0;
             psram_ctrl[1]   <= 1'b0;
             psram_dbg_rd_trig <= 1'b0;
+            psram_dbg_wr_trig <= 1'b0;
             sc_force_lock   <= 1'b0;
             noise_trig      <= 1'b0;
 
@@ -291,6 +297,7 @@ module reg_bank (
                     8'h75: begin
                                psram_dbg_rd_trig  <= wdata[0];
                                psram_dbg_auto_inc <= wdata[1];
+                               psram_dbg_wr_trig  <= wdata[2];
                            end
                     8'h77: if (!packet_active) replay_delay_samples[7:0]  <= wdata; // blocked during active packet
                     8'h78: if (!packet_active) replay_delay_samples[15:8] <= wdata; // blocked during active packet
