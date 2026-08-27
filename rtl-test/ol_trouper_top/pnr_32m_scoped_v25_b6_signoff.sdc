@@ -1,3 +1,14 @@
+# pnr_32m_scoped_v25_b6_signoff.sdc
+# ============================================================================
+# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus ONE
+# extra exception group -- `tacc_accumulate` (v28, 2026-08-27, marked below).
+# It is used as SIGNOFF_SDC_FILE only; PNR_SDC_FILE stays the plain
+# pnr_32m_scoped_v25_b6.sdc so the placed/routed netlist is bit-for-bit the
+# job-5105 flow (adding tacc_accumulate to the P&R SDC strands the IQ_CLK root
+# clkbuf with no routing access point -- DRT-0073, job 5112).
+# Keep everything except the marked v28 block identical to the P&R SDC.
+# ============================================================================
+#
 # pnr_32m_scoped_v25_b6.sdc
 # v25_b6 = v20_baseline_minff adapted for the B6 packet_ctrl_fsm rewrite
 #   (area roadmap 7/8): the three 32-bit absolute deadline registers
@@ -9,13 +20,8 @@
 #     * The three -through exception blocks (qs_srcs / lat_timing_ref / M_val)
 #       are KEPT: they now relax only the one-shot ST_ACQ_SETUP load arc.
 #       The per-tick decrement path (cnt -> cnt-1 -> cnt) does NOT traverse
-#       any -through net, so it stays honestly MCP=1 IN THIS P&R SDC; likewise
-#       the live sample_count (elapsed-correction) operand into the load.
-#       [2026-08-27] Both were revisited once test_mcp_iq_samp_cnt_settle.py
-#       (job 5120) proved iq_tick == dcr_valid is 1-in-64: they are now MCP=3
-#       in the SIGNOFF SDC only (pnr_32m_scoped_v25_b6_signoff.sdc, group
-#       pcfsm_tick_decrement, v30). Kept single-cycle here so the P&R route
-#       stays the job-5105 build -- see the NOTE further below.
+#       any -through net, so it stays honestly MCP=1; likewise the live
+#       sample_count (elapsed-correction) operand into the load.
 #   VERIFY after STA: no STA-0361/0472 on the u_pcfsm.*_cnt patterns (the
 #   silent-no-op failure mode this file's history documents).
 #
@@ -250,19 +256,104 @@ set tacc_window_regs [get_cells -of_objects \
 set_multicycle_path 3 -setup -through $tacc_qs_srcs -to $tacc_window_regs
 set_multicycle_path 2 -hold  -through $tacc_qs_srcs -to $tacc_window_regs
 
-# NOTE (2026-08-27): three more paced/idle-bound cones -- the training_acc
-# Zpair_i*/Zpair_q*/Zdiag_* accumulate recurrence (group tacc_accumulate, v28),
-# dcr_valid -> iq_samp_cnt[*] (group iq_samp_cnt, v29), and the packet_ctrl_fsm
-# B6 down-counter load(sample_count operand)+decrement arcs (group
-# pcfsm_tick_decrement, v30) -- are ALSO MCP=3/2 class, but their `-to`
-# exceptions live in the SIGNOFF SDC only (pnr_32m_scoped_v25_b6_signoff.sdc),
-# NOT here. Reason: adding paced MCPs to the P&R SDC perturbs the post-GRT
-# resizer enough to strand the IQ_CLK root clkbuf with no routing access point
-# (DRT-0073, job 5112). Keeping the P&R SDC identical to job 5105 keeps that
-# route reproducible while letting signoff STA report all three cones honestly
-# at MCP=3. Applying them P&R-wide would also let the resizer under-build those
-# paths against the 3-cycle budget; leaving them single-cycle for P&R is the
-# conservative choice.
+# ==== v28 (2026-08-27) -- SIGNOFF-ONLY, present in this file, absent in the P&R SDC ====
+# training_acc Zpair_i*/Zpair_q*/Zdiag_* accumulate recurrence.
+# training_acc's 32-bit accumulator outputs are wired straight through to
+# trouper_top's `Zpair_i/Zpair_q [0:5]` / `Zdiag [0:3]` wire arrays
+# (trouper_top.v:329-332) for reg_bank readback, so post-synthesis the driving
+# flops' Q nets keep the TOP-LEVEL names `Zpair_q[3][10]` etc. -- never
+# `u_tacc.Zpair_q3`. The `paced_nets` `-through [get_nets -hierarchical u_tacc.*]`
+# wildcard further below is meant to cover this cone but never matches it: same
+# "output net keeps its top-level name, the u_*-wildcard misses it" failure mode
+# as v21 (timing_ref), v22 (acc_ci0), v27 (M_val write arc). Job 5105's SS WNS
+# worst path (-15.71 ns) is exactly `Zpair_q[3][10]` -> aoi222/aoi21/xor3/... ->
+# a sibling Zpair register, reported single-cycle.
+# NOT a new relaxation class: the MAC into these accumulators is the same
+# TDM_WAIT=2 pacing -- one pipeline advance per 3 clocks, 16 steps per 64-clock
+# iq_valid sample (training_acc.v:40,89-97) -- that `paced_dsp` already covers
+# and cocotb/tests/test_mcp_tacc_settle.py already proves (SGE job 4083, 8/8).
+# Every functional write to Zpair_i*/Zpair_q*/Zdiag_* is either that paced
+# accumulate (guarded by `acc_active && active_cycle`, training_acc.v:298) or
+# the constant zero-load at arm (training_acc.v:250-256) -- no fast operand --
+# so a bare `-to` endpoint scope is honest, same as the v18 bshift_regs
+# precedent. Pattern: these are 2-D wire arrays flattened to escaped names like
+# `Zpair_q[3][10]`; a `[*]` bus glob is unreliable against a doubly-subscripted
+# name, so use a plain trailing `*` (no other net shares these prefixes).
+# SIGNOFF-ONLY because adding it to the P&R SDC perturbs the post-GRT resizer
+# into stranding the IQ_CLK root clkbuf (DRT-0073, job 5112); the P&R netlist
+# stays the conservative job-5105 build with these paths at single-cycle.
+set tacc_acc_regs [get_cells -of_objects \
+    [get_nets -hierarchical {Zpair_i* Zpair_q* Zdiag*}] \
+    -filter {ref_name =~ *dff*}]
+set_multicycle_path 3 -setup -to $tacc_acc_regs
+set_multicycle_path 2 -hold  -to $tacc_acc_regs
+# ==== end v28 signoff-only block ====
+
+# ==== v29 (2026-08-27) -- SIGNOFF-ONLY, present in this file, absent in the P&R SDC ====
+# dcr_valid -> iq_samp_cnt[*] (top-level 32-bit sample counter, trouper_top.v:171
+# `if (dcr_valid) iq_samp_cnt <= iq_samp_cnt + 32'd1`). Post-DRV/v28 this cone is
+# the SS worst path (job 5118: `_63606_/dcr_valid` -> xor2/oai/... -> `_63751_`,
+# WNS -15.51 ns), reported single-cycle. It is genuinely idle-bound, same class
+# as paced_dsp: `dcr_valid` is a 1-clock pulse once per HB2 output frame
+# (sd_decimator_poly.v:348 sets iq_valid<=4'hf on hb2_stream_last only, zeroed
+# every other cycle; dc_removal.v:110 is a 1-cycle registered passthrough), so
+# the increment recurrence has ~63 idle IQ_CLK cycles between launches. Its
+# consumers (u_psram circular write ptr, u_pcfsm per-sample deadline counters)
+# only sample iq_samp_cnt on that same dcr_valid/iq_tick cadence, so the value
+# is fully settled before any read. iq_samp_cnt is a top-level net (not u_dec.*)
+# so paced_dsp's `-through u_dec.*` wildcard never covered it.
+# PROOF: cocotb/tests/test_mcp_iq_samp_cnt_settle.py (top-level trouper_top),
+# SGE job 5120, 3/3 PASS -- (1) dcr_valid never high on two consecutive IQ_CLK
+# edges (~40 pulses, min spacing 64), (2) iq_samp_cnt only ever +1, always
+# post-dcr_valid, min gap 64 cycles (21x the 3-cycle budget), (3) reset-mid-
+# stream clears to 0 and re-arms under the same discipline. With no adjacent
+# launch edge the 2-hold reference edge carries identical data, so hold is safe.
+# Only writes to iq_samp_cnt are the async reset and the +1 -> bare `-to` scope
+# is honest (v18 bshift_regs / v28 tacc_acc_regs precedent).
+# SIGNOFF-ONLY for the same reason as v28: keep the P&R netlist bit-identical to
+# job 5105 (adding paced MCPs to the P&R SDC perturbs the resizer -> DRT-0073).
+set iq_samp_cnt_regs [get_cells -of_objects \
+    [get_nets -hierarchical {iq_samp_cnt[*]}] \
+    -filter {ref_name =~ *dff*}]
+set_multicycle_path 3 -setup -to $iq_samp_cnt_regs
+set_multicycle_path 2 -hold  -to $iq_samp_cnt_regs
+# ==== end v29 signoff-only block ====
+
+# ==== v30 (2026-08-27) -- SIGNOFF-ONLY, present in this file, absent in the P&R SDC ====
+# packet_ctrl_fsm B6 per-sample down-counters acq_cnt/wpend_cnt/pkt_cnt
+# ($pcfsm_timeout_regs, defined above at v21). Post-v28/v29 this cone is the SS
+# worst-path cluster (job 5121: `_63606_/dcr_valid` -> ... -> `u_pcfsm.pkt_cnt[10]`
+# and ~130 sibling bits across pkt_cnt/wpend_cnt/acq_cnt, WNS -15.51 ns),
+# reported single-cycle. Two write arcs land here; the v21/v24 -through blocks
+# cover the quasi-static operands of the LOAD arc but NOT these two:
+#
+#  (A) LOAD, sample_count operand (ST_ACQ_SETUP, packet_ctrl_fsm.v:223-225):
+#      cnt <= clamp(span + 1 - elapsed_c - iq_tick),
+#      elapsed_c = sample_count[19:0] - lat_timing_ref[19:0] (v:114).
+#      span/M_val/lat_timing_ref are already MCP=3 (pcfsm_quasi_static /
+#      pcfsm_mval / pcfsm_latched_timing_ref). The ST_ACQ_SETUP dwell
+#      (setup_cnt 0->3, capture at 3; v:205-227) was added specifically to give
+#      this cone 3 settled edges (Open Risks #43), and the `- iq_tick` term
+#      (v:115-117) corrects a tick landing in the dwell -- so MCP=3 on the whole
+#      load arc, sample_count included, matches the RTL's own design intent.
+#
+#  (B) DECREMENT recurrence (ST_PREAMBLE_ACQ/ST_W_PENDING/ST_PAYLOAD_ACTIVE,
+#      v:166-170): `if (iq_tick) cnt <= cnt - 1`. Fires only on iq_tick ==
+#      dcr_valid, proven a 1-clock pulse with >=64-cycle spacing
+#      (test_mcp_iq_samp_cnt_settle.py::test_dcr_valid_single_cycle, SGE job
+#      5120) -> ~63 idle IQ_CLK cycles between launches, same idle-bound class
+#      as paced_dsp / iq_samp_cnt. No adjacent launch edge -> the 2-hold
+#      reference edge carries identical data.
+#
+# The v25_b6 header left both at MCP=1 only because no -through matched them and
+# there was then no proof iq_tick is sparse; job 5120 supplies that proof.
+# The only writes to these regs are the load, the decrement, and the async
+# reset (v:135-137) -> a bare `-to` is honest (v18 bshift_regs / v28/v29
+# precedent). SIGNOFF-ONLY for the same reason as v28/v29: the P&R netlist
+# stays the job-5105 build with these paths conservatively single-cycle.
+set_multicycle_path 3 -setup -to $pcfsm_timeout_regs
+set_multicycle_path 2 -hold  -to $pcfsm_timeout_regs
+# ==== end v30 signoff-only block ====
 
 # v21: rb_sc_hits_req -> timing_ref (inside u_sc, but the destination net
 # survives synthesis under its top-level name -- see bug note above -- so
@@ -416,6 +507,9 @@ set mcp_audit_groups {
     {pcfsm_mval               3 2 pcfsm_mval           pcfsm_timeout_regs}
     {pcfsm_mval_write         3 2 pcfsm_qs_srcs        pcfsm_mval_regs}
     {training_window          3 2 tacc_qs_srcs         tacc_window_regs}
+    {tacc_accumulate          3 2 {}                   tacc_acc_regs}
+    {iq_samp_cnt              3 2 {}                   iq_samp_cnt_regs}
+    {pcfsm_tick_decrement     3 2 {}                   pcfsm_timeout_regs}
     {timing_ref_hits          3 2 timing_ref_hits_srcs timing_ref_reg}
     {timing_ref_config        3 2 timing_ref_cfg_srcs  timing_ref_reg}
     {psram_barrel_shift       2 1 {}                   bshift_regs}

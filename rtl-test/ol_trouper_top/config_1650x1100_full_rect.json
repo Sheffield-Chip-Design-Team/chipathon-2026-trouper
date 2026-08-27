@@ -57,7 +57,7 @@
   "RUN_LVS": true,
   "RUN_IRDROP_REPORT": true,
   "PNR_SDC_FILE": "dir::pnr_32m_scoped_v25_b6.sdc",
-  "SIGNOFF_SDC_FILE": "dir::pnr_32m_scoped_v25_b6.sdc",
+  "SIGNOFF_SDC_FILE": "dir::pnr_32m_scoped_v25_b6_signoff.sdc",
   "RUN_POST_GRT_DESIGN_REPAIR": true,
   "GRT_DESIGN_REPAIR_RUN_GRT": true,
   "GRT_RESIZER_SETUP_MAX_BUFFER_PCT": 40,
