@@ -5,8 +5,10 @@
 //   Byte 0 (command): [7] = R/W# (1 = read, 0 = write), [6:0] = register address.
 //   Byte 1..N (data): write data on MOSI, or register read data on MISO.
 //   Burst: while HOST_CS stays low, each additional data byte accesses the next
-//   consecutive address (7-bit wrap).  Exception: PSRAM_DBG_DATA (0x76) does not
-//   auto-increment — repeated bytes re-read the same data port.
+//   consecutive address (7-bit wrap).  Exception: the PSRAM debug data ports
+//   PSRAM_DBG_DATA (0x76, read) and PSRAM_DBG_WDATA (0x79, write) do not
+//   auto-increment — repeated bytes re-access the same port (0x76 re-reads the
+//   same window byte-by-byte; 0x79 pushes successive bytes into the write shadow).
 //   The command byte 0x7F (write to 0x7F) is reserved for a future protocol
 //   escape; register 0x7F is not implemented, so it is accepted and discarded.
 //
@@ -47,7 +49,9 @@ module spi_slave (
     input  wire [7:0]  reg_rdata     // combinational peek data for reg_rd_addr
 );
 
-    localparam [6:0] NO_INC_ADDR = 7'h76;  // PSRAM_DBG_DATA: burst-exempt
+    // PSRAM debug data ports: burst-exempt (address holds across the burst).
+    localparam [6:0] NO_INC_RD_ADDR = 7'h76;  // PSRAM_DBG_DATA  (read pop)
+    localparam [6:0] NO_INC_WR_ADDR = 7'h79;  // PSRAM_DBG_WDATA (write push)
 
     // -----------------------------------------------------------------------
     // SPI domain: shift register, bit counter, frame state
@@ -101,8 +105,8 @@ module spi_slave (
                     have_cmd <= 1'b1;
                 end else begin
                     // Data byte completes
-                    // Burst auto-increment (7-bit wrap); 0x76 holds
-                    if (cur_addr != NO_INC_ADDR)
+                    // Burst auto-increment (7-bit wrap); 0x76/0x79 hold
+                    if (cur_addr != NO_INC_RD_ADDR && cur_addr != NO_INC_WR_ADDR)
                         cur_addr <= cur_addr + 7'd1;
                 end
             end else begin
