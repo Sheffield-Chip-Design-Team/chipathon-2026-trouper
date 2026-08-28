@@ -17,7 +17,7 @@
   "CLOCK_PERIOD": 31.25,
   "FP_SIZING": "absolute",
   "DIE_AREA": "0 0 1650 1100",
-  "PL_TARGET_DENSITY_PCT": 78,
+  "PL_TARGET_DENSITY_PCT": 72,
   "DPL_CELL_PADDING": 3,
   "PL_MAX_DISPLACEMENT_X": 500,
   "PL_MAX_DISPLACEMENT_Y": 400,
@@ -79,5 +79,5 @@
   "IO_PIN_ORDER_CFG": "dir::io_placement_a40.cfg",
   "IO_PIN_V_LAYER": "Metal2",
   "IO_PIN_H_LAYER": "Metal2",
-  "_comment_a40": "A40 shared-padframe re-pin trial. Current src/ RTL (post-#47, AHB + GRP + 106 pad-control tie-off ports added in trouper_top.v). Functional external pins ordered to A40_ACV_pad_map.yaml edges (IQ+clk/rst on West, REMOD/PSRAM/SPI/IRQ_OUT on North); GRP bus + AHB endpoint + IRQ_GROUPER forced South (die-internal abutment). Pad-control tie-offs auto-placed. Goal: confirm the A40 functional pinout routes and closes at 1650x1100. Not an A40-exact placement (no FP_DEF_TEMPLATE yet)."
+  "_comment_a40": "A40 shared-padframe re-pin trial. Current src/ RTL (post-#47, AHB + GRP + 106 pad-control tie-off ports added in trouper_top.v). Functional external pins ordered to A40_ACV_pad_map.yaml edges (IQ+clk/rst on West, REMOD/PSRAM/SPI/IRQ_OUT on North); GRP bus + AHB endpoint + IRQ_GROUPER forced South (die-internal abutment). Pad-control tie-offs auto-placed. Goal: confirm the A40 functional pinout routes and closes at 1650x1100. Not an A40-exact placement (no FP_DEF_TEMPLATE yet). [d72] density 78->72 to give detailed placement room to seat the IQ_CLK clkbuf_2_3_0 with a legal access point (job 5146 died DRT-0073 there; global route was 0/0/0 overflow, not congestion)."
 }
