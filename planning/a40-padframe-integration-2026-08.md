@@ -77,6 +77,7 @@ is broken until then.
 | 5147 | `io_placement_a40.cfg` | 1650×1100 | **72** | 0 viol | **0** | 0.0 | **−16.27** | 0.0 |
 | 5150 | **`FP_DEF_TEMPLATE`** (`A40_ACV_rtlnames.def`, VDD/VSS dropped) | **1675×1110** | 72 | clear | **0** | 0.0 | **−12.26** | 0.0 |
 | 5153 | `FP_DEF_TEMPLATE` (VDD/VSS boundary pins kept) | 1675×1110 | 72 | 0 | **0** | 0.0 | **−12.26** | 0.0 |
+| 5154 | 5153 + **18 RTL ports renamed** to `<pad>_<terminal>` | 1675×1110 | 72 | 0 | **0** | 0.0 | **−13.40** | 0.0 |
 
 - **5146** reached detailed routing then aborted `DRT-0073` "no access point" on
   CTS buffer `clkbuf_2_3_0_IQ_CLK_regs` (`clkbuf_16`). Global route was
@@ -95,6 +96,11 @@ is broken until then.
   IR drop 5.2 mV. Magic DRC 0, routing DRC 0, XOR 0, LVS-unmatched 0, WNS
   byte-identical to 5150. 15 non-critical disconnected pins (the unused `_IN`
   legs on output-only pads), 0 critical.
+- **5154** — the 18 functional ports renamed in `src/top/trouper_top.v`; the
+  raw integrator `A40_ACV.def` now matches `trouper_top` verbatim (`ren` map in
+  the transform script is empty). No name-mismatch at floorplan. Magic DRC 0,
+  routing DRC 0, XOR 0, LVS 0/0, power-grid 0/0. max_ss −13.40 ns — ~1.1 ns off
+  5153, within repair-pass variance (identical logic, die, density, SDC).
 
 Pin edges in every A40 run: **W** = IQ data/clk/rst (+pull ties); **N** =
 REMOD / PSRAM / SPI / IRQ_OUT (+pad-control ties); **S** = GRP + AHB +
