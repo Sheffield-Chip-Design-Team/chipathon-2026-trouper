@@ -649,6 +649,64 @@ primitive at `src/rtl/sync.sv`.
   32-bit bridge word maps onto that packing non-trivially).
 - Re-verify `reg_bank` arbitration against the bridge once its RTL lands.
 
+### 49. Grouper external-AHB endpoint is not yet an integration-safe macro interface
+
+Commit `095ae2e` adds Grouper's current 8-bit external-peripheral signals
+(`HADDR`, `HWDATA`, `HTRANS`, `HSIZE`, `HWRITE`, `HRDATA`, `HREADY`, and
+`HRESP`) to `src/top/trouper_top.v`, and adapts accepted byte transactions to
+the CE-gated register-bank arbiter. This is an implementation start, not an
+integration-closed endpoint:
+
+1. The active IO-placement files still name only the legacy `GRP_*` bus. No
+   physical pin list, placement, timing constraints, or macro-level wrapper
+   has been updated for the new endpoint, so a P&R run cannot prove the
+   intended inter-project connectivity.
+2. The adapter accepts only `HSIZE=3'b000` and rejects `HADDR[7]`. Grouper's
+   CPU bridge emits byte, halfword, and word accesses according to its native
+   strobes (`hw/rtl/cpu_ss.sv` in Grouper `origin/dev`). Firmware must be
+   constrained to byte MMIO accesses, or Grouper must provide the required
+   width conversion before this endpoint is usable. Grouper currently does
+   not turn `HRESP` into a software-visible fault.
+3. The adapter samples its controls on Trouper's `IQ_CLK`. It is valid only
+   after the clock relationship gate in item 29 is closed; with independent
+   macro clocks, the AHB transfer must terminate in a Grouper-side CDC bridge,
+   not cross these wires directly.
+4. Existing cocotb wrappers tie the new port inactive, so SPI regressions
+   establish only legacy non-regression. There is no AHB BFM test for normal
+   accesses, error responses, wait-state persistence, or SPI collisions.
+
+**Risk:** a superficially compiling interface can either be physically
+unroutable, return errors for normal Grouper firmware accesses, or corrupt
+transactions across a clock boundary.
+**Action:** close the clock/pin contract; promote the endpoint through
+Grouper's top/PD wrapper; decide byte-only firmware ABI versus width bridge;
+add endpoint pin placement/constraints; and add a directed AHB BFM regression
+before any integration P&R.
+**See:** item 29 (CDC), item 16 (SPI arbitration),
+`planning/grouper-trouper-control-integration-plan.md` (when merged), and
+commit `095ae2e`.
+**Found:** 2026-08-28, post-implementation review of `095ae2e`.
+
+### 50. PSRAM debug data ports still bypass the proposed shared transaction arbiter
+
+`PSRAM_DBG_DATA` (`0x76`) pops through the SPI-only `spi_reg_re` strobe and
+`PSRAM_DBG_WDATA` (`0x79`) pushes directly from `spi_wr_new`. Neither event is
+derived from the accepted AHB/CSR transaction. The new AHB endpoint therefore
+cannot safely provide debug reads/writes with exactly-once semantics, and an
+SPI debug-port access can bypass Grouper priority. The existing three-bit
+`dbg_widx` also wraps after eight pushes, contradicting the documented rule
+that a ninth byte is ignored until commit.
+
+**Risk:** debug capture/writeback can tear, duplicate, or overwrite a line
+when SPI and Grouper contend; future AHB debug support would have undefined
+side effects.
+**Action:** replace both bypasses with common post-arbitration read/write
+accept events, latch read data before pop, make the write fill count saturate
+at eight, define AHB error/no-side-effect behavior for invalid port accesses,
+and add shared SPI/AHB debug-port tests.
+**See:** item 16 and `planning/Grouper PSRAM CSR Exploration.md`.
+**Found:** 2026-08-28, post-implementation review of `095ae2e`.
+
 ### 38. Host SPI 10 MHz timing is not constrained or signed off — CDC portion FIXED, SDC portion open
 
 **Partially fixed 2026-07-12:** the persistent toggle/mailbox CDC (commits
