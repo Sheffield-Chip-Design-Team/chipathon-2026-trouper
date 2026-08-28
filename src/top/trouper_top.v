@@ -97,6 +97,22 @@ module trouper_top (
     output wire        GRP_RDATA_7,
     output wire        GRP_READY,
 
+    // ---- Grouper dev external-peripheral AHB endpoint (8-bit) ----
+    // This is the real Grouper origin/dev boundary.  It is kept alongside the
+    // legacy GRP_* placeholder during the migration so existing SPI/GRP
+    // regressions remain usable; integration must drive the AHB port only.
+    input  wire [7:0]  HADDR,
+    input  wire [2:0]  HBURST,
+    input  wire        HMASTLOCK,
+    input  wire [3:0]  HPROT,
+    input  wire [2:0]  HSIZE,
+    input  wire [1:0]  HTRANS,
+    input  wire [7:0]  HWDATA,
+    input  wire        HWRITE,
+    output wire [7:0]  HRDATA,
+    output wire        HREADY,
+    output wire        HRESP,
+
     // ---- Interrupt outputs ----
     output wire        IRQ_OUT,       // → dedicated IRQ pad; sticky, level-high
     output wire        IRQ_GROUPER    // → Grouper inter-project IRQ line; same signal as IRQ_OUT
@@ -671,7 +687,24 @@ module trouper_top (
     // Grouper byte-cycle contract requires that it release before a second SPI
     // data byte completes (>= 800 ns at 10 MHz), so this slot cannot overflow.
     // =========================================================================
-    wire grp_active = GRP_WE | GRP_RE;
+    // The AHB endpoint turns one transfer into one held byte request.  Its
+    // completion is deliberately tied to the CE-domain dispatch below, not
+    // merely to observing HWRITE in the address phase.
+    wire [7:0] ahb_addr, ahb_wdata;
+    wire       ahb_we, ahb_re, ahb_dispatch;
+    wire [7:0] ahb_rdata = cfg_rdata_w;
+    wire       ahb_rready = cfg_ready_w;
+    trouper_ahb8_adapter u_ahb8 (
+        .clk(clk), .rst_n(rst_n), .HADDR(HADDR), .HBURST(HBURST),
+        .HMASTLOCK(HMASTLOCK), .HPROT(HPROT), .HSIZE(HSIZE),
+        .HTRANS(HTRANS), .HWDATA(HWDATA), .HWRITE(HWRITE),
+        .HRDATA(HRDATA), .HREADY(HREADY), .HRESP(HRESP),
+        .csr_addr(ahb_addr), .csr_wdata(ahb_wdata), .csr_we(ahb_we),
+        .csr_re(ahb_re), .csr_dispatch(ahb_dispatch),
+        .csr_rdata(ahb_rdata), .csr_rready(ahb_rready)
+    );
+
+    wire grp_active = GRP_WE | GRP_RE | ahb_we | ahb_re;
 
     reg        spi_reg_we_d;
     reg        spi_wr_pending;
@@ -708,7 +741,11 @@ module trouper_top (
             end
 
             if (ce_16m) begin
-                if (grp_active) begin
+                if (ahb_we) begin
+                    rb_addr  <= ahb_addr;
+                    rb_wdata <= ahb_wdata;
+                    rb_we    <= 1'b1;
+                end else if (GRP_WE | GRP_RE) begin
                     rb_addr  <= GRP_ADDR;
                     rb_wdata <= GRP_WDATA;
                     rb_we    <= GRP_WE;
@@ -736,8 +773,13 @@ module trouper_top (
     // There is only one combinational read port: a concurrent Grouper read
     // takes priority and makes that SPI read byte invalid; the SPI host retries
     // the complete read frame after GRP_RE deasserts.
-    wire [7:0] rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr;
-    wire       rb_re    = GRP_RE;
+    wire [7:0] rb_raddr = ahb_re ? ahb_addr :
+                          (GRP_WE | GRP_RE) ? GRP_ADDR : spi_reg_rd_addr;
+    wire       rb_re    = ahb_re | GRP_RE;
+
+    // A write is accepted only on the CE edge that dispatches it into the
+    // register-bank path.  Reads acknowledge through reg_bank.ready.
+    assign ahb_dispatch = ce_16m & ahb_we;
 
     assign GRP_RDATA = cfg_rdata_w;
     assign GRP_READY = cfg_ready_w;
@@ -821,6 +863,62 @@ module trouper_top (
         .replay_delay_samples (rb_replay_delay_samples)
     );
 
+endmodule
+
+// Grouper origin/dev external-peripheral endpoint.  HSEL/HREADYIN are
+// deliberately absent: Grouper's interconnect owns them internally.  This
+// module is synchronous to IQ_CLK; an asynchronous deployment must terminate
+// AHB in the Grouper-side CDC bridge described in the integration plan.
+module trouper_ahb8_adapter (
+    input wire clk, input wire rst_n,
+    input wire [7:0] HADDR, input wire [2:0] HBURST,
+    input wire HMASTLOCK, input wire [3:0] HPROT, input wire [2:0] HSIZE,
+    input wire [1:0] HTRANS, input wire [7:0] HWDATA, input wire HWRITE,
+    output reg [7:0] HRDATA, output wire HREADY, output wire HRESP,
+    output wire [7:0] csr_addr, output wire [7:0] csr_wdata,
+    output wire csr_we, output wire csr_re, input wire csr_dispatch,
+    input wire [7:0] csr_rdata, input wire csr_rready
+);
+    localparam IDLE=2'd0, WRITE=2'd1, READ=2'd2, ERROR=2'd3;
+    reg [1:0] state;
+    reg [7:0] addr_q;
+    reg write_dispatched, error_wait;
+    wire request = HTRANS[1];
+    wire bad_req = (HSIZE != 3'b000) || HADDR[7];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state <= IDLE; addr_q <= 8'd0; HRDATA <= 8'd0;
+            write_dispatched <= 1'b0; error_wait <= 1'b0;
+        end else begin
+            case (state)
+                IDLE: if (request) begin
+                    addr_q <= HADDR;
+                    if (bad_req) begin state <= ERROR; error_wait <= 1'b0; end
+                    else if (HWRITE) begin state <= WRITE; write_dispatched <= 1'b0; end
+                    else state <= READ;
+                end
+                WRITE: if (csr_dispatch) begin
+                    write_dispatched <= 1'b1;
+                    state <= IDLE;
+                end
+                READ: if (csr_rready) begin
+                    HRDATA <= csr_rdata;
+                    state <= IDLE;
+                end
+                ERROR: if (error_wait) state <= IDLE; else error_wait <= 1'b1;
+            endcase
+        end
+    end
+    assign csr_addr = addr_q;
+    assign csr_wdata = HWDATA;
+    assign csr_we = (state == WRITE) & ~write_dispatched;
+    assign csr_re = (state == READ);
+    assign HREADY = (state == IDLE) ||
+                    ((state == WRITE) && csr_dispatch) ||
+                    ((state == READ) && csr_rready) ||
+                    ((state == ERROR) && error_wait);
+    assign HRESP = (state == ERROR);
 endmodule
 
 `default_nettype wire

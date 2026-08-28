@@ -92,6 +92,17 @@ module tb_trouper_cocotb (
         .GRP_RDATA_6 (GRP_RDATA[6]),
         .GRP_RDATA_7 (GRP_RDATA[7]),
         .GRP_READY     (GRP_READY),
+        .HADDR         (8'd0),
+        .HBURST        (3'd0),
+        .HMASTLOCK     (1'b0),
+        .HPROT         (4'd0),
+        .HSIZE         (3'd0),
+        .HTRANS        (2'd0),
+        .HWDATA        (8'd0),
+        .HWRITE        (1'b0),
+        .HRDATA        (),
+        .HREADY        (),
+        .HRESP         (),
         .IRQ_OUT       (IRQ_OUT),
         .IRQ_GROUPER   ()
     );
