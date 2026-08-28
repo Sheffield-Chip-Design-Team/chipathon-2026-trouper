@@ -14,6 +14,7 @@ ROOT=$(git rev-parse --show-toplevel)
 SGE_USER=${SGE_USER:-timothyn-dev}
 DESIGNS="/srv/eda/designs/$SGE_USER/lora-mimo"
 STAGE= NETLIST= LIBERTY= SPEF=
+SDC=rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc
 UPDATE=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -21,10 +22,16 @@ while [ $# -gt 0 ]; do
         --netlist) NETLIST=$2; shift 2;;
         --liberty) LIBERTY=$2; shift 2;;
         --spef) SPEF=$2; shift 2;;
+        --sdc) SDC=$2; shift 2;;
         --update-baseline) UPDATE=1; shift;;
         *) echo "unknown argument: $1" >&2; exit 2;;
     esac
 done
+# --sdc: repo-relative path to the SDC to audit. Defaults to the P&R SDC.
+# Signoff-only MCP groups (tacc_accumulate / iq_samp_cnt / pcfsm_tick_decrement)
+# live ONLY in pnr_32m_scoped_v25_b6_signoff.sdc, so audit those with
+#   --sdc rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6_signoff.sdc
+SDC_BASE=$(basename "$SDC")
 [ "$STAGE" = synth ] || [ "$STAGE" = route ] || { echo "--stage synth|route required" >&2; exit 2; }
 [ -n "$NETLIST" ] && [ -n "$LIBERTY" ] || { echo "--netlist and --liberty required" >&2; exit 2; }
 [ "$STAGE" = synth ] || [ -n "$SPEF" ] || { echo "--spef required for route" >&2; exit 2; }
@@ -52,8 +59,8 @@ SPEF_CONTAINER=""
 
 # Sync the audit script + SDC too, in case of uncommitted local edits.
 cp "$ROOT/rtl-test/ol_trouper_top/mcp_audit.tcl" "$DESIGNS/rtl-test/ol_trouper_top/mcp_audit.tcl"
-cp "$ROOT/rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc" "$DESIGNS/rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc"
-chmod g+w "$DESIGNS/rtl-test/ol_trouper_top/mcp_audit.tcl" "$DESIGNS/rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc"
+cp "$ROOT/$SDC" "$DESIGNS/rtl-test/ol_trouper_top/$SDC_BASE"
+chmod g+w "$DESIGNS/rtl-test/ol_trouper_top/mcp_audit.tcl" "$DESIGNS/rtl-test/ol_trouper_top/$SDC_BASE"
 
 JOB_SCRIPT="$STAGE_DIR/run_job.sh"
 cat > "$JOB_SCRIPT" <<EOF
@@ -68,7 +75,7 @@ export MCP_AUDIT_LIBERTY="$LIB_CONTAINER"
 export MCP_AUDIT_TECH_LEF=/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/techlef/gf180mcu_fd_sc_mcu7t5v0__nom.tlef
 export MCP_AUDIT_CELL_LEF=/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lef/gf180mcu_fd_sc_mcu7t5v0.lef
 export MCP_AUDIT_NETLIST="$NL_CONTAINER"
-export MCP_AUDIT_SDC=/foss/designs/rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc
+export MCP_AUDIT_SDC=/foss/designs/rtl-test/ol_trouper_top/$SDC_BASE
 export MCP_AUDIT_STAGE=$STAGE
 export MCP_AUDIT_REPORT="\$OUT/mcp_audit_${STAGE}.evidence"
 export MCP_AUDIT_SPEF="$SPEF_CONTAINER"

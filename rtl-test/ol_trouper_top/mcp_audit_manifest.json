@@ -30,12 +30,31 @@
       "min_endpoint": 1,
       "proof": "cocotb/tests/test_mcp_pcfsm_settle.py (ST_ACQ_SETUP 4-cycle dwell, capture at u+4; adversarial config write before/at the lock edge) -- SGE job 4362, 4/4; plus cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
     },
+    "pcfsm_mval_write": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 1,
+      "min_endpoint": 1,
+      "status": "CONFIRMED 2026-08-20 -- audit job 4519 (route stage, job 4501's netlist+SPEF): 17 through / 15 endpoint objects, non-vacuous, baseline updated. Full P&R re-run job 4520 (config_lshape_current.json): max_ss_125C_3v00 WNS -22.25 -> -15.97 ns (+6.28 ns), nom_tt/max_ff unchanged at 0.0 ns (met), Magic DRC 0, LVS 0 mismatches. rb_sf_cfg->M_val is no longer the worst path -- new worst path is the unrelated timing_ref[3] -> u_tacc.acc_end[31] cone.",
+      "found_via": "job 4501 (L-shape, GRP-south re-pin): max_ss_125C_3v00 worst path was rb_sf_cfg[3] -> clkinv/nand4/nand2/nor4 -> u_pcfsm.M_val[3] D pin, WNS -22.25 ns. This is the WRITE arc into M_val -- the converse of what pcfsm_mval (above) covers (M_val as SOURCE, not destination). pcfsm_qs_srcs's -through already includes rb_sf_cfg*, so the gap was purely pcfsm_qs_srcs's -to list never including M_val's own register cells.",
+      "proof": "Architectural half from test_mcp_pcfsm_settle.py: its SettleMonitor already includes M_val in the monitored source set and asserts it is stable for >=3 cycles before the ST_ACQ_SETUP capture edge (same as sf/sample_shift) -- SGE job 4362, 4/4. Physical-implementation half now confirmed by job 4520's clean post-route signoff at the relaxed budget (see status above). Not yet a dedicated cocotb test asserting the write-arc D-input timing directly (distinct from the read-arc test reused here) -- lower priority now that both halves are covered by existing/adjacent evidence, but would close the loop fully if written."
+    },
     "training_window": {
       "setup": 3,
       "hold": 2,
       "min_through": 1,
       "min_endpoint": 1,
       "proof": "cocotb/tests/test_mcp_cfg_hold_settle.py (RX_HOLD mutual exclusion: no sc_lock while held incl. SC_FORCE_LOCK; background monitor requires every MCP'd config net change to land while RX_HOLD set; release waits >=3 cycles after the last change) -- SGE job 4368, 3/3"
+    },
+    "tacc_accumulate": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 0,
+      "min_endpoint": 1,
+      "sdc_scope": "SIGNOFF ONLY -- this group lives in pnr_32m_scoped_v25_b6_signoff.sdc (SIGNOFF_SDC_FILE), NOT in pnr_32m_scoped_v25_b6.sdc (PNR_SDC_FILE). Adding it to the P&R SDC strands the IQ_CLK root clkbuf (DRT-0073, job 5112); keeping it signoff-only leaves the placed/routed netlist bit-identical to the job-5105 build with these paths conservatively single-cycle, while signoff STA reports them honestly at MCP=3. run_mcp_audit.sh must therefore point MCP_AUDIT_SDC at the _signoff.sdc file for this group.",
+      "status": "ADDED as SDC v28 (2026-08-27), signoff-SDC-only. Extends paced_dsp endpoint coverage to the training_acc Zpair_i*/Zpair_q*/Zdiag_* accumulators, whose Q nets surface post-synthesis under trouper_top's top-level `Zpair_q[3][10]` array names (trouper_top.v:329-332) and so are never matched by paced_dsp's `-through u_tacc.*` wildcard. Job 5105 SS WNS worst path (-15.71 ns) is `Zpair_q[3][10]` -> aoi/xor chain -> sibling Zpair register, reported single-cycle. Same match-gap failure mode as pcfsm_mval_write (v27) / timing_ref (v21).",
+      "found_via": "Post-DRV-closure worst-path analysis on job 5105 (config_1650x1100_full_rect.json + t4b DRV settings): 732/1000 reported SS setup paths violate; ~470 of them are the training_acc Zpair accumulate recurrence, dominated by the WNS path Zpair_q[3][10] -> _62874_.",
+      "proof": "Same relaxation class as paced_dsp -- the TDM_WAIT=2 pacing (one accumulate per 3 clocks, 16 steps per 64-clock iq_valid sample; training_acc.v:40,89-97) is substantiated by cocotb/tests/test_mcp_tacc_settle.py (settle-gating + reset-mid-burst re-arm) -- SGE job 4083, 8/8 PASS, 2026-08-09. That test's SettleMonitor directly asserts only mul_out/mulB_out (the TDM multiply products) never move unless pipe_active && tdm_wait==TDM_WAIT held on the preceding edge; the Zpair_i*/Zpair_q*/Zdiag_* endpoints this group scopes are covered TRANSITIVELY via the shared active_cycle gate -- the accumulate `Zpair_qN <= zpair_qa_r + zq_add` fires under `if (acc_active && active_cycle)` (training_acc.v:298), the same active_cycle (pipe_active && tdm_wait==TDM_WAIT) the monitor proves gates the products, so the endpoint inherits the >=3-cycle launch->capture separation. Not a direct endpoint monitor -- a dedicated Zpair/Zdiag settle assertion would close that gap fully. Every write to Zpair_i*/Zpair_q*/Zdiag_* is either that paced accumulate or the constant zero-load at arm (training_acc.v:250-256); no fast operand exists, so the bare `-to` endpoint scope is honest (v18 bshift_regs precedent). Non-vacuity to be confirmed by run_mcp_audit.sh --stage route against the _signoff.sdc on the next clean routed netlist."
     },
     "timing_ref_hits": {
       "setup": 3,
@@ -71,6 +90,27 @@
       "min_through": 1,
       "min_endpoint": 0,
       "proof": "cocotb/tests/test_spi_cdc.py::test_regbank_write_bus_ce_gated (rb_we/rb_addr/rb_wdata CE-gated settle monitor across reset-mid-write, back-to-back SPI writes, and SPI/Grouper write interleaving; PASS, SGE job 4120, 2026-08-09)"
+    },
+    "pcfsm_tick_decrement": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 0,
+      "min_endpoint": 1,
+      "sdc_scope": "SIGNOFF ONLY -- lives in pnr_32m_scoped_v25_b6_signoff.sdc (SIGNOFF_SDC_FILE), NOT in the P&R SDC. Same rationale as tacc_accumulate / iq_samp_cnt. run_mcp_audit.sh must point MCP_AUDIT_SDC at the _signoff.sdc for this group. Endpoint collection is $pcfsm_timeout_regs, shared with pcfsm_quasi_static / pcfsm_latched_timing_ref / pcfsm_mval (this group is the bare `-to`, no -through, that catches the two arcs those -through blocks miss).",
+      "status": "ADDED as SDC v30 (2026-08-27), signoff-SDC-only. Relaxes the two write arcs into packet_ctrl_fsm's B6 per-sample down-counters acq_cnt/wpend_cnt/pkt_cnt that the v21/v24 -through exceptions leave at MCP=1: (A) the sample_count operand of the ST_ACQ_SETUP load (elapsed_c = sample_count[19:0] - lat_timing_ref[19:0], packet_ctrl_fsm.v:114-117,223-225), and (B) the per-tick decrement recurrence `if (iq_tick) cnt <= cnt - 1` (packet_ctrl_fsm.v:166-170). The v25_b6 header left both at MCP=1 only because no -through matched them and there was then no proof iq_tick is sparse.",
+      "found_via": "job 5121 (v28+v29 signoff P&R): once tacc_accumulate + iq_samp_cnt were relaxed, the SS setup worst path and its ~130-bit cluster were entirely u_pcfsm.pkt_cnt[*]/wpend_cnt[*]/acq_cnt[*] (`_63606_/dcr_valid` -> ... -> `u_pcfsm.pkt_cnt[10]` = `_63751_`, WNS -15.51 ns). iq_samp_cnt (v29) itself was not in the violating set.",
+      "proof": "Arc B (decrement recurrence): iq_tick == dcr_valid is a 1-clock pulse with measured >=64-cycle spacing -- cocotb/tests/test_mcp_iq_samp_cnt_settle.py::test_dcr_valid_single_cycle, SGE job 5120, 3/3 PASS -- so the recurrence has ~63 idle IQ_CLK cycles between launches (21x the 3-cycle budget) and never a back-to-back launch (hold-2 reference edge carries identical data). Arc A (sample_count -> load): the ST_ACQ_SETUP dwell (setup_cnt 0->3, capture at setup_cnt==3, packet_ctrl_fsm.v:205-227) was added specifically to give the load cone 3 settled edges (Open Risks #43), proven by cocotb/tests/test_mcp_pcfsm_settle.py (4-cycle dwell, capture at u+4, adversarial config write before/at lock edge) -- SGE job 4362, 4/4; the `- iq_tick` term in acq_rem_w/wpend_rem_w/pkt_rem_w (packet_ctrl_fsm.v:115-117) corrects for a tick landing inside the dwell, so MCP=3 across the whole load arc (sample_count included) matches the same RTL intent pcfsm_latched_timing_ref / pcfsm_mval already rely on. The only writes to these regs are the load, the decrement, and the async reset (packet_ctrl_fsm.v:135-137), so the bare `-to` scope is honest (v18 bshift_regs / v28 tacc_acc_regs precedent). A dedicated cocotb assertion that iq_samp_cnt-driven decrement operands are stable >=3 cycles before every armed-state iq_tick would close arc A's sample_count leg fully (test_mcp_iq_samp_cnt_settle.py covers the dcr_valid spacing but at trouper_top level, not the pcfsm decrement path specifically). Non-vacuity to be confirmed by run_mcp_audit.sh --stage route against the _signoff.sdc on the next clean routed netlist.",
+      "_comment_note": "min_through 0 / min_endpoint 1: bare -to, endpoint set = $pcfsm_timeout_regs (acq_cnt/wpend_cnt/pkt_cnt dff cells), expected ~62 endpoint objects."
+    },
+    "iq_samp_cnt": {
+      "setup": 3,
+      "hold": 2,
+      "min_through": 0,
+      "min_endpoint": 1,
+      "sdc_scope": "SIGNOFF ONLY -- lives in pnr_32m_scoped_v25_b6_signoff.sdc (SIGNOFF_SDC_FILE), NOT in the P&R SDC. Same rationale as tacc_accumulate: keeping paced MCPs out of the P&R SDC leaves the placed/routed netlist bit-identical to job 5105 and avoids the resizer perturbation that stranded the IQ_CLK root clkbuf (DRT-0073, job 5112). run_mcp_audit.sh must point MCP_AUDIT_SDC at the _signoff.sdc for this group. NOTE (job 5121): the SS worst-path dcr_valid cluster is actually u_pcfsm.{pkt,wpend,acq}_cnt (see pcfsm_tick_decrement group) -- iq_samp_cnt's own paths were not in the violating set, so this group is correct but had no measured WNS/TNS effect; kept for completeness and audited for non-vacuity.",
+      "status": "ADDED as SDC v29 (2026-08-27), signoff-SDC-only. Scopes the top-level 32-bit sample counter iq_samp_cnt[*] (trouper_top.v:171, `if (dcr_valid) iq_samp_cnt <= iq_samp_cnt + 32'd1`). Not a u_dec.* net, so paced_dsp's -through wildcard never covered it.",
+      "found_via": "job 5118 (v28 signoff-only P&R): once tacc_accumulate relaxed the training_acc cone, the SS setup worst path became `_63606_/dcr_valid` -> xor2/oai/... -> `_63751_` (an iq_samp_cnt bit), WNS -15.51 ns, ~130 sibling violators.",
+      "proof": "cocotb/tests/test_mcp_iq_samp_cnt_settle.py (top-level trouper_top), SGE job 5120, 3/3 PASS: (1) test_dcr_valid_single_cycle -- dcr_valid never high on two consecutive IQ_CLK edges (~40 pulses, measured min spacing 64 cycles); structurally sd_decimator_poly.v:348 sets iq_valid<=4'hf on hb2_stream_last only (zeroed every other cycle) and dc_removal.v:110 is a 1-cycle registered passthrough. (2) test_iq_samp_cnt_settle_gating -- 51 increments, every one +1 and every one on a post-dcr_valid edge, min gap 64 IQ_CLK cycles (21x the 3-cycle setup budget). (3) test_reset_mid_stream_rearm -- clears to 0 on reset between pulses and on a reset coincident with a dcr_valid delta, then re-arms and resumes under the same discipline. With no adjacent launch edge the 2-hold reference edge carries identical data, so hold is safe. The only writes to iq_samp_cnt are the async reset and the +1, so the bare `-to` endpoint scope is honest (v18 bshift_regs / v28 tacc_acc_regs precedent). Non-vacuity to be confirmed by run_mcp_audit.sh --stage route against the _signoff.sdc on the next clean routed netlist."
     }
   },
   "withdrawn_groups": {
