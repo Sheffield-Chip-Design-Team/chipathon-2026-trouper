@@ -5,21 +5,19 @@ FP_DEF_TEMPLATE flow can consume directly.
 Input : the integrator bundle's A40/project_defs/ACV/A40_ACV.def
 Output : rtl-test/ol_trouper_top/A40_ACV_rtlnames.def
 
-Three edits:
-  1. Rename 18 pins from the DEF's "<pad>_OUT/_IN/_OE" convention to Trouper
-     RTL's port names (PSRAM_SIO_0_OUT -> PSRAM_SIO_OUT_0, REMOD_A_I_OUT ->
-     REMOD_A_I, PSRAM_SCK_OUT -> PSRAM_SCK, PSRAM_CE_N_OUT -> PSRAM_CE_N,
-     SPI_MISO_OUT -> SPI_MISO, IRQ_OUT_OUT -> IRQ_OUT).
-  2. Keep the VDD / VSS boundary pin entries (USE POWER / USE GROUND, W12 / N14)
+Two edits (as of the 2026-08-28 RTL rename, commit renaming the 18 functional
+ports in src/top/trouper_top.v to the generator's <pad>_<terminal> convention,
+the DEF names now match trouper_top verbatim - no rename step needed):
+  1. Keep the VDD / VSS boundary pin entries (USE POWER / USE GROUND, W12 / N14)
      so the LibreLane PDN ring terminates on the integrator's power-pad
      locations rather than being a self-contained grid. They have no matching
      trouper_top RTL port - they attach to the PDN's special VDD/VSS nets.
-  3. Append the die-internal Grouper interface (GRP_* + AHB H* + IRQ_GROUPER,
-     205-139+2 = 68 pins) on the south edge at synthetic coordinates. These are
-     NOT part of the integrator flow (no pads, absent from info.yaml, never in
-     A40_ACV.def) - they are placed only to satisfy FP_DEF_TEMPLATE's "every
-     top-level port must be placed" rule. Their real placement is the
-     Trouper<->Grouper abutment, agreed between those two projects.
+  2. Append the die-internal Grouper interface (GRP_* + AHB H* + IRQ_GROUPER,
+     68 pins) on the south edge at synthetic coordinates. These are NOT part of
+     the integrator flow (no pads, absent from info.yaml, never in A40_ACV.def) -
+     they are placed only to satisfy FP_DEF_TEMPLATE's "every top-level port must
+     be placed" rule. Their real placement is the Trouper<->Grouper abutment,
+     agreed between those two projects.
 
 DEF units are 200 dbu/um; die is 335000 x 222000 dbu = 1675 x 1110 um.
 
@@ -31,16 +29,7 @@ import sys
 SRC = sys.argv[1] if len(sys.argv) > 1 else "tmp/.a40/A40/project_defs/ACV/A40_ACV.def"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "rtl-test/ol_trouper_top/A40_ACV_rtlnames.def"
 
-ren = {}
-for n in range(4):
-    ren[f"PSRAM_SIO_{n}_OUT"] = f"PSRAM_SIO_OUT_{n}"
-    ren[f"PSRAM_SIO_{n}_IN"] = f"PSRAM_SIO_IN_{n}"
-    ren[f"PSRAM_SIO_{n}_OE"] = f"PSRAM_SIO_OE_{n}"
-ren.update({
-    "REMOD_A_I_OUT": "REMOD_A_I", "REMOD_A_Q_OUT": "REMOD_A_Q",
-    "PSRAM_SCK_OUT": "PSRAM_SCK", "PSRAM_CE_N_OUT": "PSRAM_CE_N",
-    "SPI_MISO_OUT": "SPI_MISO", "IRQ_OUT_OUT": "IRQ_OUT",
-})
+ren = {}  # RTL now matches the DEF's <pad>_<terminal> names - no renames.
 
 lines = open(SRC).read().split("\n")
 h = next(i for i, l in enumerate(lines) if re.match(r"^PINS \d+ ;", l))
@@ -98,4 +87,4 @@ newbody = [f"PINS {len(allpins)} ;"]
 for ent in allpins:
     newbody += ent
 open(OUT, "w").write("\n".join(pre + newbody + post))
-print(f"{OUT}: renamed {len(ren)}, kept VDD/VSS, +{len(south)} south -> {len(allpins)} pins")
+print(f"{OUT}: renames {len(ren)} (RTL matches), kept VDD/VSS, +{len(south)} south -> {len(allpins)} pins")

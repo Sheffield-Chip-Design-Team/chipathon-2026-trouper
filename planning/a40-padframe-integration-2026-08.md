@@ -41,27 +41,32 @@ bidirectional pad (`gf180mcu_fd_io__bi_t`, or `bi_24t` for `PSRAM_SCK`). The
 tie-off block. Tie values (pulls off, PSRAM fast/max-drive/input-enabled,
 REMOD/MISO/IRQ mid-drive, `SPI_MISO_OE=1` per TRPR-SPS-008) are tabulated in
 `planning/Pinout.md` → "A40 pad-control tie-offs". Drive-strength / slew are
-provisional pending SI review. Functional port **names are unchanged**
-(`PSRAM_SIO_OUT_0`, not the template's `PSRAM_SIO_0_OUT`) to avoid ~30 testbench
-touch-points.
+provisional pending SI review.
 
 ## Name reconciliation for `FP_DEF_TEMPLATE`
 
-`FP_DEF_TEMPLATE` matches pins by exact name. 18 template pins use the
-`<pad>_OUT/_IN/_OE` convention where Trouper's RTL differs — reconciled
-**in the DEF** by `rtl-test/scripts/a40_def_to_rtlnames.py`:
+The generator builds every DEF pin name as `<info.yaml pad>_<IO-cell terminal>`
+(confirmed in `A40_ACV_interface.yaml`: `user_pin_name` + `cell_terminal`).
+That convention is fixed — you cannot get `PSRAM_SIO_OUT_0` out of it without a
+semantically wrong pad name.
 
-| `A40_ACV.def` | trouper_top.v |
-|---|---|
-| `PSRAM_SIO_{n}_OUT` / `_IN` / `_OE` | `PSRAM_SIO_OUT_{n}` / `IN_{n}` / `OE_{n}` |
-| `REMOD_A_I_OUT`, `REMOD_A_Q_OUT` | `REMOD_A_I`, `REMOD_A_Q` |
-| `PSRAM_SCK_OUT`, `PSRAM_CE_N_OUT` | `PSRAM_SCK`, `PSRAM_CE_N` |
-| `SPI_MISO_OUT`, `IRQ_OUT_OUT` | `SPI_MISO`, `IRQ_OUT` |
+**2026-08-28: the 18 functional ports in `src/top/trouper_top.v` were renamed
+to match** (`PSRAM_SIO_OUT_{n}` → `PSRAM_SIO_{n}_OUT`; `REMOD_A_I` →
+`REMOD_A_I_OUT`; `PSRAM_SCK` → `PSRAM_SCK_OUT`; `PSRAM_CE_N` → `PSRAM_CE_N_OUT`;
+`SPI_MISO` → `SPI_MISO_OUT`; `IRQ_OUT` → `IRQ_OUT_OUT`). This also makes the RTL
+self-consistent — the data ports now match the pad-control ties
+(`PSRAM_SIO_0_OUT` alongside `PSRAM_SIO_0_IE`). **The integrator's raw
+`A40_ACV.def` now matches `trouper_top` verbatim; no rename step.**
 
-The script keeps the `VDD`/`VSS` boundary pin entries as delivered (see the
-VDD/VSS item under "Open / next") and appends the 68 Grouper/AHB pins on the
-south edge at synthetic coordinates so every `trouper_top` port is accounted
-for → `A40_ACV_rtlnames.def` (207 pins).
+`rtl-test/scripts/a40_def_to_rtlnames.py` therefore only: keeps the `VDD`/`VSS`
+boundary pin entries as delivered (see "Open / next"), and appends the 68
+die-internal Grouper/AHB pins on a synthetic south row so every `trouper_top`
+port is placed → `A40_ACV_rtlnames.def` (207 pins).
+
+**Testbenches not yet updated** (deliberate): ~30 `cocotb/` + `rtl-test/tb/`
+benches instantiate `trouper_top` with the old port names and will fail to
+elaborate against the renamed `src/` until updated. Block regression / cocotb
+is broken until then.
 
 ## P&R evidence (SGE, `config_1650x1100_full_rect` lineage, signoff SDC `v25_b6`)
 
@@ -125,9 +130,9 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
   them. The 68 synthetic south-edge pins the script adds exist only to satisfy
   `FP_DEF_TEMPLATE`'s "every port placed" rule. Real placement is the
   **Trouper↔Grouper abutment**, agreed between those two projects.
-- **Name reconciliation** — kept on the DEF side (`a40_def_to_rtlnames.py`). For
-  the production build, decide DEF-side rename vs renaming the 18 ports in
-  `trouper_top.v` (the ~30-TB churn).
+- **Name reconciliation** — DONE: the 18 ports renamed in `src/top/trouper_top.v`
+  (2026-08-28). Remaining: update the ~30 testbenches to the new port names so
+  block regression / cocotb elaborates again.
 
 ## Files
 

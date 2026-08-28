@@ -120,10 +120,13 @@ Values (drive-strength `PDRV[1:0]` and slew `SL` are provisional, pending SI rev
 `SPI_MISO=0` when deselected (TRPR-SPS-008) and the host MISO net is point-to-point.
 Flip to `~HOST_CS` only if the integrator confirms a shared host-SPI MISO bus.
 
-The functional output ports keep their existing names (`PSRAM_SIO_OUT_0`, `REMOD_A_I`,
-…); the A40 template uses `PSRAM_SIO_0_OUT` / `REMOD_A_I_OUT` ordering, so the
-integrator maps names on hook-up. Grouper `GRP_*` / AHB `H*` / `IRQ_GROUPER` are
-die-internal (south abutment edge), not pads.
+As of 2026-08-28 the 18 functional ports in `src/top/trouper_top.v` were renamed
+to the A40 generator convention `<pad>_<terminal>` — `PSRAM_SIO_{n}_OUT/_IN/_OE`,
+`REMOD_A_{I,Q}_OUT`, `PSRAM_SCK_OUT`, `PSRAM_CE_N_OUT`, `SPI_MISO_OUT`,
+`IRQ_OUT_OUT` — so the integrator's `A40_ACV.def` matches `trouper_top` verbatim
+(no name mapping on hook-up). Testbenches still use the old names and are being
+updated separately. Grouper `GRP_*` / AHB `H*` / `IRQ_GROUPER` are die-internal
+(south abutment edge), not pads.
 
 ---
 

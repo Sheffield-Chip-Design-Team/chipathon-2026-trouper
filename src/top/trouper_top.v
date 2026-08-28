@@ -43,30 +43,30 @@ module trouper_top (
     input  wire        IQ_DATA_Q_3,  // ant3
 
     // ---- ASIC → SX1302: MRC-combined sigma-delta output ----
-    output wire        REMOD_A_I,
-    output wire        REMOD_A_Q,
+    output wire        REMOD_A_I_OUT,
+    output wire        REMOD_A_Q_OUT,
 
     // ---- PSRAM QPI (SIO[3:0] on four dedicated pads) ----
-    output wire        PSRAM_SCK,     // PSRAM clock (32 MHz, gated in psram_buf_ctrl)
-    output wire        PSRAM_CE_N,
-    output wire        PSRAM_SIO_OUT_0,
-    output wire        PSRAM_SIO_OUT_1,
-    output wire        PSRAM_SIO_OUT_2,
-    output wire        PSRAM_SIO_OUT_3,
-    input  wire        PSRAM_SIO_IN_0,
-    input  wire        PSRAM_SIO_IN_1,
-    input  wire        PSRAM_SIO_IN_2,
-    input  wire        PSRAM_SIO_IN_3,
-    output wire        PSRAM_SIO_OE_0,
-    output wire        PSRAM_SIO_OE_1,
-    output wire        PSRAM_SIO_OE_2,
-    output wire        PSRAM_SIO_OE_3,
+    output wire        PSRAM_SCK_OUT,     // PSRAM clock (32 MHz, gated in psram_buf_ctrl)
+    output wire        PSRAM_CE_N_OUT,
+    output wire        PSRAM_SIO_0_OUT,
+    output wire        PSRAM_SIO_1_OUT,
+    output wire        PSRAM_SIO_2_OUT,
+    output wire        PSRAM_SIO_3_OUT,
+    input  wire        PSRAM_SIO_0_IN,
+    input  wire        PSRAM_SIO_1_IN,
+    input  wire        PSRAM_SIO_2_IN,
+    input  wire        PSRAM_SIO_3_IN,
+    output wire        PSRAM_SIO_0_OE,
+    output wire        PSRAM_SIO_1_OE,
+    output wire        PSRAM_SIO_2_OE,
+    output wire        PSRAM_SIO_3_OE,
 
     // ---- Host SPI slave (RPi) ----
     input  wire        HOST_CS,       // active-low chip select from RPi
     input  wire        SPI_SCK,       // SPI clock (Mode 0, up to 10 MHz)
     input  wire        SPI_MOSI,
-    output wire        SPI_MISO,
+    output wire        SPI_MISO_OUT,
 
     // ---- Grouper inter-project register bus (priority over SPI) ----
     input  wire        GRP_ADDR_0,
@@ -114,7 +114,7 @@ module trouper_top (
     output wire        HRESP,
 
     // ---- Interrupt outputs ----
-    output wire        IRQ_OUT,       // → dedicated IRQ pad; sticky, level-high
+    output wire        IRQ_OUT_OUT,       // → dedicated IRQ pad; sticky, level-high
     output wire        IRQ_GROUPER,   // → Grouper inter-project IRQ line; same signal as IRQ_OUT
 
     // ==== A40 padframe pad-control tie-offs =================================
@@ -244,8 +244,8 @@ module trouper_top (
     wire [3:0] IQ_DATA_I = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
     wire [3:0] IQ_DATA_Q = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
     wire [3:0] PSRAM_SIO_OUT;
-    wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_IN_3, PSRAM_SIO_IN_2,
-                               PSRAM_SIO_IN_1, PSRAM_SIO_IN_0};
+    wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
+                               PSRAM_SIO_1_IN, PSRAM_SIO_0_IN};
     wire [3:0] PSRAM_SIO_OE;
     wire [7:0] GRP_ADDR = {GRP_ADDR_7, GRP_ADDR_6, GRP_ADDR_5, GRP_ADDR_4,
                            GRP_ADDR_3, GRP_ADDR_2, GRP_ADDR_1, GRP_ADDR_0};
@@ -253,10 +253,10 @@ module trouper_top (
                             GRP_WDATA_3, GRP_WDATA_2, GRP_WDATA_1, GRP_WDATA_0};
     wire [7:0] GRP_RDATA;
 
-    assign {PSRAM_SIO_OUT_3, PSRAM_SIO_OUT_2,
-            PSRAM_SIO_OUT_1, PSRAM_SIO_OUT_0} = PSRAM_SIO_OUT;
-    assign {PSRAM_SIO_OE_3, PSRAM_SIO_OE_2,
-            PSRAM_SIO_OE_1, PSRAM_SIO_OE_0} = PSRAM_SIO_OE;
+    assign {PSRAM_SIO_3_OUT, PSRAM_SIO_2_OUT,
+            PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = PSRAM_SIO_OUT;
+    assign {PSRAM_SIO_3_OE, PSRAM_SIO_2_OE,
+            PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = PSRAM_SIO_OE;
     assign {GRP_RDATA_7, GRP_RDATA_6, GRP_RDATA_5, GRP_RDATA_4,
             GRP_RDATA_3, GRP_RDATA_2, GRP_RDATA_1, GRP_RDATA_0} = GRP_RDATA;
 
@@ -731,8 +731,8 @@ module trouper_top (
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
         .clr_err      (rb_psram_ctrl[1]),
-        .sck          (PSRAM_SCK),
-        .ce_n         (PSRAM_CE_N),
+        .sck          (PSRAM_SCK_OUT),
+        .ce_n         (PSRAM_CE_N_OUT),
         .sio_out      (PSRAM_SIO_OUT),
         .sio_in       (PSRAM_SIO_IN),
         .sio_oe       (PSRAM_SIO_OE),
@@ -832,8 +832,8 @@ module trouper_top (
         .in_q     (remod_in_q),
         .in_valid (comb_y_valid),
         .en       (1'b1),
-        .out_i    (REMOD_A_I),
-        .out_q    (REMOD_A_Q)
+        .out_i    (REMOD_A_I_OUT),
+        .out_q    (REMOD_A_Q_OUT)
     );
 
     // =========================================================================
@@ -895,7 +895,7 @@ module trouper_top (
         .HOST_CS     (HOST_CS),
         .SPI_SCK     (SPI_SCK),
         .SPI_MOSI    (SPI_MOSI),
-        .SPI_MISO    (SPI_MISO),
+        .SPI_MISO    (SPI_MISO_OUT),
         .reg_wr_addr (spi_reg_wr_addr),
         .reg_wdata   (spi_reg_wdata),
         .reg_we      (spi_reg_we),
@@ -1014,7 +1014,7 @@ module trouper_top (
 
     // ---- Register Bank ----
     wire rb_irq_out_sticky;
-    assign IRQ_OUT     = rb_irq_out_sticky;
+    assign IRQ_OUT_OUT     = rb_irq_out_sticky;
     assign IRQ_GROUPER = rb_irq_out_sticky;
 
     reg_bank u_rb (
