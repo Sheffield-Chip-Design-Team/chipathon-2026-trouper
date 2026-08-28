@@ -102,8 +102,11 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
 
 - **`info.yaml` order** — the current order is P&R-validated (all runs above).
   Finalise it, then request the integrator regenerate `A40_ACV.def` from it.
-- **Die size** — template is 1675×1110; the rest of Trouper's P&R history is
-  1650×1100. Reconcile (accept the template's, or ask the integrator).
+- **Die size — DECIDED 2026-08-28: defer to the integrator DEF (1675×1110).**
+  The template defines the slot the shared padring actually reserves for
+  Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already
+  closed clean at 1675×1110. The signed-off `final/` bundle (1650×1100) will
+  need a re-run at the template die for the production A40 build.
 - **VDD/VSS** — dropped from the template for the dry-run; confirm the real flow
   with the integrator's power pads + PDN.
 - **Grouper/AHB placement** — synthetic south row here; the integrator template
