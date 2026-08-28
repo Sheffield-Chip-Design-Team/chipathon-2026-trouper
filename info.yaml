@@ -26,6 +26,17 @@ project:
 # there is one supply pin (VDD), not two. VSS added <TODO: date> — the
 # padring now requires a per-project VSS pin (previously GND/VSS was
 # shared die-wide and not a per-project pin) — see planning/Pinout.md.)
+#
+# LIST ORDER IS LOAD-BEARING. The A40 integrator tooling wraps this list
+# around Trouper's NW-corner arc in order: the first 11 entries
+# (VSS .. RESETB) land on the West edge bottom->top (A40 slots W12-W22),
+# the next 14 (REMOD_A_I .. VDD) on the North edge left->right (N01-N14).
+# This order is P&R-validated: job 5150 built trouper_top against the
+# integrator's A40_ACV.def generated from exactly this order and closed
+# DRC-clean / XOR-0 / max_ss -12.26 ns (= the signed-off rect baseline).
+# The Grouper bus (GRP_*, AHB H*, IRQ_GROUPER) is die-internal, not pads,
+# so it is intentionally absent here. See
+# planning/a40-padframe-integration-2026-08.md before reordering.
 # ======================================================
 pins:
   - name: VSS
