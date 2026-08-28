@@ -107,10 +107,16 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
   Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already
   closed clean at 1675×1110. The signed-off `final/` bundle (1650×1100) will
   need a re-run at the template die for the production A40 build.
-- **VDD/VSS** — dropped from the template for the dry-run; confirm the real flow
-  with the integrator's power pads + PDN.
-- **Grouper/AHB placement** — synthetic south row here; the integrator template
-  has none. Real south-edge abutment coordinates TBD.
+- **VDD/VSS** — the template *has* real coordinates (`VSS` W12, `VDD` N14);
+  `a40_def_to_rtlnames.py` drops those pin entries because `trouper_top.v` has
+  no power ports and the LibreLane PDN builds power. For production, decide:
+  keep the template's power-pad entries so P&R ties the PDN to the integrator's
+  actual pad locations, or keep the PDN self-contained.
+- **Grouper/AHB placement** — *not part of the integrator flow at all*: no pads,
+  absent from `info.yaml`, the regenerated `A40_ACV.def` will never contain
+  them. The 68 synthetic south-edge pins the script adds exist only to satisfy
+  `FP_DEF_TEMPLATE`'s "every port placed" rule. Real placement is the
+  **Trouper↔Grouper abutment**, agreed between those two projects.
 - **Name reconciliation** — kept on the DEF side (`a40_def_to_rtlnames.py`). For
   the production build, decide DEF-side rename vs renaming the 18 ports in
   `trouper_top.v` (the ~30-TB churn).

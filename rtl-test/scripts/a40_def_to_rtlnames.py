@@ -12,11 +12,11 @@ Three edits:
      SPI_MISO_OUT -> SPI_MISO, IRQ_OUT_OUT -> IRQ_OUT).
   2. Drop the VDD / VSS pin entries - the LibreLane PDN step builds power.
   3. Append the die-internal Grouper interface (GRP_* + AHB H* + IRQ_GROUPER,
-     205-139+2 = 68 pins) on the south edge at synthetic coordinates. The
-     integrator template has no Grouper pins ("Grouper will be internal"); these
-     are placed only so every trouper_top port is accounted for and the flow
-     completes. Their real placement is the south abutment edge, TBD with the
-     integrator.
+     205-139+2 = 68 pins) on the south edge at synthetic coordinates. These are
+     NOT part of the integrator flow (no pads, absent from info.yaml, never in
+     A40_ACV.def) - they are placed only to satisfy FP_DEF_TEMPLATE's "every
+     top-level port must be placed" rule. Their real placement is the
+     Trouper<->Grouper abutment, agreed between those two projects.
 
 DEF units are 200 dbu/um; die is 335000 x 222000 dbu = 1675 x 1110 um.
 
