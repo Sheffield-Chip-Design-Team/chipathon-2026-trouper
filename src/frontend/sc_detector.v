@@ -98,7 +98,9 @@ module sc_detector (
     input  wire [1:0]  sc_hits_req,
     input  wire        sc_clr,     // re-arm: clear lock + detection state (packet done)
     input  wire        sc_lock_force, // manual override (reg_bank SC_FORCE_LOCK 0x19, W1P)
+    input  wire        sc_lock_sync,  // idle-only peer acquisition request
     output reg         sc_lock,
+    output reg         sc_lock_natural_pulse,
     output reg  [31:0] timing_ref,
     output reg  signed [31:0] c_i0, c_q0,
     output reg  [15:0] sc_stat,
@@ -265,6 +267,7 @@ module sc_detector (
             eval_ci0  <= 13'sd0; eval_cq0  <= 13'sd0;
             eval_E0cur<= 13'sd0; eval_E0del<= 13'sd0;
             sc_lock            <= 1'b0;
+            sc_lock_natural_pulse <= 1'b0;
             timing_ref         <= 32'd0;
             c_i0 <= 32'sd0; c_q0 <= 32'sd0;
             sc_stat            <= 16'd0;
@@ -276,6 +279,7 @@ module sc_detector (
         end else begin
             metric_valid_pulse <= 1'b0;
             sc_hit_dbg         <= 1'b0;
+            sc_lock_natural_pulse <= 1'b0;
             mul_start          <= 1'b0;  // default; pulsed to launch a product
 
             // -----------------------------------------------------------------
@@ -439,6 +443,7 @@ module sc_detector (
                         first_hit_sample <= eval_sample_mark;
                     if (hit_count == sc_hits_req) begin
                         sc_lock            <= 1'b1;
+                        sc_lock_natural_pulse <= 1'b1;
                         sc_lock_sample_dbg <= eval_sample_mark;
                         // (sc_hits_req+1)*M: M=2^(sf+sample_shift), shift by sf+sample_shift.
                         // n_hits_p1 ∈ 1..4 (3 bits); offset ≤ 4×16384=65536 (17 bits).
@@ -460,6 +465,24 @@ module sc_detector (
                     hit_count <= 2'd0;
                 end
                 sc_hit_count_dbg <= hit_count;
+            end
+
+            // Peer array acquisition request. This is intentionally distinct
+            // from SC_FORCE_LOCK: it has passed the idle-only guard in
+            // array_acq_sync and uses the same hit-run back-calculation as a
+            // natural SC lock. Linked arrays must share SF/BW, IQ_CLK, and
+            // reset deassertion. A simultaneous local qualified hit wins.
+            if (sc_lock_sync && !sc_lock &&
+                !(metric_valid_pulse && eval_hit && (hit_count == sc_hits_req))) begin
+                sc_lock            <= 1'b1;
+                sc_lock_sample_dbg <= sample_count;
+                begin : blk_sync_timing
+                    reg [2:0]  n_hits_p1;
+                    reg [16:0] sc_off;
+                    n_hits_p1 = {1'b0, sc_hits_req} + 2'd1;
+                    sc_off = {14'd0, n_hits_p1} << (sf + sample_shift);
+                    timing_ref <= sample_count - {15'd0, sc_off} + 32'd1;
+                end
             end
 
             // -----------------------------------------------------------------

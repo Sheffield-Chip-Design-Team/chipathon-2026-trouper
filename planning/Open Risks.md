@@ -1322,6 +1322,57 @@ package-bond available until the integrator confirms it.
 
 ---
 
+### 53. `ARRAY_ACQ_N` open-drain emulation has not received pad-level electrical review
+
+The multi-ASIC acquisition-sync extension uses one `gf180mcu_fd_io__bi_24t`
+bidirectional pad as an active-low, shared open-drain wire: RTL ties `A=0` and
+uses `OE` to select drive-low versus high impedance while sampling `Y`.  This
+is the appropriate logical use of the available pad, but the PDK provides no
+dedicated open-drain primitive and no pad-level/silicon validation has yet
+established that the selected control polarity, reset behaviour, input
+thresholds, drive strength, leakage, or enable/disable transition are suitable
+for a multi-chip wired net.
+
+**Risk:** an incorrect interpretation of the `bi_24t` controls or an
+unreviewed board pull-up can cause contention, an excessive low-level current,
+slow/noisy rising edges, false synchronisation events, or an unintentional
+drive during reset.  The net is optional for a single-chip receiver, but it is
+required for the proposed coordinated multi-chip acquisition and should not be
+committed to the board/pad allocation on RTL inference alone.
+
+**Required review / closure evidence:**
+
+- Review the exact `gf180mcu_fd_io__bi_24t` Liberty, Verilog model, and PDK
+  documentation for `A`, `OE`, `Y`, `IE`, `CS`, `SL`, `PU`, `PD`, `PDRV0`, and
+  `PDRV1`; confirm OE polarity, high-impedance state, reset/default state, and
+  whether any keeper or implicit pull is active.
+- Simulate the actual pad model at chip-top with an external pull-up and two
+  pad instances.  Prove no device drives high, simultaneous local locks only
+  sink current, and reset/enable transitions do not create a false accepted
+  falling edge.
+- Select and document a board pull-up resistance from the pad's sink-current
+  limit, IO voltage, net capacitance, maximum trace length, and the required
+  release/rise time.  Verify VIH/VIL margins and account for all attached
+  chips' leakage.
+- Confirm package/padframe integration maps the ten logical boundary signals
+  (`OUT`, `IN`, `OE`, and seven controls) to exactly one physical bidirectional
+  pad and that this additional physical pad remains available in the final
+  allocation.
+- Run a post-integration electrical/functional test with the real pad wrapper
+  before relying on multi-chip beamforming or direction-finding experiments.
+
+**Current RTL safeguards:** internal pull-up/down controls are disabled,
+Schmitt input is enabled, the driver only ever presents zero, a natural local
+SC lock wins over a same-cycle peer edge, and a receiver ignores peer events
+while `packet_active`.  These reduce protocol risk but are not substitutes for
+the electrical review.
+
+**See:** item 52 above (the pad-slot allocation decision this depends on);
+`planning/array-acquisition-sync.md`; `src/top/trouper_top.v`
+(`array_acq_sync` and `ARRAY_ACQ_N_*` pad wiring).
+
+---
+
 ## Low
 
 ### 47. Trouper standalone flow has never run a real-source IR-drop analysis
