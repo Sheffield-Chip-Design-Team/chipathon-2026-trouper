@@ -9,9 +9,12 @@ Two edits (as of the 2026-08-28 RTL rename, commit renaming the 18 functional
 ports in src/top/trouper_top.v to the generator's <pad>_<terminal> convention,
 the DEF names now match trouper_top verbatim - no rename step needed):
   1. Keep the VDD / VSS boundary pin entries (USE POWER / USE GROUND, W12 / N14)
-     so the LibreLane PDN ring terminates on the integrator's power-pad
-     locations rather than being a self-contained grid. They have no matching
-     trouper_top RTL port - they attach to the PDN's special VDD/VSS nets.
+     so the file matches the integrator artifact. NOTE: with the default config
+     these are INERT - FP_DEF_TEMPLATE matching filters POWER/GROUND sigtype
+     bterms, and FP_TEMPLATE_COPY_POWER_PINS defaults False, so their
+     coordinates are never copied; the LibreLane PDN builds its own VDD/VSS
+     ring regardless (jobs 5150 == 5153). To honour them, set
+     FP_TEMPLATE_COPY_POWER_PINS: true and reconcile pdn_cfg.tcl.
   2. Append the die-internal Grouper interface (GRP_* + AHB H* + IRQ_GROUPER,
      68 pins) on the south edge at synthetic coordinates. These are NOT part of
      the integrator flow (no pads, absent from info.yaml, never in A40_ACV.def) -

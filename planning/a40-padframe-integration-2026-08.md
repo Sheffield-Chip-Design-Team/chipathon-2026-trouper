@@ -92,10 +92,15 @@ is broken until then.
   pins clear, no `DRT-0073` at all. **max_ss −12.26 ns — matches the signed-off
   rectangular baseline (−12.45)**, ~4 ns better than the approximate cfg.
 - **5153** — 5150 + the template's `VSS`(W12)/`VDD`(N14) boundary pin entries
-  restored. PDN ring terminates on those pins: power-grid violations **0/0**,
-  IR drop 5.2 mV. Magic DRC 0, routing DRC 0, XOR 0, LVS-unmatched 0, WNS
-  byte-identical to 5150. 15 non-critical disconnected pins (the unused `_IN`
-  legs on output-only pads), 0 critical.
+  restored in the DEF. **They had no effect.** `FP_DEF_TEMPLATE` pin matching
+  (`template_bterm_names`) excludes POWER/GROUND sigtype bterms from the strict
+  check — the only reason 5153 passed with `VDD`/`VSS` present and no matching
+  RTL port (invisible, not "handled") — and `FP_TEMPLATE_COPY_POWER_PINS`
+  defaults `False` (unset here), so the template's coordinates were never
+  copied. The PDN generated its own `VDD`/`VSS` boundary pins identically in
+  5150 and 5153: the placed DEFs' `VDD`/`VSS` entries are byte-identical, at
+  PDN-chosen locations, and all results (power-grid 0/0, IR drop 5.2 mV, WNS,
+  DRC, XOR) match 5150 exactly.
 - **5154** — the 18 functional ports renamed in `src/top/trouper_top.v`; the
   raw integrator `A40_ACV.def` now matches `trouper_top` verbatim (`ren` map in
   the transform script is empty). No name-mismatch at floorplan. Magic DRC 0,
@@ -125,12 +130,15 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
   Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already
   closed clean at 1675×1110. The signed-off `final/` bundle (1650×1100) will
   need a re-run at the template die for the production A40 build.
-- **VDD/VSS — DECIDED: keep** the template's boundary pin entries (`VSS` W12,
-  `VDD` N14, `USE POWER`/`USE GROUND`). Job 5153: PDN ring terminates on those
-  pins, power-grid violations 0/0, IR drop 5.2 mV, and timing/DRC byte-identical
-  to the drop-them run (−12.26 ns SS, 0 DRC/XOR). No downside. They have no
-  matching `trouper_top` RTL port — they attach to the PDN's special VDD/VSS
-  nets. `a40_def_to_rtlnames.py` keeps them as delivered.
+- **VDD/VSS — OPEN.** `a40_def_to_rtlnames.py` keeps the template's `VSS`(W12) /
+  `VDD`(N14) `USE POWER`/`USE GROUND` entries so the file matches the integrator
+  artifact, but **with the current config they are inert** — filtered from
+  `FP_DEF_TEMPLATE` matching (POWER/GROUND sigtype) and not copied
+  (`FP_TEMPLATE_COPY_POWER_PINS` defaults `False`). The PDN builds its own
+  `VDD`/`VSS` ring regardless (jobs 5150 ≡ 5153). To make power actually enter
+  at the integrator's pad locations: set `FP_TEMPLATE_COPY_POWER_PINS: true`
+  **and** reconcile `pdn_cfg.tcl` so the ring terminates on those boundary pins
+  instead of generating its own. Not yet done.
 - **Grouper/AHB placement** — *not part of the integrator flow at all*: no pads,
   absent from `info.yaml`, the regenerated `A40_ACV.def` will never contain
   them. The 68 synthetic south-edge pins the script adds exist only to satisfy
