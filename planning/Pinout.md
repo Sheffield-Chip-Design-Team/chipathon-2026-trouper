@@ -96,6 +96,37 @@ Dedicated PSRAM QPI data nibble. JTAG and GPIO have been removed (no TAP in RTL;
 
 ---
 
+## A40 pad-control tie-offs (shared-padframe integration, 2026-08-28)
+
+The A40 (ACV) workshop padring exposes each pad's full IO-cell control interface to
+the core, and has **no output-only cell** — every functional output sits on a
+bidirectional pad. `trouper_top.v` therefore drives all pad-control pins itself
+(`src/top/trouper_top.v`, "A40 padframe pad-control tie-offs" block) so integration
+is a straight wire-up with no assumptions about a padring wrapper. 106 added ports:
+100 constant outputs + 6 unused `_IN` inputs.
+
+Values (drive-strength `PDRV[1:0]` and slew `SL` are provisional, pending SI review):
+
+| Pad group | Added control pins (per pad) | Tie value |
+|---|---|---|
+| 13 input pads (`IQ_DATA_{I,Q}_0..3`, `IQ_CLK`, `RESETB`, `HOST_CS`, `SPI_SCK`, `SPI_MOSI`) | `_PU`, `_PD` | `0`, `0` — on-chip pulls off; board supplies SPI-CS / reset pull-ups |
+| `PSRAM_SIO_0..3` (true bidir; `_OUT/_IN/_OE` already existed) | `_IE`, `_CS`, `_SL`, `_PU`, `_PD`, `_PDRV0`, `_PDRV1` | `1, 0, 0, 0, 0, 1, 1` — input-enabled, CMOS, fast, no pull, max drive |
+| `PSRAM_CE_N` (output on `bi_t`) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OE=1`, `_SL=0` fast, drive `1,1` max, rest `0` |
+| `PSRAM_SCK` (output on `bi_24t`, drive fixed) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD` | `_OE=1`, `_SL=0` fast, rest `0` |
+| `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,0` mid, rest `0` |
+| `SPI_MISO`, `IRQ_OUT` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
+
+`SPI_MISO_OE` is tied `1` (not gated by `HOST_CS`): the SPI slave already drives
+`SPI_MISO=0` when deselected (TRPR-SPS-008) and the host MISO net is point-to-point.
+Flip to `~HOST_CS` only if the integrator confirms a shared host-SPI MISO bus.
+
+The functional output ports keep their existing names (`PSRAM_SIO_OUT_0`, `REMOD_A_I`,
+…); the A40 template uses `PSRAM_SIO_0_OUT` / `REMOD_A_I_OUT` ordering, so the
+integrator maps names on hook-up. Grouper `GRP_*` / AHB `H*` / `IRQ_GROUPER` are
+die-internal (south abutment edge), not pads.
+
+---
+
 ## Supply pad (1 pad; GND/VSS shared chip-wide, not a Trouper pad)
 
 | Pad name | Voltage | Count | Description |

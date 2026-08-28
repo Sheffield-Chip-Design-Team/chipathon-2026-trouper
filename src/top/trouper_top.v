@@ -115,7 +115,129 @@ module trouper_top (
 
     // ---- Interrupt outputs ----
     output wire        IRQ_OUT,       // → dedicated IRQ pad; sticky, level-high
-    output wire        IRQ_GROUPER    // → Grouper inter-project IRQ line; same signal as IRQ_OUT
+    output wire        IRQ_GROUPER,   // → Grouper inter-project IRQ line; same signal as IRQ_OUT
+
+    // ==== A40 padframe pad-control tie-offs =================================
+    //  The A40 workshop padring has no output-only cell: every functional
+    //  output sits on a bidirectional pad whose config pins are driven from
+    //  this block (Option A: SPI_MISO_OE tied 1, host link is point-to-point).
+    //  Pull/slew/drive values follow planning/Pinout.md; drive-strength and
+    //  slew are provisional pending SI review.  See planning/Pinout.md
+    //  "A40 pad-control tie-offs".
+    // -- discrete input pads: pulls disabled (board supplies pull-ups) --
+    output wire        IQ_CLK_PU,
+    output wire        IQ_CLK_PD,
+    output wire        RESETB_PU,
+    output wire        RESETB_PD,
+    output wire        IQ_DATA_I_0_PU,
+    output wire        IQ_DATA_I_0_PD,
+    output wire        IQ_DATA_I_1_PU,
+    output wire        IQ_DATA_I_1_PD,
+    output wire        IQ_DATA_I_2_PU,
+    output wire        IQ_DATA_I_2_PD,
+    output wire        IQ_DATA_I_3_PU,
+    output wire        IQ_DATA_I_3_PD,
+    output wire        IQ_DATA_Q_0_PU,
+    output wire        IQ_DATA_Q_0_PD,
+    output wire        IQ_DATA_Q_1_PU,
+    output wire        IQ_DATA_Q_1_PD,
+    output wire        IQ_DATA_Q_2_PU,
+    output wire        IQ_DATA_Q_2_PD,
+    output wire        IQ_DATA_Q_3_PU,
+    output wire        IQ_DATA_Q_3_PD,
+    output wire        HOST_CS_PU,
+    output wire        HOST_CS_PD,
+    output wire        SPI_SCK_PU,
+    output wire        SPI_SCK_PD,
+    output wire        SPI_MOSI_PU,
+    output wire        SPI_MOSI_PD,
+    // -- PSRAM_SIO[3:0]: true bidir (OUT/IN/OE above); input-enabled, max drive --
+    output wire        PSRAM_SIO_0_IE,
+    output wire        PSRAM_SIO_0_CS,
+    output wire        PSRAM_SIO_0_SL,
+    output wire        PSRAM_SIO_0_PU,
+    output wire        PSRAM_SIO_0_PD,
+    output wire        PSRAM_SIO_0_PDRV0,
+    output wire        PSRAM_SIO_0_PDRV1,
+    output wire        PSRAM_SIO_1_IE,
+    output wire        PSRAM_SIO_1_CS,
+    output wire        PSRAM_SIO_1_SL,
+    output wire        PSRAM_SIO_1_PU,
+    output wire        PSRAM_SIO_1_PD,
+    output wire        PSRAM_SIO_1_PDRV0,
+    output wire        PSRAM_SIO_1_PDRV1,
+    output wire        PSRAM_SIO_2_IE,
+    output wire        PSRAM_SIO_2_CS,
+    output wire        PSRAM_SIO_2_SL,
+    output wire        PSRAM_SIO_2_PU,
+    output wire        PSRAM_SIO_2_PD,
+    output wire        PSRAM_SIO_2_PDRV0,
+    output wire        PSRAM_SIO_2_PDRV1,
+    output wire        PSRAM_SIO_3_IE,
+    output wire        PSRAM_SIO_3_CS,
+    output wire        PSRAM_SIO_3_SL,
+    output wire        PSRAM_SIO_3_PU,
+    output wire        PSRAM_SIO_3_PD,
+    output wire        PSRAM_SIO_3_PDRV0,
+    output wire        PSRAM_SIO_3_PDRV1,
+    // -- PSRAM_CE_N: output on bidir pad --
+    input  wire        PSRAM_CE_N_IN,
+    output wire        PSRAM_CE_N_OE,
+    output wire        PSRAM_CE_N_IE,
+    output wire        PSRAM_CE_N_CS,
+    output wire        PSRAM_CE_N_SL,
+    output wire        PSRAM_CE_N_PU,
+    output wire        PSRAM_CE_N_PD,
+    output wire        PSRAM_CE_N_PDRV0,
+    output wire        PSRAM_CE_N_PDRV1,
+    // -- REMOD_A_I: output on bidir pad --
+    input  wire        REMOD_A_I_IN,
+    output wire        REMOD_A_I_OE,
+    output wire        REMOD_A_I_IE,
+    output wire        REMOD_A_I_CS,
+    output wire        REMOD_A_I_SL,
+    output wire        REMOD_A_I_PU,
+    output wire        REMOD_A_I_PD,
+    output wire        REMOD_A_I_PDRV0,
+    output wire        REMOD_A_I_PDRV1,
+    // -- REMOD_A_Q: output on bidir pad --
+    input  wire        REMOD_A_Q_IN,
+    output wire        REMOD_A_Q_OE,
+    output wire        REMOD_A_Q_IE,
+    output wire        REMOD_A_Q_CS,
+    output wire        REMOD_A_Q_SL,
+    output wire        REMOD_A_Q_PU,
+    output wire        REMOD_A_Q_PD,
+    output wire        REMOD_A_Q_PDRV0,
+    output wire        REMOD_A_Q_PDRV1,
+    // -- SPI_MISO: output on bidir pad --
+    input  wire        SPI_MISO_IN,
+    output wire        SPI_MISO_OE,
+    output wire        SPI_MISO_IE,
+    output wire        SPI_MISO_CS,
+    output wire        SPI_MISO_SL,
+    output wire        SPI_MISO_PU,
+    output wire        SPI_MISO_PD,
+    output wire        SPI_MISO_PDRV0,
+    output wire        SPI_MISO_PDRV1,
+    // -- IRQ_OUT: output on bidir pad --
+    input  wire        IRQ_OUT_IN,
+    output wire        IRQ_OUT_OE,
+    output wire        IRQ_OUT_IE,
+    output wire        IRQ_OUT_CS,
+    output wire        IRQ_OUT_SL,
+    output wire        IRQ_OUT_PU,
+    output wire        IRQ_OUT_PD,
+    output wire        IRQ_OUT_PDRV0,
+    output wire        IRQ_OUT_PDRV1,
+    // -- PSRAM_SCK: output on 24 mA bidir pad (no PDRV select) --
+    input  wire        PSRAM_SCK_IN,
+    output wire        PSRAM_SCK_OE,
+    output wire        PSRAM_SCK_IE,
+    output wire        PSRAM_SCK_CS,
+    output wire        PSRAM_SCK_SL,
+    output wire        PSRAM_SCK_PU,
+    output wire        PSRAM_SCK_PD
 );
 
     // Reassemble scalar physical pins into the vectors used inside the design.
@@ -137,6 +259,111 @@ module trouper_top (
             PSRAM_SIO_OE_1, PSRAM_SIO_OE_0} = PSRAM_SIO_OE;
     assign {GRP_RDATA_7, GRP_RDATA_6, GRP_RDATA_5, GRP_RDATA_4,
             GRP_RDATA_3, GRP_RDATA_2, GRP_RDATA_1, GRP_RDATA_0} = GRP_RDATA;
+
+    // ==== A40 padframe pad-control tie-offs (see module header + Pinout.md) ===
+    assign IQ_CLK_PU = 1'b0;
+    assign IQ_CLK_PD = 1'b0;
+    assign RESETB_PU = 1'b0;
+    assign RESETB_PD = 1'b0;
+    assign IQ_DATA_I_0_PU = 1'b0;
+    assign IQ_DATA_I_0_PD = 1'b0;
+    assign IQ_DATA_I_1_PU = 1'b0;
+    assign IQ_DATA_I_1_PD = 1'b0;
+    assign IQ_DATA_I_2_PU = 1'b0;
+    assign IQ_DATA_I_2_PD = 1'b0;
+    assign IQ_DATA_I_3_PU = 1'b0;
+    assign IQ_DATA_I_3_PD = 1'b0;
+    assign IQ_DATA_Q_0_PU = 1'b0;
+    assign IQ_DATA_Q_0_PD = 1'b0;
+    assign IQ_DATA_Q_1_PU = 1'b0;
+    assign IQ_DATA_Q_1_PD = 1'b0;
+    assign IQ_DATA_Q_2_PU = 1'b0;
+    assign IQ_DATA_Q_2_PD = 1'b0;
+    assign IQ_DATA_Q_3_PU = 1'b0;
+    assign IQ_DATA_Q_3_PD = 1'b0;
+    assign HOST_CS_PU = 1'b0;
+    assign HOST_CS_PD = 1'b0;
+    assign SPI_SCK_PU = 1'b0;
+    assign SPI_SCK_PD = 1'b0;
+    assign SPI_MOSI_PU = 1'b0;
+    assign SPI_MOSI_PD = 1'b0;
+    assign PSRAM_SIO_0_IE = 1'b1;
+    assign PSRAM_SIO_0_CS = 1'b0;
+    assign PSRAM_SIO_0_SL = 1'b0;
+    assign PSRAM_SIO_0_PU = 1'b0;
+    assign PSRAM_SIO_0_PD = 1'b0;
+    assign PSRAM_SIO_0_PDRV0 = 1'b1;
+    assign PSRAM_SIO_0_PDRV1 = 1'b1;
+    assign PSRAM_SIO_1_IE = 1'b1;
+    assign PSRAM_SIO_1_CS = 1'b0;
+    assign PSRAM_SIO_1_SL = 1'b0;
+    assign PSRAM_SIO_1_PU = 1'b0;
+    assign PSRAM_SIO_1_PD = 1'b0;
+    assign PSRAM_SIO_1_PDRV0 = 1'b1;
+    assign PSRAM_SIO_1_PDRV1 = 1'b1;
+    assign PSRAM_SIO_2_IE = 1'b1;
+    assign PSRAM_SIO_2_CS = 1'b0;
+    assign PSRAM_SIO_2_SL = 1'b0;
+    assign PSRAM_SIO_2_PU = 1'b0;
+    assign PSRAM_SIO_2_PD = 1'b0;
+    assign PSRAM_SIO_2_PDRV0 = 1'b1;
+    assign PSRAM_SIO_2_PDRV1 = 1'b1;
+    assign PSRAM_SIO_3_IE = 1'b1;
+    assign PSRAM_SIO_3_CS = 1'b0;
+    assign PSRAM_SIO_3_SL = 1'b0;
+    assign PSRAM_SIO_3_PU = 1'b0;
+    assign PSRAM_SIO_3_PD = 1'b0;
+    assign PSRAM_SIO_3_PDRV0 = 1'b1;
+    assign PSRAM_SIO_3_PDRV1 = 1'b1;
+    assign PSRAM_CE_N_OE = 1'b1;
+    assign PSRAM_CE_N_IE = 1'b0;
+    assign PSRAM_CE_N_CS = 1'b0;
+    assign PSRAM_CE_N_SL = 1'b0;
+    assign PSRAM_CE_N_PU = 1'b0;
+    assign PSRAM_CE_N_PD = 1'b0;
+    assign PSRAM_CE_N_PDRV0 = 1'b1;
+    assign PSRAM_CE_N_PDRV1 = 1'b1;
+    assign REMOD_A_I_OE = 1'b1;
+    assign REMOD_A_I_IE = 1'b0;
+    assign REMOD_A_I_CS = 1'b0;
+    assign REMOD_A_I_SL = 1'b0;
+    assign REMOD_A_I_PU = 1'b0;
+    assign REMOD_A_I_PD = 1'b0;
+    assign REMOD_A_I_PDRV0 = 1'b1;
+    assign REMOD_A_I_PDRV1 = 1'b0;
+    assign REMOD_A_Q_OE = 1'b1;
+    assign REMOD_A_Q_IE = 1'b0;
+    assign REMOD_A_Q_CS = 1'b0;
+    assign REMOD_A_Q_SL = 1'b0;
+    assign REMOD_A_Q_PU = 1'b0;
+    assign REMOD_A_Q_PD = 1'b0;
+    assign REMOD_A_Q_PDRV0 = 1'b1;
+    assign REMOD_A_Q_PDRV1 = 1'b0;
+    assign SPI_MISO_OE = 1'b1;
+    assign SPI_MISO_IE = 1'b0;
+    assign SPI_MISO_CS = 1'b0;
+    assign SPI_MISO_SL = 1'b1;
+    assign SPI_MISO_PU = 1'b0;
+    assign SPI_MISO_PD = 1'b0;
+    assign SPI_MISO_PDRV0 = 1'b1;
+    assign SPI_MISO_PDRV1 = 1'b0;
+    assign IRQ_OUT_OE = 1'b1;
+    assign IRQ_OUT_IE = 1'b0;
+    assign IRQ_OUT_CS = 1'b0;
+    assign IRQ_OUT_SL = 1'b1;
+    assign IRQ_OUT_PU = 1'b0;
+    assign IRQ_OUT_PD = 1'b0;
+    assign IRQ_OUT_PDRV0 = 1'b1;
+    assign IRQ_OUT_PDRV1 = 1'b0;
+    assign PSRAM_SCK_OE = 1'b1;
+    assign PSRAM_SCK_IE = 1'b0;
+    assign PSRAM_SCK_CS = 1'b0;
+    assign PSRAM_SCK_SL = 1'b0;
+    assign PSRAM_SCK_PU = 1'b0;
+    assign PSRAM_SCK_PD = 1'b0;
+    // Sink the unused pad-input-path nets from the output-only bidir pads.
+    wire _unused_pad_in = &{1'b0, PSRAM_CE_N_IN, REMOD_A_I_IN, REMOD_A_Q_IN,
+                            SPI_MISO_IN, IRQ_OUT_IN, PSRAM_SCK_IN};
 
     // =========================================================================
     // Global clock and reset
