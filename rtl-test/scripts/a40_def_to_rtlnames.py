@@ -10,7 +10,10 @@ Three edits:
      RTL's port names (PSRAM_SIO_0_OUT -> PSRAM_SIO_OUT_0, REMOD_A_I_OUT ->
      REMOD_A_I, PSRAM_SCK_OUT -> PSRAM_SCK, PSRAM_CE_N_OUT -> PSRAM_CE_N,
      SPI_MISO_OUT -> SPI_MISO, IRQ_OUT_OUT -> IRQ_OUT).
-  2. Drop the VDD / VSS pin entries - the LibreLane PDN step builds power.
+  2. Keep the VDD / VSS boundary pin entries (USE POWER / USE GROUND, W12 / N14)
+     so the LibreLane PDN ring terminates on the integrator's power-pad
+     locations rather than being a self-contained grid. They have no matching
+     trouper_top RTL port - they attach to the PDN's special VDD/VSS nets.
   3. Append the die-internal Grouper interface (GRP_* + AHB H* + IRQ_GROUPER,
      205-139+2 = 68 pins) on the south edge at synthetic coordinates. These are
      NOT part of the integrator flow (no pads, absent from info.yaml, never in
@@ -58,8 +61,7 @@ if cur:
 kept = []
 for ent in entries:
     name = ent[0].split()[1]
-    if name in ("VDD", "VSS"):
-        continue
+    # VDD / VSS kept as-is: USE POWER / USE GROUND boundary pins for the PDN.
     if name in ren:
         new = ren[name]
         ent = [re.sub(r"(^- |\+ NET )" + re.escape(name) + r"\b",
@@ -96,4 +98,4 @@ newbody = [f"PINS {len(allpins)} ;"]
 for ent in allpins:
     newbody += ent
 open(OUT, "w").write("\n".join(pre + newbody + post))
-print(f"{OUT}: renamed {len(ren)}, dropped VDD/VSS, +{len(south)} south -> {len(allpins)} pins")
+print(f"{OUT}: renamed {len(ren)}, kept VDD/VSS, +{len(south)} south -> {len(allpins)} pins")

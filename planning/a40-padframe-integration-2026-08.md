@@ -58,9 +58,10 @@ touch-points.
 | `PSRAM_SCK_OUT`, `PSRAM_CE_N_OUT` | `PSRAM_SCK`, `PSRAM_CE_N` |
 | `SPI_MISO_OUT`, `IRQ_OUT_OUT` | `SPI_MISO`, `IRQ_OUT` |
 
-The script also drops the `VDD`/`VSS` pin entries (PDN builds power) and appends
-the 68 Grouper/AHB pins on the south edge at synthetic coordinates so every
-`trouper_top` port is accounted for → `A40_ACV_rtlnames.def`.
+The script keeps the `VDD`/`VSS` boundary pin entries as delivered (see the
+VDD/VSS item under "Open / next") and appends the 68 Grouper/AHB pins on the
+south edge at synthetic coordinates so every `trouper_top` port is accounted
+for → `A40_ACV_rtlnames.def` (207 pins).
 
 ## P&R evidence (SGE, `config_1650x1100_full_rect` lineage, signoff SDC `v25_b6`)
 
@@ -69,7 +70,8 @@ the 68 Grouper/AHB pins on the south edge at synthetic coordinates so every
 | 5122 (`final/`) | `io_placement_lshape.cfg` | 1650×1100 | 78 | clean | 0 | 0.0 | **−12.45** | 0.0 |
 | 5146 | `io_placement_a40.cfg` | 1650×1100 | 78 | — | — | — | — | — |
 | 5147 | `io_placement_a40.cfg` | 1650×1100 | **72** | 0 viol | **0** | 0.0 | **−16.27** | 0.0 |
-| 5150 | **`FP_DEF_TEMPLATE`** (`A40_ACV_rtlnames.def`) | **1675×1110** | 72 | clear | **0** | 0.0 | **−12.26** | 0.0 |
+| 5150 | **`FP_DEF_TEMPLATE`** (`A40_ACV_rtlnames.def`, VDD/VSS dropped) | **1675×1110** | 72 | clear | **0** | 0.0 | **−12.26** | 0.0 |
+| 5153 | `FP_DEF_TEMPLATE` (VDD/VSS boundary pins kept) | 1675×1110 | 72 | 0 | **0** | 0.0 | **−12.26** | 0.0 |
 
 - **5146** reached detailed routing then aborted `DRT-0073` "no access point" on
   CTS buffer `clkbuf_2_3_0_IQ_CLK_regs` (`clkbuf_16`). Global route was
@@ -83,6 +85,11 @@ the 68 Grouper/AHB pins on the south edge at synthetic coordinates so every
   result**: 0 magic DRC, routing-DRC clear, **XOR 0 differences**, disconnected-
   pins clear, no `DRT-0073` at all. **max_ss −12.26 ns — matches the signed-off
   rectangular baseline (−12.45)**, ~4 ns better than the approximate cfg.
+- **5153** — 5150 + the template's `VSS`(W12)/`VDD`(N14) boundary pin entries
+  restored. PDN ring terminates on those pins: power-grid violations **0/0**,
+  IR drop 5.2 mV. Magic DRC 0, routing DRC 0, XOR 0, LVS-unmatched 0, WNS
+  byte-identical to 5150. 15 non-critical disconnected pins (the unused `_IN`
+  legs on output-only pads), 0 critical.
 
 Pin edges in every A40 run: **W** = IQ data/clk/rst (+pull ties); **N** =
 REMOD / PSRAM / SPI / IRQ_OUT (+pad-control ties); **S** = GRP + AHB +
@@ -107,11 +114,12 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
   Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already
   closed clean at 1675×1110. The signed-off `final/` bundle (1650×1100) will
   need a re-run at the template die for the production A40 build.
-- **VDD/VSS** — the template *has* real coordinates (`VSS` W12, `VDD` N14);
-  `a40_def_to_rtlnames.py` drops those pin entries because `trouper_top.v` has
-  no power ports and the LibreLane PDN builds power. For production, decide:
-  keep the template's power-pad entries so P&R ties the PDN to the integrator's
-  actual pad locations, or keep the PDN self-contained.
+- **VDD/VSS — DECIDED: keep** the template's boundary pin entries (`VSS` W12,
+  `VDD` N14, `USE POWER`/`USE GROUND`). Job 5153: PDN ring terminates on those
+  pins, power-grid violations 0/0, IR drop 5.2 mV, and timing/DRC byte-identical
+  to the drop-them run (−12.26 ns SS, 0 DRC/XOR). No downside. They have no
+  matching `trouper_top` RTL port — they attach to the PDN's special VDD/VSS
+  nets. `a40_def_to_rtlnames.py` keeps them as delivered.
 - **Grouper/AHB placement** — *not part of the integrator flow at all*: no pads,
   absent from `info.yaml`, the regenerated `A40_ACV.def` will never contain
   them. The 68 synthetic south-edge pins the script adds exist only to satisfy
