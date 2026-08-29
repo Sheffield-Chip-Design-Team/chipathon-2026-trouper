@@ -70,10 +70,10 @@ pad-control tie-offs — that work lives on `pnr/trouper-a40-padframe-tieoffs`.
   - `nom_tt_025C_3v30`: **+9.85 ns** (met)
   - `max_ff_n40C_3v60`: **+11.81 ns** (met)
   - `max_ss_125C_3v00`: **−13.15 ns / −329 ns** — *better* than job 5158's
-    −13.52 ns. This is the voltage-headroom gap
-    (`gf180mcu_fd_sc_mcu7t5v0` is 5 V-characterized cells run at 3.0 V SS), not
-    an antenna-fix regression. Worst path is the `ahb_re` → `reg_bank`/AHB
-    read-decode cone (`_63059_ → _61493_`, IQ_CLK domain).
+    −13.52 ns, so not an antenna-fix regression. This is a **supply-headroom
+    gap, not a design defect** — see "SS is a voltage problem" below. Worst path
+    is the `ahb_re` → `reg_bank`/AHB read-decode cone (`_63059_ → _61493_`,
+    IQ_CLK domain).
 - **Clock skew:** 0.312 ns (max_ss)
 - **Max slew / max cap:** 13 / 4 (nom_tt), 22 / 5 (max_ss), 17 / 4 (max_ff) —
   the documented DRV waiver, same class as job 5158. See "DRV residual".
@@ -81,6 +81,46 @@ pad-control tie-offs — that work lives on `pnr/trouper-a40-padframe-tieoffs`.
 - **Core utilization** 0.646, **instance count** 123 841 (48 417 std cells),
   **routed wirelength** 2.04 mm
 - Full metrics: `metrics.json` / `metrics.csv`
+
+## SS is a voltage problem, not a design defect (job 5200)
+
+The `max_ss_125C_3v00` setup gap is supply headroom: `gf180mcu_fd_sc_mcu7t5v0`
+is a **5 V-characterised** library ("5v0") run at **3.0 V**, far below native.
+**This netlist** was re-timed at the SS corner with only the cell Liberty
+swapped — same netlist, same extracted SPEF, same signoff SDC:
+
+| SS 125C corner | setup WNS | setup TNS | hold WNS |
+|---|---|---|---|
+| `ss_125C_3v00` (control) | −13.121 ns | −329.73 ns | +1.92 ns |
+| **`ss_125C_4v50`** | **+2.704 ns — MET** | **0.0** | **+1.00 ns** |
+
+The control reproduces this run's signoff figures (−13.146 / −329.21) to
+**0.026 ns**, so the harness is faithful and the 4.5 V number is trustworthy.
+At 4.5 V the design **meets 32 MHz outright with +2.70 ns margin and zero total
+negative slack**, and hold stays clean — the setup win is not bought with a hold
+problem.
+
+Reproduce: `rtl-test/scripts/run_voltage_sta.sh` (STA only, no re-P&R; uses
+`honest_sta.tcl`, inputs staged to `ol_trouper_top/vsta_inputs/`).
+
+**This does not make the design signed off at 32 MHz.** Caveats:
+
+- Requires a genuine **4.5–5 V core**, which is *not* the current plan. The
+  reference PDN declares a single net with VDD_CORE/VDD_IO tied, so this means
+  dual-rail plus PDN work and A40 integrator agreement.
+- The IO ring must stay ~3.3 V regardless: SX1257 abs max **3.9 V**, APS6404L
+  abs max **4.0 V**. So it is a hot core + 3.3 V IO ring + level shifting, not a
+  uniform rail.
+- **Hold must be re-signed at the fast 5 V corner** (`ff_*_5v50`), which is not
+  in this run's `STA_CORNERS`. Higher voltage = faster silicon = more hold risk.
+- Sign off the **3.0 V-optimised netlist at 4.5 V** (this reload, +2.70 ns), not
+  a re-P&R targeting 4.5 V — the latter historically lands −7.1 to −8.4 ns
+  because paths look easy at the target corner and the setup resizer stops early
+  (the "resizer under-drive trap").
+- The PDK ships only `ss_125C_1v62 / 3v00 / 4v50`. There is **no 3v60 SS
+  liberty**, so "3.6 V is not enough" is an interpolation and cannot be measured.
+
+Corner-policy decision for the team; tracked as Open Risk #1.
 
 ## Signoff-SDC MCP relaxations (v28–v30, carried from job 5122)
 
