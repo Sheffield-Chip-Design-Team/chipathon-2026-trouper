@@ -1280,6 +1280,39 @@ padframe integrator) before it can be relied on.
 
 ## Low
 
+### 47. Trouper standalone flow has never run a real-source IR-drop analysis
+
+`VSRC_LOC_FILES` (OpenROAD PSM's realistic-downbond-location IR-drop mode)
+is not set anywhere in Trouper's own P&R configs (`rtl-test/ol_*/config*`,
+`pdn_cfg.tcl`) — confirmed by search, 2026-08-23. Whenever Trouper's own
+flow reaches `OpenROAD.IRDropReport`, it falls back to LibreLane's default
+`LIB_VOLTAGE`/BTerm-source behavior, which treats every top-level power pin
+as an idealized current source — optimistic relative to a real chip with
+only a handful of actual bond wires. `planning/Open Risks.md` #46 and
+several other docs flag IR drop as a qualitative unknown for exactly this
+reason.
+
+**Mitigated by context, not by data of Trouper's own:** Trouper is being
+physically implemented together with Grouper on one shared die
+(`lora-mimo/integration/pd/config_landscape_2235.yaml`,
+`chip_top.v`), not packaged standalone, so the risk this entry names is
+already being answered by that combined integration's own real-source IR-drop
+analysis rather than needing a separate Trouper-only run. That analysis
+(2026-08-23, both landscape SRAM-orientation topologies, real
+via-connected vsrc downbond locations, `chip_top` job 4833/4834) came back
+at **~3-5% worst-case drop on both VDD and VSS** (VDD 3.02%/5.13%
+depending on topology, VSS 2.05%/2.84%) — a reasonable, non-alarming
+number, not pinned to 0 (which would suggest a broken analysis) or blowing
+up. See `lora-mimo/planning/grouper-trouper-landscape-floorplan-2026-08.md`
+Open Item #9 for the full derivation and the two LibreLane/OpenROAD bugs
+that had to be fixed to get a working number at all
+(`lora-mimo/integration/pd/vsrc/README.md`).
+
+Still real padframe/downbond estimates, not final pad data — this entry
+stays open until real physical downbond locations replace the geometric
+via-connected estimates currently in `vsrc/*.loc`, same caveat the
+combined-die doc itself carries.
+
 ### 18. PSRAM-replay sample staleness unquantified
 
 **Retitled/repointed 2026-07-11:** originally filed against

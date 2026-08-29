@@ -394,10 +394,13 @@ module trouper_top (
     wire        psram_dbg_busy_w;
     wire [7:0]  psram_dbg_data_w;
     wire        psram_replay_active_w;
-    // PSRAM debug-write byte port (0x79): driven straight from the SPI slave
-    // write strobe, bypassing the CE/arbiter exactly like the 0x76 read pop.
+    // PSRAM debug byte ports (0x76 read-pop / 0x79 write-push): driven
+    // directly by either register master, bypassing the CE/arbiter.  Both
+    // masters can hold a request for several clk edges (in particular the
+    // AHB-to-GRP bridge), hence each side effect is explicitly edge-detected.
     wire [7:0]  psram_dbg_wdata_w;
     wire        psram_dbg_wdata_push_w;
+    wire        psram_dbg_data_pop_w;
 
     // =========================================================================
     // Free-running 32-bit sample counter (for packet_ctrl_fsm)
@@ -759,7 +762,7 @@ module trouper_top (
         .dbg_addr     (rb_psram_dbg_addr),
         .dbg_auto_inc (rb_psram_dbg_auto_inc),
         .dbg_rd_trig  (rb_psram_dbg_rd_trig),
-        .dbg_data_pop (spi_reg_re && (spi_reg_re_addr == 8'h76)),
+        .dbg_data_pop (psram_dbg_data_pop_w),
         .dbg_busy     (psram_dbg_busy_w),
         .dbg_data     (psram_dbg_data_w),
         .dbg_wdata      (psram_dbg_wdata_w),
@@ -934,17 +937,29 @@ module trouper_top (
     wire grp_active = GRP_WE | GRP_RE | ahb_we | ahb_re;
 
     reg        spi_reg_we_d;
+    reg        grp_we_d;
+    reg        grp_re_d;
     reg        spi_wr_pending;
     reg [7:0]  spi_wr_pending_addr;
     reg [7:0]  spi_wr_pending_data;
     wire       spi_wr_new = spi_reg_we & ~spi_reg_we_d;
 
-    // PSRAM debug-write byte port (0x79): a single-cycle push per completed SPI
-    // write to 0x79, straight off spi_wr_new — same CE/arbiter bypass as the
-    // 0x76 read pop.  The SPI slave holds the burst address at 0x79 (burst-
-    // exempt), so a command byte 0x79 followed by 8 data bytes = 8 pushes.
-    assign psram_dbg_wdata_w      = spi_reg_wdata;
-    assign psram_dbg_wdata_push_w = spi_wr_new && (spi_reg_wr_addr == 8'h79);
+    // PSRAM debug-write byte port (0x79): a single push per completed SPI or
+    // Grouper write.  The SPI slave holds 0x79 for a burst; the AHB-to-GRP
+    // bridge holds GRP_WE for six clk edges, so both sources need one-shot
+    // strobes rather than their level-qualified write enables.
+    wire grp_dbg_wdata_push = GRP_WE && !grp_we_d && (GRP_ADDR == 8'h79);
+    assign psram_dbg_wdata_w      = grp_dbg_wdata_push ? GRP_WDATA : spi_reg_wdata;
+    assign psram_dbg_wdata_push_w = grp_dbg_wdata_push ||
+                                    (spi_wr_new && (spi_reg_wr_addr == 8'h79));
+
+    // Likewise, a Grouper read held by the bridge must consume exactly one
+    // 0x76 byte, not one byte per held GRP_RE cycle.  Pop on release, rather
+    // than assertion: reg_bank captures the current byte while GRP_RE is
+    // held, and the bridge returns that captured value before this advances
+    // the debug window.
+    assign psram_dbg_data_pop_w = (spi_reg_re && (spi_reg_re_addr == 8'h76)) ||
+                                  (!GRP_RE && grp_re_d && (GRP_ADDR == 8'h76));
 
     // CE-latched WRITE bus: addr/wdata/we are sampled TOGETHER on a CE edge and
     // captured by the CE-gated reg_bank on the next CE edge, so the whole write
@@ -954,12 +969,16 @@ module trouper_top (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             spi_reg_we_d       <= 1'b0;
+            grp_we_d           <= 1'b0;
+            grp_re_d           <= 1'b0;
             spi_wr_pending     <= 1'b0;
             spi_wr_pending_addr <= 8'd0;
             spi_wr_pending_data <= 8'd0;
             rb_addr <= 8'd0; rb_wdata <= 8'd0; rb_we <= 1'b0;
         end else begin
             spi_reg_we_d <= spi_reg_we;
+            grp_we_d     <= GRP_WE;
+            grp_re_d     <= GRP_RE;
 
             if (spi_wr_new) begin
                 spi_wr_pending      <= 1'b1;
