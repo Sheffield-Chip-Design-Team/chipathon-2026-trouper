@@ -43,30 +43,30 @@ module trouper_top (
     input  wire        IQ_DATA_Q_3,  // ant3
 
     // ---- ASIC → SX1302: MRC-combined sigma-delta output ----
-    output wire        REMOD_A_I,
-    output wire        REMOD_A_Q,
+    output wire        REMOD_A_I_OUT,
+    output wire        REMOD_A_Q_OUT,
 
     // ---- PSRAM QPI (SIO[3:0] on four dedicated pads) ----
-    output wire        PSRAM_SCK,     // PSRAM clock (32 MHz, gated in psram_buf_ctrl)
-    output wire        PSRAM_CE_N,
-    output wire        PSRAM_SIO_OUT_0,
-    output wire        PSRAM_SIO_OUT_1,
-    output wire        PSRAM_SIO_OUT_2,
-    output wire        PSRAM_SIO_OUT_3,
-    input  wire        PSRAM_SIO_IN_0,
-    input  wire        PSRAM_SIO_IN_1,
-    input  wire        PSRAM_SIO_IN_2,
-    input  wire        PSRAM_SIO_IN_3,
-    output wire        PSRAM_SIO_OE_0,
-    output wire        PSRAM_SIO_OE_1,
-    output wire        PSRAM_SIO_OE_2,
-    output wire        PSRAM_SIO_OE_3,
+    output wire        PSRAM_SCK_OUT,     // PSRAM clock (32 MHz, gated in psram_buf_ctrl)
+    output wire        PSRAM_CE_N_OUT,
+    output wire        PSRAM_SIO_0_OUT,
+    output wire        PSRAM_SIO_1_OUT,
+    output wire        PSRAM_SIO_2_OUT,
+    output wire        PSRAM_SIO_3_OUT,
+    input  wire        PSRAM_SIO_0_IN,
+    input  wire        PSRAM_SIO_1_IN,
+    input  wire        PSRAM_SIO_2_IN,
+    input  wire        PSRAM_SIO_3_IN,
+    output wire        PSRAM_SIO_0_OE,
+    output wire        PSRAM_SIO_1_OE,
+    output wire        PSRAM_SIO_2_OE,
+    output wire        PSRAM_SIO_3_OE,
 
     // ---- Host SPI slave (RPi) ----
     input  wire        HOST_CS,       // active-low chip select from RPi
     input  wire        SPI_SCK,       // SPI clock (Mode 0, up to 2 MHz)
     input  wire        SPI_MOSI,
-    output wire        SPI_MISO,
+    output wire        SPI_MISO_OUT,
 
     // ---- Grouper inter-project register bus (priority over SPI) ----
     input  wire        GRP_ADDR_0,
@@ -97,17 +97,155 @@ module trouper_top (
     output wire        GRP_RDATA_7,
     output wire        GRP_READY,
 
+    // ---- Grouper dev external-peripheral AHB endpoint (8-bit) ----
+    // This is the real Grouper origin/dev boundary.  It is kept alongside the
+    // legacy GRP_* placeholder during the migration so existing SPI/GRP
+    // regressions remain usable; integration must drive the AHB port only.
+    input  wire [7:0]  HADDR,
+    input  wire [2:0]  HBURST,
+    input  wire        HMASTLOCK,
+    input  wire [3:0]  HPROT,
+    input  wire [2:0]  HSIZE,
+    input  wire [1:0]  HTRANS,
+    input  wire [7:0]  HWDATA,
+    input  wire        HWRITE,
+    output wire [7:0]  HRDATA,
+    output wire        HREADY,
+    output wire        HRESP,
+
     // ---- Interrupt outputs ----
-    output wire        IRQ_OUT,       // → dedicated IRQ pad; sticky, level-high
-    output wire        IRQ_GROUPER    // → Grouper inter-project IRQ line; same signal as IRQ_OUT
+    output wire        IRQ_OUT_OUT,       // → dedicated IRQ pad; sticky, level-high
+    output wire        IRQ_GROUPER,   // → Grouper inter-project IRQ line; same signal as IRQ_OUT
+
+    // ==== A40 padframe pad-control tie-offs =================================
+    //  The A40 workshop padring has no output-only cell: every functional
+    //  output sits on a bidirectional pad whose config pins are driven from
+    //  this block (Option A: SPI_MISO_OE tied 1, host link is point-to-point).
+    //  Pull/slew/drive values follow planning/Pinout.md; drive-strength and
+    //  slew are provisional pending SI review.  See planning/Pinout.md
+    //  "A40 pad-control tie-offs".
+    // -- discrete input pads: pulls disabled (board supplies pull-ups) --
+    output wire        IQ_CLK_PU,
+    output wire        IQ_CLK_PD,
+    output wire        RESETB_PU,
+    output wire        RESETB_PD,
+    output wire        IQ_DATA_I_0_PU,
+    output wire        IQ_DATA_I_0_PD,
+    output wire        IQ_DATA_I_1_PU,
+    output wire        IQ_DATA_I_1_PD,
+    output wire        IQ_DATA_I_2_PU,
+    output wire        IQ_DATA_I_2_PD,
+    output wire        IQ_DATA_I_3_PU,
+    output wire        IQ_DATA_I_3_PD,
+    output wire        IQ_DATA_Q_0_PU,
+    output wire        IQ_DATA_Q_0_PD,
+    output wire        IQ_DATA_Q_1_PU,
+    output wire        IQ_DATA_Q_1_PD,
+    output wire        IQ_DATA_Q_2_PU,
+    output wire        IQ_DATA_Q_2_PD,
+    output wire        IQ_DATA_Q_3_PU,
+    output wire        IQ_DATA_Q_3_PD,
+    output wire        HOST_CS_PU,
+    output wire        HOST_CS_PD,
+    output wire        SPI_SCK_PU,
+    output wire        SPI_SCK_PD,
+    output wire        SPI_MOSI_PU,
+    output wire        SPI_MOSI_PD,
+    // -- PSRAM_SIO[3:0]: true bidir (OUT/IN/OE above); input-enabled, max drive --
+    output wire        PSRAM_SIO_0_IE,
+    output wire        PSRAM_SIO_0_CS,
+    output wire        PSRAM_SIO_0_SL,
+    output wire        PSRAM_SIO_0_PU,
+    output wire        PSRAM_SIO_0_PD,
+    output wire        PSRAM_SIO_0_PDRV0,
+    output wire        PSRAM_SIO_0_PDRV1,
+    output wire        PSRAM_SIO_1_IE,
+    output wire        PSRAM_SIO_1_CS,
+    output wire        PSRAM_SIO_1_SL,
+    output wire        PSRAM_SIO_1_PU,
+    output wire        PSRAM_SIO_1_PD,
+    output wire        PSRAM_SIO_1_PDRV0,
+    output wire        PSRAM_SIO_1_PDRV1,
+    output wire        PSRAM_SIO_2_IE,
+    output wire        PSRAM_SIO_2_CS,
+    output wire        PSRAM_SIO_2_SL,
+    output wire        PSRAM_SIO_2_PU,
+    output wire        PSRAM_SIO_2_PD,
+    output wire        PSRAM_SIO_2_PDRV0,
+    output wire        PSRAM_SIO_2_PDRV1,
+    output wire        PSRAM_SIO_3_IE,
+    output wire        PSRAM_SIO_3_CS,
+    output wire        PSRAM_SIO_3_SL,
+    output wire        PSRAM_SIO_3_PU,
+    output wire        PSRAM_SIO_3_PD,
+    output wire        PSRAM_SIO_3_PDRV0,
+    output wire        PSRAM_SIO_3_PDRV1,
+    // -- PSRAM_CE_N: output on bidir pad --
+    input  wire        PSRAM_CE_N_IN,
+    output wire        PSRAM_CE_N_OE,
+    output wire        PSRAM_CE_N_IE,
+    output wire        PSRAM_CE_N_CS,
+    output wire        PSRAM_CE_N_SL,
+    output wire        PSRAM_CE_N_PU,
+    output wire        PSRAM_CE_N_PD,
+    output wire        PSRAM_CE_N_PDRV0,
+    output wire        PSRAM_CE_N_PDRV1,
+    // -- REMOD_A_I: output on bidir pad --
+    input  wire        REMOD_A_I_IN,
+    output wire        REMOD_A_I_OE,
+    output wire        REMOD_A_I_IE,
+    output wire        REMOD_A_I_CS,
+    output wire        REMOD_A_I_SL,
+    output wire        REMOD_A_I_PU,
+    output wire        REMOD_A_I_PD,
+    output wire        REMOD_A_I_PDRV0,
+    output wire        REMOD_A_I_PDRV1,
+    // -- REMOD_A_Q: output on bidir pad --
+    input  wire        REMOD_A_Q_IN,
+    output wire        REMOD_A_Q_OE,
+    output wire        REMOD_A_Q_IE,
+    output wire        REMOD_A_Q_CS,
+    output wire        REMOD_A_Q_SL,
+    output wire        REMOD_A_Q_PU,
+    output wire        REMOD_A_Q_PD,
+    output wire        REMOD_A_Q_PDRV0,
+    output wire        REMOD_A_Q_PDRV1,
+    // -- SPI_MISO: output on bidir pad --
+    input  wire        SPI_MISO_IN,
+    output wire        SPI_MISO_OE,
+    output wire        SPI_MISO_IE,
+    output wire        SPI_MISO_CS,
+    output wire        SPI_MISO_SL,
+    output wire        SPI_MISO_PU,
+    output wire        SPI_MISO_PD,
+    output wire        SPI_MISO_PDRV0,
+    output wire        SPI_MISO_PDRV1,
+    // -- IRQ_OUT: output on bidir pad --
+    input  wire        IRQ_OUT_IN,
+    output wire        IRQ_OUT_OE,
+    output wire        IRQ_OUT_IE,
+    output wire        IRQ_OUT_CS,
+    output wire        IRQ_OUT_SL,
+    output wire        IRQ_OUT_PU,
+    output wire        IRQ_OUT_PD,
+    output wire        IRQ_OUT_PDRV0,
+    output wire        IRQ_OUT_PDRV1,
+    // -- PSRAM_SCK: output on 24 mA bidir pad (no PDRV select) --
+    input  wire        PSRAM_SCK_IN,
+    output wire        PSRAM_SCK_OE,
+    output wire        PSRAM_SCK_IE,
+    output wire        PSRAM_SCK_CS,
+    output wire        PSRAM_SCK_SL,
+    output wire        PSRAM_SCK_PU,
+    output wire        PSRAM_SCK_PD
 );
 
     // Reassemble scalar physical pins into the vectors used inside the design.
     wire [3:0] IQ_DATA_I = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
     wire [3:0] IQ_DATA_Q = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
     wire [3:0] PSRAM_SIO_OUT;
-    wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_IN_3, PSRAM_SIO_IN_2,
-                               PSRAM_SIO_IN_1, PSRAM_SIO_IN_0};
+    wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
+                               PSRAM_SIO_1_IN, PSRAM_SIO_0_IN};
     wire [3:0] PSRAM_SIO_OE;
     wire [7:0] GRP_ADDR = {GRP_ADDR_7, GRP_ADDR_6, GRP_ADDR_5, GRP_ADDR_4,
                            GRP_ADDR_3, GRP_ADDR_2, GRP_ADDR_1, GRP_ADDR_0};
@@ -115,12 +253,117 @@ module trouper_top (
                             GRP_WDATA_3, GRP_WDATA_2, GRP_WDATA_1, GRP_WDATA_0};
     wire [7:0] GRP_RDATA;
 
-    assign {PSRAM_SIO_OUT_3, PSRAM_SIO_OUT_2,
-            PSRAM_SIO_OUT_1, PSRAM_SIO_OUT_0} = PSRAM_SIO_OUT;
-    assign {PSRAM_SIO_OE_3, PSRAM_SIO_OE_2,
-            PSRAM_SIO_OE_1, PSRAM_SIO_OE_0} = PSRAM_SIO_OE;
+    assign {PSRAM_SIO_3_OUT, PSRAM_SIO_2_OUT,
+            PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = PSRAM_SIO_OUT;
+    assign {PSRAM_SIO_3_OE, PSRAM_SIO_2_OE,
+            PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = PSRAM_SIO_OE;
     assign {GRP_RDATA_7, GRP_RDATA_6, GRP_RDATA_5, GRP_RDATA_4,
             GRP_RDATA_3, GRP_RDATA_2, GRP_RDATA_1, GRP_RDATA_0} = GRP_RDATA;
+
+    // ==== A40 padframe pad-control tie-offs (see module header + Pinout.md) ===
+    assign IQ_CLK_PU = 1'b0;
+    assign IQ_CLK_PD = 1'b0;
+    assign RESETB_PU = 1'b0;
+    assign RESETB_PD = 1'b0;
+    assign IQ_DATA_I_0_PU = 1'b0;
+    assign IQ_DATA_I_0_PD = 1'b0;
+    assign IQ_DATA_I_1_PU = 1'b0;
+    assign IQ_DATA_I_1_PD = 1'b0;
+    assign IQ_DATA_I_2_PU = 1'b0;
+    assign IQ_DATA_I_2_PD = 1'b0;
+    assign IQ_DATA_I_3_PU = 1'b0;
+    assign IQ_DATA_I_3_PD = 1'b0;
+    assign IQ_DATA_Q_0_PU = 1'b0;
+    assign IQ_DATA_Q_0_PD = 1'b0;
+    assign IQ_DATA_Q_1_PU = 1'b0;
+    assign IQ_DATA_Q_1_PD = 1'b0;
+    assign IQ_DATA_Q_2_PU = 1'b0;
+    assign IQ_DATA_Q_2_PD = 1'b0;
+    assign IQ_DATA_Q_3_PU = 1'b0;
+    assign IQ_DATA_Q_3_PD = 1'b0;
+    assign HOST_CS_PU = 1'b0;
+    assign HOST_CS_PD = 1'b0;
+    assign SPI_SCK_PU = 1'b0;
+    assign SPI_SCK_PD = 1'b0;
+    assign SPI_MOSI_PU = 1'b0;
+    assign SPI_MOSI_PD = 1'b0;
+    assign PSRAM_SIO_0_IE = 1'b1;
+    assign PSRAM_SIO_0_CS = 1'b0;
+    assign PSRAM_SIO_0_SL = 1'b0;
+    assign PSRAM_SIO_0_PU = 1'b0;
+    assign PSRAM_SIO_0_PD = 1'b0;
+    assign PSRAM_SIO_0_PDRV0 = 1'b1;
+    assign PSRAM_SIO_0_PDRV1 = 1'b1;
+    assign PSRAM_SIO_1_IE = 1'b1;
+    assign PSRAM_SIO_1_CS = 1'b0;
+    assign PSRAM_SIO_1_SL = 1'b0;
+    assign PSRAM_SIO_1_PU = 1'b0;
+    assign PSRAM_SIO_1_PD = 1'b0;
+    assign PSRAM_SIO_1_PDRV0 = 1'b1;
+    assign PSRAM_SIO_1_PDRV1 = 1'b1;
+    assign PSRAM_SIO_2_IE = 1'b1;
+    assign PSRAM_SIO_2_CS = 1'b0;
+    assign PSRAM_SIO_2_SL = 1'b0;
+    assign PSRAM_SIO_2_PU = 1'b0;
+    assign PSRAM_SIO_2_PD = 1'b0;
+    assign PSRAM_SIO_2_PDRV0 = 1'b1;
+    assign PSRAM_SIO_2_PDRV1 = 1'b1;
+    assign PSRAM_SIO_3_IE = 1'b1;
+    assign PSRAM_SIO_3_CS = 1'b0;
+    assign PSRAM_SIO_3_SL = 1'b0;
+    assign PSRAM_SIO_3_PU = 1'b0;
+    assign PSRAM_SIO_3_PD = 1'b0;
+    assign PSRAM_SIO_3_PDRV0 = 1'b1;
+    assign PSRAM_SIO_3_PDRV1 = 1'b1;
+    assign PSRAM_CE_N_OE = 1'b1;
+    assign PSRAM_CE_N_IE = 1'b0;
+    assign PSRAM_CE_N_CS = 1'b0;
+    assign PSRAM_CE_N_SL = 1'b0;
+    assign PSRAM_CE_N_PU = 1'b0;
+    assign PSRAM_CE_N_PD = 1'b0;
+    assign PSRAM_CE_N_PDRV0 = 1'b1;
+    assign PSRAM_CE_N_PDRV1 = 1'b1;
+    assign REMOD_A_I_OE = 1'b1;
+    assign REMOD_A_I_IE = 1'b0;
+    assign REMOD_A_I_CS = 1'b0;
+    assign REMOD_A_I_SL = 1'b0;
+    assign REMOD_A_I_PU = 1'b0;
+    assign REMOD_A_I_PD = 1'b0;
+    assign REMOD_A_I_PDRV0 = 1'b1;
+    assign REMOD_A_I_PDRV1 = 1'b0;
+    assign REMOD_A_Q_OE = 1'b1;
+    assign REMOD_A_Q_IE = 1'b0;
+    assign REMOD_A_Q_CS = 1'b0;
+    assign REMOD_A_Q_SL = 1'b0;
+    assign REMOD_A_Q_PU = 1'b0;
+    assign REMOD_A_Q_PD = 1'b0;
+    assign REMOD_A_Q_PDRV0 = 1'b1;
+    assign REMOD_A_Q_PDRV1 = 1'b0;
+    assign SPI_MISO_OE = 1'b1;
+    assign SPI_MISO_IE = 1'b0;
+    assign SPI_MISO_CS = 1'b0;
+    assign SPI_MISO_SL = 1'b1;
+    assign SPI_MISO_PU = 1'b0;
+    assign SPI_MISO_PD = 1'b0;
+    assign SPI_MISO_PDRV0 = 1'b1;
+    assign SPI_MISO_PDRV1 = 1'b0;
+    assign IRQ_OUT_OE = 1'b1;
+    assign IRQ_OUT_IE = 1'b0;
+    assign IRQ_OUT_CS = 1'b0;
+    assign IRQ_OUT_SL = 1'b1;
+    assign IRQ_OUT_PU = 1'b0;
+    assign IRQ_OUT_PD = 1'b0;
+    assign IRQ_OUT_PDRV0 = 1'b1;
+    assign IRQ_OUT_PDRV1 = 1'b0;
+    assign PSRAM_SCK_OE = 1'b1;
+    assign PSRAM_SCK_IE = 1'b0;
+    assign PSRAM_SCK_CS = 1'b0;
+    assign PSRAM_SCK_SL = 1'b0;
+    assign PSRAM_SCK_PU = 1'b0;
+    assign PSRAM_SCK_PD = 1'b0;
+    // Sink the unused pad-input-path nets from the output-only bidir pads.
+    wire _unused_pad_in = &{1'b0, PSRAM_CE_N_IN, REMOD_A_I_IN, REMOD_A_Q_IN,
+                            SPI_MISO_IN, IRQ_OUT_IN, PSRAM_SCK_IN};
 
     // =========================================================================
     // Global clock and reset
@@ -151,10 +394,13 @@ module trouper_top (
     wire        psram_dbg_busy_w;
     wire [7:0]  psram_dbg_data_w;
     wire        psram_replay_active_w;
-    // PSRAM debug-write byte port (0x79): driven straight from the SPI slave
-    // write strobe, bypassing the CE/arbiter exactly like the 0x76 read pop.
+    // PSRAM debug byte ports (0x76 read-pop / 0x79 write-push): driven
+    // directly by either register master, bypassing the CE/arbiter.  Both
+    // masters can hold a request for several clk edges (in particular the
+    // AHB-to-GRP bridge), hence each side effect is explicitly edge-detected.
     wire [7:0]  psram_dbg_wdata_w;
     wire        psram_dbg_wdata_push_w;
+    wire        psram_dbg_data_pop_w;
 
     // =========================================================================
     // Free-running 32-bit sample counter (for packet_ctrl_fsm)
@@ -488,8 +734,8 @@ module trouper_top (
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
         .clr_err      (rb_psram_ctrl[1]),
-        .sck          (PSRAM_SCK),
-        .ce_n         (PSRAM_CE_N),
+        .sck          (PSRAM_SCK_OUT),
+        .ce_n         (PSRAM_CE_N_OUT),
         .sio_out      (PSRAM_SIO_OUT),
         .sio_in       (PSRAM_SIO_IN),
         .sio_oe       (PSRAM_SIO_OE),
@@ -516,7 +762,7 @@ module trouper_top (
         .dbg_addr     (rb_psram_dbg_addr),
         .dbg_auto_inc (rb_psram_dbg_auto_inc),
         .dbg_rd_trig  (rb_psram_dbg_rd_trig),
-        .dbg_data_pop (spi_reg_re && (spi_reg_re_addr == 8'h76)),
+        .dbg_data_pop (psram_dbg_data_pop_w),
         .dbg_busy     (psram_dbg_busy_w),
         .dbg_data     (psram_dbg_data_w),
         .dbg_wdata      (psram_dbg_wdata_w),
@@ -589,8 +835,8 @@ module trouper_top (
         .in_q     (remod_in_q),
         .in_valid (comb_y_valid),
         .en       (1'b1),
-        .out_i    (REMOD_A_I),
-        .out_q    (REMOD_A_Q)
+        .out_i    (REMOD_A_I_OUT),
+        .out_q    (REMOD_A_Q_OUT)
     );
 
     // =========================================================================
@@ -652,7 +898,7 @@ module trouper_top (
         .HOST_CS     (HOST_CS),
         .SPI_SCK     (SPI_SCK),
         .SPI_MOSI    (SPI_MOSI),
-        .SPI_MISO    (SPI_MISO),
+        .SPI_MISO    (SPI_MISO_OUT),
         .reg_wr_addr (spi_reg_wr_addr),
         .reg_wdata   (spi_reg_wdata),
         .reg_we      (spi_reg_we),
@@ -671,20 +917,49 @@ module trouper_top (
     // Grouper byte-cycle contract requires that it release before a second SPI
     // data byte completes (>= 4 us at 2 MHz), so this slot cannot overflow.
     // =========================================================================
-    wire grp_active = GRP_WE | GRP_RE;
+    // The AHB endpoint turns one transfer into one held byte request.  Its
+    // completion is deliberately tied to the CE-domain dispatch below, not
+    // merely to observing HWRITE in the address phase.
+    wire [7:0] ahb_addr, ahb_wdata;
+    wire       ahb_we, ahb_re, ahb_dispatch;
+    wire [7:0] ahb_rdata = cfg_rdata_w;
+    wire       ahb_rready = cfg_ready_w;
+    trouper_ahb8_adapter u_ahb8 (
+        .clk(clk), .rst_n(rst_n), .HADDR(HADDR), .HBURST(HBURST),
+        .HMASTLOCK(HMASTLOCK), .HPROT(HPROT), .HSIZE(HSIZE),
+        .HTRANS(HTRANS), .HWDATA(HWDATA), .HWRITE(HWRITE),
+        .HRDATA(HRDATA), .HREADY(HREADY), .HRESP(HRESP),
+        .csr_addr(ahb_addr), .csr_wdata(ahb_wdata), .csr_we(ahb_we),
+        .csr_re(ahb_re), .csr_dispatch(ahb_dispatch),
+        .csr_rdata(ahb_rdata), .csr_rready(ahb_rready)
+    );
+
+    wire grp_active = GRP_WE | GRP_RE | ahb_we | ahb_re;
 
     reg        spi_reg_we_d;
+    reg        grp_we_d;
+    reg        grp_re_d;
     reg        spi_wr_pending;
     reg [7:0]  spi_wr_pending_addr;
     reg [7:0]  spi_wr_pending_data;
     wire       spi_wr_new = spi_reg_we & ~spi_reg_we_d;
 
-    // PSRAM debug-write byte port (0x79): a single-cycle push per completed SPI
-    // write to 0x79, straight off spi_wr_new — same CE/arbiter bypass as the
-    // 0x76 read pop.  The SPI slave holds the burst address at 0x79 (burst-
-    // exempt), so a command byte 0x79 followed by 8 data bytes = 8 pushes.
-    assign psram_dbg_wdata_w      = spi_reg_wdata;
-    assign psram_dbg_wdata_push_w = spi_wr_new && (spi_reg_wr_addr == 8'h79);
+    // PSRAM debug-write byte port (0x79): a single push per completed SPI or
+    // Grouper write.  The SPI slave holds 0x79 for a burst; the AHB-to-GRP
+    // bridge holds GRP_WE for six clk edges, so both sources need one-shot
+    // strobes rather than their level-qualified write enables.
+    wire grp_dbg_wdata_push = GRP_WE && !grp_we_d && (GRP_ADDR == 8'h79);
+    assign psram_dbg_wdata_w      = grp_dbg_wdata_push ? GRP_WDATA : spi_reg_wdata;
+    assign psram_dbg_wdata_push_w = grp_dbg_wdata_push ||
+                                    (spi_wr_new && (spi_reg_wr_addr == 8'h79));
+
+    // Likewise, a Grouper read held by the bridge must consume exactly one
+    // 0x76 byte, not one byte per held GRP_RE cycle.  Pop on release, rather
+    // than assertion: reg_bank captures the current byte while GRP_RE is
+    // held, and the bridge returns that captured value before this advances
+    // the debug window.
+    assign psram_dbg_data_pop_w = (spi_reg_re && (spi_reg_re_addr == 8'h76)) ||
+                                  (!GRP_RE && grp_re_d && (GRP_ADDR == 8'h76));
 
     // CE-latched WRITE bus: addr/wdata/we are sampled TOGETHER on a CE edge and
     // captured by the CE-gated reg_bank on the next CE edge, so the whole write
@@ -694,12 +969,16 @@ module trouper_top (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             spi_reg_we_d       <= 1'b0;
+            grp_we_d           <= 1'b0;
+            grp_re_d           <= 1'b0;
             spi_wr_pending     <= 1'b0;
             spi_wr_pending_addr <= 8'd0;
             spi_wr_pending_data <= 8'd0;
             rb_addr <= 8'd0; rb_wdata <= 8'd0; rb_we <= 1'b0;
         end else begin
             spi_reg_we_d <= spi_reg_we;
+            grp_we_d     <= GRP_WE;
+            grp_re_d     <= GRP_RE;
 
             if (spi_wr_new) begin
                 spi_wr_pending      <= 1'b1;
@@ -708,7 +987,11 @@ module trouper_top (
             end
 
             if (ce_16m) begin
-                if (grp_active) begin
+                if (ahb_we) begin
+                    rb_addr  <= ahb_addr;
+                    rb_wdata <= ahb_wdata;
+                    rb_we    <= 1'b1;
+                end else if (GRP_WE | GRP_RE) begin
                     rb_addr  <= GRP_ADDR;
                     rb_wdata <= GRP_WDATA;
                     rb_we    <= GRP_WE;
@@ -736,8 +1019,13 @@ module trouper_top (
     // There is only one combinational read port: a concurrent Grouper read
     // takes priority and makes that SPI read byte invalid; the SPI host retries
     // the complete read frame after GRP_RE deasserts.
-    wire [7:0] rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr;
-    wire       rb_re    = GRP_RE;
+    wire [7:0] rb_raddr = ahb_re ? ahb_addr :
+                          (GRP_WE | GRP_RE) ? GRP_ADDR : spi_reg_rd_addr;
+    wire       rb_re    = ahb_re | GRP_RE;
+
+    // A write is accepted only on the CE edge that dispatches it into the
+    // register-bank path.  Reads acknowledge through reg_bank.ready.
+    assign ahb_dispatch = ce_16m & ahb_we;
 
     assign GRP_RDATA = cfg_rdata_w;
     assign GRP_READY = cfg_ready_w;
@@ -745,7 +1033,7 @@ module trouper_top (
 
     // ---- Register Bank ----
     wire rb_irq_out_sticky;
-    assign IRQ_OUT     = rb_irq_out_sticky;
+    assign IRQ_OUT_OUT     = rb_irq_out_sticky;
     assign IRQ_GROUPER = rb_irq_out_sticky;
 
     reg_bank u_rb (
@@ -821,6 +1109,62 @@ module trouper_top (
         .replay_delay_samples (rb_replay_delay_samples)
     );
 
+endmodule
+
+// Grouper origin/dev external-peripheral endpoint.  HSEL/HREADYIN are
+// deliberately absent: Grouper's interconnect owns them internally.  This
+// module is synchronous to IQ_CLK; an asynchronous deployment must terminate
+// AHB in the Grouper-side CDC bridge described in the integration plan.
+module trouper_ahb8_adapter (
+    input wire clk, input wire rst_n,
+    input wire [7:0] HADDR, input wire [2:0] HBURST,
+    input wire HMASTLOCK, input wire [3:0] HPROT, input wire [2:0] HSIZE,
+    input wire [1:0] HTRANS, input wire [7:0] HWDATA, input wire HWRITE,
+    output reg [7:0] HRDATA, output wire HREADY, output wire HRESP,
+    output wire [7:0] csr_addr, output wire [7:0] csr_wdata,
+    output wire csr_we, output wire csr_re, input wire csr_dispatch,
+    input wire [7:0] csr_rdata, input wire csr_rready
+);
+    localparam IDLE=2'd0, WRITE=2'd1, READ=2'd2, ERROR=2'd3;
+    reg [1:0] state;
+    reg [7:0] addr_q;
+    reg write_dispatched, error_wait;
+    wire request = HTRANS[1];
+    wire bad_req = (HSIZE != 3'b000) || HADDR[7];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state <= IDLE; addr_q <= 8'd0; HRDATA <= 8'd0;
+            write_dispatched <= 1'b0; error_wait <= 1'b0;
+        end else begin
+            case (state)
+                IDLE: if (request) begin
+                    addr_q <= HADDR;
+                    if (bad_req) begin state <= ERROR; error_wait <= 1'b0; end
+                    else if (HWRITE) begin state <= WRITE; write_dispatched <= 1'b0; end
+                    else state <= READ;
+                end
+                WRITE: if (csr_dispatch) begin
+                    write_dispatched <= 1'b1;
+                    state <= IDLE;
+                end
+                READ: if (csr_rready) begin
+                    HRDATA <= csr_rdata;
+                    state <= IDLE;
+                end
+                ERROR: if (error_wait) state <= IDLE; else error_wait <= 1'b1;
+            endcase
+        end
+    end
+    assign csr_addr = addr_q;
+    assign csr_wdata = HWDATA;
+    assign csr_we = (state == WRITE) & ~write_dispatched;
+    assign csr_re = (state == READ);
+    assign HREADY = (state == IDLE) ||
+                    ((state == WRITE) && csr_dispatch) ||
+                    ((state == READ) && csr_rready) ||
+                    ((state == ERROR) && error_wait);
+    assign HRESP = (state == ERROR);
 endmodule
 
 `default_nettype wire
