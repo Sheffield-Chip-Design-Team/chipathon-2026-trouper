@@ -9,8 +9,13 @@
 #     * The three -through exception blocks (qs_srcs / lat_timing_ref / M_val)
 #       are KEPT: they now relax only the one-shot ST_ACQ_SETUP load arc.
 #       The per-tick decrement path (cnt -> cnt-1 -> cnt) does NOT traverse
-#       any -through net, so it stays honestly MCP=1; likewise the live
-#       sample_count (elapsed-correction) operand into the load.
+#       any -through net, so it stays honestly MCP=1 IN THIS P&R SDC; likewise
+#       the live sample_count (elapsed-correction) operand into the load.
+#       [2026-08-27] Both were revisited once test_mcp_iq_samp_cnt_settle.py
+#       (job 5120) proved iq_tick == dcr_valid is 1-in-64: they are now MCP=3
+#       in the SIGNOFF SDC only (pnr_32m_scoped_v25_b6_signoff.sdc, group
+#       pcfsm_tick_decrement, v30). Kept single-cycle here so the P&R route
+#       stays the job-5105 build -- see the NOTE further below.
 #   VERIFY after STA: no STA-0361/0472 on the u_pcfsm.*_cnt patterns (the
 #   silent-no-op failure mode this file's history documents).
 #
@@ -206,6 +211,34 @@ set pcfsm_mval [get_nets -hierarchical {u_pcfsm.M_val[*]}]
 set_multicycle_path 3 -setup -through $pcfsm_mval -to $pcfsm_timeout_regs
 set_multicycle_path 2 -hold  -through $pcfsm_mval -to $pcfsm_timeout_regs
 
+# v27: rb_sf_cfg -> u_pcfsm.M_val itself (Open Risk #46/1117sq-margin follow-up,
+# job 4501: SS worst path -22.25 ns, `rb_sf_cfg[3]` -> clkinv/nand4/nand2/nor4
+# -> `u_pcfsm.M_val[3]` D pin -- i.e. the WRITE arc into M_val, not the read
+# arc out of it that $pcfsm_mval above already covers). This is the converse
+# gap from the one the v24 block above closed: $pcfsm_qs_srcs's -through list
+# already includes rb_sf_cfg*/rb_sample_shift*/rb_bw_sel*, so it DOES match
+# this path -- but its -to list is $pcfsm_timeout_regs (acq_cnt/wpend_cnt/
+# pkt_cnt), which M_val's own register is not a member of. The path was never
+# excepted by either block: $pcfsm_qs_srcs matches-through-but-not-to, $pcfsm_mval
+# matches-to-but-not-through (M_val is that group's SOURCE, not its destination).
+# Same justification as both: M_val is combinationally recomputed every cycle
+# from sf/sample_shift (packet_ctrl_fsm.v:46-49, `M_val <= 1 << (sf+sample_shift)`,
+# no load enable), but sf/sample_shift only change at host write rate and are
+# write-gated to !packet_active (Open Risk #31/#32) -- M_val genuinely differs
+# from its previous value only in the handful of cycles after a legitimate
+# config write, same quasi-static class as every exception in this file.
+# cocotb/tests/test_mcp_pcfsm_settle.py's SettleMonitor already includes M_val
+# in its monitored source set and asserts it (like sf/sample_shift) is stable
+# for >=3 cycles before the ST_ACQ_SETUP capture -- that is the architectural
+# half of this exception's proof (nothing downstream needs a correct M_val
+# before 3 settled cycles have passed); this SDC change is what makes STA
+# actually check the physical implementation meets that same budget on the
+# write side. Not yet re-run post-change -- see mcp_audit_manifest.json entry.
+set pcfsm_mval_regs [get_cells -of_objects \
+    [get_nets -hierarchical {u_pcfsm.M_val[*]}] -filter {ref_name =~ *dff*}]
+set_multicycle_path 3 -setup -through $pcfsm_qs_srcs -to $pcfsm_mval_regs
+set_multicycle_path 2 -hold  -through $pcfsm_qs_srcs -to $pcfsm_mval_regs
+
 # v21: rb_tacc_window_syms -> u_tacc.acc_start/acc_end. Same arithmetic shape
 # as the pcfsm block above (a fast operand -- timing_ref or sample_count --
 # plus a quasi-static shifted window width), same narrow -through/-to scope so
@@ -216,6 +249,20 @@ set tacc_window_regs [get_cells -of_objects \
     -filter {ref_name =~ *dff*}]
 set_multicycle_path 3 -setup -through $tacc_qs_srcs -to $tacc_window_regs
 set_multicycle_path 2 -hold  -through $tacc_qs_srcs -to $tacc_window_regs
+
+# NOTE (2026-08-27): three more paced/idle-bound cones -- the training_acc
+# Zpair_i*/Zpair_q*/Zdiag_* accumulate recurrence (group tacc_accumulate, v28),
+# dcr_valid -> iq_samp_cnt[*] (group iq_samp_cnt, v29), and the packet_ctrl_fsm
+# B6 down-counter load(sample_count operand)+decrement arcs (group
+# pcfsm_tick_decrement, v30) -- are ALSO MCP=3/2 class, but their `-to`
+# exceptions live in the SIGNOFF SDC only (pnr_32m_scoped_v25_b6_signoff.sdc),
+# NOT here. Reason: adding paced MCPs to the P&R SDC perturbs the post-GRT
+# resizer enough to strand the IQ_CLK root clkbuf with no routing access point
+# (DRT-0073, job 5112). Keeping the P&R SDC identical to job 5105 keeps that
+# route reproducible while letting signoff STA report all three cones honestly
+# at MCP=3. Applying them P&R-wide would also let the resizer under-build those
+# paths against the 3-cycle budget; leaving them single-cycle for P&R is the
+# conservative choice.
 
 # v21: rb_sc_hits_req -> timing_ref (inside u_sc, but the destination net
 # survives synthesis under its top-level name -- see bug note above -- so
@@ -321,20 +368,33 @@ set_multicycle_path 1 -hold  -to $bshift_regs
 create_clock -name IQ_CLK -period 31.25 [get_ports IQ_CLK]
 set_clock_uncertainty 0.5 [get_clocks IQ_CLK]
 
+# Host SPI is a separate 2 MHz Mode-0 clock domain.  SPI_MOSI is synchronous
+# to SPI_SCK, never IQ_CLK; SPI_SCK and IQ_CLK communicate only through the
+# explicit toggle/mailbox CDC in spi_slave.v.
+create_clock -name SPI_SCK -period 500.0 [get_ports SPI_SCK]
+set_clock_groups -asynchronous -group [get_clocks IQ_CLK] -group [get_clocks SPI_SCK]
+
+# Zero board-delay baseline: this checks the ASIC's SPI-clocked logic but is
+# NOT pad-interface signoff.  Replace these with the selected RPi's launch/
+# sample requirements and measured PCB flight-time before tapeout.
+set_input_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
+set_input_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
+set_output_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
+set_output_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
+
 # IQ vectors are reassembled inside trouper_top; the physical top-level ports
 # are scalar per antenna.  Constrain the actual pad ports, not the internal
 # IQ_DATA_I/Q vector nets (which get_ports cannot see).
 set iq_input_ports [get_ports {IQ_DATA_I_0 IQ_DATA_I_1 IQ_DATA_I_2 IQ_DATA_I_3 \
-                               IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3 \
-                               SPI_MOSI}]
+                               IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3}]
 set_input_delay  -max 2.0 -clock IQ_CLK $iq_input_ports
 set_input_delay  -min 1.0 -clock IQ_CLK $iq_input_ports
-set_output_delay -max 2.0 -clock IQ_CLK [all_outputs]
-set_output_delay -min 0.0 -clock IQ_CLK [all_outputs]
+set core_output_ports [remove_from_collection [all_outputs] [get_ports SPI_MISO_OUT]]
+set_output_delay -max 2.0 -clock IQ_CLK $core_output_ports
+set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 
 set_false_path -from [get_ports RESETB]
 set_false_path -from [get_ports HOST_CS]
-set_false_path -from [get_ports SPI_SCK]
 
 # --- Scoped multicycle: ONLY the four paced DSP blocks get 3 cycles ----------
 # Net names retain hierarchy ('.' separator) after flatten; cell names do not.
@@ -367,6 +427,7 @@ set mcp_audit_groups {
     {pcfsm_quasi_static       3 2 pcfsm_qs_srcs        pcfsm_timeout_regs}
     {pcfsm_latched_timing_ref 3 2 pcfsm_lat_timing_ref pcfsm_timeout_regs}
     {pcfsm_mval               3 2 pcfsm_mval           pcfsm_timeout_regs}
+    {pcfsm_mval_write         3 2 pcfsm_qs_srcs        pcfsm_mval_regs}
     {training_window          3 2 tacc_qs_srcs         tacc_window_regs}
     {timing_ref_hits          3 2 timing_ref_hits_srcs timing_ref_reg}
     {timing_ref_config        3 2 timing_ref_cfg_srcs  timing_ref_reg}

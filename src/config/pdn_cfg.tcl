@@ -28,6 +28,22 @@ foreach vdd $::env(VDD_NETS) gnd $::env(GND_NETS) {
 
 set_voltage_domain -name CORE -power $::env(VDD_NET) -ground $::env(GND_NET) -secondary_power $secondary
 
+# Optional hard keepout for shared-die floorplans (e.g. the L-shape config's
+# corner reserved for the Grouper project). FP_OBSTRUCTIONS only blocks cell
+# placement, not PDN stripe generation or routing, so without this the power
+# grid and signal routing both cross straight through a "blocked" corner.
+# Guarded on an env var set only by the configs that need it (see
+# config_lshape_1100_550_v26_pins.json) — inert for every other config.
+# Region format: "x1 y1 x2 y2" in microns, matching FP_OBSTRUCTIONS' box.
+# create_obstruction blocks PG routing too unless -except_pg is passed, which
+# is exactly what we want here (see OpenROAD ODB.tcl create_obstruction).
+if { [info exists ::env(PDN_KEEPOUT_REGION)] } {
+    set pdn_keepout_region $::env(PDN_KEEPOUT_REGION)
+    foreach pdn_keepout_layer {Metal1 Metal2 Metal3 Metal4 Metal5} {
+        create_obstruction -region $pdn_keepout_region -layer $pdn_keepout_layer
+    }
+}
+
 if { $::env(PDN_MULTILAYER) == 1 } {
     set arg_list [list]
     if { $::env(PDN_ENABLE_PINS) } {
