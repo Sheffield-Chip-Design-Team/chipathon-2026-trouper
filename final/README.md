@@ -151,17 +151,37 @@ diodes exposed.
 `set_max_capacitance` to either SDC: any design-wide value stalls
 `repair_design` on this netlist for 70+ min.
 
-The residual pins sit in two quasi-static combinational cones:
+Traced against **this run's** `reports/sta/max_ss_125C_3v00/checks.rpt` (22 max
+slew / 5 max cap). The 22 pins are exactly three groups:
 
-- **`sc_detector` SF/BW symbol-period decode** — cells fed by `u_sc.sym_cnt[*]`,
-  `rb_sf_cfg[*]`, `rb_bw_sel` (`sym_cnt` vs `M = 1<<(SF+sample_shift)`).
-- **`reg_bank` / AHB read-address decode** — cells fed by `ahb_addr[*]`,
-  `ahb_re`, `spi_reg_rd_addr[*]` (the readback mux, merged with the AHB read
-  path).
+| pins | group | fed by |
+|---|---|---|
+| 9 | **`sc_detector` SF/BW symbol-period decode** | `u_sc.sym_cnt[*]` vs `rb_sf_cfg[*]` (`sym_cnt` vs `M = 1<<(SF+sample_shift)`) |
+| 6 | **`reg_bank` Grouper-bus read decode** | **`GRP_RE`** (via `input9`/`net9`) |
+| 7 | **antenna diode input pins** (`ANTENNA_*/I`) | the diodes this run inserted |
 
-Both re-evaluate only on config writes or host reads (SPI ≤ 2 MHz), settle far
-within a cycle, and hold is clean — functionally immaterial. Full list:
-`reports/sta/*/checks.rpt`.
+Both logic cones re-evaluate only on config writes or host/Grouper reads, settle
+far within a cycle, and hold is clean — functionally immaterial.
+
+**On the count rising 15 → 22 vs job 5158:** the *underlying violating nets are
+identical* — the same 15 driver/sink pins, the same two cones. The +7 is purely
+antenna-diode **input** pins attaching to those already-violating nets, which is
+expected: a long, high-antenna-ratio net is exactly a poorly-slewed net, so the
+diodes land where slew was already worst. No new net became a violator and the
+max-cap count is unchanged at 5. Slew degraded modestly where diodes stacked up
+(worst `_33983_/ZN` 22.96 → 24.53 ns; `_11436_` carries four diodes off a
+minimum-strength `oai21_1`) and one net improved (`_36197_/ZN` 17.33 → 15.83).
+
+**Correction vs the job-5158 README:** it named the second cone as "AHB
+read-address decode — `ahb_addr[*]`, `ahb_re`, `spi_reg_rd_addr[*]`". Tracing
+the netlist shows it is driven by **`GRP_RE`**, the Grouper register-bus read
+enable — same `reg_bank` readback area, different strobe. It also predated the
+diodes and so did not mention them.
+
+If the diode-loaded slew is ever judged unacceptable, the targeted fix is to
+upsize the three minimum-strength drivers (`_33983_` oai32_1, `_36207_` /
+`_36197_` oai21_1) rather than to remove diodes — the antenna repair is what
+buys the zero-violation result.
 
 ## Contents
 
