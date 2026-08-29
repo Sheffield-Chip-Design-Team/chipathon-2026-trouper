@@ -61,6 +61,17 @@ module trouper_top(
   output GRP_RDATA_6,
   output GRP_RDATA_7,
   output GRP_READY,
+  input[7:0] HADDR,
+  input[2:0] HBURST,
+  input HMASTLOCK,
+  input[3:0] HPROT,
+  input[2:0] HSIZE,
+  input[1:0] HTRANS,
+  input[7:0] HWDATA,
+  input HWRITE,
+  output[7:0] HRDATA,
+  output HREADY,
+  output HRESP,
   output IRQ_OUT,
   output IRQ_GROUPER
 );
