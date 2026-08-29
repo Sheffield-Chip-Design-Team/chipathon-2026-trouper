@@ -933,28 +933,6 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__oai31_1 and gf180mcu_fd_sc_mcu7t5v0__oai31_1 are equivalent.
 
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: ZN
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__nand2_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__nand2_ 
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-ZN                                         |ZN                                         
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__nand2_2 and gf180mcu_fd_sc_mcu7t5v0__nand2_2 are equivalent.
-
 Cell gf180mcu_fd_sc_mcu7t5v0__nor4_4 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__nor4_4 (0) disconnected node: A2
 Cell gf180mcu_fd_sc_mcu7t5v0__nor4_4 (0) disconnected node: A3
@@ -1153,6 +1131,28 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__and3_1 and gf180mcu_fd_sc_mcu7t5v0__and3_1 are equivalent.
 
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: ZN
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__nand2_2 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__nand2_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__nand2_ 
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+ZN                                         |ZN                                         
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__nand2_2 and gf180mcu_fd_sc_mcu7t5v0__nand2_2 are equivalent.
+
 Cell gf180mcu_fd_sc_mcu7t5v0__and4_4 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__and4_4 (0) disconnected node: A2
 Cell gf180mcu_fd_sc_mcu7t5v0__and4_4 (0) disconnected node: A3
@@ -1202,6 +1202,34 @@ VSS                                        |VSS
 ---------------------------------------------------------------------------------------
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__xnor3_1 and gf180mcu_fd_sc_mcu7t5v0__xnor3_1 are equivalent.
+
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: A3
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: B1
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: B2
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: ZN
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__oai32_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__oai32_ 
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+A3                                         |A3                                         
+B1                                         |B1                                         
+B2                                         |B2                                         
+ZN                                         |ZN                                         
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__oai32_4 and gf180mcu_fd_sc_mcu7t5v0__oai32_4 are equivalent.
 
 Cell gf180mcu_fd_sc_mcu7t5v0__oai211_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__oai211_2 (0) disconnected node: A2
@@ -1427,6 +1455,30 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__aoi221_4 and gf180mcu_fd_sc_mcu7t5v0__aoi221_4 are equivalent.
 
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: A3
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: Z
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__or3_2  |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__or3_2  
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+A3                                         |A3                                         
+Z                                          |Z                                          
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__or3_2 and gf180mcu_fd_sc_mcu7t5v0__or3_2 are equivalent.
+
 Cell gf180mcu_fd_sc_mcu7t5v0__clkbuf_8 (0) disconnected node: I
 Cell gf180mcu_fd_sc_mcu7t5v0__clkbuf_8 (0) disconnected node: Z
 Cell gf180mcu_fd_sc_mcu7t5v0__clkbuf_8 (0) disconnected node: VDD
@@ -1592,6 +1644,26 @@ VSS                                        |VSS
 ---------------------------------------------------------------------------------------
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__aoi211_2 and gf180mcu_fd_sc_mcu7t5v0__aoi211_2 are equivalent.
+
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (0) disconnected node: I
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (0) disconnected node: VSS
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (1) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__antenna (1) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__antenn |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__antenn 
+-------------------------------------------|-------------------------------------------
+I                                          |I                                          
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__antenna and gf180mcu_fd_sc_mcu7t5v0__antenna are equivalent.
 
 Cell gf180mcu_fd_sc_mcu7t5v0__and2_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__and2_2 (0) disconnected node: A2
@@ -1769,30 +1841,6 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__clkinv_4 and gf180mcu_fd_sc_mcu7t5v0__clkinv_4 are equivalent.
 
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: A3
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: Z
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_2 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__or3_2  |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__or3_2  
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-A3                                         |A3                                         
-Z                                          |Z                                          
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__or3_2 and gf180mcu_fd_sc_mcu7t5v0__or3_2 are equivalent.
-
 Cell gf180mcu_fd_sc_mcu7t5v0__or2_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__or2_2 (0) disconnected node: A2
 Cell gf180mcu_fd_sc_mcu7t5v0__or2_2 (0) disconnected node: Z
@@ -1904,6 +1952,32 @@ VSS                                        |VSS
 ---------------------------------------------------------------------------------------
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__dffsnq_1 and gf180mcu_fd_sc_mcu7t5v0__dffsnq_1 are equivalent.
+
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: B1
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: B2
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: ZN
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__oai22_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__oai22_ 
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+B1                                         |B1                                         
+B2                                         |B2                                         
+ZN                                         |ZN                                         
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__oai22_4 and gf180mcu_fd_sc_mcu7t5v0__oai22_4 are equivalent.
 
 Cell gf180mcu_fd_sc_mcu7t5v0__buf_1 (0) disconnected node: I
 Cell gf180mcu_fd_sc_mcu7t5v0__buf_1 (0) disconnected node: Z
@@ -2279,6 +2353,32 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__dffsnq_4 and gf180mcu_fd_sc_mcu7t5v0__dffsnq_4 are equivalent.
 
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: B1
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: B2
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: ZN
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__aoi22_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__aoi22_ 
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+B1                                         |B1                                         
+B2                                         |B2                                         
+ZN                                         |ZN                                         
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__aoi22_2 and gf180mcu_fd_sc_mcu7t5v0__aoi22_2 are equivalent.
+
 Cell gf180mcu_fd_sc_mcu7t5v0__inv_20 (0) disconnected node: I
 Cell gf180mcu_fd_sc_mcu7t5v0__inv_20 (0) disconnected node: ZN
 Cell gf180mcu_fd_sc_mcu7t5v0__inv_20 (0) disconnected node: VDD
@@ -2385,32 +2485,6 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__clkinv_12 and gf180mcu_fd_sc_mcu7t5v0__clkinv_12 are equivalent.
 
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: B1
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: B2
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: ZN
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__aoi22_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__aoi22_ 
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-B1                                         |B1                                         
-B2                                         |B2                                         
-ZN                                         |ZN                                         
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__aoi22_2 and gf180mcu_fd_sc_mcu7t5v0__aoi22_2 are equivalent.
-
 Cell gf180mcu_fd_sc_mcu7t5v0__and4_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__and4_2 (0) disconnected node: A2
 Cell gf180mcu_fd_sc_mcu7t5v0__and4_2 (0) disconnected node: A3
@@ -2436,6 +2510,30 @@ VSS                                        |VSS
 ---------------------------------------------------------------------------------------
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__and4_2 and gf180mcu_fd_sc_mcu7t5v0__and4_2 are equivalent.
+
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: A3
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: Z
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__or3_4  |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__or3_4  
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+A3                                         |A3                                         
+Z                                          |Z                                          
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__or3_4 and gf180mcu_fd_sc_mcu7t5v0__or3_4 are equivalent.
 
 Cell gf180mcu_fd_sc_mcu7t5v0__oai31_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__oai31_2 (0) disconnected node: A2
@@ -2601,32 +2699,6 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__dffq_2 and gf180mcu_fd_sc_mcu7t5v0__dffq_2 are equivalent.
 
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: B1
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: B2
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: ZN
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__oai22_4 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__oai22_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__oai22_ 
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-B1                                         |B1                                         
-B2                                         |B2                                         
-ZN                                         |ZN                                         
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__oai22_4 and gf180mcu_fd_sc_mcu7t5v0__oai22_4 are equivalent.
-
 Cell gf180mcu_fd_sc_mcu7t5v0__inv_1 (0) disconnected node: I
 Cell gf180mcu_fd_sc_mcu7t5v0__inv_1 (0) disconnected node: ZN
 Cell gf180mcu_fd_sc_mcu7t5v0__inv_1 (0) disconnected node: VDD
@@ -2646,6 +2718,36 @@ VSS                                        |VSS
 ---------------------------------------------------------------------------------------
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__inv_1 and gf180mcu_fd_sc_mcu7t5v0__inv_1 are equivalent.
+
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: A1
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: A2
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: B1
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: B2
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: C1
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: C2
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: ZN
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VDD
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VNW
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VPW
+Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VSS
+
+Subcircuit pins:
+Circuit 1: gf180mcu_fd_sc_mcu7t5v0__aoi222 |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__aoi222 
+-------------------------------------------|-------------------------------------------
+A1                                         |A1                                         
+A2                                         |A2                                         
+B1                                         |B1                                         
+B2                                         |B2                                         
+C1                                         |C1                                         
+C2                                         |C2                                         
+ZN                                         |ZN                                         
+VDD                                        |VDD                                        
+VNW                                        |VNW                                        
+VPW                                        |VPW                                        
+VSS                                        |VSS                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes gf180mcu_fd_sc_mcu7t5v0__aoi222_2 and gf180mcu_fd_sc_mcu7t5v0__aoi222_2 are equivalent.
 
 Cell gf180mcu_fd_sc_mcu7t5v0__or4_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__or4_2 (0) disconnected node: A2
@@ -2693,30 +2795,6 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__clkinv_3 and gf180mcu_fd_sc_mcu7t5v0__clkinv_3 are equivalent.
 
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: A3
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: Z
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__or3_4 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__or3_4  |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__or3_4  
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-A3                                         |A3                                         
-Z                                          |Z                                          
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__or3_4 and gf180mcu_fd_sc_mcu7t5v0__or3_4 are equivalent.
-
 Cell gf180mcu_fd_sc_mcu7t5v0__oai22_2 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__oai22_2 (0) disconnected node: A2
 Cell gf180mcu_fd_sc_mcu7t5v0__oai22_2 (0) disconnected node: B1
@@ -2760,34 +2838,6 @@ VSS                                        |VSS
 ---------------------------------------------------------------------------------------
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__tiel and gf180mcu_fd_sc_mcu7t5v0__tiel are equivalent.
-
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: A3
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: B1
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: B2
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: ZN
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__oai32_4 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__oai32_ |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__oai32_ 
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-A3                                         |A3                                         
-B1                                         |B1                                         
-B2                                         |B2                                         
-ZN                                         |ZN                                         
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__oai32_4 and gf180mcu_fd_sc_mcu7t5v0__oai32_4 are equivalent.
 
 Cell gf180mcu_fd_sc_mcu7t5v0__or2_4 (0) disconnected node: A1
 Cell gf180mcu_fd_sc_mcu7t5v0__or2_4 (0) disconnected node: A2
@@ -2953,36 +3003,6 @@ VSS                                        |VSS
 Cell pin lists are equivalent.
 Device classes gf180mcu_fd_sc_mcu7t5v0__oai221_4 and gf180mcu_fd_sc_mcu7t5v0__oai221_4 are equivalent.
 
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: A1
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: A2
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: B1
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: B2
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: C1
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: C2
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: ZN
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VDD
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VNW
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VPW
-Cell gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (0) disconnected node: VSS
-
-Subcircuit pins:
-Circuit 1: gf180mcu_fd_sc_mcu7t5v0__aoi222 |Circuit 2: gf180mcu_fd_sc_mcu7t5v0__aoi222 
--------------------------------------------|-------------------------------------------
-A1                                         |A1                                         
-A2                                         |A2                                         
-B1                                         |B1                                         
-B2                                         |B2                                         
-C1                                         |C1                                         
-C2                                         |C2                                         
-ZN                                         |ZN                                         
-VDD                                        |VDD                                        
-VNW                                        |VNW                                        
-VPW                                        |VPW                                        
-VSS                                        |VSS                                        
----------------------------------------------------------------------------------------
-Cell pin lists are equivalent.
-Device classes gf180mcu_fd_sc_mcu7t5v0__aoi222_2 and gf180mcu_fd_sc_mcu7t5v0__aoi222_2 are equivalent.
-
 Cell trouper_top (0) disconnected node: HBURST[0]
 Cell trouper_top (0) disconnected node: HBURST[1]
 Cell trouper_top (0) disconnected node: HBURST[2]
@@ -3001,8 +3021,8 @@ Cell trouper_top (1) disconnected node: HPROT[2]
 Cell trouper_top (1) disconnected node: HPROT[1]
 Cell trouper_top (1) disconnected node: HPROT[0]
 Cell trouper_top (1) disconnected node: HTRANS[0]
-Class trouper_top (0):  Merged 26670 parallel devices.
-Class trouper_top (1):  Merged 26670 parallel devices.
+Class trouper_top (0):  Merged 26677 parallel devices.
+Class trouper_top (1):  Merged 26677 parallel devices.
 Cell trouper_top (0) disconnected node: HBURST[0]
 Cell trouper_top (0) disconnected node: HBURST[1]
 Cell trouper_top (0) disconnected node: HBURST[2]
@@ -3024,136 +3044,137 @@ Cell trouper_top (1) disconnected node: HTRANS[0]
 Subcircuit summary:
 Circuit 1: trouper_top                     |Circuit 2: trouper_top                     
 -------------------------------------------|-------------------------------------------
-gf180mcu_fd_sc_mcu7t5v0__nand2_1 (4353)    |gf180mcu_fd_sc_mcu7t5v0__nand2_1 (4353)    
+gf180mcu_fd_sc_mcu7t5v0__nand2_1 (4357)    |gf180mcu_fd_sc_mcu7t5v0__nand2_1 (4357)    
 gf180mcu_fd_sc_mcu7t5v0__mux2_2 (2878)     |gf180mcu_fd_sc_mcu7t5v0__mux2_2 (2878)     
-gf180mcu_fd_sc_mcu7t5v0__fillcap_64 (245-> |gf180mcu_fd_sc_mcu7t5v0__fillcap_64 (245-> 
-gf180mcu_fd_sc_mcu7t5v0__aoi222_1 (231)    |gf180mcu_fd_sc_mcu7t5v0__aoi222_1 (231)    
+gf180mcu_fd_sc_mcu7t5v0__fillcap_64 (242-> |gf180mcu_fd_sc_mcu7t5v0__fillcap_64 (242-> 
+gf180mcu_fd_sc_mcu7t5v0__aoi222_1 (230)    |gf180mcu_fd_sc_mcu7t5v0__aoi222_1 (230)    
 gf180mcu_fd_sc_mcu7t5v0__clkbuf_16 (240)   |gf180mcu_fd_sc_mcu7t5v0__clkbuf_16 (240)   
-gf180mcu_fd_sc_mcu7t5v0__fillcap_8 (8512-> |gf180mcu_fd_sc_mcu7t5v0__fillcap_8 (8512-> 
-gf180mcu_fd_sc_mcu7t5v0__fillcap_4 (13658- |gf180mcu_fd_sc_mcu7t5v0__fillcap_4 (13658- 
-gf180mcu_fd_sc_mcu7t5v0__aoi21_1 (2060)    |gf180mcu_fd_sc_mcu7t5v0__aoi21_1 (2060)    
-gf180mcu_fd_sc_mcu7t5v0__dffrnq_1 (4494)   |gf180mcu_fd_sc_mcu7t5v0__dffrnq_1 (4494)   
-gf180mcu_fd_sc_mcu7t5v0__fillcap_16 (3752- |gf180mcu_fd_sc_mcu7t5v0__fillcap_16 (3752- 
-gf180mcu_fd_sc_mcu7t5v0__nor2_1 (1689)     |gf180mcu_fd_sc_mcu7t5v0__nor2_1 (1689)     
-gf180mcu_fd_sc_mcu7t5v0__dffrnq_2 (25)     |gf180mcu_fd_sc_mcu7t5v0__dffrnq_2 (25)     
-gf180mcu_fd_sc_mcu7t5v0__nor3_1 (274)      |gf180mcu_fd_sc_mcu7t5v0__nor3_1 (274)      
-gf180mcu_fd_sc_mcu7t5v0__nand4_1 (1026)    |gf180mcu_fd_sc_mcu7t5v0__nand4_1 (1026)    
+gf180mcu_fd_sc_mcu7t5v0__fillcap_8 (8444-> |gf180mcu_fd_sc_mcu7t5v0__fillcap_8 (8444-> 
+gf180mcu_fd_sc_mcu7t5v0__fillcap_4 (13729- |gf180mcu_fd_sc_mcu7t5v0__fillcap_4 (13729- 
+gf180mcu_fd_sc_mcu7t5v0__aoi21_1 (2064)    |gf180mcu_fd_sc_mcu7t5v0__aoi21_1 (2064)    
+gf180mcu_fd_sc_mcu7t5v0__dffrnq_1 (4492)   |gf180mcu_fd_sc_mcu7t5v0__dffrnq_1 (4492)   
+gf180mcu_fd_sc_mcu7t5v0__fillcap_16 (3705- |gf180mcu_fd_sc_mcu7t5v0__fillcap_16 (3705- 
+gf180mcu_fd_sc_mcu7t5v0__nor2_1 (1686)     |gf180mcu_fd_sc_mcu7t5v0__nor2_1 (1686)     
+gf180mcu_fd_sc_mcu7t5v0__dffrnq_2 (26)     |gf180mcu_fd_sc_mcu7t5v0__dffrnq_2 (26)     
+gf180mcu_fd_sc_mcu7t5v0__nor3_1 (269)      |gf180mcu_fd_sc_mcu7t5v0__nor3_1 (269)      
+gf180mcu_fd_sc_mcu7t5v0__nand4_1 (1025)    |gf180mcu_fd_sc_mcu7t5v0__nand4_1 (1025)    
 gf180mcu_fd_sc_mcu7t5v0__aoi22_1 (1337)    |gf180mcu_fd_sc_mcu7t5v0__aoi22_1 (1337)    
-gf180mcu_fd_sc_mcu7t5v0__oai21_4 (53)      |gf180mcu_fd_sc_mcu7t5v0__oai21_4 (53)      
-gf180mcu_fd_sc_mcu7t5v0__and2_1 (606)      |gf180mcu_fd_sc_mcu7t5v0__and2_1 (606)      
-gf180mcu_fd_sc_mcu7t5v0__oai21_1 (2441)    |gf180mcu_fd_sc_mcu7t5v0__oai21_1 (2441)    
-gf180mcu_fd_sc_mcu7t5v0__xor2_1 (1524)     |gf180mcu_fd_sc_mcu7t5v0__xor2_1 (1524)     
-gf180mcu_fd_sc_mcu7t5v0__clkinv_1 (1176)   |gf180mcu_fd_sc_mcu7t5v0__clkinv_1 (1176)   
-gf180mcu_fd_sc_mcu7t5v0__dffrnq_4 (132)    |gf180mcu_fd_sc_mcu7t5v0__dffrnq_4 (132)    
-gf180mcu_fd_sc_mcu7t5v0__xor3_2 (40)       |gf180mcu_fd_sc_mcu7t5v0__xor3_2 (40)       
-gf180mcu_fd_sc_mcu7t5v0__nand3_1 (2017)    |gf180mcu_fd_sc_mcu7t5v0__nand3_1 (2017)    
-gf180mcu_fd_sc_mcu7t5v0__dffq_1 (524)      |gf180mcu_fd_sc_mcu7t5v0__dffq_1 (524)      
-gf180mcu_fd_sc_mcu7t5v0__fillcap_32 (508-> |gf180mcu_fd_sc_mcu7t5v0__fillcap_32 (508-> 
-gf180mcu_fd_sc_mcu7t5v0__aoi211_1 (496)    |gf180mcu_fd_sc_mcu7t5v0__aoi211_1 (496)    
+gf180mcu_fd_sc_mcu7t5v0__oai21_4 (58)      |gf180mcu_fd_sc_mcu7t5v0__oai21_4 (58)      
+gf180mcu_fd_sc_mcu7t5v0__and2_1 (603)      |gf180mcu_fd_sc_mcu7t5v0__and2_1 (603)      
+gf180mcu_fd_sc_mcu7t5v0__oai21_1 (2434)    |gf180mcu_fd_sc_mcu7t5v0__oai21_1 (2434)    
+gf180mcu_fd_sc_mcu7t5v0__xor2_1 (1520)     |gf180mcu_fd_sc_mcu7t5v0__xor2_1 (1520)     
+gf180mcu_fd_sc_mcu7t5v0__clkinv_1 (1177)   |gf180mcu_fd_sc_mcu7t5v0__clkinv_1 (1177)   
+gf180mcu_fd_sc_mcu7t5v0__dffrnq_4 (133)    |gf180mcu_fd_sc_mcu7t5v0__dffrnq_4 (133)    
+gf180mcu_fd_sc_mcu7t5v0__xor3_2 (43)       |gf180mcu_fd_sc_mcu7t5v0__xor3_2 (43)       
+gf180mcu_fd_sc_mcu7t5v0__nand3_1 (2014)    |gf180mcu_fd_sc_mcu7t5v0__nand3_1 (2014)    
+gf180mcu_fd_sc_mcu7t5v0__dffq_1 (523)      |gf180mcu_fd_sc_mcu7t5v0__dffq_1 (523)      
+gf180mcu_fd_sc_mcu7t5v0__fillcap_32 (504-> |gf180mcu_fd_sc_mcu7t5v0__fillcap_32 (504-> 
+gf180mcu_fd_sc_mcu7t5v0__aoi211_1 (492)    |gf180mcu_fd_sc_mcu7t5v0__aoi211_1 (492)    
 gf180mcu_fd_sc_mcu7t5v0__and4_1 (487)      |gf180mcu_fd_sc_mcu7t5v0__and4_1 (487)      
 gf180mcu_fd_sc_mcu7t5v0__mux4_1 (90)       |gf180mcu_fd_sc_mcu7t5v0__mux4_1 (90)       
 gf180mcu_fd_sc_mcu7t5v0__nor4_1 (259)      |gf180mcu_fd_sc_mcu7t5v0__nor4_1 (259)      
-gf180mcu_fd_sc_mcu7t5v0__oai211_1 (608)    |gf180mcu_fd_sc_mcu7t5v0__oai211_1 (608)    
+gf180mcu_fd_sc_mcu7t5v0__oai211_1 (606)    |gf180mcu_fd_sc_mcu7t5v0__oai211_1 (606)    
 gf180mcu_fd_sc_mcu7t5v0__oai31_4 (10)      |gf180mcu_fd_sc_mcu7t5v0__oai31_4 (10)      
 gf180mcu_fd_sc_mcu7t5v0__aoi221_1 (343)    |gf180mcu_fd_sc_mcu7t5v0__aoi221_1 (343)    
-gf180mcu_fd_sc_mcu7t5v0__or3_1 (228)       |gf180mcu_fd_sc_mcu7t5v0__or3_1 (228)       
+gf180mcu_fd_sc_mcu7t5v0__or3_1 (227)       |gf180mcu_fd_sc_mcu7t5v0__or3_1 (227)       
 gf180mcu_fd_sc_mcu7t5v0__nand3_4 (23)      |gf180mcu_fd_sc_mcu7t5v0__nand3_4 (23)      
-gf180mcu_fd_sc_mcu7t5v0__oai22_1 (282)     |gf180mcu_fd_sc_mcu7t5v0__oai22_1 (282)     
+gf180mcu_fd_sc_mcu7t5v0__oai22_1 (273)     |gf180mcu_fd_sc_mcu7t5v0__oai22_1 (273)     
 gf180mcu_fd_sc_mcu7t5v0__nand2_4 (65)      |gf180mcu_fd_sc_mcu7t5v0__nand2_4 (65)      
 gf180mcu_fd_sc_mcu7t5v0__or4_1 (119)       |gf180mcu_fd_sc_mcu7t5v0__or4_1 (119)       
 gf180mcu_fd_sc_mcu7t5v0__xnor2_1 (502)     |gf180mcu_fd_sc_mcu7t5v0__xnor2_1 (502)     
-gf180mcu_fd_sc_mcu7t5v0__xor3_1 (631)      |gf180mcu_fd_sc_mcu7t5v0__xor3_1 (631)      
-gf180mcu_fd_sc_mcu7t5v0__oai31_1 (502)     |gf180mcu_fd_sc_mcu7t5v0__oai31_1 (502)     
-gf180mcu_fd_sc_mcu7t5v0__nand2_2 (67)      |gf180mcu_fd_sc_mcu7t5v0__nand2_2 (67)      
+gf180mcu_fd_sc_mcu7t5v0__xor3_1 (628)      |gf180mcu_fd_sc_mcu7t5v0__xor3_1 (628)      
+gf180mcu_fd_sc_mcu7t5v0__oai31_1 (501)     |gf180mcu_fd_sc_mcu7t5v0__oai31_1 (501)     
 gf180mcu_fd_sc_mcu7t5v0__nor4_4 (213)      |gf180mcu_fd_sc_mcu7t5v0__nor4_4 (213)      
-gf180mcu_fd_sc_mcu7t5v0__oai32_1 (186)     |gf180mcu_fd_sc_mcu7t5v0__oai32_1 (186)     
-gf180mcu_fd_sc_mcu7t5v0__nor2_4 (46)       |gf180mcu_fd_sc_mcu7t5v0__nor2_4 (46)       
+gf180mcu_fd_sc_mcu7t5v0__oai32_1 (179)     |gf180mcu_fd_sc_mcu7t5v0__oai32_1 (179)     
+gf180mcu_fd_sc_mcu7t5v0__nor2_4 (49)       |gf180mcu_fd_sc_mcu7t5v0__nor2_4 (49)       
 gf180mcu_fd_sc_mcu7t5v0__oai221_1 (160)    |gf180mcu_fd_sc_mcu7t5v0__oai221_1 (160)    
 gf180mcu_fd_sc_mcu7t5v0__or2_1 (704)       |gf180mcu_fd_sc_mcu7t5v0__or2_1 (704)       
-gf180mcu_fd_sc_mcu7t5v0__nor3_2 (9)        |gf180mcu_fd_sc_mcu7t5v0__nor3_2 (9)        
-gf180mcu_fd_sc_mcu7t5v0__oai21_2 (82)      |gf180mcu_fd_sc_mcu7t5v0__oai21_2 (82)      
-gf180mcu_fd_sc_mcu7t5v0__and3_1 (427)      |gf180mcu_fd_sc_mcu7t5v0__and3_1 (427)      
+gf180mcu_fd_sc_mcu7t5v0__nor3_2 (12)       |gf180mcu_fd_sc_mcu7t5v0__nor3_2 (12)       
+gf180mcu_fd_sc_mcu7t5v0__oai21_2 (84)      |gf180mcu_fd_sc_mcu7t5v0__oai21_2 (84)      
+gf180mcu_fd_sc_mcu7t5v0__and3_1 (428)      |gf180mcu_fd_sc_mcu7t5v0__and3_1 (428)      
+gf180mcu_fd_sc_mcu7t5v0__nand2_2 (64)      |gf180mcu_fd_sc_mcu7t5v0__nand2_2 (64)      
 gf180mcu_fd_sc_mcu7t5v0__and4_4 (6)        |gf180mcu_fd_sc_mcu7t5v0__and4_4 (6)        
 gf180mcu_fd_sc_mcu7t5v0__xnor3_1 (199)     |gf180mcu_fd_sc_mcu7t5v0__xnor3_1 (199)     
-gf180mcu_fd_sc_mcu7t5v0__oai211_2 (28)     |gf180mcu_fd_sc_mcu7t5v0__oai211_2 (28)     
-gf180mcu_fd_sc_mcu7t5v0__xor2_2 (43)       |gf180mcu_fd_sc_mcu7t5v0__xor2_2 (43)       
+gf180mcu_fd_sc_mcu7t5v0__oai32_4 (13)      |gf180mcu_fd_sc_mcu7t5v0__oai32_4 (13)      
+gf180mcu_fd_sc_mcu7t5v0__oai211_2 (29)     |gf180mcu_fd_sc_mcu7t5v0__oai211_2 (29)     
+gf180mcu_fd_sc_mcu7t5v0__xor2_2 (47)       |gf180mcu_fd_sc_mcu7t5v0__xor2_2 (47)       
 gf180mcu_fd_sc_mcu7t5v0__buf_20 (48)       |gf180mcu_fd_sc_mcu7t5v0__buf_20 (48)       
 gf180mcu_fd_sc_mcu7t5v0__and3_4 (12)       |gf180mcu_fd_sc_mcu7t5v0__and3_4 (12)       
 gf180mcu_fd_sc_mcu7t5v0__buf_2 (252)       |gf180mcu_fd_sc_mcu7t5v0__buf_2 (252)       
-gf180mcu_fd_sc_mcu7t5v0__aoi21_2 (159)     |gf180mcu_fd_sc_mcu7t5v0__aoi21_2 (159)     
+gf180mcu_fd_sc_mcu7t5v0__aoi21_2 (150)     |gf180mcu_fd_sc_mcu7t5v0__aoi21_2 (150)     
 gf180mcu_fd_sc_mcu7t5v0__buf_4 (164)       |gf180mcu_fd_sc_mcu7t5v0__buf_4 (164)       
-gf180mcu_fd_sc_mcu7t5v0__buf_8 (234)       |gf180mcu_fd_sc_mcu7t5v0__buf_8 (234)       
+gf180mcu_fd_sc_mcu7t5v0__buf_8 (236)       |gf180mcu_fd_sc_mcu7t5v0__buf_8 (236)       
 gf180mcu_fd_sc_mcu7t5v0__buf_12 (82)       |gf180mcu_fd_sc_mcu7t5v0__buf_12 (82)       
 gf180mcu_fd_sc_mcu7t5v0__aoi221_4 (11)     |gf180mcu_fd_sc_mcu7t5v0__aoi221_4 (11)     
+gf180mcu_fd_sc_mcu7t5v0__or3_2 (16)        |gf180mcu_fd_sc_mcu7t5v0__or3_2 (16)        
 gf180mcu_fd_sc_mcu7t5v0__clkbuf_8 (46)     |gf180mcu_fd_sc_mcu7t5v0__clkbuf_8 (46)     
-gf180mcu_fd_sc_mcu7t5v0__aoi21_4 (43)      |gf180mcu_fd_sc_mcu7t5v0__aoi21_4 (43)      
+gf180mcu_fd_sc_mcu7t5v0__aoi21_4 (48)      |gf180mcu_fd_sc_mcu7t5v0__aoi21_4 (48)      
 gf180mcu_fd_sc_mcu7t5v0__aoi222_4 (1)      |gf180mcu_fd_sc_mcu7t5v0__aoi222_4 (1)      
-gf180mcu_fd_sc_mcu7t5v0__aoi211_4 (40)     |gf180mcu_fd_sc_mcu7t5v0__aoi211_4 (40)     
-gf180mcu_fd_sc_mcu7t5v0__clkbuf_2 (20)     |gf180mcu_fd_sc_mcu7t5v0__clkbuf_2 (20)     
-gf180mcu_fd_sc_mcu7t5v0__clkbuf_1 (159)    |gf180mcu_fd_sc_mcu7t5v0__clkbuf_1 (159)    
-gf180mcu_fd_sc_mcu7t5v0__aoi211_2 (13)     |gf180mcu_fd_sc_mcu7t5v0__aoi211_2 (13)     
-gf180mcu_fd_sc_mcu7t5v0__and2_2 (22)       |gf180mcu_fd_sc_mcu7t5v0__and2_2 (22)       
-gf180mcu_fd_sc_mcu7t5v0__nand4_4 (80)      |gf180mcu_fd_sc_mcu7t5v0__nand4_4 (80)      
+gf180mcu_fd_sc_mcu7t5v0__aoi211_4 (39)     |gf180mcu_fd_sc_mcu7t5v0__aoi211_4 (39)     
+gf180mcu_fd_sc_mcu7t5v0__clkbuf_2 (21)     |gf180mcu_fd_sc_mcu7t5v0__clkbuf_2 (21)     
+gf180mcu_fd_sc_mcu7t5v0__clkbuf_1 (158)    |gf180mcu_fd_sc_mcu7t5v0__clkbuf_1 (158)    
+gf180mcu_fd_sc_mcu7t5v0__aoi211_2 (18)     |gf180mcu_fd_sc_mcu7t5v0__aoi211_2 (18)     
+gf180mcu_fd_sc_mcu7t5v0__antenna (102->44) |gf180mcu_fd_sc_mcu7t5v0__antenna (102->44) 
+gf180mcu_fd_sc_mcu7t5v0__and2_2 (23)       |gf180mcu_fd_sc_mcu7t5v0__and2_2 (23)       
+gf180mcu_fd_sc_mcu7t5v0__nand4_4 (78)      |gf180mcu_fd_sc_mcu7t5v0__nand4_4 (78)      
 gf180mcu_fd_sc_mcu7t5v0__dlyc_1 (43)       |gf180mcu_fd_sc_mcu7t5v0__dlyc_1 (43)       
 gf180mcu_fd_sc_mcu7t5v0__dlyb_1 (79)       |gf180mcu_fd_sc_mcu7t5v0__dlyb_1 (79)       
-gf180mcu_fd_sc_mcu7t5v0__buf_3 (28)        |gf180mcu_fd_sc_mcu7t5v0__buf_3 (28)        
+gf180mcu_fd_sc_mcu7t5v0__buf_3 (30)        |gf180mcu_fd_sc_mcu7t5v0__buf_3 (30)        
 gf180mcu_fd_sc_mcu7t5v0__nor2_2 (61)       |gf180mcu_fd_sc_mcu7t5v0__nor2_2 (61)       
-gf180mcu_fd_sc_mcu7t5v0__oai211_4 (15)     |gf180mcu_fd_sc_mcu7t5v0__oai211_4 (15)     
-gf180mcu_fd_sc_mcu7t5v0__clkinv_4 (16)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_4 (16)     
-gf180mcu_fd_sc_mcu7t5v0__or3_2 (16)        |gf180mcu_fd_sc_mcu7t5v0__or3_2 (16)        
-gf180mcu_fd_sc_mcu7t5v0__or2_2 (25)        |gf180mcu_fd_sc_mcu7t5v0__or2_2 (25)        
-gf180mcu_fd_sc_mcu7t5v0__nand3_2 (23)      |gf180mcu_fd_sc_mcu7t5v0__nand3_2 (23)      
+gf180mcu_fd_sc_mcu7t5v0__oai211_4 (16)     |gf180mcu_fd_sc_mcu7t5v0__oai211_4 (16)     
+gf180mcu_fd_sc_mcu7t5v0__clkinv_4 (15)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_4 (15)     
+gf180mcu_fd_sc_mcu7t5v0__or2_2 (24)        |gf180mcu_fd_sc_mcu7t5v0__or2_2 (24)        
+gf180mcu_fd_sc_mcu7t5v0__nand3_2 (26)      |gf180mcu_fd_sc_mcu7t5v0__nand3_2 (26)      
 gf180mcu_fd_sc_mcu7t5v0__clkinv_8 (18)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_8 (18)     
 gf180mcu_fd_sc_mcu7t5v0__xor2_4 (11)       |gf180mcu_fd_sc_mcu7t5v0__xor2_4 (11)       
 gf180mcu_fd_sc_mcu7t5v0__dffsnq_1 (24)     |gf180mcu_fd_sc_mcu7t5v0__dffsnq_1 (24)     
+gf180mcu_fd_sc_mcu7t5v0__oai22_4 (17)      |gf180mcu_fd_sc_mcu7t5v0__oai22_4 (17)      
 gf180mcu_fd_sc_mcu7t5v0__buf_1 (9)         |gf180mcu_fd_sc_mcu7t5v0__buf_1 (9)         
-gf180mcu_fd_sc_mcu7t5v0__nand4_2 (20)      |gf180mcu_fd_sc_mcu7t5v0__nand4_2 (20)      
+gf180mcu_fd_sc_mcu7t5v0__nand4_2 (23)      |gf180mcu_fd_sc_mcu7t5v0__nand4_2 (23)      
 gf180mcu_fd_sc_mcu7t5v0__inv_4 (27)        |gf180mcu_fd_sc_mcu7t5v0__inv_4 (27)        
 gf180mcu_fd_sc_mcu7t5v0__oai222_1 (6)      |gf180mcu_fd_sc_mcu7t5v0__oai222_1 (6)      
-gf180mcu_fd_sc_mcu7t5v0__aoi22_4 (13)      |gf180mcu_fd_sc_mcu7t5v0__aoi22_4 (13)      
+gf180mcu_fd_sc_mcu7t5v0__aoi22_4 (14)      |gf180mcu_fd_sc_mcu7t5v0__aoi22_4 (14)      
 gf180mcu_fd_sc_mcu7t5v0__clkbuf_12 (27)    |gf180mcu_fd_sc_mcu7t5v0__clkbuf_12 (27)    
-gf180mcu_fd_sc_mcu7t5v0__inv_3 (32)        |gf180mcu_fd_sc_mcu7t5v0__inv_3 (32)        
-gf180mcu_fd_sc_mcu7t5v0__nor3_4 (21)       |gf180mcu_fd_sc_mcu7t5v0__nor3_4 (21)       
+gf180mcu_fd_sc_mcu7t5v0__inv_3 (34)        |gf180mcu_fd_sc_mcu7t5v0__inv_3 (34)        
+gf180mcu_fd_sc_mcu7t5v0__nor3_4 (23)       |gf180mcu_fd_sc_mcu7t5v0__nor3_4 (23)       
 gf180mcu_fd_sc_mcu7t5v0__xnor2_4 (2)       |gf180mcu_fd_sc_mcu7t5v0__xnor2_4 (2)       
-gf180mcu_fd_sc_mcu7t5v0__dffq_4 (11)       |gf180mcu_fd_sc_mcu7t5v0__dffq_4 (11)       
-gf180mcu_fd_sc_mcu7t5v0__oai33_4 (2)       |gf180mcu_fd_sc_mcu7t5v0__oai33_4 (2)       
+gf180mcu_fd_sc_mcu7t5v0__dffq_4 (13)       |gf180mcu_fd_sc_mcu7t5v0__dffq_4 (13)       
+gf180mcu_fd_sc_mcu7t5v0__oai33_4 (5)       |gf180mcu_fd_sc_mcu7t5v0__oai33_4 (5)       
 gf180mcu_fd_sc_mcu7t5v0__clkbuf_4 (38)     |gf180mcu_fd_sc_mcu7t5v0__clkbuf_4 (38)     
-gf180mcu_fd_sc_mcu7t5v0__clkinv_2 (24)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_2 (24)     
-gf180mcu_fd_sc_mcu7t5v0__oai32_2 (6)       |gf180mcu_fd_sc_mcu7t5v0__oai32_2 (6)       
+gf180mcu_fd_sc_mcu7t5v0__clkinv_2 (25)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_2 (25)     
+gf180mcu_fd_sc_mcu7t5v0__oai32_2 (4)       |gf180mcu_fd_sc_mcu7t5v0__oai32_2 (4)       
 gf180mcu_fd_sc_mcu7t5v0__xnor2_2 (8)       |gf180mcu_fd_sc_mcu7t5v0__xnor2_2 (8)       
 gf180mcu_fd_sc_mcu7t5v0__dffsnq_4 (6)      |gf180mcu_fd_sc_mcu7t5v0__dffsnq_4 (6)      
+gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (14)      |gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (14)      
 gf180mcu_fd_sc_mcu7t5v0__inv_20 (3)        |gf180mcu_fd_sc_mcu7t5v0__inv_20 (3)        
-gf180mcu_fd_sc_mcu7t5v0__and3_2 (12)       |gf180mcu_fd_sc_mcu7t5v0__and3_2 (12)       
-gf180mcu_fd_sc_mcu7t5v0__and2_4 (10)       |gf180mcu_fd_sc_mcu7t5v0__and2_4 (10)       
-gf180mcu_fd_sc_mcu7t5v0__inv_8 (4)         |gf180mcu_fd_sc_mcu7t5v0__inv_8 (4)         
+gf180mcu_fd_sc_mcu7t5v0__and3_2 (11)       |gf180mcu_fd_sc_mcu7t5v0__and3_2 (11)       
+gf180mcu_fd_sc_mcu7t5v0__and2_4 (12)       |gf180mcu_fd_sc_mcu7t5v0__and2_4 (12)       
+gf180mcu_fd_sc_mcu7t5v0__inv_8 (5)         |gf180mcu_fd_sc_mcu7t5v0__inv_8 (5)         
 gf180mcu_fd_sc_mcu7t5v0__clkinv_12 (7)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_12 (7)     
-gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (15)      |gf180mcu_fd_sc_mcu7t5v0__aoi22_2 (15)      
 gf180mcu_fd_sc_mcu7t5v0__and4_2 (23)       |gf180mcu_fd_sc_mcu7t5v0__and4_2 (23)       
-gf180mcu_fd_sc_mcu7t5v0__oai31_2 (6)       |gf180mcu_fd_sc_mcu7t5v0__oai31_2 (6)       
+gf180mcu_fd_sc_mcu7t5v0__or3_4 (7)         |gf180mcu_fd_sc_mcu7t5v0__or3_4 (7)         
+gf180mcu_fd_sc_mcu7t5v0__oai31_2 (7)       |gf180mcu_fd_sc_mcu7t5v0__oai31_2 (7)       
 gf180mcu_fd_sc_mcu7t5v0__inv_12 (1)        |gf180mcu_fd_sc_mcu7t5v0__inv_12 (1)        
-gf180mcu_fd_sc_mcu7t5v0__oai33_1 (13)      |gf180mcu_fd_sc_mcu7t5v0__oai33_1 (13)      
+gf180mcu_fd_sc_mcu7t5v0__oai33_1 (10)      |gf180mcu_fd_sc_mcu7t5v0__oai33_1 (10)      
 gf180mcu_fd_sc_mcu7t5v0__or4_4 (4)         |gf180mcu_fd_sc_mcu7t5v0__or4_4 (4)         
-gf180mcu_fd_sc_mcu7t5v0__inv_2 (18)        |gf180mcu_fd_sc_mcu7t5v0__inv_2 (18)        
+gf180mcu_fd_sc_mcu7t5v0__inv_2 (14)        |gf180mcu_fd_sc_mcu7t5v0__inv_2 (14)        
 gf180mcu_fd_sc_mcu7t5v0__clkinv_16 (4)     |gf180mcu_fd_sc_mcu7t5v0__clkinv_16 (4)     
-gf180mcu_fd_sc_mcu7t5v0__dffq_2 (9)        |gf180mcu_fd_sc_mcu7t5v0__dffq_2 (9)        
-gf180mcu_fd_sc_mcu7t5v0__oai22_4 (11)      |gf180mcu_fd_sc_mcu7t5v0__oai22_4 (11)      
+gf180mcu_fd_sc_mcu7t5v0__dffq_2 (8)        |gf180mcu_fd_sc_mcu7t5v0__dffq_2 (8)        
 gf180mcu_fd_sc_mcu7t5v0__inv_1 (1)         |gf180mcu_fd_sc_mcu7t5v0__inv_1 (1)         
+gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (2)      |gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (2)      
 gf180mcu_fd_sc_mcu7t5v0__or4_2 (3)         |gf180mcu_fd_sc_mcu7t5v0__or4_2 (3)         
 gf180mcu_fd_sc_mcu7t5v0__clkinv_3 (5)      |gf180mcu_fd_sc_mcu7t5v0__clkinv_3 (5)      
-gf180mcu_fd_sc_mcu7t5v0__or3_4 (6)         |gf180mcu_fd_sc_mcu7t5v0__or3_4 (6)         
-gf180mcu_fd_sc_mcu7t5v0__oai22_2 (5)       |gf180mcu_fd_sc_mcu7t5v0__oai22_2 (5)       
+gf180mcu_fd_sc_mcu7t5v0__oai22_2 (8)       |gf180mcu_fd_sc_mcu7t5v0__oai22_2 (8)       
 gf180mcu_fd_sc_mcu7t5v0__tiel (1)          |gf180mcu_fd_sc_mcu7t5v0__tiel (1)          
-gf180mcu_fd_sc_mcu7t5v0__oai32_4 (4)       |gf180mcu_fd_sc_mcu7t5v0__oai32_4 (4)       
-gf180mcu_fd_sc_mcu7t5v0__or2_4 (5)         |gf180mcu_fd_sc_mcu7t5v0__or2_4 (5)         
+gf180mcu_fd_sc_mcu7t5v0__or2_4 (6)         |gf180mcu_fd_sc_mcu7t5v0__or2_4 (6)         
 gf180mcu_fd_sc_mcu7t5v0__nor4_2 (4)        |gf180mcu_fd_sc_mcu7t5v0__nor4_2 (4)        
 gf180mcu_fd_sc_mcu7t5v0__clkbuf_20 (2)     |gf180mcu_fd_sc_mcu7t5v0__clkbuf_20 (2)     
 gf180mcu_fd_sc_mcu7t5v0__dffnrnq_1 (8)     |gf180mcu_fd_sc_mcu7t5v0__dffnrnq_1 (8)     
 gf180mcu_fd_sc_mcu7t5v0__xnor3_2 (1)       |gf180mcu_fd_sc_mcu7t5v0__xnor3_2 (1)       
 gf180mcu_fd_sc_mcu7t5v0__buf_16 (1)        |gf180mcu_fd_sc_mcu7t5v0__buf_16 (1)        
 gf180mcu_fd_sc_mcu7t5v0__oai221_4 (1)      |gf180mcu_fd_sc_mcu7t5v0__oai221_4 (1)      
-gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (1)      |gf180mcu_fd_sc_mcu7t5v0__aoi222_2 (1)      
-Number of devices: 36125                   |Number of devices: 36125                   
-Number of nets: 36178                      |Number of nets: 36178                      
+Number of devices: 36174                   |Number of devices: 36174                   
+Number of nets: 36183                      |Number of nets: 36183                      
 ---------------------------------------------------------------------------------------
 Resolving symmetries by property value.
 Resolving symmetries by pin name.
@@ -3162,24 +3183,27 @@ Netlists match uniquely.
 Subcircuit pins:
 Circuit 1: trouper_top                     |Circuit 2: trouper_top                     
 -------------------------------------------|-------------------------------------------
-IQ_DATA_I_1                                |IQ_DATA_I_1                                
 IQ_DATA_I_3                                |IQ_DATA_I_3                                
 IQ_DATA_Q_2                                |IQ_DATA_Q_2                                
+IQ_DATA_I_1                                |IQ_DATA_I_1                                
 IQ_DATA_Q_3                                |IQ_DATA_Q_3                                
 IQ_DATA_I_0                                |IQ_DATA_I_0                                
 GRP_WE                                     |GRP_WE                                     
 HOST_CS                                    |HOST_CS                                    
-HSIZE[1]                                   |HSIZE[1]                                   
-HSIZE[0]                                   |HSIZE[0]                                   
-HSIZE[2]                                   |HSIZE[2]                                   
-HWRITE                                     |HWRITE                                     
 IQ_DATA_I_2                                |IQ_DATA_I_2                                
 IQ_DATA_Q_0                                |IQ_DATA_Q_0                                
 HTRANS[1]                                  |HTRANS[1]                                  
 RESETB                                     |RESETB                                     
 HADDR[7]                                   |HADDR[7]                                   
 SPI_MOSI                                   |SPI_MOSI                                   
+HWRITE                                     |HWRITE                                     
 SPI_SCK                                    |SPI_SCK                                    
+HSIZE[1]                                   |HSIZE[1]                                   
+HSIZE[0]                                   |HSIZE[0]                                   
+GRP_ADDR_5                                 |GRP_ADDR_5                                 
+HSIZE[2]                                   |HSIZE[2]                                   
+GRP_ADDR_4                                 |GRP_ADDR_4                                 
+GRP_ADDR_6                                 |GRP_ADDR_6                                 
 IQ_DATA_Q_1                                |IQ_DATA_Q_1                                
 HADDR[4]                                   |HADDR[4]                                   
 HADDR[5]                                   |HADDR[5]                                   
@@ -3205,9 +3229,6 @@ HADDR[2]                                   |HADDR[2]
 HADDR[3]                                   |HADDR[3]                                   
 HADDR[1]                                   |HADDR[1]                                   
 HADDR[6]                                   |HADDR[6]                                   
-GRP_ADDR_5                                 |GRP_ADDR_5                                 
-GRP_ADDR_4                                 |GRP_ADDR_4                                 
-GRP_ADDR_6                                 |GRP_ADDR_6                                 
 PSRAM_SIO_IN_0                             |PSRAM_SIO_IN_0                             
 PSRAM_SIO_IN_1                             |PSRAM_SIO_IN_1                             
 PSRAM_SIO_IN_2                             |PSRAM_SIO_IN_2                             
@@ -3217,40 +3238,40 @@ GRP_ADDR_3                                 |GRP_ADDR_3
 GRP_ADDR_0                                 |GRP_ADDR_0                                 
 GRP_ADDR_2                                 |GRP_ADDR_2                                 
 GRP_RE                                     |GRP_RE                                     
+HRESP                                      |HRESP                                      
+GRP_RDATA_4                                |GRP_RDATA_4                                
 PSRAM_SIO_OE_1                             |PSRAM_SIO_OE_1                             
+GRP_RDATA_3                                |GRP_RDATA_3                                
+GRP_RDATA_1                                |GRP_RDATA_1                                
 PSRAM_SIO_OUT_2                            |PSRAM_SIO_OUT_2                            
-HRDATA[4]                                  |HRDATA[4]                                  
+HREADY                                     |HREADY                                     
 HRDATA[5]                                  |HRDATA[5]                                  
 HRDATA[6]                                  |HRDATA[6]                                  
 HRDATA[7]                                  |HRDATA[7]                                  
+HRDATA[4]                                  |HRDATA[4]                                  
 PSRAM_SIO_OE_0                             |PSRAM_SIO_OE_0                             
-HRDATA[2]                                  |HRDATA[2]                                  
 HRDATA[3]                                  |HRDATA[3]                                  
-PSRAM_CE_N                                 |PSRAM_CE_N                                 
-HRDATA[0]                                  |HRDATA[0]                                  
+HRDATA[2]                                  |HRDATA[2]                                  
 HRDATA[1]                                  |HRDATA[1]                                  
+HRDATA[0]                                  |HRDATA[0]                                  
 PSRAM_SIO_OUT_0                            |PSRAM_SIO_OUT_0                            
-PSRAM_SIO_OUT_1                            |PSRAM_SIO_OUT_1                            
 PSRAM_SIO_OUT_3                            |PSRAM_SIO_OUT_3                            
-IRQ_GROUPER                                |IRQ_GROUPER                                
+GRP_READY                                  |GRP_READY                                  
 REMOD_A_I                                  |REMOD_A_I                                  
-HRESP                                      |HRESP                                      
+PSRAM_SIO_OUT_1                            |PSRAM_SIO_OUT_1                            
 GRP_RDATA_5                                |GRP_RDATA_5                                
-GRP_RDATA_4                                |GRP_RDATA_4                                
-GRP_RDATA_3                                |GRP_RDATA_3                                
 GRP_RDATA_2                                |GRP_RDATA_2                                
 GRP_RDATA_7                                |GRP_RDATA_7                                
 GRP_RDATA_6                                |GRP_RDATA_6                                
-GRP_RDATA_1                                |GRP_RDATA_1                                
 GRP_RDATA_0                                |GRP_RDATA_0                                
 REMOD_A_Q                                  |REMOD_A_Q                                  
-HREADY                                     |HREADY                                     
+PSRAM_CE_N                                 |PSRAM_CE_N                                 
+IRQ_GROUPER                                |IRQ_GROUPER                                
 PSRAM_SIO_OE_3                             |PSRAM_SIO_OE_3                             
 PSRAM_SIO_OE_2                             |PSRAM_SIO_OE_2                             
 SPI_MISO                                   |SPI_MISO                                   
 PSRAM_SCK                                  |PSRAM_SCK                                  
 IRQ_OUT                                    |IRQ_OUT                                    
-GRP_READY                                  |GRP_READY                                  
 VDD                                        |VDD                                        
 VSS                                        |VSS                                        
 IQ_CLK                                     |IQ_CLK                                     

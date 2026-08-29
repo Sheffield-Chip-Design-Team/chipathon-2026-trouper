@@ -13,22 +13,22 @@ Fanout         Cap        Slew       Delay        Time   Description
 ---------------------------------------------------------------------------------------------
                                  15.625000   15.625000   clock IQ_CLK (fall edge)
                                   0.000000   15.625000   clock source latency
-     2    0.218272    0.000000    0.000000   15.625000 v IQ_CLK (in)
+     2    0.219740    0.000000    0.000000   15.625000 v IQ_CLK (in)
                                                          IQ_CLK (net)
-                      0.028323    0.011585   15.636586 v clkbuf_0_IQ_CLK/I (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
-     1    0.023124    0.070526    0.171740   15.808326 v clkbuf_0_IQ_CLK/Z (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+                      0.029406    0.012028   15.637028 v clkbuf_0_IQ_CLK/I (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+     1    0.023124    0.070528    0.172022   15.809051 v clkbuf_0_IQ_CLK/Z (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
                                                          clknet_0_IQ_CLK (net)
-                      0.070527    0.000268   15.808594 v clkbuf_1_0__f_IQ_CLK/I (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
-     1    0.004243    0.055795    0.169633   15.978228 v clkbuf_1_0__f_IQ_CLK/Z (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+                      0.070528    0.000268   15.809319 v clkbuf_1_0__f_IQ_CLK/I (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+     1    0.004073    0.055657    0.169511   15.978829 v clkbuf_1_0__f_IQ_CLK/Z (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
                                                          clknet_1_0__leaf_IQ_CLK (net)
-                      0.055795    0.000050   15.978277 v _30241_/A1 (gf180mcu_fd_sc_mcu7t5v0__and2_1)
-     1    0.003255    0.108767    0.187937   16.166214 v _30241_/Z (gf180mcu_fd_sc_mcu7t5v0__and2_1)
+                      0.055657    0.000044   15.978874 v _30241_/A1 (gf180mcu_fd_sc_mcu7t5v0__and2_1)
+     1    0.003255    0.100416    0.187901   16.166775 v _30241_/Z (gf180mcu_fd_sc_mcu7t5v0__and2_1)
                                                          net78 (net)
-                      0.108767    0.000032   16.166246 v output78/I (gf180mcu_fd_sc_mcu7t5v0__dlyb_1)
-     1    0.001720    0.131625    0.780672   16.946917 v output78/Z (gf180mcu_fd_sc_mcu7t5v0__dlyb_1)
+                      0.100416    0.000032   16.166807 v output78/I (gf180mcu_fd_sc_mcu7t5v0__dlyb_1)
+     1    0.001720    0.131629    0.778032   16.944839 v output78/Z (gf180mcu_fd_sc_mcu7t5v0__dlyb_1)
                                                          PSRAM_SCK (net)
-                      0.131625    0.000011   16.946928 v PSRAM_SCK (out)
-                                             16.946928   data arrival time
+                      0.131629    0.000011   16.944849 v PSRAM_SCK (out)
+                                             16.944849   data arrival time
 
                                  31.250000   31.250000   clock IQ_CLK (rise edge)
                                   0.000000   31.250000   clock network delay (propagated)
@@ -38,9 +38,9 @@ Fanout         Cap        Slew       Delay        Time   Description
                                              28.750002   data required time
 ---------------------------------------------------------------------------------------------
                                              28.750002   data required time
-                                            -16.946928   data arrival time
+                                            -16.944849   data arrival time
 ---------------------------------------------------------------------------------------------
-                                             11.803075   slack (MET)
+                                             11.805153   slack (MET)
 
 
 
@@ -62,24 +62,32 @@ max slew
 
 Pin                                        Limit        Slew       Slack
 ------------------------------------------------------------------------
-_34012_/A2                              5.200000    6.689294   -1.489295 (VIOLATED)
-_34009_/A1                              5.200000    6.689292   -1.489293 (VIOLATED)
-_33980_/ZN                              5.200000    6.688453   -1.488453 (VIOLATED)
-_34009_/C                               5.200000    6.544794   -1.344794 (VIOLATED)
-_33983_/ZN                              5.200000    6.544643   -1.344643 (VIOLATED)
-_53114_/A2                              5.200000    6.021241   -0.821241 (VIOLATED)
-_36208_/B                               5.200000    6.021185   -0.821185 (VIOLATED)
-_36207_/ZN                              5.200000    6.019807   -0.819808 (VIOLATED)
+ANTENNA_23/I                            5.200000    6.980399   -1.780399 (VIOLATED)
+_34009_/C                               5.200000    6.980400   -1.780400 (VIOLATED)
+_33983_/ZN                              5.200000    6.980265   -1.780265 (VIOLATED)
+_34012_/A2                              5.200000    6.800825   -1.600825 (VIOLATED)
+_34009_/A1                              5.200000    6.800822   -1.600822 (VIOLATED)
+_33980_/ZN                              5.200000    6.799830   -1.599831 (VIOLATED)
+_53114_/A2                              5.200000    6.019622   -0.819622 (VIOLATED)
+ANTENNA_91/I                            5.200000    6.019621   -0.819621 (VIOLATED)
+ANTENNA_92/I                            5.200000    6.019621   -0.819621 (VIOLATED)
+ANTENNA_90/I                            5.200000    6.019597   -0.819597 (VIOLATED)
+ANTENNA_89/I                            5.200000    6.019588   -0.819588 (VIOLATED)
+_36208_/B                               5.200000    6.019582   -0.819583 (VIOLATED)
+_36207_/ZN                              5.200000    6.018944   -0.818944 (VIOLATED)
+_33988_/A2                              5.200000    5.291644   -0.091644 (VIOLATED)
+_34006_/A2                              5.200000    5.291643   -0.091643 (VIOLATED)
+_34013_/A3                              5.200000    5.291643   -0.091643 (VIOLATED)
+_33987_/ZN                              5.200000    5.291336   -0.091336 (VIOLATED)
 
 max capacitance
 
 Pin                                        Limit         Cap       Slack
 ------------------------------------------------------------------------
-_33980_/ZN                              0.189000    0.261984   -0.072984 (VIOLATED)
-_33983_/ZN                              0.123700    0.169396   -0.045696 (VIOLATED)
-_36207_/ZN                              0.191500    0.237111   -0.045611 (VIOLATED)
-_36197_/ZN                              0.191500    0.201531   -0.010031 (VIOLATED)
-_33987_/ZN                              0.189000    0.196507   -0.007507 (VIOLATED)
+_33980_/ZN                              0.189000    0.266495   -0.077495 (VIOLATED)
+_33983_/ZN                              0.123700    0.181506   -0.057806 (VIOLATED)
+_36207_/ZN                              0.191500    0.236877   -0.045377 (VIOLATED)
+_33987_/ZN                              0.189000    0.206150   -0.017150 (VIOLATED)
 
 
 
@@ -277,9 +285,9 @@ Found 187 unannotated drivers.
 Found 0 partially unannotated drivers.
 
 ===========================================================================
-max slew violation count 8
+max slew violation count 17
 max fanout violation count 0
-max cap violation count 5
+max cap violation count 4
 ============================================================================
 
 ===========================================================================
