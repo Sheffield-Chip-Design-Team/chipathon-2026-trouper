@@ -130,15 +130,25 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
   Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already
   closed clean at 1675×1110. The signed-off `final/` bundle (1650×1100) will
   need a re-run at the template die for the production A40 build.
-- **VDD/VSS — OPEN.** `a40_def_to_rtlnames.py` keeps the template's `VSS`(W12) /
-  `VDD`(N14) `USE POWER`/`USE GROUND` entries so the file matches the integrator
-  artifact, but **with the current config they are inert** — filtered from
-  `FP_DEF_TEMPLATE` matching (POWER/GROUND sigtype) and not copied
-  (`FP_TEMPLATE_COPY_POWER_PINS` defaults `False`). The PDN builds its own
-  `VDD`/`VSS` ring regardless (jobs 5150 ≡ 5153). To make power actually enter
-  at the integrator's pad locations: set `FP_TEMPLATE_COPY_POWER_PINS: true`
-  **and** reconcile `pdn_cfg.tcl` so the ring terminates on those boundary pins
-  instead of generating its own. Not yet done.
+- **VDD/VSS — DECIDED 2026-08-29: option 1, accept the PDN's own edge pins.**
+  `PDN_ENABLE_PINS: true` already puts `VDD`/`VSS` boundary pins on the M4/M5
+  stripes at the die edge (distributed). The A40 padring bridges from its pad
+  rails to the macro's PDN wherever it reaches the boundary — standard macro
+  abutment; the exact W12/N14 match is the padring's job (`A40_ACV_padring.def`).
+  `a40_def_to_rtlnames.py` keeps the template's `VSS`(W12) / `VDD`(N14) entries
+  so the file matches the integrator artifact, but they are **inert** (see the
+  5153/5155 findings above) and have no effect on the macro's power interface.
+  - **Rejected: `FP_TEMPLATE_COPY_POWER_PINS: true` (job 5155, FAILED).**
+    `Odb.ApplyDEFTemplate` still discards POWER/GROUND template bterms
+    ("declared as a 'POWER' pin. It will be ignored"), but the flag also drops
+    the POWER/GROUND exemption from the strict cross-check, so the design's own
+    `VDD`/`VSS` bterms then fail "must exist in template". It breaks matching
+    without delivering the copy — the template's power pins cannot be pulled
+    into the macro this way.
+  - If the integrator later requires the macro to declare `VDD`/`VSS` at exactly
+    M2 / N14 / W12: add explicit `odb::dbBTerm_create` + placement + a short
+    connect stripe in a custom `pdn_cfg.tcl` (bypasses ApplyDEFTemplate). ~15
+    lines. Only if they say abutment won't otherwise connect.
 - **Grouper/AHB placement** — *not part of the integrator flow at all*: no pads,
   absent from `info.yaml`, the regenerated `A40_ACV.def` will never contain
   them. The 68 synthetic south-edge pins the script adds exist only to satisfy
