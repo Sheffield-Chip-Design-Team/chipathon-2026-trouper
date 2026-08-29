@@ -143,6 +143,19 @@ papering over unrelated debt.
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
 
+### 51. `trouper_top` @ 1675×1110 has 26 antenna net violations; zero is not reachable by P&R config alone
+
+**Blocks:** tapeout signoff of the A40 die-size rebuild (job 5158).
+
+Diode repair gets from 26 to **8 net violations**, then the flow dies on
+`DRT-0073` (no access point) placing the last 22 diodes — a diode *placement*
+failure, not a repair-capability one. ~25 P&R iterations exhausted every other
+lever; `SYNTH_KEEP_HIERARCHY_MODULES` is config-only (not an RTL change) but made
+antenna **worse** (26→38), though it did buy +0.85 ns of SS WNS. Fallback is to
+rebuild the pre-#47 netlist at 1675×1110 for ~12 violations, matching what `main`
+ships today. Full record, including the SDC constraint that SEGFAULTs OpenROAD if
+the keep-set is wrong: `planning/antenna-closure-investigation-2026-08.md`.
+
 ### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
 
 **Blocks:** timing signoff using any `set_multicycle_path` exception.
