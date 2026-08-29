@@ -24,7 +24,7 @@ Key features:
 | Port | Direction | Width | Description |
 | --- | --- | --- | --- |
 | `HOST_CS` | in | 1 | Active-low chip select from RPi SPI0 CE1 |
-| `HOST_SCK` | in | 1 | SPI clock from RPi (up to 10 MHz) |
+| `HOST_SCK` | in | 1 | SPI clock from RPi (up to 2 MHz) |
 | `HOST_MOSI` | in | 1 | Data from RPi |
 | `HOST_MISO` | out | 1 | Data to RPi |
 | `clk_32m` | in | — | Master clock (register domain) |
@@ -136,12 +136,12 @@ Bytes 5...(5+N-1): host sends dummy bytes; MISO returns CPU SRAM bytes, starting
 **Arbitration.** Grouper has priority. A completed SPI write that overlaps one
 Grouper byte cycle is retained in a one-entry pending slot and committed after
 the Grouper request releases. The Grouper cycle must release before a second SPI
-data byte completes (at least 800 ns at the 10 MHz limit). Pin-level SPI has no
+data byte completes (at least 4 µs at the 2 MHz limit). Pin-level SPI has no
 WAIT response and the current register bank has one combinational read port, so
 an SPI read byte overlapping `GRP_RE=1` is invalid; the host retries the complete
 read frame after the Grouper request releases.
 
-**Clock domain crossing.** SPI clock (up to 10 MHz) and the 32 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into the core domain with a small handshake or async FIFO.
+**Clock domain crossing.** SPI clock (up to 2 MHz) and the 32 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into the core domain with a small handshake or async FIFO.
 
 **MISO drive.** `HOST_MISO` is a dedicated Trouper output in the selected
 pinout. Drive it low whenever `HOST_CS` is deasserted; no output-enable or

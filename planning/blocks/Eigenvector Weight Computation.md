@@ -401,6 +401,32 @@ Instret (8 it): im = 3,201, emc = 3,776. RV32E costs **~+10% cycles** (16-regist
 spilling in this register-heavy kernel), partly offset in code size (~1.5 KB vs
 ~1.8 KB `.text`).
 
+### Integrated IRQ-to-commit measurement (2026-08-29)
+
+The combined Grouper--Trouper Verilator/cocotb test
+`integration/ram_backdoor/test_grouper_trouper_psram.py` now measures the
+hardware-visible service interval from the **second** `IRQ_GROUPER` rising edge
+(the sticky `TRAINING_DONE` source, not the earlier `SC_LOCK` notification) to
+Trouper's received `rb_w_commit_pulse`. The firmware enters the real PicoRV32
+IRQ vector, clears the source, reads `N_ACC` and all 48 Z bytes through the
+external AHB-to-GRP bridge, executes the fixed-point eight-iteration
+eigenvector computation, writes the 16-byte W shadow bank, and commits it.
+
+| Metric | Measured value |
+|---|---:|
+| `IRQ_GROUPER` (`TRAINING_DONE`) → `W_COMMIT`, production 8-iteration kernel | **2.145062 ms** (68,642 IQ_CLK cycles at 32 MHz; Grouper HCLK = 16 MHz) |
+| Default replay margin | 3.000 ms (1,500 samples at 500 kS/s) |
+| rv32emc 8-iteration kernel, prior cycle-accurate measurement | 2.279 ms (36,458 cycles at 16 MHz) |
+| Direct end-to-end margin remaining | **854.938 µs** |
+
+This test now directly closes the relevant path: its ISR runs the production
+fixed-point eight-iteration power iteration on a non-zero Z matrix accumulated
+by the live Trouper datapath, then writes the resulting W shadow bank and
+commits it through the real bridge. The cocotb test asserts the measured
+interval is below 3 ms. The earlier 2.279 ms benchmark remains useful as an
+isolated, cycle-accurate kernel characterization; it must not be added to the
+end-to-end result because the direct result already contains that computation.
+
 > **rv32emc is the current Grouper plan** — the RV32E row is the operative one;
 > read the SF-window table below against the rv32emc columns. Note also that
 > these numbers bound only the *on-Grouper* mode: in the external-host mode
@@ -506,10 +532,26 @@ Iteration**): the host is not integer-only, so use exact math instead of the
 | Write gain shift | `0x0F` bits [2:0] (`COMB_CFG.post_gain_shift`) | Must be written before `W_COMMIT`, same ordering requirement. |
 | Commit | `0x1E` bit 0 (`WGT_CTRL.W_COMMIT`) | Self-clears in hardware. |
 
-SPI is Mode 0, MSB-first, up to 10 MHz — the full read+write+commit sequence
-is ~60 bytes of raw SPI traffic (well under 100 µs of bus time at 10 MHz).
+SPI is Mode 0, MSB-first, up to 2 MHz — the full read+write+commit sequence
+is ~60 bytes of raw SPI traffic (about 240 µs of bus time at 2 MHz).
 The bottleneck is host-side latency (see Timing below), not the transfer
 itself.
+
+### 2 MHz replay-margin budget
+
+The default `REPLAY_DELAY_SAMPLES=1500` gives a **3.000 ms** post-
+`training_done` response window at 500 kS/s. The host SPI transfer consumes
+`60 bytes × 8 / 2 MHz = 240 µs`, leaving **2.760 ms** for `IRQ_OUT` delivery,
+host wake-up/scheduling, the host eigensolve, driver overhead, and any
+inter-frame gaps. An application-class host eigensolve is expected to take
+tens of microseconds, but that is not a measured end-to-end bound; the full
+2.760 ms remainder must therefore be treated as a **budget**, not claimed
+slack. Firmware SHALL increase `REPLAY_DELAY_SAMPLES` if measured high-
+percentile `IRQ_OUT → W_COMMIT` latency exceeds this budget.
+
+This budget applies to the same-packet replay path. It does **not** make the
+external host's live-mode deadline deterministic: that path is still governed
+by host scheduling jitter and the SF/BW-dependent payload-start deadline.
 
 ### Algorithm — exact eigendecomposition instead of power iteration
 

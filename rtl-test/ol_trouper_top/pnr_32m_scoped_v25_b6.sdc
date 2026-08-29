@@ -368,20 +368,33 @@ set_multicycle_path 1 -hold  -to $bshift_regs
 create_clock -name IQ_CLK -period 31.25 [get_ports IQ_CLK]
 set_clock_uncertainty 0.5 [get_clocks IQ_CLK]
 
+# Host SPI is a separate 2 MHz Mode-0 clock domain.  SPI_MOSI is synchronous
+# to SPI_SCK, never IQ_CLK; SPI_SCK and IQ_CLK communicate only through the
+# explicit toggle/mailbox CDC in spi_slave.v.
+create_clock -name SPI_SCK -period 500.0 [get_ports SPI_SCK]
+set_clock_groups -asynchronous -group [get_clocks IQ_CLK] -group [get_clocks SPI_SCK]
+
+# Zero board-delay baseline: this checks the ASIC's SPI-clocked logic but is
+# NOT pad-interface signoff.  Replace these with the selected RPi's launch/
+# sample requirements and measured PCB flight-time before tapeout.
+set_input_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
+set_input_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
+set_output_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
+set_output_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
+
 # IQ vectors are reassembled inside trouper_top; the physical top-level ports
 # are scalar per antenna.  Constrain the actual pad ports, not the internal
 # IQ_DATA_I/Q vector nets (which get_ports cannot see).
 set iq_input_ports [get_ports {IQ_DATA_I_0 IQ_DATA_I_1 IQ_DATA_I_2 IQ_DATA_I_3 \
-                               IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3 \
-                               SPI_MOSI}]
+                               IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3}]
 set_input_delay  -max 2.0 -clock IQ_CLK $iq_input_ports
 set_input_delay  -min 1.0 -clock IQ_CLK $iq_input_ports
-set_output_delay -max 2.0 -clock IQ_CLK [all_outputs]
-set_output_delay -min 0.0 -clock IQ_CLK [all_outputs]
+set core_output_ports [remove_from_collection [all_outputs] [get_ports SPI_MISO_OUT]]
+set_output_delay -max 2.0 -clock IQ_CLK $core_output_ports
+set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 
 set_false_path -from [get_ports RESETB]
 set_false_path -from [get_ports HOST_CS]
-set_false_path -from [get_ports SPI_SCK]
 
 # --- Scoped multicycle: ONLY the four paced DSP blocks get 3 cycles ----------
 # Net names retain hierarchy ('.' separator) after flatten; cell names do not.

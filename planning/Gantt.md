@@ -100,7 +100,7 @@ gantt
     Top-level cocotb regression (SF/BW sweep, ongoing) :active, vf0, 2026-07-05, 2026-08-15
     packet_ctrl_fsm directed coverage (#42):vf1, 2026-07-28, 10d
     Grouper AHB-Lite CDC fix + reverify (#29):vf2, 2026-07-28, 12d
-    Host SPI 10 MHz SDC closure (#38)      :vf3, 2026-07-28, 7d
+    Host SPI 2 MHz board-timing closure (#38) :vf3, 2026-07-28, 7d
     Regression re-run on final signoff netlist :vf4, after pd4, 3d
 
     section Firmware / Host

@@ -28,7 +28,7 @@
 //   C. Partial-frame suppression: a toggle event's SPI-domain cause is
 //      always a genuinely completed byte in the right role, never a partial
 //      byte or the wrong direction
-//   D. Row #13: environment assumption that legal 10 MHz SCK operation
+//   D. Row #13: conservative environment assumption stronger than legal 2 MHz SCK operation
 //      cannot produce two source toggle events closer together than the
 //      3-stage clk_32m synchronizer needs, PLUS the row #15 proof that under
 //      that assumption every event is delivered exactly once, within a
@@ -291,7 +291,7 @@ module spi_slave_formal (
         end
 
     // Environment assumption for row #13: TRPR-SPS-004 caps SPI_SCK at
-    // 10 MHz, and a source toggle event fires at most once per completed
+    // 2 MHz (the bound retained here is conservative), and a source toggle event fires at most once per completed
     // byte (8 SCK periods); against clk_32m at 32 MHz that is >= 25.6 core
     // cycles per event (spi_slave.v's own header comment: "at least one byte
     // (800 ns) apart ... >25 clk_32m cycles"). Assumed here as the concrete,

@@ -17,7 +17,7 @@ cover
 # real design bug (reachable-from-reset BMC never hits it). BMC anchored at
 # `initial assume(!rst_n)` only explores genuinely reachable traces, so it
 # does not have this false-counterexample class; depth is set deep enough to
-# exercise several full byte events at the real 10 MHz/32 MHz clock ratio
+# exercise several full byte events at a conservative 10 MHz/32 MHz stress ratio
 # (TRPR-SPS-004's 25-clk_32m-cycle minimum spacing) plus reset/CS
 # interleavings, well past the point non-vacuity requires (see cover task).
 bmc: mode bmc

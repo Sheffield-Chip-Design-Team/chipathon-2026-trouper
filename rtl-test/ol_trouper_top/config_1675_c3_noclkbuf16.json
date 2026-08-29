@@ -1,0 +1,84 @@
+{
+  "DESIGN_NAME": "trouper_top",
+  "VERILOG_FILES": [
+    "dir::../../src/frontend/dc_removal.v",
+    "dir::../../src/top/trouper_top.v",
+    "dir::../../src/combiner/mrc_combiner.v",
+    "dir::../../src/control/packet_ctrl_fsm.v",
+    "dir::../../src/control/psram_buf_ctrl.v",
+    "dir::../../src/control/reg_bank.v",
+    "dir::../../src/frontend/sc_detector.v",
+    "dir::../../src/decimator/sd_decimator_poly.v",
+    "dir::../../src/remod/sd_remod.v",
+    "dir::../../src/control/spi_slave.v",
+    "dir::../../src/combiner/training_acc.v"
+  ],
+  "CLOCK_PORT": "IQ_CLK",
+  "CLOCK_PERIOD": 31.25,
+  "FP_SIZING": "absolute",
+  "DIE_AREA": "0 0 1675 1110",
+  "PL_TARGET_DENSITY_PCT": 65,
+  "DPL_CELL_PADDING": 2,
+  "PL_MAX_DISPLACEMENT_X": 500,
+  "PL_MAX_DISPLACEMENT_Y": 400,
+  "PL_ROUTABILITY_DRIVEN": true,
+  "RUN_POST_GPL_DESIGN_REPAIR": true,
+  "MAX_FANOUT_CONSTRAINT": 8,
+  "ERROR_ON_SYNTH_CHECKS": false,
+  "SYNTH_CHECKS_ALLOW_TRISTATE": true,
+  "SYNTH_STRATEGY": "DELAY 0",
+  "SYNTH_ABC_BUFFERING": false,
+  "DRT_THREADS": 10,
+  "ROUTING_OPT_ITERS": 64,
+  "DEFAULT_CORNER": "nom_tt_025C_3v30",
+  "STA_CORNERS": [
+    "nom_tt_025C_3v30",
+    "max_ss_125C_3v00",
+    "max_ff_n40C_3v60"
+  ],
+  "CTS_ROOT_BUFFER": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_16",
+  "CTS_CLK_BUFFERS": [
+    "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8",
+    "gf180mcu_fd_sc_mcu7t5v0__clkbuf_12"
+  ],
+  "LIB": {
+    "*_tt_025C_3v30": [
+      "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib"
+    ],
+    "*_ss_125C_3v00": [
+      "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ss_125C_3v00.lib"
+    ],
+    "*_ff_n40C_3v60": [
+      "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ff_n40C_3v60.lib"
+    ]
+  },
+  "RUN_MAGIC_DRC": true,
+  "RUN_LVS": true,
+  "RUN_IRDROP_REPORT": true,
+  "PNR_SDC_FILE": "dir::pnr_32m_scoped_v25_b6.sdc",
+  "SIGNOFF_SDC_FILE": "dir::pnr_32m_scoped_v25_b6_signoff.sdc",
+  "RUN_POST_GRT_DESIGN_REPAIR": true,
+  "GRT_DESIGN_REPAIR_RUN_GRT": true,
+  "GRT_RESIZER_SETUP_MAX_BUFFER_PCT": 40,
+  "_comment_drv_closure": "DRV (max slew / max cap) closure, SGE job 5105 (t4b), 2026-08-27. Baseline job 4780 signed off with 1060/115 max-slew/max-cap violations at nom_tt (1963/160 at SS) because the only DRV repair ran on estimated parasitics and found the design ~clean. Enabling the post-GRT resizer-timing pass plus widening the design-repair slew/cap margins to 65% drops that to 10/4 (nom_tt) / 15/6 (SS), DRC/LVS clean, WNS unchanged (SS actually -16.97 -> -15.71). Do NOT add set_max_transition/set_max_capacitance to the SDC to push further: any design-wide value stalls repair_design on this netlist for 70+ min (trials t3/t5/t6). Residual ~15 pins are a documented waiver (quasi-static MCP-relaxed sc_detector-decode / training_acc cones + 2 output-path buffers).",
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "DESIGN_REPAIR_MAX_SLEW_PCT": 65,
+  "DESIGN_REPAIR_MAX_CAP_PCT": 65,
+  "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 65,
+  "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 65,
+  "GRT_ANTENNA_REPAIR_JUMPER_ONLY": false,
+  "DRT_ANTENNA_REPAIR_JUMPER_ONLY": false,
+  "HOLD_VIOLATION_CORNERS": [
+    ""
+  ],
+  "ERROR_ON_ILLEGAL_OVERLAPS": false,
+  "ERROR_ON_PDN_VIOLATIONS": true,
+  "PDN_CFG": "dir::pdn_cfg.tcl",
+  "IO_PIN_ORDER_CFG": "dir::io_placement_lshape_1675.cfg",
+  "IO_PIN_V_LAYER": "Metal2",
+  "IO_PIN_H_LAYER": "Metal2",
+  "_comment_die": "trouper_top signoff at the A40 slot size. The integrator A40_ACV.def / A40_ACV_interface.yaml reserve 1675x1110 um; the prior final/ (job 5122) was 1650x1100, so its layer-0/0 bounding box under-filled the slot by 25x10 um (organiser-flagged, both the size and the bbox complaint are the same root cause). Delta from config_1650x1100_full_rect.json: DIE_AREA 1675x1110, PL_TARGET_DENSITY_PCT 78->65 (78 and 72 both hit DRT-0073/1231 on an IQ_CLK clock buffer - the post-#47 AHB endpoint adds ~40 forced internal-bus pins that perturb CTS; job 5159 confirmed it is the AHB pins, not the die growth), and io_placement_lshape_1675.cfg (= io_placement_lshape.cfg + the 40 AHB H* bits on #S). RTL is main post-#47, no A40 rename/tie-offs. SGE job 5158, 2026-08-29.",
+  "_comment_antenna": "Antenna closure = the working chipathon-2026-lora-mimo integration recipe (integration/pd/config_landscape_2235.yaml, 'pnrs cleanly'): DPL_CELL_PADDING 2 + plain mixed GRT/DRT_ANTENNA_REPAIR_JUMPER_ONLY false (jumpers first, then legalizable diode cells), no flood, no diode-ports, no special iters/margins. Trouper's config_1650x1100_full_rect carried DPL_CELL_PADDING 3 from DRV closure - that left no room for the diodes to legalize, which is why jobs 5165-5171 hit DPL-0036 / diode DRT-0073. Padding 2 fixes it. Else = config_1675x1110_full_rect (1675x1110, d65).",
+  "DIODE_PADDING": 2,
+  "_comment_antenna_c": "Antenna closure attempt C3/C4, 2026-08-29. BREAKTHROUGH from C1/C2 (jobs 5194/5195): with DIODE_PADDING set, GRT-side antenna repair reaches 0 net / 0 pin violations. Zero antenna IS achievable. The ONLY remaining blocker is detailed routing failing on an IQ_CLK clock-buffer pin access: 5183 clkbuf_0_IQ_CLK_regs/I, 5194 clkbuf_2_1_0_IQ_CLK_regs/I, 5195 clkbuf_2_2_0_IQ_CLK_regs/I -- a DIFFERENT instance every time but ALWAYS a gf180mcu_fd_sc_mcu7t5v0__clkbuf_16, the largest clock buffer and the one whose input pin is hardest to reach. So it is the CELL TYPE, not a bad location, and neither DIODE_PADDING 2 nor density 60 avoids it (diodes only have to land near one). Fix: drop clkbuf_16 from CTS_CLK_BUFFERS so the tree is built from the smaller clkbuf_8/clkbuf_12, which have easier pin access. This is the recurring DRT-1231/DRT-0073 clkbuf hazard, Open Risk #6. C3 = C1 + clkbuf_16 dropped from the tree (root buffer left as clkbuf_16)."
+}

@@ -1,6 +1,7 @@
 # cocotb/spi_cdc/Makefile
 # SPI slave CDC/timing regression suite (test_spi_cdc.py).
 # See planning/spi-slave-cdc-and-10mhz-timing-plan.md -- Open Risk #38.
+# The suite retains 8/10 MHz vectors as over-spec stress; the product limit is 2 MHz.
 #
 # Usage (inside the chipathon26 container):
 #   make            # all 8 scenarios

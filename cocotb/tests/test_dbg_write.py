@@ -39,7 +39,7 @@ test_dbg_write_blocked_by_qspi_owner:
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import Timer
+from cocotb.triggers import RisingEdge, Timer
 
 from test_trouper_top import (CLK_NS, spi_read, spi_write, spi_burst_write,
                               release_rx_hold)
@@ -117,6 +117,42 @@ async def _dbg_read_line(dut, tag, byte_addr):
     return [await spi_read(dut, 0x76) for _ in range(8)]
 
 
+async def _grp_write(dut, addr, data):
+    """One Grouper-register write with the bridge's six-IQ-clock hold time."""
+    dut.GRP_ADDR.value = addr
+    dut.GRP_WDATA.value = data
+    dut.GRP_WE.value = 1
+    for _ in range(6):
+        await RisingEdge(dut.IQ_CLK)
+    dut.GRP_WE.value = 0
+    await RisingEdge(dut.IQ_CLK)
+
+
+async def _grp_read(dut, addr):
+    """One Grouper-register read with the bridge's six-IQ-clock hold time."""
+    dut.GRP_ADDR.value = addr
+    dut.GRP_RE.value = 1
+    for _ in range(6):
+        await RisingEdge(dut.IQ_CLK)
+    value = int(dut.GRP_RDATA.value)
+    dut.GRP_RE.value = 0
+    await RisingEdge(dut.IQ_CLK)
+    return value
+
+
+async def _grp_set_dbg_addr(dut, byte_addr):
+    await _grp_write(dut, 0x72, byte_addr & 0xFF)
+    await _grp_write(dut, 0x73, (byte_addr >> 8) & 0xFF)
+    await _grp_write(dut, 0x74, (byte_addr >> 16) & 0x7F)
+
+
+async def _grp_poll_not_busy(dut, tag, what):
+    for _ in range(200):
+        if not ((await _grp_read(dut, 0x75)) & DBG_BUSY):
+            return
+    assert False, f"{tag}: DBG_BUSY never cleared after {what}"
+
+
 @cocotb.test()
 async def test_dbg_write_roundtrip(dut):
     tag = "dbg_wr_roundtrip"
@@ -138,6 +174,42 @@ async def test_dbg_write_roundtrip(dut):
         f"paths disagree"
 
     dut._log.info(f"{tag}: PASS -- committed {payload}, model + read-back both match")
+
+
+@cocotb.test()
+async def test_dbg_write_read_from_grouper_ram(dut):
+    """Grouper-side debug write/read round trip.
+
+    ``grouper_ram`` models a firmware-resident byte buffer: each byte travels
+    over the GRP register bus to 0x79, is committed to PSRAM, then is read
+    back over that same bus through 0x76.  The six-cycle holds match the
+    production AHB-to-GRP bridge, so this also guards against turning one
+    held transaction into six debug pushes/pops.
+    """
+    tag = "dbg_wr_grp_ram"
+    await _bringup(dut, tag)
+
+    addr = BASE + 0x0800
+    grouper_ram = [0x47, 0x52, 0x50, 0x2D, 0x52, 0x41, 0x4D, 0x21]
+
+    await _grp_set_dbg_addr(dut, addr)
+    for byte in grouper_ram:
+        await _grp_write(dut, 0x79, byte)
+    await _grp_write(dut, 0x75, WR_TRIG)
+    await _grp_poll_not_busy(dut, tag, "WR_TRIG")
+
+    stored = [await _model_byte(dut, addr + i) for i in range(8)]
+    assert stored == grouper_ram, \
+        f"{tag}: PSRAM stored {stored} != Grouper RAM {grouper_ram}"
+
+    await _grp_set_dbg_addr(dut, addr)
+    await _grp_write(dut, 0x75, RD_TRIG)
+    await _grp_poll_not_busy(dut, tag, "RD_TRIG")
+    got = [await _grp_read(dut, 0x76) for _ in range(8)]
+    assert got == grouper_ram, \
+        f"{tag}: Grouper readback {got} != Grouper RAM {grouper_ram}"
+
+    dut._log.info(f"{tag}: PASS -- Grouper RAM -> PSRAM -> Grouper readback: {got}")
 
 
 @cocotb.test()

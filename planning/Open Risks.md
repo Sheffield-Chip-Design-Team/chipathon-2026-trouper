@@ -143,6 +143,26 @@ papering over unrelated debt.
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
 
+### 51. `trouper_top` @ 1675×1110 antenna violations — CLOSED 2026-08-29 (`DIODE_PADDING: 4`)
+
+The A40 die-size rebuild had 26 antenna net / 35 pin violations (job 5158).
+**Job 5198 (`config_1675_c5_diodepad4.json`) reaches 0 net / 0 pin**, fully
+signoff-clean: DRC 0, XOR 0, LVS clear, hold 0 all corners, setup max_ss
+−13.15 ns (better than the −13.52 ns baseline), clock skew 0.312 ns,
+die 1675×1110.
+
+Antenna *repair* was never the problem — inserted diodes crowded IQ_CLK clock
+buffers and stole their routing pin access, so detailed routing died on
+`DRT-0073`/`DRT-1231`. `DIODE_PADDING` was unset, so diodes could abut a clock
+buffer; setting it to 4 fixes the interaction. The failing cell was a `clkbuf_16`
+in every early run, but downsizing the tree is **not** the fix — job 5197 then
+failed on a `clkbuf_12`, the very cell it downsized to, and cost skew
+(0.442 vs 0.312 ns). Buffer size is irrelevant; diode proximity is the cause.
+
+This also gives Open Risk #6 (recurring `DRT-1231` clkbuf pin-access failure) a
+concrete mitigation. Full record:
+`planning/antenna-closure-investigation-2026-08.md`.
+
 ### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
 
 **Blocks:** timing signoff using any `set_multicycle_path` exception.
@@ -707,7 +727,7 @@ and add shared SPI/AHB debug-port tests.
 **See:** item 16 and `planning/Grouper PSRAM CSR Exploration.md`.
 **Found:** 2026-08-28, post-implementation review of `095ae2e`.
 
-### 38. Host SPI 10 MHz timing is not constrained or signed off — CDC portion FIXED, SDC portion open
+### 38. Host SPI 2 MHz pad timing is not signed off — CDC portion FIXED, baseline SDC added
 
 **Partially fixed 2026-07-12:** the persistent toggle/mailbox CDC (commits
 `2b6af0f`, `fef30de`) closes the RTL half of this risk's Action item and
@@ -718,20 +738,25 @@ exceptions, mailbox settling constraint) is still open:
 Implementation order steps 6-8 in
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
+**2026-08-29:** the interface limit is now 2 MHz. The canonical P&R and
+signoff SDCs declare a 500 ns `SPI_SCK`, remove its blanket false path,
+declare the SPI/core clocks asynchronous, and use SPI-relative zero-board-delay
+MOSI/MISO constraints. This is an ASIC-only baseline, not board signoff.
+
 The production SDC declares only `IQ_CLK` and globally false-paths
 `SPI_SCK`. It also constrains `SPI_MOSI` relative to `IQ_CLK`, even though MOSI
 is captured by `SPI_SCK`-clocked flops. Consequently, STA does not prove the
-advertised 10 MHz SPI interface: SCK-domain register paths, MOSI setup/hold,
+advertised 2 MHz SPI interface: SCK-domain register paths, MOSI setup/hold,
 and the falling-edge `SPI_MISO` output timing are either hidden or referenced
 to the wrong clock.
 
-The most critical read path has only half an SCK period: the command address
+The most critical read path has half an SCK period: the command address
 completes on its eighth rising edge, the asynchronous `reg_bank` peek decode
-must settle, and the MISO shifter loads on the following falling edge (50 ns at
-10 MHz, before pad/PCB/host margin).
+must settle, and the MISO shifter loads on the following falling edge (250 ns at
+2 MHz, before pad/PCB/host margin).
 
 **Risk:** a design that passes the current top-level timing reports can still
-fail register reads or writes at the specified 10 MHz on silicon.
+fail register reads or writes at the specified 2 MHz on silicon.
 
 **Action:** declare a 100 ns
 `SPI_SCK` clock; add SCK-relative MOSI and MISO I/O delays; declare SCK and
@@ -743,7 +768,7 @@ and GF180 pad timing rather than guessing them.
 **See:** Open Risk #15; `src/control/spi_slave.v`;
 `src/config/pnr_32m_scoped_v25_b6.sdc`;
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
-**Found:** 2026-07-11 (10 MHz SPI implementation/constraint research).
+**Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29.
 
 ### 39. Scoped-MCP SDC cone leaks and `timing_ref` write-arc dishonesty — CLOSED 2026-07-26 (v25_b6 canonicalized)
 
@@ -1139,8 +1164,9 @@ writes. See `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
 `spi_reg_we_req` (`spi_slave.v:70-118`) is cleared asynchronously by
 `HOST_CS` rising; the 2-FF synchronizer needs ~3 × 31.25 ns of request
-persistence, but at 10 MHz SCK the natural gap is only ~50 ns. Either make
-the request survive CS de-assertion or document "hold CS low ≥ 100 ns after
+persistence, but at 2 MHz SCK the natural gap is ~250 ns. The persistent-toggle
+fix remains required for safe frame teardown; it cannot be replaced by assuming
+the request will survive CS de-assertion or documenting "hold CS low ≥ 100 ns after
 the final SCK edge" as a hard host requirement (and add it to the RPi driver).
 
 **Found:** 2026-07-02 trouper_top RTL review.
@@ -1158,7 +1184,7 @@ Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
 **Resolved:** 2026-08-04, regression job 3863. `trouper_top.v` now captures each completed SPI
 write in a one-entry pending slot and commits it after the higher-priority
 Grouper byte cycle releases. The byte-cycle contract requires release before a
-second SPI data byte completes (≥ 800 ns at 10 MHz). Because pin-level SPI has
+second SPI data byte completes (≥ 4 µs at 2 MHz). Because pin-level SPI has
 no WAIT response and the register bank has one combinational read port,
 TRPR-SPS-007 now explicitly rejects a read byte whose MISO snapshot overlaps
 `GRP_RE=1`; the host retries the complete read frame. Directed cases 3a/3b/4a
@@ -1279,6 +1305,39 @@ padframe integrator) before it can be relied on.
 ---
 
 ## Low
+
+### 47. Trouper standalone flow has never run a real-source IR-drop analysis
+
+`VSRC_LOC_FILES` (OpenROAD PSM's realistic-downbond-location IR-drop mode)
+is not set anywhere in Trouper's own P&R configs (`rtl-test/ol_*/config*`,
+`pdn_cfg.tcl`) — confirmed by search, 2026-08-23. Whenever Trouper's own
+flow reaches `OpenROAD.IRDropReport`, it falls back to LibreLane's default
+`LIB_VOLTAGE`/BTerm-source behavior, which treats every top-level power pin
+as an idealized current source — optimistic relative to a real chip with
+only a handful of actual bond wires. `planning/Open Risks.md` #46 and
+several other docs flag IR drop as a qualitative unknown for exactly this
+reason.
+
+**Mitigated by context, not by data of Trouper's own:** Trouper is being
+physically implemented together with Grouper on one shared die
+(`lora-mimo/integration/pd/config_landscape_2235.yaml`,
+`chip_top.v`), not packaged standalone, so the risk this entry names is
+already being answered by that combined integration's own real-source IR-drop
+analysis rather than needing a separate Trouper-only run. That analysis
+(2026-08-23, both landscape SRAM-orientation topologies, real
+via-connected vsrc downbond locations, `chip_top` job 4833/4834) came back
+at **~3-5% worst-case drop on both VDD and VSS** (VDD 3.02%/5.13%
+depending on topology, VSS 2.05%/2.84%) — a reasonable, non-alarming
+number, not pinned to 0 (which would suggest a broken analysis) or blowing
+up. See `lora-mimo/planning/grouper-trouper-landscape-floorplan-2026-08.md`
+Open Item #9 for the full derivation and the two LibreLane/OpenROAD bugs
+that had to be fixed to get a working number at all
+(`lora-mimo/integration/pd/vsrc/README.md`).
+
+Still real padframe/downbond estimates, not final pad data — this entry
+stays open until real physical downbond locations replace the geometric
+via-connected estimates currently in `vsrc/*.loc`, same caveat the
+combined-die doc itself carries.
 
 ### 18. PSRAM-replay sample staleness unquantified
 
