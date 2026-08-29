@@ -136,8 +136,22 @@ unchanged, so placement/routing builds those paths as single-cycle
 | `pcfsm_tick_decrement` (v30) | `acq_cnt/wpend_cnt/pkt_cnt` (63 endpoints) | `sample_count → ST_ACQ_SETUP` load + the `if (iq_tick) cnt<=cnt-1` decrement |
 
 Rationale and non-vacuity evidence per group: `mcp_audit_manifest.json`,
-`run_mcp_audit.sh` — **re-audit against this run's routed netlist before
-tapeout**; the job-5124 baseline was taken on the pre-AHB job-5122 netlist.
+`run_mcp_audit.sh`.
+
+**Re-audited against THIS run's routed netlist (jobs 5201 / 5202)** — the prior
+baseline was taken on the pre-AHB job-5122 netlist. Result: **passing**. All 14
+groups present with identical setup/hold multipliers and identical
+through/endpoint counts; the three signoff-only groups remain **non-vacuous**
+(`tacc_accumulate` 512 endpoints, `iq_samp_cnt` 20, `pcfsm_tick_decrement` 63),
+so the AHB endpoint did not hollow out any relaxation.
+
+The audit first reported "resolved MCP object set changed". Reviewed: every
+`through` list is byte-identical — those use real hierarchical names
+(`u_comb.a_r[*]`, `rb_sf_cfg[*]`), so the scoping resolves to the same real
+signals — and every endpoint difference is pure anonymised-cell renumbering from
+resynthesis (all differing names match `_\d+_`, counts balance exactly). The
+baseline is now rebased onto this netlist (`mcp_audit_baseline.json`,
+`mcp_audit_route.evidence`).
 
 **Why signoff-only, not P&R:** adding any of these to the P&R SDC perturbs the
 post-GRT resizer enough to strand the `IQ_CLK` root clkbuf with no routing access
