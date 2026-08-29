@@ -143,18 +143,25 @@ papering over unrelated debt.
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
 
-### 51. `trouper_top` @ 1675×1110 has 26 antenna net violations; zero is not reachable by P&R config alone
+### 51. `trouper_top` @ 1675×1110 antenna violations — CLOSED 2026-08-29 (`DIODE_PADDING: 4`)
 
-**Blocks:** tapeout signoff of the A40 die-size rebuild (job 5158).
+The A40 die-size rebuild had 26 antenna net / 35 pin violations (job 5158).
+**Job 5198 (`config_1675_c5_diodepad4.json`) reaches 0 net / 0 pin**, fully
+signoff-clean: DRC 0, XOR 0, LVS clear, hold 0 all corners, setup max_ss
+−13.15 ns (better than the −13.52 ns baseline), clock skew 0.312 ns,
+die 1675×1110.
 
-Diode repair gets from 26 to **8 net violations**, then the flow dies on
-`DRT-0073` (no access point) placing the last 22 diodes — a diode *placement*
-failure, not a repair-capability one. ~25 P&R iterations exhausted every other
-lever; `SYNTH_KEEP_HIERARCHY_MODULES` is config-only (not an RTL change) but made
-antenna **worse** (26→38), though it did buy +0.85 ns of SS WNS. Fallback is to
-rebuild the pre-#47 netlist at 1675×1110 for ~12 violations, matching what `main`
-ships today. Full record, including the SDC constraint that SEGFAULTs OpenROAD if
-the keep-set is wrong: `planning/antenna-closure-investigation-2026-08.md`.
+Antenna *repair* was never the problem — inserted diodes crowded IQ_CLK clock
+buffers and stole their routing pin access, so detailed routing died on
+`DRT-0073`/`DRT-1231`. `DIODE_PADDING` was unset, so diodes could abut a clock
+buffer; setting it to 4 fixes the interaction. The failing cell was a `clkbuf_16`
+in every early run, but downsizing the tree is **not** the fix — job 5197 then
+failed on a `clkbuf_12`, the very cell it downsized to, and cost skew
+(0.442 vs 0.312 ns). Buffer size is irrelevant; diode proximity is the cause.
+
+This also gives Open Risk #6 (recurring `DRT-1231` clkbuf pin-access failure) a
+concrete mitigation. Full record:
+`planning/antenna-closure-investigation-2026-08.md`.
 
 ### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
 

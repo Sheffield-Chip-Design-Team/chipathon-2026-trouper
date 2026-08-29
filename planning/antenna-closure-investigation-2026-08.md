@@ -47,7 +47,45 @@ as the max_ss worst path (`_63059_ → _61493_`). PR #47's `trouper_ahb8_adapter
 ~68 forced die-internal pins, which is why the post-#47 netlist is worse than 5122's
 pre-#47 one (26 vs 12).
 
-## 2. THE KEY RESULT — diode repair reaches 8, then dies on placement
+## 0. RESOLVED — zero antenna, job 5198 (`config_1675_c5_diodepad4.json`)
+
+**`DIODE_PADDING: 4` closes it.** Sections 2–6 below are the investigation that led
+here and are kept for the reasoning; the conclusion in §6 that "zero is not reachable
+by P&R config" is **superseded and wrong**.
+
+| metric | baseline 5158 | **C5 — job 5198 (ADOPT)** | C3 — job 5196 |
+|---|---|---|---|
+| **antenna** | 26 / 35 | **0 net / 0 pin** | **0 net / 0 pin** |
+| magic DRC | 0 | 0 | 0 |
+| XOR | 0 | 0 | 0 |
+| LVS | clear | clear | clear |
+| hold WNS (all corners) | 0 | 0 | 0 |
+| setup nom_tt / ff | met | met | met |
+| setup max_ss | −13.52 ns | **−13.15 ns** | −12.69 ns |
+| clock skew (max_ss) | — | **0.312 ns** | 0.442 ns |
+| die / bbox | 1675×1110 | 1675×1110 | 1675×1110 |
+
+**Root cause:** antenna *repair* was never the problem — inserted diodes were crowding
+IQ_CLK clock buffers and stealing their routing pin access, so detailed routing died
+with `DRT-0073`/`DRT-1231`. `DIODE_PADDING` was unset (`None`), leaving diodes free to
+abut a clock buffer. Setting it fixes the interaction outright.
+
+**Two hypotheses were tested; the intuitive one was wrong.** The failing cell was a
+`clkbuf_16` in every early run (5183, 5194, 5195), which suggested the largest buffer's
+pin geometry was at fault. C3/C4 therefore dropped `clkbuf_16` from `CTS_CLK_BUFFERS` —
+but **C4 (job 5197) then failed on `clkbuf_4_3_0_IQ_CLK_regs/I`, a `clkbuf_12`**, i.e.
+the very cell it had downsized to. The failure simply follows the clock tree to whatever
+buffer the diodes box in; buffer *size* is irrelevant. Downsizing is the wrong fix, and
+it also costs skew (0.442 vs 0.312 ns) for no benefit.
+
+**Adopt C5, not C3:** both reach zero, but C5 leaves the clock tree completely alone,
+so there is no drive-strength or skew trade to re-validate, and it has the better skew.
+C3's 0.46 ns WNS advantage is within the known repair-lottery spread.
+
+`DPL_CELL_PADDING` is *not* an alternative lever: it is 2, and 3 causes `DPL-0036`
+(diodes fail to legalize). `DIODE_PADDING` applies to diode cells only and avoids that.
+
+## 2. Diode repair reaches 8, then dies on a clock buffer (superseded by §0)
 
 Jobs **5165 / 5166 / 5183** produced *byte-identical* repair traces despite differing
 `DPL_CELL_PADDING`, which means the outcome is deterministic:
