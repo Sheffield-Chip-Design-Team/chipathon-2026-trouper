@@ -1,4 +1,4 @@
-+ analyze_power_grid -net VDD -voltage_file /foss/runs/trouper_config_1675x1110_d65/run/58-openroad-irdropreport/net-VDD.csv
++ analyze_power_grid -net VDD -voltage_file /foss/runs/trouper_1675_c5_diodepad4/run/58-openroad-irdropreport/net-VDD.csv
 [INFO PSM-0040] All shapes on net VDD are connected.
 ########## IR report #################
 Net              : VDD
@@ -8,10 +8,10 @@ Supply voltage   : 3.30e+00 V
 Worstcase voltage: 3.29e+00 V
 Average voltage  : 3.30e+00 V
 Average IR drop  : 2.24e-04 V
-Worstcase IR drop: 5.32e-03 V
+Worstcase IR drop: 5.33e-03 V
 Percentage drop  : 0.16 %
 ######################################
-+ analyze_power_grid -net VSS -voltage_file /foss/runs/trouper_config_1675x1110_d65/run/58-openroad-irdropreport/net-VSS.csv
++ analyze_power_grid -net VSS -voltage_file /foss/runs/trouper_1675_c5_diodepad4/run/58-openroad-irdropreport/net-VSS.csv
 [INFO PSM-0040] All shapes on net VSS are connected.
 ########## IR report #################
 Net              : VSS

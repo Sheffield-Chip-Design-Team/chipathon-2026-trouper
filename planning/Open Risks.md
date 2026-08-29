@@ -143,6 +143,26 @@ papering over unrelated debt.
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
 
+### 51. `trouper_top` @ 1675×1110 antenna violations — CLOSED 2026-08-29 (`DIODE_PADDING: 4`)
+
+The A40 die-size rebuild had 26 antenna net / 35 pin violations (job 5158).
+**Job 5198 (`config_1675_c5_diodepad4.json`) reaches 0 net / 0 pin**, fully
+signoff-clean: DRC 0, XOR 0, LVS clear, hold 0 all corners, setup max_ss
+−13.15 ns (better than the −13.52 ns baseline), clock skew 0.312 ns,
+die 1675×1110.
+
+Antenna *repair* was never the problem — inserted diodes crowded IQ_CLK clock
+buffers and stole their routing pin access, so detailed routing died on
+`DRT-0073`/`DRT-1231`. `DIODE_PADDING` was unset, so diodes could abut a clock
+buffer; setting it to 4 fixes the interaction. The failing cell was a `clkbuf_16`
+in every early run, but downsizing the tree is **not** the fix — job 5197 then
+failed on a `clkbuf_12`, the very cell it downsized to, and cost skew
+(0.442 vs 0.312 ns). Buffer size is irrelevant; diode proximity is the cause.
+
+This also gives Open Risk #6 (recurring `DRT-1231` clkbuf pin-access failure) a
+concrete mitigation. Full record:
+`planning/antenna-closure-investigation-2026-08.md`.
+
 ### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
 
 **Blocks:** timing signoff using any `set_multicycle_path` exception.
