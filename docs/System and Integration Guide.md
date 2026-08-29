@@ -80,7 +80,7 @@ Full pad-by-pad list, direction, and electrical notes: [Pinout](../planning/Pino
 
 ### 4.1 Host SPI register access
 
-Mode 0, up to 10 MHz `SPI_SCK`. Frame format:
+Mode 0, up to 2 MHz `SPI_SCK`. Frame format:
 
 ```
 Byte 0 (command): bit[7] = R/W# (1=read, 0=write), bits[6:0] = register address (0x00-0x7F)

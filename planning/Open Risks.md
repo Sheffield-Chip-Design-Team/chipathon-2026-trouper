@@ -707,7 +707,7 @@ and add shared SPI/AHB debug-port tests.
 **See:** item 16 and `planning/Grouper PSRAM CSR Exploration.md`.
 **Found:** 2026-08-28, post-implementation review of `095ae2e`.
 
-### 38. Host SPI 10 MHz timing is not constrained or signed off — CDC portion FIXED, SDC portion open
+### 38. Host SPI 2 MHz pad timing is not signed off — CDC portion FIXED, baseline SDC added
 
 **Partially fixed 2026-07-12:** the persistent toggle/mailbox CDC (commits
 `2b6af0f`, `fef30de`) closes the RTL half of this risk's Action item and
@@ -718,20 +718,25 @@ exceptions, mailbox settling constraint) is still open:
 Implementation order steps 6-8 in
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
+**2026-08-29:** the interface limit is now 2 MHz. The canonical P&R and
+signoff SDCs declare a 500 ns `SPI_SCK`, remove its blanket false path,
+declare the SPI/core clocks asynchronous, and use SPI-relative zero-board-delay
+MOSI/MISO constraints. This is an ASIC-only baseline, not board signoff.
+
 The production SDC declares only `IQ_CLK` and globally false-paths
 `SPI_SCK`. It also constrains `SPI_MOSI` relative to `IQ_CLK`, even though MOSI
 is captured by `SPI_SCK`-clocked flops. Consequently, STA does not prove the
-advertised 10 MHz SPI interface: SCK-domain register paths, MOSI setup/hold,
+advertised 2 MHz SPI interface: SCK-domain register paths, MOSI setup/hold,
 and the falling-edge `SPI_MISO` output timing are either hidden or referenced
 to the wrong clock.
 
-The most critical read path has only half an SCK period: the command address
+The most critical read path has half an SCK period: the command address
 completes on its eighth rising edge, the asynchronous `reg_bank` peek decode
-must settle, and the MISO shifter loads on the following falling edge (50 ns at
-10 MHz, before pad/PCB/host margin).
+must settle, and the MISO shifter loads on the following falling edge (250 ns at
+2 MHz, before pad/PCB/host margin).
 
 **Risk:** a design that passes the current top-level timing reports can still
-fail register reads or writes at the specified 10 MHz on silicon.
+fail register reads or writes at the specified 2 MHz on silicon.
 
 **Action:** declare a 100 ns
 `SPI_SCK` clock; add SCK-relative MOSI and MISO I/O delays; declare SCK and
@@ -743,7 +748,7 @@ and GF180 pad timing rather than guessing them.
 **See:** Open Risk #15; `src/control/spi_slave.v`;
 `src/config/pnr_32m_scoped_v25_b6.sdc`;
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
-**Found:** 2026-07-11 (10 MHz SPI implementation/constraint research).
+**Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29.
 
 ### 39. Scoped-MCP SDC cone leaks and `timing_ref` write-arc dishonesty — CLOSED 2026-07-26 (v25_b6 canonicalized)
 
@@ -1139,8 +1144,9 @@ writes. See `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 
 `spi_reg_we_req` (`spi_slave.v:70-118`) is cleared asynchronously by
 `HOST_CS` rising; the 2-FF synchronizer needs ~3 × 31.25 ns of request
-persistence, but at 10 MHz SCK the natural gap is only ~50 ns. Either make
-the request survive CS de-assertion or document "hold CS low ≥ 100 ns after
+persistence, but at 2 MHz SCK the natural gap is ~250 ns. The persistent-toggle
+fix remains required for safe frame teardown; it cannot be replaced by assuming
+the request will survive CS de-assertion or documenting "hold CS low ≥ 100 ns after
 the final SCK edge" as a hard host requirement (and add it to the RPi driver).
 
 **Found:** 2026-07-02 trouper_top RTL review.
@@ -1158,7 +1164,7 @@ Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
 **Resolved:** 2026-08-04, regression job 3863. `trouper_top.v` now captures each completed SPI
 write in a one-entry pending slot and commits it after the higher-priority
 Grouper byte cycle releases. The byte-cycle contract requires release before a
-second SPI data byte completes (≥ 800 ns at 10 MHz). Because pin-level SPI has
+second SPI data byte completes (≥ 4 µs at 2 MHz). Because pin-level SPI has
 no WAIT response and the register bank has one combinational read port,
 TRPR-SPS-007 now explicitly rejects a read byte whose MISO snapshot overlaps
 `GRP_RE=1`; the host retries the complete read frame. Directed cases 3a/3b/4a

@@ -345,7 +345,7 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
 | TRPR-SPS-001/002/003 | Mode-0 frames, R/W#+7-bit-addr command byte, reg-bus translation | T | `tb_trouper_spi.v` (21 checks, job 1693), every cocotb SPI helper | ✅ |
-| TRPR-SPS-004 | Max SPI clock 10 MHz | A | all tbs run 8 MHz (under max) | ✅ (analysis; no at-speed 10 MHz sim, margin covered by STA) |
+| TRPR-SPS-004 | Max SPI clock 2 MHz | A | `test_clock_limit_sweep` exercises 1/2 MHz; 8/10 MHz are retained as over-spec stress tests | 🟨 Baseline SDC now declares 2 MHz, but board-specific pad delays and post-P&R STA remain open (Open Risk #38). |
 | TRPR-SPS-005 | CS/SCK synchronisers (async domain) | I | inspection; POR frame-flop fix verified (Open Risks #26, closed 2026-07-02) | ✅ |
 | TRPR-SPS-006 | `CHIP_ID` = 0xA7 | T | `tb_trouper_spi.v`, every cocotb test's settle read | ✅ |
 | TRPR-SPS-007 | Grouper priority; pending SPI write; colliding-read retry | T | `tb_trouper_grp_arb.v` (full-strobe write overlap and MISO-load read overlap) | ✅ job 3863 |

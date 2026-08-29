@@ -1,5 +1,5 @@
 // spi_slave.v
-// SPI slave: RPi host interface (SPI0 CS1, Mode 0, MSB first, up to 10 MHz).
+// SPI slave: RPi host interface (SPI0 CS1, Mode 0, MSB first, up to 2 MHz).
 //
 // Frame format (TRPR-SPS-002/009/010/011):
 //   Byte 0 (command): [7] = R/W# (1 = read, 0 = write), [6:0] = register address.
@@ -35,7 +35,7 @@ module spi_slave (
 
     // SPI bus (asynchronous to clk_32m)
     input  wire        HOST_CS,    // active-low chip select from RPi
-    input  wire        SPI_SCK,    // SPI clock (CPOL=0 CPHA=0, up to 10 MHz)
+    input  wire        SPI_SCK,    // SPI clock (CPOL=0 CPHA=0, up to 2 MHz)
     input  wire        SPI_MOSI,
     output reg         SPI_MISO,
 
@@ -117,8 +117,8 @@ module spi_slave (
 
     // Completed-byte events must outlive the SPI frame.  This block observes
     // the pre-edge frame state above, latches the bundled payload, and toggles
-    // one bit per event.  At 10 MHz consecutive events are at least one byte
-    // (800 ns) apart, leaving >25 clk_32m cycles for the destination to observe
+    // one bit per event.  At 2 MHz consecutive events are at least one byte
+    // (4 us) apart, leaving >128 clk_32m cycles for the destination to observe
     // each toggle.  Guard with HOST_CS in case SCK toggles while deselected.
     always @(posedge SPI_SCK or negedge rst_n) begin
         if (!rst_n) begin
@@ -148,7 +148,7 @@ module spi_slave (
     // MISO: loaded at the falling edge that precedes each data byte
     // (spi_bit_cnt == 0 after the previous byte's 8th rising edge).
     // reg_rdata is the asynchronous reg_bank peek addressed by cur_addr; it has
-    // half an SCK period to settle (50 ns at the 10 MHz maximum).
+    // half an SCK period to settle (250 ns at the 2 MHz maximum).
     // -----------------------------------------------------------------------
     reg  [7:0] miso_shreg;
     wire [7:0] miso_byte = (have_cmd && fp_rw) ? reg_rdata : 8'h00;
@@ -173,7 +173,7 @@ module spi_slave (
     // -----------------------------------------------------------------------
     // Clock-domain crossing: SPI → clk_32m persistent event toggles.
     // Two-FF sync plus change detect; the bundled address/data are stable for
-    // the full byte period (≥800 ns at 10 MHz) around each event.
+    // the full byte period (≥4 us at 2 MHz) around each event.
     // -----------------------------------------------------------------------
     reg spi_we_sync0, spi_we_sync1, spi_we_sync2;
     reg spi_re_sync0, spi_re_sync1, spi_re_sync2;

@@ -506,10 +506,26 @@ Iteration**): the host is not integer-only, so use exact math instead of the
 | Write gain shift | `0x0F` bits [2:0] (`COMB_CFG.post_gain_shift`) | Must be written before `W_COMMIT`, same ordering requirement. |
 | Commit | `0x1E` bit 0 (`WGT_CTRL.W_COMMIT`) | Self-clears in hardware. |
 
-SPI is Mode 0, MSB-first, up to 10 MHz — the full read+write+commit sequence
-is ~60 bytes of raw SPI traffic (well under 100 µs of bus time at 10 MHz).
+SPI is Mode 0, MSB-first, up to 2 MHz — the full read+write+commit sequence
+is ~60 bytes of raw SPI traffic (about 240 µs of bus time at 2 MHz).
 The bottleneck is host-side latency (see Timing below), not the transfer
 itself.
+
+### 2 MHz replay-margin budget
+
+The default `REPLAY_DELAY_SAMPLES=1500` gives a **3.000 ms** post-
+`training_done` response window at 500 kS/s. The host SPI transfer consumes
+`60 bytes × 8 / 2 MHz = 240 µs`, leaving **2.760 ms** for `IRQ_OUT` delivery,
+host wake-up/scheduling, the host eigensolve, driver overhead, and any
+inter-frame gaps. An application-class host eigensolve is expected to take
+tens of microseconds, but that is not a measured end-to-end bound; the full
+2.760 ms remainder must therefore be treated as a **budget**, not claimed
+slack. Firmware SHALL increase `REPLAY_DELAY_SAMPLES` if measured high-
+percentile `IRQ_OUT → W_COMMIT` latency exceeds this budget.
+
+This budget applies to the same-packet replay path. It does **not** make the
+external host's live-mode deadline deterministic: that path is still governed
+by host scheduling jitter and the SF/BW-dependent payload-start deadline.
 
 ### Algorithm — exact eigendecomposition instead of power iteration
 

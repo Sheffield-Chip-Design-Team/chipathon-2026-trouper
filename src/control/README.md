@@ -69,7 +69,7 @@ throughout:
 ## `spi_slave.v` — the mailman
 
 Speaks SPI Mode 0 (idle clock low, sample on rising edge), MSB-first, up to
-10 MHz. Frame shape:
+2 MHz. Frame shape:
 
 ```
 byte 0: [7]=R/W#  [6:0]=register address     (command byte)

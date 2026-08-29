@@ -1,4 +1,4 @@
-# SPI Slave CDC and 10 MHz Timing Plan
+# SPI Slave CDC and 2 MHz Timing Plan
 
 ## Status (2026-07-12)
 
@@ -12,35 +12,38 @@ Open Risk #15 (final SPI write lost on early CS deassertion). Regression suite
 `test_reset_interruption`, `test_aborted_frame`, `test_clock_limit_sweep`,
 `test_w1p_exactly_once`) — all 8 scenarios PASS (SGE job 3352).
 
-**Still open:** the "Static-timing constraints" section (SDC changes) and
-"Gate-level/signoff checks" are not done — `src/config/pnr_32m_scoped_v20.sdc`
-is unchanged, so SPI paths remain false-pathed/unconstrained. This is the
-residual scope of Open Risk #38; see Implementation order steps 6-8 below.
+**2026-08-29 update:** the canonical P&R and signoff SDCs now declare
+`SPI_SCK` at 2 MHz, make it asynchronous to `IQ_CLK`, and apply a zero-board-
+delay MOSI/MISO baseline. This removes the erroneous SCK false path and
+IQ-clock-relative MOSI constraint. The baseline is deliberately **not** pad
+signoff: selected-RPi timing, PCB flight time, post-P&R STA, and bench evidence
+remain open under Open Risk #38.
 
 ## Purpose
 
 Make the host SPI register interface reliable with a Raspberry Pi master at
-10 MHz without relying on an undocumented chip-select hold time, and bring the
+2 MHz without relying on an undocumented chip-select hold time, and bring the
 SPI paths into static-timing signoff.
 
 The current serial/frame logic runs directly from asynchronous `SPI_SCK`, while
 register writes and read side effects cross into the 32 MHz `IQ_CLK` domain.
 This is the right high-level architecture for the available clock ratio, but
 the current pulse crossing can lose the final write when `HOST_CS` rises soon
-after the last clock edge. The production SDC also false-paths `SPI_SCK`, so it
-does not prove the advertised 10 MHz interface timing.
+after the last clock edge. The canonical SDC now models `SPI_SCK` at 2 MHz,
+but its zero-board-delay baseline does not yet prove the advertised interface
+against real pad and PCB timing.
 
 ## Clock architecture
 
 - `SPI_SCK`: external, asynchronous, Mode 0 serial-engine clock, maximum
-  10 MHz (100 ns period).
+  2 MHz (500 ns period).
 - `IQ_CLK`: the only physical local clock, 32 MHz (31.25 ns period).
 - `ce_16m`: a clock enable that updates selected control-plane registers every
   other `IQ_CLK` edge. It is not a separate clock domain.
 
-Do not replace the SCK-clocked serial engine with 32 MHz oversampling. A 10 MHz
-SCK half-period is 50 ns, only 1.6 `IQ_CLK` cycles, which is insufficient for a
-normal two-flop synchronizer plus reliable detection of every SCK edge.
+Do not replace the SCK-clocked serial engine with 32 MHz oversampling. The
+serial engine remains the proper CDC boundary; the 2 MHz limit supplies a
+250 ns half-period and generous interface margin.
 
 ## Reference architectures reviewed
 
@@ -49,7 +52,7 @@ normal two-flop synchronizer plus reliable detection of every SCK edge.
 OpenTitan keeps serial activity in the SPI clock domain and uses asynchronous
 RX/TX FIFOs between SPI and the main clock. This is the robust general solution
 for arbitrary streams. Trouper's decoded register events occur at most once per
-byte (800 ns at 10 MHz), so a full FIFO is unnecessary.
+byte (4 µs at 2 MHz), so a full FIFO is unnecessary.
 
 Reference:
 <https://opentitan.org/book/hw/ip/spi_device/data/spi_device.html>
@@ -58,7 +61,8 @@ Reference:
 
 AMD documents an alternative architecture that synchronizes SPI inputs into a
 faster reference-clock domain. That approach is unsuitable at Trouper's
-32 MHz-to-10 MHz ratio because there is too little sampling margin.
+32 MHz-to-2 MHz ratio because the original high-rate oversampling argument is
+no longer relevant.
 
 Reference:
 <https://docs.amd.com/r/en-US/am011-versal-acap-trm/Data-Transfer>
@@ -119,8 +123,8 @@ synchronized values to create exactly one destination-domain event. Unlike a
 pulse, the changed toggle persists after `HOST_CS` rises and until the 32 MHz
 domain observes it.
 
-At 10 MHz, consecutive byte events are separated by 800 ns, approximately
-25.6 `IQ_CLK` cycles. The destination therefore has ample time to observe each
+At 2 MHz, consecutive byte events are separated by 4 µs, approximately
+128 `IQ_CLK` cycles. The destination therefore has ample time to observe each
 toggle before the next event.
 
 ### 3. Treat address/data as a bundled-data mailbox
@@ -154,7 +158,7 @@ synchronous deassertion separately in each clock domain.
 The production SDC must describe the external SPI interface instead of globally
 false-pathing `SPI_SCK`:
 
-1. Add `create_clock -name SPI_SCK -period 100.0 [get_ports SPI_SCK]`.
+1. Add `create_clock -name SPI_SCK -period 500.0 [get_ports SPI_SCK]`.
 2. Add realistic board/master input delays for `SPI_MOSI` relative to the
    rising SCK edge.
 3. Add `SPI_MISO` output delay requirements for the Raspberry Pi's following
@@ -167,7 +171,7 @@ false-pathing `SPI_SCK`:
 7. Time the SCK-domain rising-edge state paths normally.
 8. Prove the command-to-first-read-bit path: the address is completed on the
    eighth rising edge, `reg_bank` combinational peek data settles, and MISO loads
-   on the following falling edge. The internal budget is at most 50 ns before
+   on the following falling edge. The internal budget is at most 250 ns before
    pad, board, and host setup margins.
 9. Run setup and hold analysis at all signoff PVT corners and report
    unconstrained endpoints.
@@ -176,11 +180,23 @@ Exact input/output delay numbers must come from the chosen Raspberry Pi model,
 PCB flight-time estimate, and GF180 pad timing. Do not substitute the existing
 `IQ_CLK`-relative `SPI_MOSI` constraint.
 
+## Weight-generation transport margin
+
+The external-host weight flow transfers about 60 SPI bytes after
+`IRQ_TRAINING_DONE`: matrix readback, `N_ACC`, weight/gain writes, and
+`W_COMMIT`. At the supported 2 MHz rate this is **240 µs** of deterministic
+wire time. Against the default 1500-sample replay delay (3.000 ms at 500 kS/s),
+the remaining end-to-end host-response budget is **2.760 ms**. It covers GPIO
+IRQ delivery, host wake-up/scheduling, eigensolve, SPI-driver overhead, and
+inter-frame gaps; it is not yet measured on the RPi. Use `IRQ_OUT`, not SPI
+polling, and increase `REPLAY_DELAY_SAMPLES` if the measured high-percentile
+`IRQ_OUT → W_COMMIT` time exceeds 3 ms.
+
 ## Verification plan
 
 ### Directed RTL tests
 
-- Mode 0 single-register write and read at exactly 10 MHz.
+- Mode 0 single-register write and read at exactly 2 MHz.
 - Raise CS at the earliest legal time after the final falling edge; confirm the
   write is committed exactly once.
 - Back-to-back write transactions with minimum CS-high time.
@@ -197,7 +213,7 @@ PCB flight-time estimate, and GF180 pad timing. Do not substitute the existing
   phase range.
 - Randomize CS setup, hold, and inter-transaction spacing within the supported
   protocol limits.
-- Sweep SCK below and through 10 MHz.
+- Sweep SCK through 2 MHz; retain 8/10 MHz only as over-spec stress coverage.
 - Use a scoreboard to require a one-to-one mapping between completed SPI data
   bytes and destination `reg_we`/`reg_re` events.
 
@@ -208,7 +224,7 @@ PCB flight-time estimate, and GF180 pad timing. Do not substitute the existing
 - Mailbox address/data remains stable from toggle generation through
   destination capture.
 - No two source events occur before the destination can distinguish them under
-  the supported 10 MHz/32 MHz clocks.
+  the supported 2 MHz/32 MHz clocks.
 - CS deassertion clears frame state without changing an outstanding toggle or
   mailbox.
 
@@ -219,14 +235,14 @@ PCB flight-time estimate, and GF180 pad timing. Do not substitute the existing
   CDC paths.
 - CDC and reset-domain-crossing reports reviewed with intentional crossings
   documented.
-- Bench confirmation at 10 MHz with a Raspberry Pi and oscilloscope/logic
+- Bench confirmation at 2 MHz with a Raspberry Pi and oscilloscope/logic
   analyzer, including measured CS timing and MISO setup margin.
 
 ## Acceptance criteria
 
 - No host-side CS hold extension is required beyond normal Raspberry Pi SPI
   behavior.
-- Every valid write at up to 10 MHz commits exactly once for all tested clock
+- Every valid write at up to 2 MHz commits exactly once for all tested clock
   phases.
 - Every read returns the addressed byte with valid first-bit timing.
 - No unintended CDC/RDC warnings remain.
@@ -243,5 +259,4 @@ PCB flight-time estimate, and GF180 pad timing. Do not substitute the existing
 5. Run RTL regression and CDC/RDC checks.
 6. Replace the blanket SCK false path with explicit SPI constraints.
 7. Run PnR/signoff STA and inspect the command-to-MISO half-cycle path.
-8. Verify on Raspberry Pi hardware at 10 MHz.
-
+8. Verify on Raspberry Pi hardware at 2 MHz.
