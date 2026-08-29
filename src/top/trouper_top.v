@@ -64,7 +64,7 @@ module trouper_top (
 
     // ---- Host SPI slave (RPi) ----
     input  wire        HOST_CS,       // active-low chip select from RPi
-    input  wire        SPI_SCK,       // SPI clock (Mode 0, up to 10 MHz)
+    input  wire        SPI_SCK,       // SPI clock (Mode 0, up to 2 MHz)
     input  wire        SPI_MOSI,
     output wire        SPI_MISO_OUT,
 
@@ -915,7 +915,7 @@ module trouper_top (
     // back at the serial pins.  Capture it in a one-entry pending slot until
     // the in-progress Grouper byte cycle releases the register bank.  The
     // Grouper byte-cycle contract requires that it release before a second SPI
-    // data byte completes (>= 800 ns at 10 MHz), so this slot cannot overflow.
+    // data byte completes (>= 4 us at 2 MHz), so this slot cannot overflow.
     // =========================================================================
     // The AHB endpoint turns one transfer into one held byte request.  Its
     // completion is deliberately tied to the CE-domain dispatch below, not

@@ -197,7 +197,7 @@ decimated IQ capture + replay buffer"]
 | AFE control / config | External board or companion-system logic | SX1257_1–4 | Reset, mode, frequency, gain programming outside Trouper RTL | board-defined |
 | ΣΔ re-mod A | ASIC | SX1302 Radio A | 1-bit I+Q sigma-delta | 32 MS/s |
 | PSRAM QSPI | Trouper `psram_buf_ctrl` or a future firmware-managed external-memory mode | APS6404L (ext.) | replay buffer or firmware-managed off-chip RAM | 32 MHz QPI |
-| Host SPI | RPi SPI0 CS1 | Trouper SPI slave | Dedicated host register access and debug | 10 MHz |
+| Host SPI | RPi SPI0 CS1 | Trouper SPI slave | Dedicated host register access and debug | 2 MHz |
 | SX1302 SPI | RPi SPI0 CS0 | SX1302 | SX1302 HAL (packets, config) | 10 MHz |
 | AHB-Lite | Grouper (Bus Master) | Trouper (Slave) + Other Peripherals | MPW System Bus | 32 MHz |
 | IRQ | Trouper (ASIC) | Grouper (PicoRV32) | Packet ready, error | Interrupt |

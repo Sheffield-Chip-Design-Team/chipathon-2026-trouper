@@ -74,7 +74,7 @@ Dedicated interface for external register access and bring-up.
 |---|---|---|---|
 | `SPI_MOSI` | in | Host SPI MOSI | Host-to-Trouper register writes and commands |
 | `SPI_MISO` | out | Host SPI MISO | Trouper-to-host readback |
-| `SPI_SCK` | in | Host SPI SCK | SPI clock, Mode 0, up to 10 MHz |
+| `SPI_SCK` | in | Host SPI SCK | SPI clock, Mode 0, up to 2 MHz |
 | `HOST_CS` | in | Host SPI chip select | Active-low slave select |
 
 ### Interrupt output (1 pad, output)

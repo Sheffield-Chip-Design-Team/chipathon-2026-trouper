@@ -243,7 +243,7 @@ These ICs have two separate power pins — `VCCA` (fixed low side) and `VCCB`
 | Signal group | Requirement | Candidate part family |
 |---|---|---|
 | PSRAM QPI (`SIO[3:0]`, up to 133 MHz, direction reverses mid-transaction) | Explicit `DIR` pin, not auto-sensing | TI `SN74AVC4T774` or Nexperia `74AVC4T245` (quad, one `DIR` per nibble group) |
-| SPI (host + SX1257 ×4, ≤10 MHz host SPI) | Direction-controlled, lower speed | TI `SN74LVC2T45`/`SN74AVC2T245` (dual-bit) or `SN74AVC1T45` per line |
+| SPI (host + SX1257 ×4, ≤2 MHz host SPI) | Direction-controlled, lower speed | TI `SN74LVC2T45`/`SN74AVC2T245` (dual-bit) or `SN74AVC1T45` per line |
 | Unidirectional (`IQ_CLK`, `IQ_DATA_*`, `RESETB`, `IRQ_OUT`) | Fixed direction, no `DIR` pin needed | Same families, `DIR` tied constant |
 
 **Why the QPI row is the one that matters:** #27 already flags "auto-
