@@ -1,6 +1,14 @@
 # Two-Pin Digital Debug / Bring-Up Plan
 
-**Status:** proposed for explicit pin-allocation decision; no RTL or package change yet.
+**Status: IMPLEMENTED 2026-08-30** — RTL, registers, pads and tests are in
+(`debug_probe_mux` in `src/top/trouper_top.v`, `DBG_CTRL`/`DBG_STATUS` in
+`reg_bank.v`, suite `cocotb/dbg_probe` 9/9). `info.yaml` declares
+`DBG0_OUT`/`DBG1_OUT`, taking the allocation to **28 of 28 — full, no spare**.
+
+Not yet closed: integrator confirmation of slots N16/N17, a P&R run against a
+real integrator DEF (the current run uses a locally extended template), and the
+bench electrical check. See "As built" and "Acceptance criteria" below, and
+Open Risks #52/#57.
 
 ## Objective
 
@@ -74,6 +82,36 @@ SPI map.
 pair, or event within the selected group as specified below. The hardware must
 not clamp invalid values; it drives zero for reserved encodings.
 
+## As built — deviations from the proposal above
+
+The implementation follows this plan except where noted here. Read these before
+using the encoding table.
+
+- **`IRQ` group reaches only `irq_status[3:0]`.** The table below lists
+  `SEL=0`–`4`, but `SEL` is a 2-bit field, so only four of the five sticky
+  sources are selectable. The fifth stays readable over SPI at `IRQ_STATUS`
+  (`0x02`). Widening `SEL` would have cost a `DBG_CTRL` bit for one probe
+  position; not judged worth it.
+- **`qpi_busy` is derived, not a dedicated signal.** It is `|state_dbg` from
+  `psram_buf_ctrl` — true whenever the QPI FSM is out of its idle state, which
+  is what the plan's bring-up use asks for.
+- **Three small observability exports were added** so the mux taps real
+  registered state rather than re-deriving it: `sc_tdm_busy_dbg` (`sc_detector`),
+  `del_rdy_dbg` (`psram_buf_ctrl`) and `irq_status_dbg` (`reg_bank`). All are
+  pure fanout of existing flops.
+- **`DBG_CTRL` is gated on `!PACKET_ACTIVE` only**, as specified — deliberately
+  weaker than the `cfg_wr_ok` (`RX_HOLD` + `!PACKET_ACTIVE`) gate the other
+  quasi-static registers use. The requirement is a fixed selection per packet,
+  not a held receiver; re-pointing a probe between packets without disabling the
+  detector is the normal bring-up loop. Rejected writes still raise
+  `CFG_WR_REJECTED`.
+- **Raw-RX capture flops are free-running**, not gated by `EN`. Gating them
+  would fan the enable out across the IQ input cone — the one place this plan
+  requires the feature not to disturb.
+- **Measured area cost: +4,454 µm² (+0.470%)** against an otherwise identical
+  build (Yosys hierarchical synth, jobs 5277/5278 on commits `53eb221` and
+  `3342b87`).
+
 ## Debug-mux encoding
 
 | `GROUP` | `SEL` | `DBG0_OUT` | `DBG1_OUT` | Bring-up use |
@@ -119,6 +157,50 @@ intermediates or PSRAM SIO pads.
 6. Select combiner sign bits while applying a common tone and compare MRC and
    passthrough settings. Use `IRQ` mode to correlate software-visible events.
 
+## Timing result (job 5279, 2026-08-30)
+
+**The IQ-input loading concern did not materialise.** The eight raw-RX capture
+flops load the `IQ_DATA_*` cone, and the worry was that this would worsen the
+pre-existing IQ-input-to-decimator paths. It did not: **zero** `IQ_DATA` paths
+appear in the SS violator list.
+
+**The debug output paths do violate at SS**, and they are the only output paths
+in the design that do:
+
+| Corner | `DBG0_OUT` | `DBG1_OUT` | Other `reg-out` violators |
+|---|---:|---:|---:|
+| `nom_tt_025C_3v30` | meets | meets | 0 |
+| `max_ff_n40C_3v60` | meets | meets | 0 |
+| `max_ss_125C_3v00` | **−4.440 ns** | **−6.060 ns** | **0 — these two are the only ones** |
+
+They inherited the standard budget automatically: `pnr_32m_scoped_v25_b6.sdc`
+applies `set_output_delay -max 2.0 -clock IQ_CLK` to `[all_outputs]` except
+`SPI_MISO_OUT`, so nobody decided 2 ns was right for a debug pin — it was the
+default.
+
+**This fails the acceptance criterion above**, which says the pads go in the
+normal 2 ns set and *"no timing exception is permitted"*. That sentence exists
+to stop exactly the argument that follows, so it is recorded as failing rather
+than waived.
+
+The argument for tolerating it, stated so it can be judged rather than assumed:
+SS 3.0 V already fails by −17.7 ns design-wide and is a known voltage-bound
+risk that closes at 4.5 V; the debug paths fail by roughly a third of that, so
+whatever closes the design very likely closes them. The functional consequence
+is bounded — a late debug output means an unreliable analyser capture at the
+slow corner, not receiver misbehaviour, and nothing downstream consumes these
+pins. And a 2 ns output delay inherited from functional outputs is arguably the
+wrong constraint for a pin whose consumer samples on its own reference.
+
+**Decision still owed:** either accept a documented, justified exception for
+these two pins, or fix the paths. Not "the corner was already red, so it does
+not matter".
+
+**Not attributable:** SS WNS moved −16.260 (job 5214) → −17.736 (job 5279) on an
+unrelated `reg-reg` path. Job 5279 also carries the array-sync link, the epoch
+compensation and the `SC_ANT_SEL` move, so none of that −1.48 ns can be charged
+to the debug probe without a baseline P&R of `53eb221` on the same config.
+
 ## RTL, physical-design, and verification work
 
 - Add `dbg_ctrl` storage/readback and the idle-only write gate to `reg_bank.v`
@@ -156,3 +238,19 @@ mux selections are bit-accurate in simulation, disabled/reserved selections
 are provably zero, debug-control writes cannot change during a packet, the pads
 meet their specified control tie-offs, the 32 MHz raw pattern is electrically
 clean at the intended probe load, and top-level P&R/signoff remains clean.
+
+Status against each, 2026-08-30 (traceability: `planning/Traceability.md`
+TRPR-DBG-001..010):
+
+| Criterion | State |
+|---|---|
+| Allocation approved | ❌ Slots N16/N17 unconfirmed by the integrator; takes the pinout to 28/28 with no spare |
+| All valid mux selections bit-accurate | ⚠️ Partial — raw-RX (all 4 branches), packet group and `DBG_STATUS` asserted; decimated-IQ, SC, PSRAM, combiner and IRQ groups are structurally identical muxing but not individually checked |
+| Disabled / reserved provably zero | ✅ `test_reset_and_disabled_drive_low`, `test_reserved_encodings_drive_zero` |
+| Config cannot change during a packet | ✅ `test_config_is_idle_only_and_sticky_records_rejection` |
+| Pad-control tie-offs | ✅ `test_pad_tieoffs` — but this checks the **core outputs**, not the pad cells they will drive. Trouper instantiates no IO cells; a tie-off landing on the wrong cell terminal is only visible in chip-level LVS (`planning/pad-cell-signoff-plan.md` §1) |
+| Probe cannot perturb the receiver | ✅ `test_probe_does_not_perturb_the_receiver` — 4000 cycles bit-identical (this is not in the original list and should be: it is the criterion that makes the feature safe to ship) |
+| 32 MHz pattern electrically clean at the probe | ❌ Gated on the integrator padframe. SPICE first (`planning/pad-cell-signoff-plan.md` §3d), then bench with a low-capacitance active probe |
+| Top-level P&R / signoff clean | ⚠️ **macro scope, with a timing exception outstanding** — job 5279: antenna 0/0, route DRC 0, Magic DRC 0, LVS match uniquely, PDN 0. But the two debug outputs violate setup at SS (below). No pad cell is present in that netlist or layout, so none of this is a pad-cell result |
+| Debug outputs meet the 2 ns output delay, no exception | ❌ **Violated at SS** — see "Timing result" below |
+| Area cost measured | ✅ +4,454 µm² (+0.470%) |

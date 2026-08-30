@@ -1,7 +1,17 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pad list. **26 pads occupying 26 A40 slots**: 24 signal +
-`VDD_CORE` + `VSS`. Older revisions of this doc quoted 24 or 25 by excluding `VSS` on the
+GF180MCU MIMO ASIC logical pin list. **28 pins occupying all 28 A40 slots**: 26 signal +
+`VDD_CORE` + `VSS`. The allocation is now FULL — no spare slot remains.
+
+> **Terminology.** Trouper is a hardened macro and instantiates **no IO cells at
+> all**. A *slot* is a padring position allocated to this project; a *boundary
+> pin* is a `PINS` entry on the macro edge, which is what our P&R places and
+> checks; a *pad cell* is a `gf180mcu_fd_io__*` instance in the shared padring,
+> instantiated by the integrator. The `_OE`/`_IE`/`_CS`/`_SL`/`_PU`/`_PD`/
+> `_PDRV*` signals below are core outputs that will *drive* pad-cell control
+> inputs. **No DRC, LVS or antenna result from any Trouper run covers a pad
+> cell** — none is present in the netlist or layout to check. Pad-cell signoff is
+> planned separately and gated on the integrator: `planning/pad-cell-signoff-plan.md`. Older revisions of this doc quoted 24 or 25 by excluding `VSS` on the
 grounds that ground was shared die-wide and not a per-project pad — that is no longer
 true. The A40 padring requires a per-project `VSS` pin, `info.yaml` declares it, and the
 integrator places it at slot W12, so **it consumes a slot and must be counted** in any
@@ -12,10 +22,11 @@ config (no independent IO rail is actually built), so it isn't a second pin. See
 
 **Allocation status — RESOLVED 2026-08-30: the assigned budget is 28 pads.** Trouper's
 A40 ACV allocation is **28 pad slots**, confirmed with the integrator. `info.yaml`
-declares **26** pins — 24 signal + `VDD_CORE` + `VSS`, all of which take a slot — so
-**26 of 28 are used and 2 are spare**. (That is 2 spare *including* `ARRAY_ACQ_N`, which
-is already one of the 26; it is not a further deduction.) The pin budget is no longer a
-constraint on this design.
+declares **28** pins — 26 signal + `VDD_CORE` + `VSS`, all of which take a slot — so
+**28 of 28 are used and none are spare**. The last two went to `DBG0_OUT`/`DBG1_OUT`
+(2026-08-30). The budget is no longer a *constraint* in the sense that everything fits,
+but it is now exactly full: any further pin need must displace something already
+allocated. Weigh that before adding anything.
 
 This supersedes the earlier working assumption of a **22-pad** team allocation, and with
 it the pin half of the NR=3 / `IRQ_OUT`-waiver contingency: neither is needed to fit the
@@ -30,7 +41,7 @@ superseded for the A40 build, which defers to the integrator DEF at 1675×1110 (
 
 ---
 
-## Signal pads (24)
+## Signal pads (26)
 
 All signal pads use **GF180 5 V-capable IO cells**, run at **3.3 V**. There is one power
 pad (`VDD_CORE`) and one shared ground (`GND`/`VSS`, not a per-project pad) — see the
@@ -111,6 +122,30 @@ the pin budget is not the open question — what remains is that no P&R run has 
 against a 26-pin DEF, and the pad has had no electrical review (Open Risks #52, #53).
 Self-contained: deleting the `info.yaml` entry, the two `io_placement` entries, and the
 `ARRAY_ACQ_N_*` ports backs it out completely.
+
+### Digital debug probes (2 pads, output) — NOT YET COMMITTED
+
+| Pad name | Dir | Connected to | Description |
+|---|---|---|---|
+| `DBG0_OUT` | out | Logic analyser / test point | Register-selected debug probe, channel 0 |
+| `DBG1_OUT` | out | Logic analyser / test point | Register-selected debug probe, channel 1 |
+
+`DBG_CTRL` (`0x04`) selects one of eight source groups — raw RX, decimated IQ,
+SC, packet/weights, PSRAM, combiner, IRQ — onto the two pins; `DBG_STATUS`
+(`0x05`) reads the driven values back as a connectivity check. Both pads drive 0
+during reset and whenever `DBG_CTRL.EN=0`. The probe is feed-forward only and
+cannot alter receiver behaviour (TRPR-DBG-004). Full mux encoding and the
+first-silicon sequence: `planning/two-pin-digital-debug-plan.md`.
+
+**Board obligation:** these can toggle on every 32 MHz edge in raw-RX mode, so
+route them short, populate the 0-ohm series-resistor footprint at each ASIC pin,
+and probe with a low-capacitance active probe. Put a ground test point beside
+each. Use `IRQ_OUT` as an analyser trigger — it must not be reused as a probe.
+
+**Status:** slots N16/N17, unconfirmed by the integrator, and they take the
+allocation to exactly 28 of 28. Open Risks #52. Self-contained: deleting the two
+`info.yaml` entries, the `io_placement` entries, the `DBG*` ports and
+`debug_probe_mux` backs the feature out completely.
 
 ### PSRAM data bus (4 pads, bidirectional)
 
@@ -256,6 +291,7 @@ fixed** — see the constraint note below the table.
 | `PSRAM_SCK` (output on `bi_24t`, drive fixed) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD` | `_OE=1`, `_SL=0` fast, rest `0` |
 | `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,1` **max (16 mA, raised from `1,0`/8 mA on 2026-08-30)**, rest `0` |
 | `SPI_MISO`, `IRQ_OUT` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
+| `DBG0_OUT`, `DBG1_OUT` (output on `bi_t`) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OE=1`, `_IE=0` (output-only — never enable a receiver on a pin nothing drives), `_CS=0` CMOS, `_SL=0` **fast**, `_PU=0`/`_PD=0`, drive `1,0` = 8 mA. Fast slew and mid drive differ from `SPI_MISO`/`IRQ_OUT` deliberately: raw-RX mode toggles every 32 MHz edge, so the host link's slow-slew setting is not adequate here. |
 | `ARRAY_ACQ_N` (emulated open drain on `bi_t`) | `_OUT`,`_IN`,`_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OUT=0` always, `_OE` = core drive request (this is the open-drain emulation), `_IE=1`, `_CS=1` **Schmitt** (long shared board net), `_SL=1` slow, **`_PU=1`** (the only pad on the chip with an internal pull enabled — see below), `_PD=0`, drive `0,0` min 4 mA |
 
 **`PSRAM_SCK_SL = 0` is a hard constraint, not a provisional value.** The

@@ -1173,7 +1173,20 @@ Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
 
 ---
 
-### 46. Trouper's 24-pad / 1200×1100 pinout may not fit a stricter 22-pad / 1117.5×1117.5 allocation — NR=3 fallback validated, NR=4 also reopened via a floorplan fix
+### 46. Trouper's pinout vs. a stricter 22-pad / 1117.5×1117.5 allocation — PIN HALF RESOLVED 2026-08-30 (allocation is 28 pads); die-size half stands
+
+**Update 2026-08-30 — the pin-budget half of this item is closed.** The A40 ACV
+allocation is confirmed at **28 pad slots**, not 22. `info.yaml` declares 26 pins — 24
+signal + `VDD_CORE` + `VSS`, every one of which occupies a slot. (Superseded later the
+same day: `DBG0_OUT`/`DBG1_OUT` took the last two, so the pinout is now **28 of 28 with
+no spare** — item 54.) Neither the `IRQ_OUT`-removal
+waiver nor NR=3 is needed to close a pin gap, because there is no pin gap. Everything below
+about pins is retained as the record of the superseded assumption; the **die-size** half
+(1117.5×1117.5 µm) is unaffected by this and is separately superseded for the A40 build,
+which defers to the integrator DEF at 1675×1110 (item 52,
+`planning/a40-padframe-integration-2026-08.md`).
+
+Original entry follows.
 
 Current pinout is 24 pads (23 signal + `VDD_CORE`; `VDD_IO` removed 2026-08-19 — it's the
 same net as `VDD_CORE`, not a second pin, see `planning/5v-core-voltage-strategy.md`
@@ -1225,45 +1238,90 @@ padframe integrator) before it can be relied on.
 
 ---
 
-### 53. `ARRAY_ACQ_N` open-drain pad has had no electrical review
+### 53. `ARRAY_ACQ_N` open-drain emulation has not received pad-level electrical review
 
-`ARRAY_ACQ_N` is a multi-chip wired-AND acquisition-sync net, active low, idle
-high via an **external board pull-up**. GF180 supplies no open-drain pad
-primitive, so the design emulates one on a `bi_t` cell: the output is either a
-driven zero or high-Z (`OUT` tied 0, `OE` does the work), with `PDRV[1:0]=00`
-(4 mA), `PU=1`, `PD=0`, `CS=1`, `IE=1`. None of that has been reviewed
-electrically.
+The multi-ASIC acquisition-sync extension uses one `gf180mcu_fd_io__bi_24t`
+bidirectional pad as an active-low, shared open-drain wire: RTL ties `A=0` and
+uses `OE` to select drive-low versus high impedance while sampling `Y`.  This
+is the appropriate logical use of the available pad, but the PDK provides no
+dedicated open-drain primitive and no pad-level/silicon validation has yet
+established that the selected control polarity, reset behaviour, input
+thresholds, drive strength, leakage, or enable/disable transition are suitable
+for a multi-chip wired net.
 
-**Open questions:** pull-up resistor value, maximum bus capacitance, trace
-length and required rise time are all board-level items with no chosen numbers.
-On a shared net **one internal pull-up per participating chip sits in parallel
-with the board resistor**, and must be counted in both the pull-up sizing and
-the V_OL budget — a two- or three-chip array multiplies that, and nothing has
-checked that 4 mA still pulls the net below V_IL against the parallel
-combination. The correctness of the whole scheme also depends on no device ever
-driving the net high; that is enforced in Trouper's own RTL
-(`test_open_drain_invariant_and_tieoffs`) but is an integration assumption for
-every other chip on the net.
+**Risk:** an incorrect interpretation of the `bi_24t` controls or an
+unreviewed board pull-up can cause contention, an excessive low-level current,
+slow/noisy rising edges, false synchronisation events, or an unintentional
+drive during reset.  The net is optional for a single-chip receiver, but it is
+required for the proposed coordinated multi-chip acquisition and should not be
+committed to the board/pad allocation on RTL inference alone.
 
-**Mitigating:** `ARRAY_SYNC_CTRL[0]` (`0x18`) resets to **0** and gates both
-directions, so an unpopulated pin on a single-chip board cannot start the
-receiver no matter what the floating pad does. The risk is confined to boards
-that actually use the link.
+**Required review / closure evidence:**
 
-**Action / exit:** pick a pull-up value against a stated bus capacitance and
-chip count; confirm V_OL at 4 mA with N internal pull-ups in parallel; confirm
-the rise time meets the sync-window budget; get the pad configuration reviewed
-against the GF180 IO databook gap already noted in item 27. Until then the
-array-sync feature is synthesis-proven only — the 2026-08-30 result is
-+111 cells / +4030 µm² (+0.41 %) with zero Yosys check problems, and explicitly
-**not** timing, DRC, LVS, pad-ring or pull-up validated.
+- Review the exact `gf180mcu_fd_io__bi_24t` Liberty, Verilog model, and PDK
+  documentation for `A`, `OE`, `Y`, `IE`, `CS`, `SL`, `PU`, `PD`, `PDRV0`, and
+  `PDRV1`; confirm OE polarity, high-impedance state, reset/default state, and
+  whether any keeper or implicit pull is active.
+- Simulate the actual pad model at chip-top with an external pull-up and two
+  pad instances.  Prove no device drives high, simultaneous local locks only
+  sink current, and reset/enable transitions do not create a false accepted
+  falling edge.
+- Select and document a board pull-up resistance from the pad's sink-current
+  limit, IO voltage, net capacitance, maximum trace length, and the required
+  release/rise time.  Verify VIH/VIL margins and account for all attached
+  chips' leakage.
+- Confirm package/padframe integration maps the ten logical boundary signals
+  (`OUT`, `IN`, `OE`, and seven controls) to exactly one physical bidirectional
+  pad and that this additional physical pad remains available in the final
+  allocation.
+- Run a post-integration electrical/functional test with the real pad wrapper
+  before relying on multi-chip beamforming or direction-finding experiments.
 
-**See:** `planning/array-acquisition-sync.md` (pad table, "Disabling the link",
-synthesis delta); `planning/Pinout.md` (`ARRAY_ACQ_N` status + internal-pull
-note); item 52 (the unconfirmed A40 pad slot the pin occupies).
-**Found:** 2026-08-30, alongside the array-acq-sync RTL landing.
+**Current RTL safeguards (updated 2026-08-30):** `ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x18`)
+resets to 0, so the pin is inert in both directions until firmware arms it; the
+internal pull-up is **enabled** on this pad alone so an unpopulated pin cannot
+float; Schmitt input is enabled; the driver only ever presents zero; a natural
+local SC lock wins over a same-cycle peer edge; and a receiver ignores peer
+events while `packet_active`.  These reduce protocol risk but are not
+substitutes for the electrical review.
 
-### 52. A40 ACV allocation reportedly has three unassigned pad slots — decide whether to dedicate one to trigger synchronisation
+**No run in this project has ever checked a pad cell.** `trouper_top`
+instantiates zero `gf180mcu_fd_io__*` cells, so the macro's LVS netlist and
+layout contain none — verified on job 5279 (0 IO cells in the netlist, 0
+`gf180mcu_fd_io` hits in the LVS report). Every "DRC/LVS clean" result to date,
+including the runs that carry this pad, is a statement about the **Trouper macro
+only**. The electrical questions below are therefore entirely open, not
+partially covered. SPICE-level LVS/DRC and the specific simulations that would
+close them are planned in `planning/pad-cell-signoff-plan.md`, gated on the
+integrator confirming the padframe.
+
+**Added to the pull-up review by the internal pull-up:** the board resistor is
+now in parallel with one internal pull-up per participating chip. Size the
+external resistor against the *combined* pull-up current, and confirm the
+resulting V_OL at the 4 mA `PDRV=00` sink still meets every receiver's V_IL
+across the worst-case number of chips on the net. The internal device's
+strength is not characterised in our own data and must be read from the PDK
+before this is closed.
+
+**See:** item 52 above (the pad-slot allocation decision this depends on);
+`planning/array-acquisition-sync.md`; `src/top/trouper_top.v`
+(`array_acq_sync` and `ARRAY_ACQ_N_*` pad wiring).
+
+---
+
+**Additional points from the parallel writeup of this item (2026-08-30):**
+`ARRAY_SYNC_CTRL[0]` (`0x18`) resets to **0** and gates both directions, so an
+unpopulated pin on a single-chip board cannot start the receiver whatever the
+floating pad does — the exposure is confined to boards that use the link. On a
+shared net one internal pull-up **per participating chip** sits in parallel with
+the board resistor and must be counted in both the sizing and the V_OL budget.
+The pad configuration should also be reviewed against the GF180 IO databook gap
+already recorded in item 27. The feature is synthesis-proven only: +111 cells /
++4030 µm² (+0.41 %), zero Yosys check problems, and explicitly not timing, DRC,
+LVS, pad-ring or pull-up validated.
+
+
+### 52. A40 ACV allocation is 28 pad slots — one spent on `ARRAY_ACQ_N`, two spare; slot N15 still needs a DEF regen
 
 The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
 `VDD`, and `VSS`). The reported ACV allocation is **28** pads, leaving **three** slots
@@ -1279,7 +1337,80 @@ acquisition/SC-lock trigger extension). If selected, update `info.yaml`,
 and regression evidence together; do not assume a spare slot is electrically or
 package-bond available until the integrator confirms it.
 
+**Update 2026-08-30 — allocation confirmed at 28; one slot spent, two remain.** The
+28-pad ACV allocation is confirmed. `ARRAY_ACQ_N` is declared in `info.yaml` (appended
+after `VDD`, so it takes N15 and no existing pin moves) and wired in `trouper_top.v`,
+bringing `info.yaml` to 26 declared pins and leaving 2 of the 28 slots spare — both of
+which were then spent on the debug probes the same day, see item 54. This
+also closes the pin half of item 46: the 22-pad budget that
+drove the NR=3 / `IRQ_OUT`-waiver contingency was never the real allocation.
+
+**Still open on this pin** (the budget was never the hard part):
+
+- No P&R run has been built against a 26-pin DEF. Request a regenerated `A40_ACV.def`
+  from the integrator and re-run before treating N15 as committed.
+- Slot names, IO-cell types, and bonding status for N15 and the two remaining spares are
+  still not recorded locally — get the current `A40_ACV_pad_map.yaml`.
+- Pad-level electrical review of the open-drain emulation is item 53.
+
+The pad is self-contained: deleting the `info.yaml` entry, the two `io_placement` entries,
+and the `ARRAY_ACQ_N_*` ports backs it out completely.
+
 ---
+
+**Superseded on the spare count (2026-08-30):** this entry was written when two
+slots were still spare. `DBG0_OUT`/`DBG1_OUT` have since taken both — the
+allocation is now exactly 28/28 with none spare. See item 57, which is the
+current statement of the pin budget; only the slot-confirmation half of this
+entry is still live.
+
+### 57. The pin allocation is now exactly full (28/28), and three of those slots are unconfirmed
+
+`info.yaml` declares **28** pins against a **28**-slot allocation: 26 signal +
+`VDD_CORE` + `VSS`. There is **no spare slot left**. The last three went to
+`ARRAY_ACQ_N` (N15) and `DBG0_OUT`/`DBG1_OUT` (N16/N17), all added 2026-08-30.
+
+**Two distinct problems, often conflated:**
+
+1. **No margin.** Any further pin need — a second supply, a strap, a bring-up
+   escape, a late interface fix — must now *displace* something already
+   allocated. Historically this project has wanted a spare pin roughly once a
+   month (`sc_lock_in`, the IRQ waiver, the NR=3 study). Zero margin at this
+   stage is a real exposure, not a bookkeeping note.
+2. **The three newest slots are not confirmed.** N15/N16/N17 exist in our
+   `info.yaml` and in a locally extended floorplan template
+   (`src/config/A40_ACV_rtlnames_dbgpins.def`, built by
+   `rtl-test/scripts/a40_append_provisional_pads.py`). The integrator has not
+   confirmed that those slots exist, are bondable, or can carry the cell types
+   we assume. Nothing in any P&R run validates that — the run only proves the
+   *design* closes with three more north-edge pads at coordinates **we chose**.
+
+**What would close it:** a regenerated `A40_ACV.def` from the integrator
+containing all 28 pads, a P&R run against that template rather than ours, and a
+decision on whether spending the final slot on a debug probe is the right use of
+the last pin.
+
+**Note on what P&R proves here.** It proves the *macro* routes and closes with
+three more boundary pins at coordinates we chose. It says nothing about the pad
+cells — Trouper instantiates none — so no amount of clean Trouper P&R can
+confirm a slot exists or is bondable. That needs the integrator, and the
+electrical half needs `planning/pad-cell-signoff-plan.md`.
+
+**If a slot is refused,** the two features are independently removable and
+documented as such: `planning/array-acquisition-sync.md` and
+`planning/two-pin-digital-debug-plan.md` each list the exact back-out steps.
+The debug probe is the cheaper thing to drop — it is bring-up-only, whereas the
+acquisition link is a functional feature.
+
+**See:** item 52 (the slot-availability decision this grew out of), item 53
+(`ARRAY_ACQ_N` pad electrics), `planning/Pinout.md` allocation status.
+
+---
+
+*(Numbered 54 on `feat/array-acq-sync`; renumbered to 57 on merge — 54, 55
+and 56 were already taken on this branch by the host-SPI GLS/SDF, startup-
+sequencing and IR-drop entries respectively.)*
+
 
 ## Low
 
