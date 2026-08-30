@@ -287,28 +287,31 @@ module trouper_top (
     assign SPI_SCK_PD = 1'b0;
     assign SPI_MOSI_PU = 1'b0;
     assign SPI_MOSI_PD = 1'b0;
-    assign PSRAM_SIO_0_IE = 1'b1;
+    // gf180mcu_fd_io__bi_t does not characterize IE=OE=1.  The PSRAM
+    // controller owns OE per lane, so enable the pad receiver only while
+    // that lane is released to the PSRAM.
+    assign PSRAM_SIO_0_IE = ~PSRAM_SIO_OE[0];
     assign PSRAM_SIO_0_CS = 1'b0;
     assign PSRAM_SIO_0_SL = 1'b0;
     assign PSRAM_SIO_0_PU = 1'b0;
     assign PSRAM_SIO_0_PD = 1'b0;
     assign PSRAM_SIO_0_PDRV0 = 1'b1;
     assign PSRAM_SIO_0_PDRV1 = 1'b1;
-    assign PSRAM_SIO_1_IE = 1'b1;
+    assign PSRAM_SIO_1_IE = ~PSRAM_SIO_OE[1];
     assign PSRAM_SIO_1_CS = 1'b0;
     assign PSRAM_SIO_1_SL = 1'b0;
     assign PSRAM_SIO_1_PU = 1'b0;
     assign PSRAM_SIO_1_PD = 1'b0;
     assign PSRAM_SIO_1_PDRV0 = 1'b1;
     assign PSRAM_SIO_1_PDRV1 = 1'b1;
-    assign PSRAM_SIO_2_IE = 1'b1;
+    assign PSRAM_SIO_2_IE = ~PSRAM_SIO_OE[2];
     assign PSRAM_SIO_2_CS = 1'b0;
     assign PSRAM_SIO_2_SL = 1'b0;
     assign PSRAM_SIO_2_PU = 1'b0;
     assign PSRAM_SIO_2_PD = 1'b0;
     assign PSRAM_SIO_2_PDRV0 = 1'b1;
     assign PSRAM_SIO_2_PDRV1 = 1'b1;
-    assign PSRAM_SIO_3_IE = 1'b1;
+    assign PSRAM_SIO_3_IE = ~PSRAM_SIO_OE[3];
     assign PSRAM_SIO_3_CS = 1'b0;
     assign PSRAM_SIO_3_SL = 1'b0;
     assign PSRAM_SIO_3_PU = 1'b0;
@@ -323,6 +326,8 @@ module trouper_top (
     assign PSRAM_CE_N_PD = 1'b0;
     assign PSRAM_CE_N_PDRV0 = 1'b1;
     assign PSRAM_CE_N_PDRV1 = 1'b1;
+    // REMOD 16 mA (PDRV=1,1) not 8 mA: 32 MHz output into an SX1302 whose
+    // input capacitance is unpublished; under-drive is unfixable post-silicon.
     assign REMOD_A_I_OE = 1'b1;
     assign REMOD_A_I_IE = 1'b0;
     assign REMOD_A_I_CS = 1'b0;
@@ -330,7 +335,7 @@ module trouper_top (
     assign REMOD_A_I_PU = 1'b0;
     assign REMOD_A_I_PD = 1'b0;
     assign REMOD_A_I_PDRV0 = 1'b1;
-    assign REMOD_A_I_PDRV1 = 1'b0;
+    assign REMOD_A_I_PDRV1 = 1'b1;
     assign REMOD_A_Q_OE = 1'b1;
     assign REMOD_A_Q_IE = 1'b0;
     assign REMOD_A_Q_CS = 1'b0;
@@ -338,7 +343,7 @@ module trouper_top (
     assign REMOD_A_Q_PU = 1'b0;
     assign REMOD_A_Q_PD = 1'b0;
     assign REMOD_A_Q_PDRV0 = 1'b1;
-    assign REMOD_A_Q_PDRV1 = 1'b0;
+    assign REMOD_A_Q_PDRV1 = 1'b1;
     assign SPI_MISO_OE = 1'b1;
     assign SPI_MISO_IE = 1'b0;
     assign SPI_MISO_CS = 1'b0;
