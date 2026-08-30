@@ -30,8 +30,8 @@ was appended 2026-08-30 and is not yet in any integrator-generated DEF):
 `ARRAY_ACQ_N` is appended **after** `VDD` rather than inserted before it, so
 every pin above keeps the slot job 5150 validated. Inserting it before `VDD`
 would push `VDD` to N15 and break the reserved W12/N14 power slots (see the
-VDD/VSS decision below). N15 spends one of the three reportedly unassigned ACV
-slots — Open Risks #52.
+VDD/VSS decision below). The ACV allocation is **28 slots** (confirmed
+2026-08-30), so N15 spends one of three spares and leaves two — Open Risks #52.
 
 The **Grouper interface is die-internal** ("Grouper will be internal"):
 `GRP_*` (28), the AHB `H*` endpoint (~40 bits), and `IRQ_GROUPER` are **not**

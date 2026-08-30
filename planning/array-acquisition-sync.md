@@ -104,9 +104,11 @@ drive control at all (fixed 24 mA) — see `planning/Pinout.md`, "Pad cell type
 selection".
 
 The pad is declared last in `info.yaml`, after `VDD`, so it takes the next free
-A40 slot (N15) without displacing any P&R-validated pin.  That slot is **not
-yet confirmed by the integrator**; it spends one of the three reportedly
-unassigned ACV slots tracked in Open Risks #52.
+A40 slot (N15) without displacing any P&R-validated pin.  Trouper's ACV
+allocation is 28 slots (confirmed 2026-08-30), so this spends one of three
+spares and leaves two.  What is still outstanding is a regenerated
+`A40_ACV.def` and a P&R run against the 26-pin list — no run has been built
+against one.  Open Risks #52.
 
 The standalone RTL test `rtl-test/tb/tb_array_acq_sync.v` covers local drive,
 packet-complete release, a synchronised peer falling edge, and rejection of a

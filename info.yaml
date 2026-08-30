@@ -41,10 +41,10 @@ project:
 # shared padring reserves for power, and the integrator may yet require the
 # macro to declare them at exactly those positions
 # (planning/a40-padframe-integration-2026-08.md, VDD/VSS decision 2026-08-29).
-# N15 is NOT yet confirmed by the integrator - it spends one of the three
-# reportedly-unassigned ACV slots. See Open Risks #52 (slot availability) and
-# #53 (pad-level electrical review); this pin is not committed until both
-# are closed.
+# The ACV allocation is 28 slots (confirmed 2026-08-30), so N15 is within
+# budget and two spares remain. Still outstanding before this pin is committed:
+# a regenerated A40_ACV.def and a P&R run against the 26-pin list, plus the
+# pad-level electrical review. See Open Risks #52 and #53.
 # The Grouper bus (GRP_*, AHB H*, IRQ_GROUPER) is die-internal, not pads,
 # so it is intentionally absent here. See
 # planning/a40-padframe-integration-2026-08.md before reordering.

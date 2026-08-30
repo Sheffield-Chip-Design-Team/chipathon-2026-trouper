@@ -1,5 +1,12 @@
 # NR=3 fallback — pin budget / die size contingency (2026-08-18)
 
+> **PIN HALF SUPERSEDED 2026-08-30.** The A40 ACV allocation is confirmed at **28 pad
+> slots**, not 22, so the pin-budget motivation for NR=3 is gone — Trouper fits at 25 pads
+> with slots to spare. This doc is retained for the **die-size** half of the analysis and
+> as the record of the NR=3 area/gain trade, which is still the reference if 4-antenna MRC
+> ever has to be cut for area or timing rather than pins. See `planning/Pinout.md`
+> allocation status and Open Risks #46, #52.
+
 Records a validated fallback in case the Chipathon pin/die rules are enforced strictly:
 **22 pads** (current Trouper pinout is 24: 23 signal + `VDD_CORE` — `VDD_IO` was removed
 2026-08-19, see below) and a

@@ -540,7 +540,7 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | Signal / path | Scope | Description |
 |---|---|---|
 | `HCLK` / `HRESETn` | inter-project clock/reset | `HCLK` is the 32 MHz `IQ_CLK` clock and `HRESETn` is `RESETB`; they are the clock and reset for the AHB endpoint. They are not members of Grouper's `ahb3lite_intf` SystemVerilog interface. |
-| AHB3-Lite slave interface | Inter-project (no pads) | The endpoint SHALL connect to the `slave` modport of Grouper's `ahb3lite_intf` (`ADDR_WIDTH=32`, `DATA_WIDTH=32`). Its complete signal set is defined below. **MPW-internal wires only — not bonded to package pads; excluded from the 26-pad budget (TRPR-PHY-002/003).** |
+| AHB3-Lite slave interface | Inter-project (no pads) | The endpoint SHALL connect to the `slave` modport of Grouper's `ahb3lite_intf` (`ADDR_WIDTH=32`, `DATA_WIDTH=32`). Its complete signal set is defined below. **MPW-internal wires only — not bonded to package pads; excluded from the 28-pad budget (TRPR-PHY-002/003).** |
 | `IRQ` | Inter-project (no pads) | active-high interrupt from `reg_bank` (interrupt aggregation) in Trouper to PicoRV32 in Grouper. Internal wire; the pad-facing copy is the dedicated `IRQ_OUT` pad. |
 | Host SPI | package pins | external register access and debug path to Trouper |
 
@@ -562,7 +562,7 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | output | `HREADYOUT` | 1 | Slave completion output. It is high for a completed zero-wait-state transfer and may be held low only to insert a wait state. |
 | output | `HRESP` | 1 | `1'b0` for `OKAY`; `1'b1` for an unsupported transfer, including a non-byte `HSIZE`. |
 
-> **Control-plane interface (implementation note).** Trouper presents its register bank to Grouper as an **AHB3-Lite slave peripheral**. A small adapter converts the AHB3-Lite slave protocol to the internal reg_bank byte interface (`addr/wdata/we/re/rdata/ready`), which the host SPI slave shares via arbitration (Grouper priority). A transfer is accepted only when `HSEL` is high, `HTRANS[1]` is high, and the preceding data phase is permitted by `HREADYIN`; a write or read side effect occurs exactly once when that transfer completes. **All AHB3-Lite slave signals are inter-project MPW connections to the Grouper master and are never routed to package pads** — they consume none of the 26 pads. *Current RTL status:* the `trouper_top` boundary still exposes the simplified `GRP_*` byte bus as a placeholder; swapping it for the AHB3-Lite slave adapter is pending (TRPR-INT-001).
+> **Control-plane interface (implementation note).** Trouper presents its register bank to Grouper as an **AHB3-Lite slave peripheral**. A small adapter converts the AHB3-Lite slave protocol to the internal reg_bank byte interface (`addr/wdata/we/re/rdata/ready`), which the host SPI slave shares via arbitration (Grouper priority). A transfer is accepted only when `HSEL` is high, `HTRANS[1]` is high, and the preceding data phase is permitted by `HREADYIN`; a write or read side effect occurs exactly once when that transfer completes. **All AHB3-Lite slave signals are inter-project MPW connections to the Grouper master and are never routed to package pads** — they consume none of the 28 pads. *Current RTL status:* the `trouper_top` boundary still exposes the simplified `GRP_*` byte bus as a placeholder; swapping it for the AHB3-Lite slave adapter is pending (TRPR-INT-001).
 
 ### 5.3 Integration Requirements
 

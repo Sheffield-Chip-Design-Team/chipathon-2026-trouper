@@ -6,19 +6,20 @@ GF180MCU MIMO ASIC logical pad list. Total: **25 pads** (24 signal + `VDD_CORE`;
 config (no independent IO rail is actually built), so it isn't a second pin. See
 `planning/5v-core-voltage-strategy.md` §2026-08-19, Open Risks #27.
 
-**Allocation status (2026-08-19): possibly tighter than previously assumed, but one pin
-closer than before.** This doc's pinout was drafted against a **<=26 pads** limit; the
-team's actual assigned budget may be **22 pads**, and the signoff die (1200×1100) fails at
-a stricter **1117.5×1117.5 µm** square target with default P&R settings — though a
-floorplan-margin fix reopens NR=4 there too (clean signoff, timing closure still open; see
-below). The `VDD_IO` removal above drops the count from 25 to **24**, so the gap to 22 is
-now 2 pins, not 3 — but see `ARRAY_ACQ_N` below, added 2026-08-30, which spends one of
-those pins back and moves the count to **25**. Either the `IRQ_OUT`-removal waiver (poll `IRQ_STATUS` over SPI instead,
-−1 pin — low risk, no RTL beyond deleting the pad) needs one more pin cut alongside it, or
-the validated NR=3 (3-antenna) fallback alone (−2 pins) now lands exactly on 22 without the
-waiver. **See:**
+**Allocation status — RESOLVED 2026-08-30: the assigned budget is 28 pads.** Trouper's
+A40 ACV allocation is **28 pad slots**, confirmed with the integrator. The current pinout
+is **25** (24 signal + `VDD_CORE`, with `VSS` also declared in `info.yaml`), so there are
+**3 slots spare** — 2 after `ARRAY_ACQ_N` takes N15. The pin budget is no longer a
+constraint on this design.
+
+This supersedes the earlier working assumption of a **22-pad** team allocation, and with
+it the pin half of the NR=3 / `IRQ_OUT`-waiver contingency: neither is needed to fit the
+pad count. `planning/nr3-fallback-2026-08.md` is retained for the **die-size** half of
+that analysis only. The separate **1117.5×1117.5 µm** square-die question is itself
+superseded for the A40 build, which defers to the integrator DEF at 1675×1110 (see
+`planning/a40-padframe-integration-2026-08.md`). **See:**
 `planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md`, Open Risks
-#46.
+#46, #52.
 
 **Related:** [System Architecture](System%20Architecture.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md)
 
@@ -99,10 +100,12 @@ does not add spatial degrees of freedom to a single chip. Protocol, coherency
 prerequisites, and the firmware-side combining story are in
 `planning/array-acquisition-sync.md`.
 
-**Status:** declared last in `info.yaml` (A40 slot N15, after `VDD`, so no
-existing pin moves), but the slot is unconfirmed by the integrator and the pad
-has had no electrical review. Open Risks #52 and #53. Drop this entry if the
-slot is refused — nothing else in the design depends on it.
+**Status:** declared last in `info.yaml` (A40 slot N15, after `VDD`, so no existing pin
+moves). The 28-pad allocation confirmed 2026-08-30 covers it with 2 slots still spare, so
+the pin budget is not the open question — what remains is that no P&R run has been built
+against a 26-pin DEF, and the pad has had no electrical review (Open Risks #52, #53).
+Self-contained: deleting the `info.yaml` entry, the two `io_placement` entries, and the
+`ARRAY_ACQ_N_*` ports backs it out completely.
 
 ### PSRAM data bus (4 pads, bidirectional)
 
@@ -397,4 +400,4 @@ The following signals connect Trouper to the Grouper project on the same MPW. Th
   instead of two unidirectional ones. See the deferred entry at the end of this section
   for the original framing.
 - **JTAG / GPIO pins:** Removed. No JTAG TAP is instantiated in the RTL and GPIO was never wired out of the macro; host debug uses the SPI register / PSRAM-readback path. See Trouper Chip Specification §4.16.
-- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock, deferred):** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads, so there is headroom for one spare pad against the 26-pad ceiling (two, if the assigned team budget really is 22 and NR=3/IRQ_OUT-waiver work closes that gap separately — see the allocation-status note at the top of this doc). Still deferred pending an explicit decision to spend that headroom here rather than as margin, but "no pad available" is no longer the reason. The internal OR-lock logic these pins would drive already exists as a register (`SC_FORCE_LOCK`, `reg_bank` 0x19, see `planning/Register Map.md` `0x19` and `planning/NR2-multi-ASIC-cascade.md`); if this pad is allocated, bond it to `sc_lock_in` OR'd into the same internal `sc_lock_force` signal rather than adding a second mechanism. `IRQ_OUT` cannot double as this pin — it is output-only.
+- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock) — SUPERSEDED 2026-08-30 by `ARRAY_ACQ_N`:** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads. **2026-08-30:** the assigned allocation is confirmed at **28 pads**, so the headroom argument is settled — and the headroom was spent, on `ARRAY_ACQ_N` (one bidirectional wired-AND pin doing the same job as these two unidirectional ones). "No pad available" was never the real reason and is now definitively not. `ARRAY_ACQ_N` deliberately does **not** OR into `sc_lock_force` (`SC_FORCE_LOCK`, `reg_bank` 0x19): that register is a diagnostic override with no verified preamble edge behind it, so propagating it between chips would establish an invalid shared time origin. A peer event instead enters `sc_detector` on the idle-gated `sc_lock_sync` port and reconstructs `timing_ref` normally. `IRQ_OUT` could not have doubled as this pin in any case — it is output-only.

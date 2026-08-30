@@ -280,7 +280,9 @@ Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper
 
 **Not a valid timing reference.** A forced lock latches `timing_ref` from the free-running `sample_count` at the moment of the write, not a symbol-boundary-corrected value derived from a real preamble edge. MRC training off a forced lock is not meaningful — treat the resulting `Z` values as noise, not a channel estimate.
 
-**Register-only today; pin variant deferred.** This is the SPI/GRP half of the OR-lock scheme sketched for the NR2/3 multi-ASIC cascade (`planning/NR2-multi-ASIC-cascade.md`, `sc_lock_in`/`sc_lock_out` pins) — that scheme's `effective_lock = sc_lock_detected || sc_lock_in` is the same shape as this register's OR into `sc_lock`. Wiring an actual `sc_lock_in` pad is not done yet — still deferred pending an explicit decision, though **2026-08-19: the pinout dropped to 24 pads (`VDD_IO` removed, see `planning/Pinout.md`)**, so there is now headroom for a spare pad against the 26-pad ceiling rather than none. If allocated, OR it into the same internal force signal (`sc_detector.sc_lock_force`) documented here rather than building a second mechanism.
+**Register-only; the pin variant was built differently.** This is the SPI/GRP half of the OR-lock scheme sketched for the NR2/3 multi-ASIC cascade (`planning/NR2-multi-ASIC-cascade.md`, `sc_lock_in`/`sc_lock_out` pins) — that scheme's `effective_lock = sc_lock_detected || sc_lock_in` is the same shape as this register's OR into `sc_lock`.
+
+**2026-08-30:** the pad was allocated, as `ARRAY_ACQ_N` (one bidirectional wired-AND pin rather than two unidirectional ones; `planning/array-acquisition-sync.md`). It deliberately does **not** OR into `sc_lock_force`: a peer event enters `sc_detector` on the separate `sc_lock_sync` port, which is idle-gated and reconstructs `timing_ref` with the normal hit-run back-calculation. `SC_FORCE_LOCK` is excluded from the array protocol on purpose — it is a diagnostic override that proves no timing reference was established, so propagating it across chips would set an invalid shared time origin. Keep them separate.
 
 ---
 

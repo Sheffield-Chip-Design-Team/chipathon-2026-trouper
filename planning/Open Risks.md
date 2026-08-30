@@ -1252,7 +1252,18 @@ Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
 
 ---
 
-### 46. Trouper's 24-pad / 1200×1100 pinout may not fit a stricter 22-pad / 1117.5×1117.5 allocation — NR=3 fallback validated, NR=4 also reopened via a floorplan fix
+### 46. Trouper's pinout vs. a stricter 22-pad / 1117.5×1117.5 allocation — PIN HALF RESOLVED 2026-08-30 (allocation is 28 pads); die-size half stands
+
+**Update 2026-08-30 — the pin-budget half of this item is closed.** The A40 ACV
+allocation is confirmed at **28 pad slots**, not 22. At 25 pads (26 `info.yaml` entries
+including `VSS`) Trouper has 3 spare, 2 after `ARRAY_ACQ_N`. Neither the `IRQ_OUT`-removal
+waiver nor NR=3 is needed to close a pin gap, because there is no pin gap. Everything below
+about pins is retained as the record of the superseded assumption; the **die-size** half
+(1117.5×1117.5 µm) is unaffected by this and is separately superseded for the A40 build,
+which defers to the integrator DEF at 1675×1110 (item 52,
+`planning/a40-padframe-integration-2026-08.md`).
+
+Original entry follows.
 
 Current pinout is 24 pads (23 signal + `VDD_CORE`; `VDD_IO` removed 2026-08-19 — it's the
 same net as `VDD_CORE`, not a second pin, see `planning/5v-core-voltage-strategy.md`
@@ -1297,14 +1308,16 @@ requirement that would prevent sharing) could potentially be bonded to a single 
 package pin across multiple quadrant projects rather than each project bonding its own copy,
 recovering a pin without any RTL change. This is a materially different, and likely cheaper,
 lever than the `IRQ_OUT`-removal waiver or NR=3 fallback already tracked in item 46 for
-closing the 22-pad/1117.5² budget gap — see `planning/nr3-fallback-2026-08.md`. Needs
+closing the 22-pad/1117.5² budget gap (the pin half of which is now moot — the allocation
+is 28 pads, see item 46's 2026-08-30 update; a shared `IQ_CLK` would now buy margin, not
+close a gap) — see `planning/nr3-fallback-2026-08.md`. Needs
 organizer confirmation of exactly which pins are shareable and the mechanics (does the
 project still declare the pin in its own `info.yaml`, or is it wired externally by the
 padframe integrator) before it can be relied on.
 
 ---
 
-### 52. A40 ACV allocation reportedly has three unassigned pad slots — decide whether to dedicate one to trigger synchronisation
+### 52. A40 ACV allocation is 28 pad slots — one spent on `ARRAY_ACQ_N`, two spare; slot N15 still needs a DEF regen
 
 The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
 `VDD`, and `VSS`). The reported ACV allocation is **28** pads, leaving **three** slots
@@ -1320,15 +1333,22 @@ acquisition/SC-lock trigger extension). If selected, update `info.yaml`,
 and regression evidence together; do not assume a spare slot is electrically or
 package-bond available until the integrator confirms it.
 
-**Update 2026-08-30 — provisionally allocated, not committed.** `ARRAY_ACQ_N` is
-now declared in `info.yaml` (appended after `VDD`, so it takes N15 and no
-existing pin moves) and wired in `trouper_top.v`. This is a *provisional* claim
-on one of the three slots: the integrator has not confirmed N15 exists, is
-bondable, or can carry a `bi_t` cell, and no P&R run has been built against a
-26-pin DEF. The pad is self-contained — deleting the `info.yaml` entry, the two
-`io_placement` entries, and the `ARRAY_ACQ_N_*` ports backs it out completely if
-the slot is refused. Note this moves the pad count 24 -> 25 against a possibly
-22-pad budget (item 46).
+**Update 2026-08-30 — allocation confirmed at 28; one slot spent, two remain.** The
+28-pad ACV allocation is confirmed. `ARRAY_ACQ_N` is declared in `info.yaml` (appended
+after `VDD`, so it takes N15 and no existing pin moves) and wired in `trouper_top.v`,
+leaving **2 slots spare**. This also closes the pin half of item 46: the 22-pad budget that
+drove the NR=3 / `IRQ_OUT`-waiver contingency was never the real allocation.
+
+**Still open on this pin** (the budget was never the hard part):
+
+- No P&R run has been built against a 26-pin DEF. Request a regenerated `A40_ACV.def`
+  from the integrator and re-run before treating N15 as committed.
+- Slot names, IO-cell types, and bonding status for N15 and the two remaining spares are
+  still not recorded locally — get the current `A40_ACV_pad_map.yaml`.
+- Pad-level electrical review of the open-drain emulation is item 53.
+
+The pad is self-contained: deleting the `info.yaml` entry, the two `io_placement` entries,
+and the `ARRAY_ACQ_N_*` ports backs it out completely.
 
 ---
 
@@ -1624,10 +1644,14 @@ suspected non-functional (not just fed a faded antenna), so the rest of the
 chain (`packet_ctrl_fsm` → PSRAM → combiner → IRQ) can still be exercised.
 A forced lock has no verified preamble edge to anchor `timing_ref` on, so it
 is not useful for recovering a real packet, only for proving downstream
-logic is alive. Register-only for now; a physical `sc_lock_in` pin (the
-NR2/3 cascade OR-lock scheme, `planning/NR2-multi-ASIC-cascade.md`) is
-deliberately deferred — the pinout is at its 26-pad budget
-(`planning/Pinout.md`) with no spare pad to bond. See `planning/Register
+logic is alive. Register-only; the physical pin the NR2/3 cascade OR-lock
+scheme wanted (`planning/NR2-multi-ASIC-cascade.md`) was built 2026-08-30 as
+`ARRAY_ACQ_N` instead, and deliberately does *not* OR into `sc_lock_force` —
+a peer event enters `sc_detector` on the idle-gated `sc_lock_sync` port with a
+real reconstructed `timing_ref`, precisely because a forced lock has none
+(`planning/array-acquisition-sync.md`). The old "no spare pad" reason is moot:
+the allocation is 28 pads. This does **not** reopen the ant0-fade fix below,
+which was deferred on die area, not pins. See `planning/Register
 Map.md` `0x19`; regression `cocotb/sc_force_lock/test_sc_force_lock.py`
 (SGE job 3356, 2/2 PASS: forced entry into `ST_PREAMBLE_ACQ` from IDLE, and
 the `PACKET_ACTIVE` write-gate confirmed to block a second force mid-packet).
