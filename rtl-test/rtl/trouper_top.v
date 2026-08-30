@@ -2,10 +2,11 @@
 // Standalone Trouper top-level integration
 // GF180MCU 3.3V 32 MHz — SSCS PICO Chipathon 2026
 //
-// Pad count: 23 signal + 2 power = 25 total (within Chipathon allocation)
+// Pad count: 24 signal + 2 power = 26 total (within Chipathon allocation)
 //            clk/rst×2, IQ×8, remod×2, PSRAM SCK+CE_N×2,
 //            SPI HOST_CS/SCK/MOSI/MISO×4,
-//            IRQ_OUT×1 (dedicated pad) + PSRAM-SIO[3:0]×4 (dedicated).
+//            IRQ_OUT×1 (dedicated pad) + PSRAM-SIO[3:0]×4 (dedicated),
+//            ARRAY_ACQ_N×1 (emulated open-drain bidirectional pad).
 //            JTAG/GPIO removed — no TAP in RTL.
 //            VDD_CORE/GND×2. No separate VDD_IO pad — the reference PDN
 //            ties the padring to VDD_CORE (see planning/Pinout.md,
@@ -116,6 +117,11 @@ module trouper_top (
     // ---- Interrupt outputs ----
     output wire        IRQ_OUT_OUT,       // → dedicated IRQ pad; sticky, level-high
     output wire        IRQ_GROUPER,   // → Grouper inter-project IRQ line; same signal as IRQ_OUT
+
+    // ---- Array acquisition synchronisation (external pull-up required) ----
+    output wire        ARRAY_ACQ_N_OUT, // permanently 0; OE provides open-drain emulation
+    input  wire        ARRAY_ACQ_N_IN,
+    output wire        ARRAY_ACQ_N_OE,
 
     // ==== A40 padframe pad-control tie-offs =================================
     //  The A40 workshop padring has no output-only cell: every functional
@@ -230,6 +236,14 @@ module trouper_top (
     output wire        IRQ_OUT_PD,
     output wire        IRQ_OUT_PDRV0,
     output wire        IRQ_OUT_PDRV1,
+    // -- ARRAY_ACQ_N: bidir pad emulating open drain (OUT=0, OE=drive) --
+    output wire        ARRAY_ACQ_N_IE,
+    output wire        ARRAY_ACQ_N_CS,
+    output wire        ARRAY_ACQ_N_SL,
+    output wire        ARRAY_ACQ_N_PU,
+    output wire        ARRAY_ACQ_N_PD,
+    output wire        ARRAY_ACQ_N_PDRV0,
+    output wire        ARRAY_ACQ_N_PDRV1,
     // -- PSRAM_SCK: output on 24 mA bidir pad (no PDRV select) --
     input  wire        PSRAM_SCK_IN,
     output wire        PSRAM_SCK_OE,
@@ -360,6 +374,19 @@ module trouper_top (
     assign IRQ_OUT_PD = 1'b0;
     assign IRQ_OUT_PDRV0 = 1'b1;
     assign IRQ_OUT_PDRV1 = 1'b0;
+    // ARRAY_ACQ_N must have an external pull-up. The core never drives a 1:
+    // OE asserts the low driver and deassertion releases the shared wire.
+    wire array_acq_drive_oe;
+    wire array_peer_lock_pulse;
+    assign ARRAY_ACQ_N_OUT   = 1'b0;
+    assign ARRAY_ACQ_N_OE    = array_acq_drive_oe;
+    assign ARRAY_ACQ_N_IE    = 1'b1;
+    assign ARRAY_ACQ_N_CS    = 1'b1; // Schmitt input for a board-level wire
+    assign ARRAY_ACQ_N_SL    = 1'b1;
+    assign ARRAY_ACQ_N_PU    = 1'b0;
+    assign ARRAY_ACQ_N_PD    = 1'b0;
+    assign ARRAY_ACQ_N_PDRV0 = 1'b0; // minimum drive is enough to sink pull-up
+    assign ARRAY_ACQ_N_PDRV1 = 1'b0;
     assign PSRAM_SCK_OE = 1'b1;
     assign PSRAM_SCK_IE = 1'b0;
     assign PSRAM_SCK_CS = 1'b0;
@@ -517,6 +544,7 @@ module trouper_top (
     wire signed [7:0] psram_del_i0, psram_del_q0;  // branch 0, N-sample delayed
     wire              psram_del_valid;               // pulses when cur/del pair ready
     wire        sc_lock;    // declared here to avoid forward-reference; driven by u_sc
+    wire        sc_lock_natural_pulse;
     wire        rb_sc_force_lock; // manual SC lock override (SC_FORCE_LOCK 0x19); declared here to avoid forward-reference
     wire        rb_rx_hold;       // RX_HOLD (0x1A[0]); declared here to avoid forward-reference
 
@@ -552,7 +580,9 @@ module trouper_top (
         // #43, planning/mcp-config-settle-gate-design.md).
         .sc_clr         (packet_done_pulse | rb_rx_hold),
         .sc_lock_force  (rb_sc_force_lock),
+        .sc_lock_sync   (array_peer_lock_pulse),
         .sc_lock        (sc_lock),
+        .sc_lock_natural_pulse (sc_lock_natural_pulse),
         .timing_ref     (timing_ref),
         .c_i0 (), .c_q0 (),
         .sc_stat              (sc_stat),
@@ -696,6 +726,23 @@ module trouper_top (
     wire        packet_active_ps;   // fanout-split duplicate, u_psram only
     wire [1:0]  active_mode;
     wire [3:0]  active_antenna_en;
+
+    // Shared active-low board wire between coherent Trouper instances. The
+    // dedicated arbiter keeps a peer request out of an active packet and makes
+    // a local qualified SC lock win a simultaneous peer assertion.
+    array_acq_sync u_array_acq_sync (
+        .clk             (clk),
+        .rst_n           (rst_n),
+        .array_sync_en   (1'b1),
+        .local_lock_pulse(sc_lock_natural_pulse),
+        .local_lock_level(sc_lock),
+        .packet_active   (packet_active),
+        .packet_done     (packet_done_pulse),
+        .rx_hold         (rb_rx_hold),
+        .acq_n_async     (ARRAY_ACQ_N_IN),
+        .drive_oe        (array_acq_drive_oe),
+        .peer_lock_pulse (array_peer_lock_pulse)
+    );
 
     // W_valid register: set by W_valid_set pulse, cleared at FSM IDLE entry
     reg  W_valid;
@@ -1203,6 +1250,63 @@ module trouper_ahb8_adapter (
                     ((state == READ) && csr_rready) ||
                     ((state == ERROR) && error_wait);
     assign HRESP = (state == ERROR);
+endmodule
+
+// Kept in this compilation unit so existing standalone top-level test targets
+// (which enumerate Trouper RTL files explicitly) pick up the helper without a
+// source-list change. The functional ownership remains the control plane.
+module array_acq_sync (
+    input  wire clk,
+    input  wire rst_n,
+    input  wire array_sync_en,
+    input  wire local_lock_pulse,
+    input  wire local_lock_level,
+    input  wire packet_active,
+    input  wire packet_done,
+    input  wire rx_hold,
+    input  wire acq_n_async,
+    output reg  drive_oe,
+    output reg  peer_lock_pulse
+);
+    reg acq_meta, acq_sync, acq_sync_d;
+    reg line_idle_seen;
+
+    wire armed = array_sync_en && !rx_hold && !packet_active && !local_lock_level;
+    wire peer_fall = acq_sync_d && !acq_sync;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            acq_meta        <= 1'b1;
+            acq_sync        <= 1'b1;
+            acq_sync_d      <= 1'b1;
+            line_idle_seen  <= 1'b0;
+            drive_oe        <= 1'b0;
+            peer_lock_pulse <= 1'b0;
+        end else begin
+            acq_meta        <= acq_n_async;
+            acq_sync        <= acq_meta;
+            acq_sync_d      <= acq_sync;
+            peer_lock_pulse <= 1'b0;
+
+            // Observe released-high before accepting a fresh low assertion,
+            // which rejects a stale request present when this ASIC is reset.
+            if (packet_done || rx_hold)
+                line_idle_seen <= 1'b0;
+            else if (acq_sync)
+                line_idle_seen <= 1'b1;
+
+            // The pad data is tied low. OE therefore implements open drain.
+            // A diagnostic SC_FORCE_LOCK cannot reach local_lock_pulse.
+            if (local_lock_pulse && array_sync_en && !rx_hold && !packet_active)
+                drive_oe <= 1'b1;
+            if (packet_done || rx_hold || !array_sync_en)
+                drive_oe <= 1'b0;
+
+            // A natural local lock wins over a simultaneous peer transition.
+            if (peer_fall && line_idle_seen && armed && !local_lock_pulse)
+                peer_lock_pulse <= 1'b1;
+        end
+    end
 endmodule
 
 `default_nettype wire
