@@ -585,11 +585,69 @@ edits. Any change — even one that is functionally correct and regression-clean
 as this one is (job 5280: all 42 cocotb suites pass) — may fail P&R for reasons
 unrelated to its content. Item 1's SS-closure work implies many such edits.
 
-**Action / exit:** stop treating this as closed by a config knob. Needed is a
-structural fix that gives the clock trees routing headroom — candidates: reduce
-the `IQ_CLK` 5213-terminal fanout at RTL level, give CTS-inserted buffers
-explicit placement room, or lower density further at the cost of area. Any
-future "fixed" claim needs **several** perturbed netlists routing clean, not one.
+**2026-08-30, five probes later — root-caused to the `SPI_SCK` CTS tree, and
+there is a working fix (job 5284).** Two claims in the paragraphs above are
+wrong and are corrected here.
+
+| job | change from the 5281 recipe | result |
+|---|---|---|
+| 5279 | *(35,526-cell netlist)* | **routed clean 78/78** |
+| 5281 | 35,670-cell netlist, 65 % density | `DRT-1231` `clkbuf_2_3__f_SPI_SCK/I` |
+| 5282 | density 63 % | `DRT-1231` `clkbuf_2_1__f_SPI_SCK/I` |
+| 5283 | density 60 % | `DRT-1231` `clkbuf_2_1__f_SPI_SCK/I` |
+| 5285 | `clkbuf_4` added to `CTS_CLK_BUFFERS` | `DRT-1231`, step 46 |
+| **5284** | **`SPI_SCK` not declared a clock in the P&R SDC** | **routed clean 78/78** |
+
+**Correction 1 — it is not a placement lottery.** Densities 63 % and 60 % failed
+on the *identical* buffer, and 65 % on a sibling of the same tree. For a given
+netlist the failure is deterministic. Lowering density is not a lever at all.
+
+**Correction 2 — it is not the `IQ_CLK` fanout.** Every failure is on `SPI_SCK`;
+`IQ_CLK_regs` and its 5211 sinks route fine in all six runs. Nor is NDR the
+differentiator: `CTS_APPLY_NDR: half` is global and the DEF carries one NDR root
+net per clock (`CTS_NDR_0` `IQ_CLK`, `CTS_NDR_1` `IQ_CLK_regs`, `CTS_NDR_2`
+`SPI_SCK`).
+
+**The actual mechanism.** `SPI_SCK` is a 2 MHz clock with **51 sinks** that CTS
+expands into 5 clock nets and drives with four **`clkbuf_16`** — the widest cell
+in the set — on leaf nets of 2–7 sinks, with an NDR on the root. The pin
+detailed routing cannot reach is the `I` input of one of those buffers. Job 5285
+shows the buffer *list* is not the constraint: adding `clkbuf_4` changed nothing,
+CTS still logged `Root buffer is clkbuf_16` / `Sink buffer is clkbuf_16` and
+failed identically. It also retro-explains job 5197 (removing `clkbuf_16` moved
+the failure to a `clkbuf_12`) — CTS picks by its own slew/cap targets, so neither
+adding nor removing a size changes what it does.
+
+**The fix (job 5284): give `SPI_SCK` no CTS tree at all.** A P&R-only SDC
+(`pnr_32m_scoped_v25_b6_nospicts.sdc`) omits its `create_clock`, so TritonCTS
+reports 2 clock nets instead of 3 and `SPI_SCK` routes as an ordinary net.
+Result: **78/78, SS WNS −18.23 ns / TNS −459.8, antenna 0/0, DRC 0, XOR 0,
+LVS clean, util 66.2 %.** A 2 MHz clock does not need a balanced tree.
+
+**SPI timing is unaffected, and this was checked rather than assumed.** The
+post-P&R signoff STA reads the *signoff* SDC, which still declares `SPI_SCK`, so
+the domain is fully constrained at signoff: the `SPI_SCK` path group is present
+with worst setup slack **241.77 ns MET** (5279: 241.14) and worst hold **2.10 ns
+MET** (5279: 1.69) against a 500 ns period.
+
+**Costs, stated honestly.** SS WNS is 0.49 ns worse than 5279 (−18.23 vs
+−17.74) — but that is confounded with the +144-cell `reg_bank` netlist and
+cannot be attributed to the SDC change from one run. Two marginal max-cap
+violations appear at SS where 5279 had none (`_38228_/ZN` −0.0029 pF,
+`_38209_/ZN` −0.000018 pF against an 0.082 pF limit); both are internal gates,
+neither is on an SPI net.
+
+**Remaining action.** The fix is still **n=1** — the same mistake that produced
+the premature closure above. Before adopting `nospicts` as canonical: reproduce
+it on at least one more perturbed netlist, and note that `SPI_SCK` becomes a
+plain routed net with whatever skew the router gives it, which makes item 54
+(host-SPI post-route GLS/SDF) more load-bearing, not less. The alternative that
+avoids the whole question is making the `reg_bank` edit netlist-neutral — the
++144 cells came from ABC duplicating an address decoder, not from the logic
+itself.
+**Runs:** 5279/5281/5282/5283/5284/5285 under
+`/srv/eda/runs/timothyn-dev/lora-mimo-dbgpnr/`; configs
+`src/config/trouper_top_dbgpins{,_d63,_d60,_nospicts,_smallbuf}.json`.
 **See:** job 5281 log `/srv/eda/logs/timothyn-dev/job-5281.o`; job 5279 (clean,
 same config); `planning/antenna-closure-investigation-2026-08.md`; item 51.
 
