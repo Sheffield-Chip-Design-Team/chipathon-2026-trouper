@@ -32,7 +32,13 @@ module tb_trouper_grp_arb;
     reg clk = 1'b0;
     always #15.625 clk = ~clk;        // 32 MHz
 
-    reg resetb = 1'b0;
+    // Start HIGH and pulse LOW below: trouper_top's SPI-domain flops use
+    // `always @(posedge SPI_SCK or negedge rst_n)`, so their reset branch runs
+    // only on a real 1->0 edge. Declaring resetb = 1'b0 at time 0 is a level,
+    // not an edge, so those flops (spi_we_toggle / spi_re_toggle and the
+    // latched address/data) stay X for the whole run, every SPI event toggle
+    // reads X, and reg_bank silently never sees a write.
+    reg resetb = 1'b1;
 
     // ---- DUT pads ----
     reg  [3:0] iq_i = 4'h0, iq_q = 4'h0;
@@ -40,8 +46,14 @@ module tb_trouper_grp_arb;
     wire       psram_sck, psram_ce_n;
     wire [3:0] psram_sio_out, psram_sio_oe;
     reg  [3:0] psram_sio_in = 4'h0;
+    // Starts LOW so the reset sequence can create a POSEDGE on spi_slave's
+    // `spi_frame_arst = HOST_CS | ~rst_n`. That reset is level-sensitive in
+    // silicon (the frame FSM is held reset for the whole HOST_CS=1 window) but
+    // edge-sensitive in Verilog: with HOST_CS tied high from time 0 the posedge
+    // never happens, the frame FSM stays X for the entire first frame, and the
+    // first read of the simulation returns 0x00 instead of the addressed byte.
 
-    reg  spi_cs   = 1'b1;             // active low
+    reg  spi_cs   = 1'b0;             // active low
     reg  spi_sck  = 1'b0;
     reg  spi_mosi = 1'b0;
     wire spi_miso;
@@ -132,7 +144,12 @@ module tb_trouper_grp_arb;
     );
 
     // ---- SPI master model (Mode 0, MSB first) ----
-    localparam real SCK_HALF = 62.5;  // 8 MHz
+    // 2 MHz, the interface's re-scoped maximum (TRPR-SPS: host SPI is
+    // specified up to 2 MHz, derated from 10 MHz). At 8 MHz a read's command
+    // byte gives reg_bank's CE-gated readback register only half an SCK period
+    // to settle, so the FIRST read after reset returns the reset value instead
+    // of the addressed one -- an out-of-spec stimulus artefact, not a DUT bug.
+    localparam real SCK_HALF = 250.0;  // ns -> 2 MHz
 
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
@@ -218,7 +235,10 @@ module tb_trouper_grp_arb;
         $dumpvars(1, tb_trouper_grp_arb);
 
         repeat (4) @(posedge clk);
+        resetb = 1'b0;                 // 1->0 edge: see the declaration comment
+        repeat (4) @(posedge clk);
         resetb = 1'b1;
+        spi_cs  = 1'b1;   // posedge on HOST_CS: fires the frame-FSM async reset
         repeat (8) @(posedge clk);
 
         // ---- 1. GRP-only write lands, read back over SPI ----

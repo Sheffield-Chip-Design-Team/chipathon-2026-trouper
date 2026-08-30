@@ -38,8 +38,14 @@ module tb_trouper_spi;
     wire       psram_sck, psram_ce_n;
     wire [3:0] psram_sio_out, psram_sio_oe;
     reg  [3:0] psram_sio_in = 4'h0;
+    // Starts LOW so the reset sequence can create a POSEDGE on spi_slave's
+    // `spi_frame_arst = HOST_CS | ~rst_n`. That reset is level-sensitive in
+    // silicon (the frame FSM is held reset for the whole HOST_CS=1 window) but
+    // edge-sensitive in Verilog: with HOST_CS tied high from time 0 the posedge
+    // never happens, the frame FSM stays X for the entire first frame, and the
+    // first read of the simulation returns 0x00 instead of the addressed byte.
 
-    reg  spi_cs   = 1'b1;             // active low
+    reg  spi_cs   = 1'b0;             // active low
     reg  spi_sck  = 1'b0;
     reg  spi_mosi = 1'b0;
     wire spi_miso;
@@ -125,7 +131,12 @@ module tb_trouper_spi;
     );
 
     // ---- SPI master model (Mode 0, MSB first) ----
-    localparam real SCK_HALF = 50.0;  // 10 MHz
+    // 2 MHz, the interface's re-scoped maximum (TRPR-SPS: host SPI is
+    // specified up to 2 MHz, derated from 10 MHz). At 8 MHz a read's command
+    // byte gives reg_bank's CE-gated readback register only half an SCK period
+    // to settle, so the FIRST read after reset returns the reset value instead
+    // of the addressed one -- an out-of-spec stimulus artefact, not a DUT bug.
+    localparam real SCK_HALF = 250.0;  // ns -> 2 MHz
 
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
@@ -218,7 +229,7 @@ module tb_trouper_spi;
         #1 resetb = 1'b0;
         repeat (4) @(posedge clk);
         resetb = 1'b1;
-        #1 spi_cs = 1'b1;
+        #1 spi_cs = 1'b1;   // posedge on HOST_CS: fires the frame-FSM async reset
         repeat (8) @(posedge clk);
 
         // 0. SPI_MISO is a dedicated output and must be driven low, not Z,
