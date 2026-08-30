@@ -172,10 +172,17 @@ async def test_packet_active_blocks_sc_force_lock(dut):
     """SC_FORCE_LOCK (0x19) is a W1P gated by packet_active alone (no
     rx_hold term)."""
     await _bring_up(dut)
+    # Clear any earlier sticky so this test owns the bit (0x1A[1] is W1C).
+    await write_reg(dut, 0x1A, 0x02 | (int(dut.rx_hold.value) & 1))
     dut.packet_active.value = 1
     await write_reg(dut, 0x19, 0x01)
     assert int(dut.sc_force_lock.value) == 0, (
         "sc_force_lock pulsed while packet_active=1"
+    )
+    # The refused write must be reported, not silently dropped -- the
+    # firmware-invisible-drop class of Open Risks #16 / W_MISSED_PACKET.
+    assert (await peek(dut, 0x1A)) & 0x02, (
+        "a 0x19 write refused by packet_active did not latch CFG_WR_REJECTED"
     )
     dut.packet_active.value = 0
     await write_reg(dut, 0x19, 0x01)

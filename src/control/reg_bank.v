@@ -265,7 +265,8 @@ module reg_bank (
             // driver -- a dropped write is otherwise invisible (cf. Open Risks
             // #16 and the W_MISSED_PACKET readback bug).
             if ((we && !cfg_wr_ok && cfg_locked_addr) ||
-                (we && (addr == 8'h04) && packet_active))
+                (we && (addr == 8'h04) && packet_active) ||
+                (we && (addr == 8'h19) && packet_active))
                 cfg_wr_rejected <= 1'b1;
             else if (we && addr == 8'h1A && wdata[1])
                 cfg_wr_rejected <= 1'b0;
@@ -309,7 +310,12 @@ module reg_bank (
                     // bring-up loop.  A rejected write still raises the shared
                     // CFG_WR_REJECTED sticky so a dropped write is visible.
                     8'h04: if (!packet_active) dbg_ctrl <= wdata;
-                    8'h19: if (!packet_active) sc_force_lock <= wdata[0]; // blocked during active packet
+                    // SC_FORCE_LOCK.  Same weak !packet_active gate as DBG_CTRL,
+                    // and likewise reported: a write rejected mid-packet raises
+                    // CFG_WR_REJECTED.  Without that it was silently dropped --
+                    // the firmware-invisible-drop class of Open Risks #16 and
+                    // the W_MISSED_PACKET readback bug.
+                    8'h19: if (!packet_active) sc_force_lock <= wdata[0];
                     // RX_HOLD is intentionally NOT self-gated: firmware must
                     // always be able to re-assert the hold to reconfigure.
                     // Bit [1] is the W1C for cfg_wr_rejected, handled above.
