@@ -371,16 +371,38 @@ set_clock_uncertainty 0.5 [get_clocks IQ_CLK]
 # Host SPI is a separate 2 MHz Mode-0 clock domain.  SPI_MOSI is synchronous
 # to SPI_SCK, never IQ_CLK; SPI_SCK and IQ_CLK communicate only through the
 # explicit toggle/mailbox CDC in spi_slave.v.
-create_clock -name SPI_SCK -period 500.0 [get_ports SPI_SCK]
-set_clock_groups -asynchronous -group [get_clocks IQ_CLK] -group [get_clocks SPI_SCK]
+# SPI_SCK is deliberately NOT declared a clock in this P&R SDC, so TritonCTS
+# builds no clock tree for it and SPI_SCK routes as an ordinary net.  It is
+# still a clock in the SIGNOFF SDC, so the domain is fully constrained at
+# signoff STA -- only the P&R-time tree is suppressed.
+#
+# Why: SPI_SCK is a 2 MHz clock with 51 sinks.  CTS expanded it into 5 clock
+# nets driven by four clkbuf_16 -- the widest cell in the set -- on leaf nets
+# of 2-7 sinks, and detailed routing could not reach the I pin of one of them
+# (DRT-1231).  Jobs 5281/5282/5283 failed at densities 65/63/60 (63 and 60 on
+# the identical buffer, so it is deterministic, not a placement lottery), and
+# job 5285 showed the buffer list is not the constraint: adding clkbuf_4 left
+# CTS still choosing clkbuf_16.  Dropping the tree fixed it outright --
+# job 5284 routes 78/78, DRC 0 / XOR 0 / LVS clean / antenna 0.
+#
+# Verified not to cost SPI timing (job 5284 signoff STA vs job 5279 baseline):
+# worst SPI_SCK setup 241.77 ns MET (was 241.14), worst hold 2.10 ns MET
+# (was 1.69), against a 500 ns period.  A 2 MHz clock needs no balanced tree.
+#
+# Do NOT re-add the create_clock here without re-testing routing; do NOT remove
+# it from the signoff SDC.  See Open Risks #6 and #54.
+# create_clock -name SPI_SCK -period 500.0 [get_ports SPI_SCK]
+# set_clock_groups -asynchronous -group [get_clocks IQ_CLK] -group [get_clocks SPI_SCK]
+set_false_path -from [get_ports SPI_SCK]
 
 # Zero board-delay baseline: this checks the ASIC's SPI-clocked logic but is
 # NOT pad-interface signoff.  Replace these with the selected RPi's launch/
 # sample requirements and measured PCB flight-time before tapeout.
-set_input_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
-set_input_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
-set_output_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
-set_output_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
+# Dropped with the create_clock above -- a -clock reference to an undeclared
+# clock is an error.  Present unchanged in the signoff SDC, which is where
+# these are actually checked.
+set_false_path -from [get_ports SPI_MOSI]
+set_false_path -to   [get_ports SPI_MISO_OUT]
 
 # IQ vectors are reassembled inside trouper_top; the physical top-level ports
 # are scalar per antenna.  Constrain the actual pad ports, not the internal
