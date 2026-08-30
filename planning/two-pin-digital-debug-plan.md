@@ -204,8 +204,8 @@ TRPR-DBG-001..010):
 | All valid mux selections bit-accurate | ⚠️ Partial — raw-RX (all 4 branches), packet group and `DBG_STATUS` asserted; decimated-IQ, SC, PSRAM, combiner and IRQ groups are structurally identical muxing but not individually checked |
 | Disabled / reserved provably zero | ✅ `test_reset_and_disabled_drive_low`, `test_reserved_encodings_drive_zero` |
 | Config cannot change during a packet | ✅ `test_config_is_idle_only_and_sticky_records_rejection` |
-| Pad control tie-offs | ✅ `test_pad_tieoffs` |
+| Pad-control tie-offs | ✅ `test_pad_tieoffs` — but this checks the **core outputs**, not the pad cells they will drive. Trouper instantiates no IO cells; a tie-off landing on the wrong cell terminal is only visible in chip-level LVS (`planning/pad-cell-signoff-plan.md` §1) |
 | Probe cannot perturb the receiver | ✅ `test_probe_does_not_perturb_the_receiver` — 4000 cycles bit-identical (this is not in the original list and should be: it is the criterion that makes the feature safe to ship) |
-| 32 MHz pattern electrically clean at the probe | ❌ Needs silicon and a low-capacitance active probe |
-| Top-level P&R / signoff clean | ⏳ Job 5279, signoff config + extended template |
+| 32 MHz pattern electrically clean at the probe | ❌ Gated on the integrator padframe. SPICE first (`planning/pad-cell-signoff-plan.md` §3d), then bench with a low-capacitance active probe |
+| Top-level P&R / signoff clean | ✅ **macro scope** — job 5279: antenna 0/0, route DRC 0, Magic DRC 0, LVS match uniquely, PDN 0. No pad cell is present in that netlist or layout, so it is not a pad-cell result |
 | Area cost measured | ✅ +4,454 µm² (+0.470%) |

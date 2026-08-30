@@ -1403,6 +1403,16 @@ local SC lock wins over a same-cycle peer edge; and a receiver ignores peer
 events while `packet_active`.  These reduce protocol risk but are not
 substitutes for the electrical review.
 
+**No run in this project has ever checked a pad cell.** `trouper_top`
+instantiates zero `gf180mcu_fd_io__*` cells, so the macro's LVS netlist and
+layout contain none — verified on job 5279 (0 IO cells in the netlist, 0
+`gf180mcu_fd_io` hits in the LVS report). Every "DRC/LVS clean" result to date,
+including the runs that carry this pad, is a statement about the **Trouper macro
+only**. The electrical questions below are therefore entirely open, not
+partially covered. SPICE-level LVS/DRC and the specific simulations that would
+close them are planned in `planning/pad-cell-signoff-plan.md`, gated on the
+integrator confirming the padframe.
+
 **Added to the pull-up review by the internal pull-up:** the board resistor is
 now in parallel with one internal pull-up per participating chip. Size the
 external resistor against the *combined* pull-up current, and confirm the
@@ -1442,6 +1452,12 @@ before this is closed.
 containing all 28 pads, a P&R run against that template rather than ours, and a
 decision on whether spending the final slot on a debug probe is the right use of
 the last pin.
+
+**Note on what P&R proves here.** It proves the *macro* routes and closes with
+three more boundary pins at coordinates we chose. It says nothing about the pad
+cells — Trouper instantiates none — so no amount of clean Trouper P&R can
+confirm a slot exists or is bondable. That needs the integrator, and the
+electrical half needs `planning/pad-cell-signoff-plan.md`.
 
 **If a slot is refused,** the two features are independently removable and
 documented as such: `planning/array-acquisition-sync.md` and

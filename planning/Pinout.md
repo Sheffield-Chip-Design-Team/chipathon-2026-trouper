@@ -1,7 +1,17 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pad list. **28 pads occupying all 28 A40 slots**: 26 signal +
-`VDD_CORE` + `VSS`. The allocation is now FULL — no spare slot remains. Older revisions of this doc quoted 24 or 25 by excluding `VSS` on the
+GF180MCU MIMO ASIC logical pin list. **28 pins occupying all 28 A40 slots**: 26 signal +
+`VDD_CORE` + `VSS`. The allocation is now FULL — no spare slot remains.
+
+> **Terminology.** Trouper is a hardened macro and instantiates **no IO cells at
+> all**. A *slot* is a padring position allocated to this project; a *boundary
+> pin* is a `PINS` entry on the macro edge, which is what our P&R places and
+> checks; a *pad cell* is a `gf180mcu_fd_io__*` instance in the shared padring,
+> instantiated by the integrator. The `_OE`/`_IE`/`_CS`/`_SL`/`_PU`/`_PD`/
+> `_PDRV*` signals below are core outputs that will *drive* pad-cell control
+> inputs. **No DRC, LVS or antenna result from any Trouper run covers a pad
+> cell** — none is present in the netlist or layout to check. Pad-cell signoff is
+> planned separately and gated on the integrator: `planning/pad-cell-signoff-plan.md`. Older revisions of this doc quoted 24 or 25 by excluding `VSS` on the
 grounds that ground was shared die-wide and not a per-project pad — that is no longer
 true. The A40 padring requires a per-project `VSS` pin, `info.yaml` declares it, and the
 integrator places it at slot W12, so **it consumes a slot and must be counted** in any

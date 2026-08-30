@@ -539,6 +539,7 @@ cannot change how the receiver behaves.
 | TRPR-DBG-005 | Should | F | Raw-RX (`GROUP=001`) SHALL be sampled into dedicated flops at `IQ_CLK`, giving an exact copy with one cycle of latency and never a combinational IQ-pad-to-debug-pad path. | T |
 | TRPR-DBG-006 | Should | S | Both pads SHALL use `bi_t` with `OE` tied high, `IE=0`, CMOS, **fast** slew and 8 mA drive — raw mode can toggle every 32 MHz edge, so the slow-slew setting used for `SPI_MISO`/`IRQ_OUT` is not adequate. | T |
 | TRPR-DBG-007 | Should | A | The feature's area cost SHALL be measured against an otherwise identical build. **Measured +4,454 µm² (+0.470%)**, SGE jobs 5277/5278. | A |
+| TRPR-DBG-008 | Should | A | Pad-cell electrical behaviour (32 MHz pattern at the intended probe load, drive/slew adequacy) SHALL be confirmed in SPICE. Trouper instantiates no IO cells, so no macro-level DRC/LVS run covers this. Gated on the integrator padframe — `planning/pad-cell-signoff-plan.md`. | A |
 
 ---
 
