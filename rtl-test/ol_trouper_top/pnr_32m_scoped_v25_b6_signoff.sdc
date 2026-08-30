@@ -480,7 +480,17 @@ set iq_input_ports [get_ports {IQ_DATA_I_0 IQ_DATA_I_1 IQ_DATA_I_2 IQ_DATA_I_3 \
                                IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3}]
 set_input_delay  -max 2.0 -clock IQ_CLK $iq_input_ports
 set_input_delay  -min 1.0 -clock IQ_CLK $iq_input_ports
-set core_output_ports [remove_from_collection [all_outputs] [get_ports SPI_MISO_OUT]]
+# SPI_MISO_OUT is constrained to SPI_SCK above, so it must be excluded here.
+# OpenSTA has no remove_from_collection (Synopsys-only; it errors out with
+# "invalid command name" and kills pre-PNR STA -- probed on the chipathon26
+# image, job 5211).  OpenSTA collections are plain Tcl lists and get_full_name
+# works on a port, so filter by name instead.
+set core_output_ports {}
+foreach p [all_outputs] {
+    if {[get_full_name $p] ne "SPI_MISO_OUT"} {
+        lappend core_output_ports $p
+    }
+}
 set_output_delay -max 2.0 -clock IQ_CLK $core_output_ports
 set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 
