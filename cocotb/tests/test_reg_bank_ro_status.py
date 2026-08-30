@@ -96,6 +96,10 @@ async def test_packet_status_decode(dut):
     dut.packet_active.value = 0
 
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
 # ---------------------------------------------------------------------------
 # 0x1D ACTIVE_STATUS -- {active_antenna_en_rb[3:0], 2'h0, active_mode_rb[1:0]}
 # ---------------------------------------------------------------------------

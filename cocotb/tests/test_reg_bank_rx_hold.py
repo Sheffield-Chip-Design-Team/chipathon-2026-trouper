@@ -179,6 +179,14 @@ async def test_hold_does_not_override_packet_active(dut):
     assert val & 0x02, "a write refused by the packet_active half did not latch CFG_WR_REJECTED"
 
     dut.packet_active.value = 0
+
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+
+    # module directly, so an undriven input would return X and break
+
+    # any read of that address.
+
+    dut.dbg_pad_value.value = 0
     await RisingEdge(dut.clk)
     await Timer(1, unit="ps")
     await _write(dut, 0x09, 0x0A)

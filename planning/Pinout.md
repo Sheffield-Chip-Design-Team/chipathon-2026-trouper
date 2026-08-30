@@ -1,29 +1,36 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pad list. Total: **24 pads** (23 signal + `VDD_CORE`;
-`GND`/`VSS` is shared across the whole die, not a per-project pad, not counted here).
+GF180MCU MIMO ASIC logical pad list. **26 pads occupying 26 A40 slots**: 24 signal +
+`VDD_CORE` + `VSS`. Older revisions of this doc quoted 24 or 25 by excluding `VSS` on the
+grounds that ground was shared die-wide and not a per-project pad — that is no longer
+true. The A40 padring requires a per-project `VSS` pin, `info.yaml` declares it, and the
+integrator places it at slot W12, so **it consumes a slot and must be counted** in any
+budget comparison. `info.yaml`'s entry count (26) is the authoritative occupancy number.
 **`VDD_IO` removed 2026-08-19** — it is the same net as `VDD_CORE` in every current PDN
 config (no independent IO rail is actually built), so it isn't a second pin. See
 `planning/5v-core-voltage-strategy.md` §2026-08-19, Open Risks #27.
 
-**Allocation status (2026-08-19): possibly tighter than previously assumed, but one pin
-closer than before.** This doc's pinout was drafted against a **<=26 pads** limit; the
-team's actual assigned budget may be **22 pads**, and the signoff die (1200×1100) fails at
-a stricter **1117.5×1117.5 µm** square target with default P&R settings — though a
-floorplan-margin fix reopens NR=4 there too (clean signoff, timing closure still open; see
-below). The `VDD_IO` removal above drops the count from 25 to **24**, so the gap to 22 is
-now 2 pins, not 3. Either the `IRQ_OUT`-removal waiver (poll `IRQ_STATUS` over SPI instead,
-−1 pin — low risk, no RTL beyond deleting the pad) needs one more pin cut alongside it, or
-the validated NR=3 (3-antenna) fallback alone (−2 pins) now lands exactly on 22 without the
-waiver. **See:**
+**Allocation status — RESOLVED 2026-08-30: the assigned budget is 28 pads.** Trouper's
+A40 ACV allocation is **28 pad slots**, confirmed with the integrator. `info.yaml`
+declares **26** pins — 24 signal + `VDD_CORE` + `VSS`, all of which take a slot — so
+**26 of 28 are used and 2 are spare**. (That is 2 spare *including* `ARRAY_ACQ_N`, which
+is already one of the 26; it is not a further deduction.) The pin budget is no longer a
+constraint on this design.
+
+This supersedes the earlier working assumption of a **22-pad** team allocation, and with
+it the pin half of the NR=3 / `IRQ_OUT`-waiver contingency: neither is needed to fit the
+pad count. `planning/nr3-fallback-2026-08.md` is retained for the **die-size** half of
+that analysis only. The separate **1117.5×1117.5 µm** square-die question is itself
+superseded for the A40 build, which defers to the integrator DEF at 1675×1110 (see
+`planning/a40-padframe-integration-2026-08.md`). **See:**
 `planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md`, Open Risks
-#46.
+#46, #52.
 
 **Related:** [System Architecture](System%20Architecture.md), [Trouper Chip Specification](Trouper%20Chip%20Specification.md)
 
 ---
 
-## Signal pads (23)
+## Signal pads (24)
 
 All signal pads use **GF180 5 V-capable IO cells**, run at **3.3 V**. There is one power
 pad (`VDD_CORE`) and one shared ground (`GND`/`VSS`, not a per-project pad) — see the
@@ -86,6 +93,24 @@ Dedicated interface for external register access and bring-up.
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
 | `IRQ_OUT` | out | Host RPi IRQ GPIO | Dedicated level-high sticky interrupt (packet ready, preamble lock, etc.). Mirrors the inter-project `IRQ_GROUPER` line. |
+
+### Array acquisition sync (1 pad, bidirectional) — NOT YET COMMITTED
+
+| Pad name | Dir | Connected to | Description |
+|---|---|---|---|
+| `ARRAY_ACQ_N` | bidir | Shared board net, one external pull-up | Active-low wired-AND acquisition-sync line between Trouper instances in one array. A chip pulls it low on a natural SC lock; an idle peer takes the falling edge as `sc_lock_sync`. Open drain is *emulated* — `A` is tied 0 and `OE` selects drive-low vs. Hi-Z. No device may drive it high. |
+
+Acquisition aid only: it carries no sample data, phase, weights, or clock, and it
+does not add spatial degrees of freedom to a single chip. Protocol, coherency
+prerequisites, and the firmware-side combining story are in
+`planning/array-acquisition-sync.md`.
+
+**Status:** declared last in `info.yaml` (A40 slot N15, after `VDD`, so no existing pin
+moves). The 28-pad allocation confirmed 2026-08-30 covers it with 2 slots still spare, so
+the pin budget is not the open question — what remains is that no P&R run has been built
+against a 26-pin DEF, and the pad has had no electrical review (Open Risks #52, #53).
+Self-contained: deleting the `info.yaml` entry, the two `io_placement` entries, and the
+`ARRAY_ACQ_N_*` ports backs it out completely.
 
 ### PSRAM data bus (4 pads, bidirectional)
 
@@ -231,6 +256,7 @@ fixed** — see the constraint note below the table.
 | `PSRAM_SCK` (output on `bi_24t`, drive fixed) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD` | `_OE=1`, `_SL=0` fast, rest `0` |
 | `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,1` **max (16 mA, raised from `1,0`/8 mA on 2026-08-30)**, rest `0` |
 | `SPI_MISO`, `IRQ_OUT` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
+| `ARRAY_ACQ_N` (emulated open drain on `bi_t`) | `_OUT`,`_IN`,`_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OUT=0` always, `_OE` = core drive request (this is the open-drain emulation), `_IE=1`, `_CS=1` **Schmitt** (long shared board net), `_SL=1` slow, **`_PU=1`** (the only pad on the chip with an internal pull enabled — see below), `_PD=0`, drive `0,0` min 4 mA |
 
 **`PSRAM_SCK_SL = 0` is a hard constraint, not a provisional value.** The
 APS6404L specifies `t_KHKL` (CLK rise/fall time) as a **maximum of 1.5 ns**,
@@ -261,6 +287,21 @@ value in the table below changes, update the RTL, this table, and the expected
 table in `test_pad_tieoffs.py` together** — the test reads this document as the
 source of truth, not the RTL. See `planning/Traceability.md` §"A40 pad-control
 tie-offs".
+
+**`ARRAY_ACQ_N_PU=1` is deliberate and unique.** Every other input pad on the
+chip disables its internal pulls, because every other input is always driven by
+something on the board. `ARRAY_ACQ_N` is the one pin a board may legitimately
+leave unpopulated — a single-chip receiver has no array to synchronise with —
+and an undriven input with `IE=1` sits the receiver near mid-rail drawing static
+current. The internal pull-up removes that, and holds the pin at its idle level
+so nothing can be misread as a peer event.
+
+It is **not** a substitute for the external pull-up. On a real multi-chip net
+the board resistor is still mandatory; the internal devices then sit in parallel
+with it, one per participating chip, and must be counted in the pull-up sizing
+and V_OL budget (Open Risks #53). The functional protection for an unused pin is
+`ARRAY_SYNC_CTRL[0] ARRAY_SYNC_EN` (register `0x18`), which resets to 0 — see
+`planning/Register Map.md`.
 
 `SPI_MISO_OE` is tied `1` (not gated by `HOST_CS`): the SPI slave already drives
 `SPI_MISO=0` when deselected (TRPR-SPS-008) and the host MISO net is point-to-point.
@@ -374,5 +415,9 @@ The following signals connect Trouper to the Grouper project on the same MPW. Th
 - **SX1257 `CLK_IN`:** Not connected; the radios and ASIC share the board clock reference instead.
 - **AFE chip-select / configuration pins:** Not allocated to Trouper package pads in the current revision.
 - **Additional PSRAM control pins:** Not required. The current allocation uses dedicated `PSRAM_SCK` and `PSRAM_CE_N`, with `PSRAM_SIO[3:0]` on four dedicated data pads.
+- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock):** superseded 2026-08-30 by the
+  `ARRAY_ACQ_N` pad above, which does the same job on one bidirectional wired-AND pin
+  instead of two unidirectional ones. See the deferred entry at the end of this section
+  for the original framing.
 - **JTAG / GPIO pins:** Removed. No JTAG TAP is instantiated in the RTL and GPIO was never wired out of the macro; host debug uses the SPI register / PSRAM-readback path. See Trouper Chip Specification §4.16.
-- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock, deferred):** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads, so there is headroom for one spare pad against the 26-pad ceiling (two, if the assigned team budget really is 22 and NR=3/IRQ_OUT-waiver work closes that gap separately — see the allocation-status note at the top of this doc). Still deferred pending an explicit decision to spend that headroom here rather than as margin, but "no pad available" is no longer the reason. The internal OR-lock logic these pins would drive already exists as a register (`SC_FORCE_LOCK`, `reg_bank` 0x19, see `planning/Register Map.md` `0x19` and `planning/NR2-multi-ASIC-cascade.md`); if this pad is allocated, bond it to `sc_lock_in` OR'd into the same internal `sc_lock_force` signal rather than adding a second mechanism. `IRQ_OUT` cannot double as this pin — it is output-only.
+- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock) — SUPERSEDED 2026-08-30 by `ARRAY_ACQ_N`:** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads. **2026-08-30:** the assigned allocation is confirmed at **28 pads**, so the headroom argument is settled — and the headroom was spent, on `ARRAY_ACQ_N` (one bidirectional wired-AND pin doing the same job as these two unidirectional ones). "No pad available" was never the real reason and is now definitively not. `ARRAY_ACQ_N` deliberately does **not** OR into `sc_lock_force` (`SC_FORCE_LOCK`, `reg_bank` 0x19): that register is a diagnostic override with no verified preamble edge behind it, so propagating it between chips would establish an invalid shared time origin. A peer event instead enters `sc_detector` on the idle-gated `sc_lock_sync` port and reconstructs `timing_ref` normally. `IRQ_OUT` could not have doubled as this pin in any case — it is output-only.

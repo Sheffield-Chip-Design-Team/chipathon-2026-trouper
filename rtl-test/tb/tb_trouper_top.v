@@ -157,7 +157,14 @@ module tb_trouper_top;
         .HREADY        (),
         .HRESP         (),
         .IRQ_OUT_OUT      (irq_out),
-        .IRQ_GROUPER  (irq_grouper)
+        .IRQ_GROUPER  (irq_grouper),
+        // Array acquisition sync: idle high, as the mandatory board
+        // pull-up holds it. planning/array-acquisition-sync.md.
+        .ARRAY_ACQ_N_IN (1'b1),
+        // Debug probes: inputs tied off (the pads are output-only in function);
+        // outputs left unconnected.
+        .DBG0_IN        (1'b0),
+        .DBG1_IN        (1'b0)
     );
 
     // -----------------------------------------------------------------------

@@ -1084,6 +1084,44 @@ padframe integrator) before it can be relied on.
 
 ---
 
+### 53. `ARRAY_ACQ_N` open-drain pad has had no electrical review
+
+`ARRAY_ACQ_N` is a multi-chip wired-AND acquisition-sync net, active low, idle
+high via an **external board pull-up**. GF180 supplies no open-drain pad
+primitive, so the design emulates one on a `bi_t` cell: the output is either a
+driven zero or high-Z (`OUT` tied 0, `OE` does the work), with `PDRV[1:0]=00`
+(4 mA), `PU=1`, `PD=0`, `CS=1`, `IE=1`. None of that has been reviewed
+electrically.
+
+**Open questions:** pull-up resistor value, maximum bus capacitance, trace
+length and required rise time are all board-level items with no chosen numbers.
+On a shared net **one internal pull-up per participating chip sits in parallel
+with the board resistor**, and must be counted in both the pull-up sizing and
+the V_OL budget — a two- or three-chip array multiplies that, and nothing has
+checked that 4 mA still pulls the net below V_IL against the parallel
+combination. The correctness of the whole scheme also depends on no device ever
+driving the net high; that is enforced in Trouper's own RTL
+(`test_open_drain_invariant_and_tieoffs`) but is an integration assumption for
+every other chip on the net.
+
+**Mitigating:** `ARRAY_SYNC_CTRL[0]` (`0x18`) resets to **0** and gates both
+directions, so an unpopulated pin on a single-chip board cannot start the
+receiver no matter what the floating pad does. The risk is confined to boards
+that actually use the link.
+
+**Action / exit:** pick a pull-up value against a stated bus capacitance and
+chip count; confirm V_OL at 4 mA with N internal pull-ups in parallel; confirm
+the rise time meets the sync-window budget; get the pad configuration reviewed
+against the GF180 IO databook gap already noted in item 27. Until then the
+array-sync feature is synthesis-proven only — the 2026-08-30 result is
++111 cells / +4030 µm² (+0.41 %) with zero Yosys check problems, and explicitly
+**not** timing, DRC, LVS, pad-ring or pull-up validated.
+
+**See:** `planning/array-acquisition-sync.md` (pad table, "Disabling the link",
+synthesis delta); `planning/Pinout.md` (`ARRAY_ACQ_N` status + internal-pull
+note); item 52 (the unconfirmed A40 pad slot the pin occupies).
+**Found:** 2026-08-30, alongside the array-acq-sync RTL landing.
+
 ### 52. A40 ACV allocation reportedly has three unassigned pad slots — decide whether to dedicate one to trigger synchronisation
 
 The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
@@ -1104,7 +1142,7 @@ package-bond available until the integrator confirms it.
 
 ## Low
 
-### 53. Trouper standalone flow has never run a real-source IR-drop analysis
+### 56. Trouper standalone flow has never run a real-source IR-drop analysis
 
 `VSRC_LOC_FILES` (OpenROAD PSM's realistic-downbond-location IR-drop mode)
 is not set anywhere in Trouper's own P&R configs (`rtl-test/ol_*/config*`,

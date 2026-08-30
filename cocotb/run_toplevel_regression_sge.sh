@@ -40,6 +40,7 @@ export DESIGN_ROOT SHARED_DIR="$SHARED" RUN_DIR="$RUN_OUT"
 # Ordered longest-first within each group so a parallel run finishes sooner and
 # a sequential one surfaces the slow failures early.
 SUITES_CORE="trouper_top replay_data replay_delay reg_bank spi_cdc remod_en \
+array_sync dbg_probe \
 packet_ctrl_fsm spi_slave w_missed warmup_rearm bypass_e2e bypass_antenna \
 noise_trig w_shadow_lock sc_force_lock sc_ant_sel sc_dbg reg_reset_sweep \
 psram_ops psram_en_glitch qspi_owner dbg_write dbg_write_collision \

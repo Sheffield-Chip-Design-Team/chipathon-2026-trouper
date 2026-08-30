@@ -26,8 +26,8 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x01` | `CHIP_REV` | R | `0x01` | — | Silicon revision |
 | `0x02` | `IRQ_STATUS` | R | `0x00` | IRQ | Sticky interrupt source bits |
 | `0x03` | `IRQ_CLEAR` | W | `0x00` | IRQ | Write 1 to clear matching `IRQ_STATUS` bits |
-| `0x04` | — | — | `0x00` | — | Reserved (former `DEBUG_CTRL`/`JTAG_EN`; JTAG removed, no TAP in RTL) |
-| `0x05` | — | — | `0x00` | — | Reserved (former `GPIO_DIR`; GPIO removed) |
+| `0x04` | `DBG_CTRL` | R/W | `0x00` | Two-pin debug | [7] `EN`; [6:4] `GROUP`; [3:2] `ANT`; [1:0] `SEL`. Reserved encodings are stored verbatim (**not** clamped) but drive both pads low. Write ignored while `PACKET_ACTIVE`; a rejected write sets `RX_HOLD.CFG_WR_REJECTED`. See `planning/two-pin-digital-debug-plan.md` |
+| `0x05` | `DBG_STATUS` | R | `0x00` | Two-pin debug | [0] `DBG0_PAD_VALUE`; [1] `DBG1_PAD_VALUE`; [7:2] 0. Post-mux, post-enable readback — a connectivity check, not a sampled trace |
 | `0x06` | — | — | `0x00` | — | Reserved (former `GPIO_OUT`; GPIO removed) |
 | `0x07` | — | — | `0x00` | — | Reserved (former `GPIO_IN`; GPIO removed) |
 | **RX / Modem Configuration** (`0x08`–`0x0F`) | | | | | |
@@ -39,8 +39,9 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
 | `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Locks after encoded value + 1 hits. Values 1–3 are normal operation (2–4 hits); 0 is diagnostic-only one-hit mode. |
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
-| **Reserved** (`0x10`–`0x18`) | | | | | |
-| `0x10`–`0x18` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below) |
+| **Reserved** (`0x10`–`0x17`) | | | | | |
+| `0x10`–`0x17` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below. `0x18`, the last of that block, is now `ARRAY_SYNC_CTRL`) |
+| `0x18` | `ARRAY_SYNC_CTRL` | R/W | `0x00` | Array acquisition sync | [0] `ARRAY_SYNC_EN`: arm the shared `ARRAY_ACQ_N` link. **Resets to 0** — the pin is inert in both directions until firmware opts in, so an unused/unpopulated pad cannot start the receiver. [7:1] reserved. Gated: write ignored unless `RX_HOLD=1` and `PACKET_ACTIVE=0`. See `planning/array-acquisition-sync.md` |
 | `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`/`SC_ANT_SEL`) |
 | `0x1A` | `RX_HOLD` | R/W | `0x01` | Schmidl-Cox / config interlock | [0] `RX_HOLD` (level): 1 = SC detector held disabled (ORed into `sc_clr`) and the gated config registers are writable; 0 = detector may lock and those writes are refused. **Set out of reset — firmware must configure, then clear it to receive.** [1] `CFG_WR_REJECTED` RO sticky, W1C: a gated config write was dropped |
 | `0x1B` | `SC_ANT_SEL` | R/W | `0x00` | Schmidl-Cox | [1:0] `sc_ant_sel` SC correlator source antenna (0-3); [7:2] reserved; write gated by `RX_HOLD` + `!PACKET_ACTIVE` |
@@ -104,7 +105,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 109 implemented + 19 reserved = 128. (Updated 2026-08-30: `SC_ANT_SEL` implemented at `0x1B` — moved out of `BW_CFG[2:1]`, which is correlator branch routing rather than a bandwidth setting — taking one address from reserved to implemented. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. The 19 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x7A`–`0x7E` and `0x7F`.)
+**Occupancy:** 112 implemented + 16 reserved = 128. (Updated 2026-08-30: `DBG_CTRL` `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. Two addresses moved from reserved to implemented. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before either change was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 16 reserved slots are `0x06`–`0x07`, `0x10`–`0x17`, `0x7A`–`0x7E` and `0x7F`.)
 
 ---
 
@@ -149,7 +150,9 @@ Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchan
 
 ---
 
-### `0x04`–`0x07` — Reserved (former DEBUG_CTRL / GPIO_DIR / GPIO_OUT / GPIO_IN)
+### `0x06`–`0x07` — Reserved (former GPIO_OUT / GPIO_IN)
+
+`0x04`/`0x05` were reclaimed 2026-08-30 as `DBG_CTRL`/`DBG_STATUS` for the two-pin digital debug probe — see `planning/two-pin-digital-debug-plan.md`.
 
 JTAG and GPIO were removed from Trouper. There is no JTAG TAP in the RTL, and the
 former GPIO direction/output/input path was never wired out of the macro boundary.
@@ -185,7 +188,7 @@ step 1.
 | Register(s) | Mid-packet policy | Result / firmware rule |
 | --- | --- | --- |
 | `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
-| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x1B`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
+| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `ARRAY_SYNC_CTRL`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x18`, `0x1B`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
 | `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
 | W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
 | `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
@@ -271,7 +274,9 @@ Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper
 
 **Not a valid timing reference.** A forced lock latches `timing_ref` from the free-running `sample_count` at the moment of the write, not a symbol-boundary-corrected value derived from a real preamble edge. MRC training off a forced lock is not meaningful — treat the resulting `Z` values as noise, not a channel estimate.
 
-**Register-only today; pin variant deferred.** This is the SPI/GRP half of the OR-lock scheme sketched for the NR2/3 multi-ASIC cascade (`planning/NR2-multi-ASIC-cascade.md`, `sc_lock_in`/`sc_lock_out` pins) — that scheme's `effective_lock = sc_lock_detected || sc_lock_in` is the same shape as this register's OR into `sc_lock`. Wiring an actual `sc_lock_in` pad is not done yet — still deferred pending an explicit decision, though **2026-08-19: the pinout dropped to 24 pads (`VDD_IO` removed, see `planning/Pinout.md`)**, so there is now headroom for a spare pad against the 26-pad ceiling rather than none. If allocated, OR it into the same internal force signal (`sc_detector.sc_lock_force`) documented here rather than building a second mechanism.
+**Register-only; the pin variant was built differently.** This is the SPI/GRP half of the OR-lock scheme sketched for the NR2/3 multi-ASIC cascade (`planning/NR2-multi-ASIC-cascade.md`, `sc_lock_in`/`sc_lock_out` pins) — that scheme's `effective_lock = sc_lock_detected || sc_lock_in` is the same shape as this register's OR into `sc_lock`.
+
+**2026-08-30:** the pad was allocated, as `ARRAY_ACQ_N` (one bidirectional wired-AND pin rather than two unidirectional ones; `planning/array-acquisition-sync.md`). It deliberately does **not** OR into `sc_lock_force`: a peer event enters `sc_detector` on the separate `sc_lock_sync` port, which is idle-gated and reconstructs `timing_ref` with the normal hit-run back-calculation. `SC_FORCE_LOCK` is excluded from the array protocol on purpose — it is a diagnostic override that proves no timing reference was established, so propagating it across chips would set an invalid shared time origin. Keep them separate.
 
 ---
 

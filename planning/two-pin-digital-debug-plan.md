@@ -17,9 +17,24 @@ bring-up tool than probes that correlate directly with the already available
 
 ## Scope and allocation gate
 
-The current physical plan lists 24 pads including `VDD_CORE`; `planning/Pinout.md`
-also records that the assigned budget might be only 22.  Consequently these pins
-must be treated as **conditional** until the package/pad allocation is confirmed.
+**Updated 2026-08-30 — the allocation is confirmed at 28 pads, and these two
+fit.** The 22-pad figure this section was written against was a working
+assumption, now superseded (`planning/Pinout.md` allocation status, Open Risks
+#46). Current occupancy is **26 of 28** — the 26 pins `info.yaml` declares, which
+includes `ARRAY_ACQ_N`, `VDD_CORE` and `VSS`, all of which take a slot. Adding
+`DBG0_OUT`/`DBG1_OUT` therefore reaches **28 of 28: exactly full, with no spare
+left**.
+
+That is a real decision, not a formality. These two pins would consume the
+entire remaining margin, so any later pin need — a second supply, a strap, a
+spare for a bring-up escape — would have to displace something already
+allocated. Weigh that against first-silicon debug value before committing.
+
+The pins are no longer gated on the *budget* in the sense that they fit. They
+remain gated on
+the integrator confirming the specific slots exist and are bondable — the same
+open item `ARRAY_ACQ_N` carries in Open Risks #52 — and no P&R run has been
+built against a pin list containing them.
 They must not displace an RX IQ input, PSRAM lane, `IQ_CLK`, reset, or host SPI.
 If they are allocated, add two output pads at board-accessible locations with
 short probe traces and adjacent ground-test points.

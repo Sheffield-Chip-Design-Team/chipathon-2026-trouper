@@ -204,11 +204,11 @@ Subblocks:
 - macro placement (Grouper PicoRV32/SRAM)
 - area/timing/power closure for each project
 - MPW-level routing for AHB-Lite bus
-- 26-pad constraint management (Trouper)
+- 28-pad constraint management (Trouper)
 
 Responsibilities:
 - keep each project within its timing and area budgets
-- manage pad budget rigorously (≤26 pads for Trouper)
+- manage pad budget rigorously (≤28 pads for Trouper; 25 used as of 2026-08-30)
 - deliver GDSII / LEF for both macros
 
 Deliverables:

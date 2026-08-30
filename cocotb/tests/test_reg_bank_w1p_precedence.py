@@ -72,6 +72,10 @@ async def test_w_wr_rejected_set_then_clear_then_new_rejection_wins(dut):
     -- the earlier clear must not leave the set branch starved."""
     await _bring_up(dut)
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     dut.w_valid_rb.value = 1  # combiner holds a live weight set: all shadow writes drop
 
     # 1) A shadow write while W_VALID is high is dropped and latches the
@@ -112,6 +116,10 @@ async def test_w_wr_rejected_clear_and_commit_same_write(dut):
     on different regs and must not interfere."""
     await _bring_up(dut)
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     dut.w_valid_rb.value = 1
 
     await write_reg(dut, 0x32, 0xEE)  # dropped write -> sets W_WR_REJECTED
@@ -140,6 +148,10 @@ async def test_w1c_bit_alone_does_not_reject_or_land_shadow_write(dut):
     argument rests on, and that WGT_CTRL writes never touch w_shadow."""
     await _bring_up(dut)
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     dut.w_valid_rb.value = 0  # shadow writes would normally be accepted
 
     before = await peek(dut, 0x30)
