@@ -14,3 +14,7 @@
 	path = ip/chipathon-2026-grouper
 	url = https://github.com/Sheffield-Chip-Design-Team/chipathon-2026-grouper.git
 	branch = picorv32_minimal
+[submodule "ip/chipathon-2026-gf180mcu-padring"]
+	path = ip/chipathon-2026-gf180mcu-padring
+	url = https://github.com/Mauricio-xx/chipathon-2026-gf180mcu-padring
+	branch = main
