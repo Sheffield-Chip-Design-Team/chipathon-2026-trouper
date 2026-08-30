@@ -64,8 +64,29 @@ accepts a peer event on a high-to-low transition only when it is idle:
 
 The accepted peer event is a one-cycle `sc_lock_sync` pulse to `sc_detector`.
 The detector reconstructs `timing_ref` using the normal back-calculation,
-`sample_count - (SC_HITS_REQ + 1) * M + 1`, so downstream training has the same
-time reference convention as a local acquisition.
+`sample_count - (SC_HITS_REQ + 1) * M + 1`, so downstream training uses the
+same time reference *convention* as a local acquisition.
+
+**The two chips do not land on the same sample, and the offset is not zero.**
+The natural path back-calculates from `eval_sample_mark` — the correlation
+window mark latched when the hit was evaluated — while the peer path reads the
+live `sample_count` at the moment the wire edge is accepted. The difference is
+the detector's evaluation-pipeline depth plus the asserting chip's
+detect-to-`OE` delay plus the receiving chip's two-flop synchroniser.
+
+Measured on the two-instance bench (`cocotb/array_sync`, SF7/BW250, both chips
+released from one reset): **+2 output samples**, against a symbol period of
+M = 256 samples. `test_peer_sync_starts_idle_chip` asserts the offset stays in
+0..4 samples so it cannot widen unnoticed.
+
+Two samples at 500 kS/s is 4 µs. That is small against a symbol but it is not
+phase coherence, and nothing downstream removes it. It is acceptable for what
+this link claims to be — an acquisition aid that starts a peer's training
+window — and it is *not* sufficient on its own for calibrated beamforming or
+direction finding, which is the same conclusion the coherency-prerequisites
+section reaches from the clock/reset side. Firmware combining eight elements
+across two chips must treat the two 4-element solutions as separately timed
+unless the offset is measured and compensated.
 
 If both chips detect locally at nearly the same time, both may pull the wire
 low.  This is safe: neither driver can contend because both only drive zero.
@@ -112,7 +133,24 @@ against one.  Open Risks #52.
 
 The standalone RTL test `rtl-test/tb/tb_array_acq_sync.v` covers local drive,
 packet-complete release, a synchronised peer falling edge, and rejection of a
-late event while a packet is active.  Full-top compilation also passes.
+late event while a packet is active -- all against the `array_acq_sync` module
+alone.
+
+`cocotb/array_sync` (`cocotb/tests/test_array_sync.py`, harness
+`cocotb/hdl/tb_array_pair.v`) is the end-to-end test: **two complete
+`trouper_top` instances** sharing one wired-AND net, chip A fed a CW SDM
+stimulus and chip B's IQ inputs held at zero. 4/4 PASS, SGE job 5261,
+2026-08-30:
+
+| Test | What it establishes |
+|---|---|
+| `test_peer_sync_starts_idle_chip` | A acquires, asserts `OE`, and B -- which has no RF input at all -- locks off the wire, starts its packet FSM, and gets a non-zero `timing_ref`. B does **not** re-drive the net, so the array cannot ring. |
+| `test_isolated_chip_never_locks` | Same run with the net forced idle-high: B stays dark. Without this control the test above proves nothing. |
+| `test_force_lock_does_not_drive_the_wire` | `SC_FORCE_LOCK` asserts A's `sc_lock` but never reaches `OE` or chip B. |
+| `test_open_drain_invariant_and_tieoffs` | Neither chip ever drives a 1, and the pad controls match the `bi_t` configuration above. |
+
+Every other bench in `cocotb/` has a single DUT and ties `ARRAY_ACQ_N_IN` to
+its idle level, so none of them can exercise the peer path.
 
 An isolated SGE synth-only comparison (job 5152, 2026-08-28) used separate
 baseline and extension NFS snapshots and did not overwrite shared inputs.

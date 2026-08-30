@@ -92,7 +92,10 @@ module tb_trouper_cocotb (
         .HREADY        (),
         .HRESP         (),
         .IRQ_OUT_OUT       (IRQ_OUT),
-        .IRQ_GROUPER   ()
+        .IRQ_GROUPER   (),
+        // Array acquisition sync: idle high, as the mandatory board
+        // pull-up holds it. planning/array-acquisition-sync.md.
+        .ARRAY_ACQ_N_IN (1'b1)
     );
 
     psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(3)) u_psram (

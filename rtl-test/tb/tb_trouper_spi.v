@@ -127,7 +127,10 @@ module tb_trouper_spi;
         .HREADY        (),
         .HRESP         (),
         .IRQ_OUT_OUT     (irq_out),
-        .IRQ_GROUPER (irq_grouper)
+        .IRQ_GROUPER (irq_grouper),
+        // Array acquisition sync: idle high, as the mandatory board
+        // pull-up holds it. planning/array-acquisition-sync.md.
+        .ARRAY_ACQ_N_IN (1'b1)
     );
 
     // ---- SPI master model (Mode 0, MSB first) ----

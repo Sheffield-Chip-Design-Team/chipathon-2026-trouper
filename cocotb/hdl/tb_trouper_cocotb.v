@@ -118,7 +118,16 @@ module tb_trouper_cocotb #(
     output wire        PSRAM_SCK_CS,
     output wire        PSRAM_SCK_SL,
     output wire        PSRAM_SCK_PU,
-    output wire        PSRAM_SCK_PD
+    output wire        PSRAM_SCK_PD,
+    output wire        ARRAY_ACQ_N_OUT,
+    output wire        ARRAY_ACQ_N_OE,
+    output wire        ARRAY_ACQ_N_IE,
+    output wire        ARRAY_ACQ_N_CS,
+    output wire        ARRAY_ACQ_N_SL,
+    output wire        ARRAY_ACQ_N_PU,
+    output wire        ARRAY_ACQ_N_PD,
+    output wire        ARRAY_ACQ_N_PDRV0,
+    output wire        ARRAY_ACQ_N_PDRV1
 );
     wire        psram_ce_n;
     wire [3:0]  psram_sio_out, psram_sio_oe, psram_sio_in, psram_sio_ie;
@@ -141,6 +150,14 @@ module tb_trouper_cocotb #(
     reg        GRP_RE    = 1'b0;
     wire [7:0] GRP_RDATA;
     wire       GRP_READY;
+
+    // Array acquisition sync input. Idle high -- that is what the mandatory
+    // external pull-up does when no chip is asserting. Declared as a reg
+    // rather than a module port for the same reason as GRP_* above: every
+    // existing suite gets the correct idle level with no change, while a test
+    // that cares can drive dut.ARRAY_ACQ_N_IN directly.
+    // See planning/array-acquisition-sync.md.
+    reg        ARRAY_ACQ_N_IN = 1'b1;
 
     trouper_top u_dut (
         .IQ_CLK        (IQ_CLK),
@@ -312,7 +329,17 @@ module tb_trouper_cocotb #(
         .PSRAM_SCK_CS        (PSRAM_SCK_CS),
         .PSRAM_SCK_SL        (PSRAM_SCK_SL),
         .PSRAM_SCK_PU        (PSRAM_SCK_PU),
-        .PSRAM_SCK_PD        (PSRAM_SCK_PD)
+        .PSRAM_SCK_PD        (PSRAM_SCK_PD),
+        .ARRAY_ACQ_N_IN      (ARRAY_ACQ_N_IN),
+        .ARRAY_ACQ_N_OUT     (ARRAY_ACQ_N_OUT),
+        .ARRAY_ACQ_N_OE      (ARRAY_ACQ_N_OE),
+        .ARRAY_ACQ_N_IE      (ARRAY_ACQ_N_IE),
+        .ARRAY_ACQ_N_CS      (ARRAY_ACQ_N_CS),
+        .ARRAY_ACQ_N_SL      (ARRAY_ACQ_N_SL),
+        .ARRAY_ACQ_N_PU      (ARRAY_ACQ_N_PU),
+        .ARRAY_ACQ_N_PD      (ARRAY_ACQ_N_PD),
+        .ARRAY_ACQ_N_PDRV0   (ARRAY_ACQ_N_PDRV0),
+        .ARRAY_ACQ_N_PDRV1   (ARRAY_ACQ_N_PDRV1)
     );
 
 `ifdef GF180_IO_MODEL
