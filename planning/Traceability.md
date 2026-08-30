@@ -460,6 +460,8 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 | TRPR-DBG-007 | Area cost measured against an identical build | A | Yosys hierarchical synth, jobs 5277 (baseline `53eb221`) / 5278 (`3342b87`) | ✅ **+4,454 µm², +0.470%** |
 | TRPR-DBG-008 | Mux group/SEL sources are bit-accurate | T | `test_dbg_probe.test_packet_group_tracks_fsm` (cross-checked against `PACKET_STATUS`, not against the probe itself); `test_dbg_status_mirrors_the_pads` | ⚠️ Partial — packet, raw-RX and DBG_STATUS groups covered; decimated-IQ, SC, PSRAM, combiner and IRQ groups are structurally identical muxing but not individually asserted. |
 | TRPR-DBG-009 | Macro P&R closes with the two boundary pins; no new antenna/DRC/LVS | A | SGE job 5279: antenna 0/0, route DRC 0, Magic DRC 0, LVS match, PDN 0 | ✅ **Macro scope only** — Trouper instantiates no IO cells, so this covers no pad cell |
+| TRPR-DBG-012 | Debug outputs meet the 2 ns `IQ_CLK` output delay with no exception | A | Job 5279 SS: `DBG0_OUT` −4.440 ns, `DBG1_OUT` −6.060 ns — the only two `reg-out` violators in the design; both meet at TT and FF | ❌ **Violated at SS.** Decision owed: justified exception, or fix. See the plan's "Timing result". |
+| TRPR-DBG-013 | Raw-RX flops must not worsen the IQ-input-to-decimator paths | A | Job 5279 SS violator list: zero `IQ_DATA` paths | ✅ Concern did not materialise |
 | TRPR-DBG-010 | Pad-cell electrical check: clean 32 MHz pattern at the intended probe load | A | — | ❌ Gated on the integrator padframe — `planning/pad-cell-signoff-plan.md` §3d |
 | TRPR-DBG-011 | Chip-level LVS/DRC across the pad boundary, with the pad cells present | A | — | ❌ Gated — `planning/pad-cell-signoff-plan.md` §1, §2 |
 

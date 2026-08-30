@@ -157,6 +157,50 @@ intermediates or PSRAM SIO pads.
 6. Select combiner sign bits while applying a common tone and compare MRC and
    passthrough settings. Use `IRQ` mode to correlate software-visible events.
 
+## Timing result (job 5279, 2026-08-30)
+
+**The IQ-input loading concern did not materialise.** The eight raw-RX capture
+flops load the `IQ_DATA_*` cone, and the worry was that this would worsen the
+pre-existing IQ-input-to-decimator paths. It did not: **zero** `IQ_DATA` paths
+appear in the SS violator list.
+
+**The debug output paths do violate at SS**, and they are the only output paths
+in the design that do:
+
+| Corner | `DBG0_OUT` | `DBG1_OUT` | Other `reg-out` violators |
+|---|---:|---:|---:|
+| `nom_tt_025C_3v30` | meets | meets | 0 |
+| `max_ff_n40C_3v60` | meets | meets | 0 |
+| `max_ss_125C_3v00` | **−4.440 ns** | **−6.060 ns** | **0 — these two are the only ones** |
+
+They inherited the standard budget automatically: `pnr_32m_scoped_v25_b6.sdc`
+applies `set_output_delay -max 2.0 -clock IQ_CLK` to `[all_outputs]` except
+`SPI_MISO_OUT`, so nobody decided 2 ns was right for a debug pin — it was the
+default.
+
+**This fails the acceptance criterion above**, which says the pads go in the
+normal 2 ns set and *"no timing exception is permitted"*. That sentence exists
+to stop exactly the argument that follows, so it is recorded as failing rather
+than waived.
+
+The argument for tolerating it, stated so it can be judged rather than assumed:
+SS 3.0 V already fails by −17.7 ns design-wide and is a known voltage-bound
+risk that closes at 4.5 V; the debug paths fail by roughly a third of that, so
+whatever closes the design very likely closes them. The functional consequence
+is bounded — a late debug output means an unreliable analyser capture at the
+slow corner, not receiver misbehaviour, and nothing downstream consumes these
+pins. And a 2 ns output delay inherited from functional outputs is arguably the
+wrong constraint for a pin whose consumer samples on its own reference.
+
+**Decision still owed:** either accept a documented, justified exception for
+these two pins, or fix the paths. Not "the corner was already red, so it does
+not matter".
+
+**Not attributable:** SS WNS moved −16.260 (job 5214) → −17.736 (job 5279) on an
+unrelated `reg-reg` path. Job 5279 also carries the array-sync link, the epoch
+compensation and the `SC_ANT_SEL` move, so none of that −1.48 ns can be charged
+to the debug probe without a baseline P&R of `53eb221` on the same config.
+
 ## RTL, physical-design, and verification work
 
 - Add `dbg_ctrl` storage/readback and the idle-only write gate to `reg_bank.v`
@@ -207,5 +251,6 @@ TRPR-DBG-001..010):
 | Pad-control tie-offs | ✅ `test_pad_tieoffs` — but this checks the **core outputs**, not the pad cells they will drive. Trouper instantiates no IO cells; a tie-off landing on the wrong cell terminal is only visible in chip-level LVS (`planning/pad-cell-signoff-plan.md` §1) |
 | Probe cannot perturb the receiver | ✅ `test_probe_does_not_perturb_the_receiver` — 4000 cycles bit-identical (this is not in the original list and should be: it is the criterion that makes the feature safe to ship) |
 | 32 MHz pattern electrically clean at the probe | ❌ Gated on the integrator padframe. SPICE first (`planning/pad-cell-signoff-plan.md` §3d), then bench with a low-capacitance active probe |
-| Top-level P&R / signoff clean | ✅ **macro scope** — job 5279: antenna 0/0, route DRC 0, Magic DRC 0, LVS match uniquely, PDN 0. No pad cell is present in that netlist or layout, so it is not a pad-cell result |
+| Top-level P&R / signoff clean | ⚠️ **macro scope, with a timing exception outstanding** — job 5279: antenna 0/0, route DRC 0, Magic DRC 0, LVS match uniquely, PDN 0. But the two debug outputs violate setup at SS (below). No pad cell is present in that netlist or layout, so none of this is a pad-cell result |
+| Debug outputs meet the 2 ns output delay, no exception | ❌ **Violated at SS** — see "Timing result" below |
 | Area cost measured | ✅ +4,454 µm² (+0.470%) |
