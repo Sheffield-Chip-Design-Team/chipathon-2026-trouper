@@ -81,6 +81,13 @@ is ever driven close to zero. Note this is the SS figure on the **A40 1675×1110
 die**, not comparable with the −12.45 ns below (job 5122, the older 1650×1100
 `config_1650x1100_full_rect` floorplan).
 
+A companion run, **job 5276**, carried the *same* RTL (identical `VERILOG_FILES`,
+so it too has both the array-sync and the debug pads) from the `rtl-test/` config
+at **72 %** density rather than 65 %. It never completed — the flow stops at step
+54/78 (`OpenROAD.FillInsertion`) with an empty `error.log` and no `final/`, so it
+has no STA, DRC, LVS or antenna results and **must not be quoted**. Job 5279 is
+the only finished run of this feature set.
+
 **Run:** `/srv/eda/runs/timothyn-dev/lora-mimo-dbgpnr/5279/dbgpins/run`;
 log `/srv/eda/logs/timothyn-dev/job-5279.o`. **See:**
 `planning/two-pin-digital-debug-plan.md` (P&R review obligations).
