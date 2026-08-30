@@ -92,7 +92,7 @@ PCF-005/PCF-009/MRC-011 findings below.
 | TRPR-TAC-004 | Z_kl readback format, 0x40–0x63, 24-bit BE | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ (via SPI, real capture data) |
 | TRPR-TAC-005 | Zdiag readback 0x64–0x6F, 24-bit | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ Spec address/width fixed 2026-07-05 (was 0x64–0x6B/16-bit, stale since the Zdiag widening in `46e1da0`) — see Register Address Reconciliation above. The test itself always read the correct current registers; only the spec text had lagged. |
 | TRPR-TAC-006 | *(REMOVED — no hardware `Z_SHIFT` register in the current revision)* | — | — | ✅ Spec reworded 2026-07-05 to state the register doesn't exist, cross-referencing TRPR-WGN-009 — see Register Address Reconciliation above. Was previously describing a register hardwired 0 in `trouper_top`. |
-| TRPR-TAC-007 | Firmware noise-trigger mode (`TACC_NOISE_TRIG`) | T | `tb_trouper_spi.v` (W1P mechanics), `cocotb/tests/test_noise_trig.py` (job 3310, functional) | ✅ Closed 2026-07-06. Full functional flow with independent per-antenna Gaussian noise: arm without `sc_lock` (PSRAM disabled → contamination impossible by construction), `NOISE_READY` IRQ fires, `n_acc == 8M` exactly (forward window — contrast with lock-mode's `7M−1`), all four Zdiag > 0, every normalized \|Z_kl\| < 0.2 (≈0.02 expected for independent noise). Plus the contamination case: SC hits/lock inside a triggered window suppress `NOISE_READY` while `training_done` still fires. First functional test of the `sigma2_valid` gate and IRQ bit 4. |
+| TRPR-TAC-007 | Firmware noise-trigger mode (`TACC_NOISE_TRIG`) | T | `tb_trouper_spi.v` (W1P mechanics), `cocotb/tests/test_noise_trig.py` (jobs 3310; 2026-08-29 2/2 PASS) | ✅ Full functional flow with independent per-antenna Gaussian noise: arm without `sc_lock` (PSRAM disabled → contamination impossible by construction), `NOISE_READY` IRQ fires, `n_acc == 8M` exactly (forward window — contrast with lock-mode's `7M−1`), all four Zdiag > 0, every normalized \|Z_kl\| < 0.2 (≈0.02 expected for independent noise). SC hits/lock inside a triggered window suppress `NOISE_READY`. **Busy-trigger closure 2026-08-29:** a trigger during normal live training is rejected, sets sticky/W1C `0x1F[1]`, lets the original training complete, and cannot produce false `NOISE_READY`. |
 | TRPR-TAC-008 | `TRAINING_STATUS` (0x20) exposes DONE/ARMED bits | T | `tb_training_acc_equiv.v`, `tb_tacc_resetless_equiv.v` (signals), `cocotb/tests/test_noise_trig.py` (job 3310, SPI readback) | ✅ Closed 2026-07-06: register 0x20 now read over SPI — 0x00 before any trigger, `ARMED` (bit 1) observed high during an active window, `DONE` (bit 0) after completion. |
 | TRPR-TAC-009 | Z_kl/n_acc matches Python `h_k·conj(h_l)` within Q1.15 | T | `test_weight_gen_spi_flow.py` (job 3286, oracle compare), `sim/tests/test_eigvec_fw.py` | ✅ |
 | TRPR-TAC-010 | Auto-reset on each `sc_lock` | T | `tb_tacc_resetless_equiv.v` (B2, job — see `project_area_cuts_b1_banked_b2_rejected_3v` memory), `test_capture_two_packet.py` (job 3273, real-capture two-packet re-arm) | ✅ |
@@ -116,11 +116,11 @@ embedded in a full-DSP-chain testbench (`tb_dsp_chain*.v`, `tb_trouper_top.v`,
 |---|---|---|---|---|
 | TRPR-SCD-001 | Per-symbol complex autocorrelation `C[s]` on branch 0 | I | `tb_dsp_chain_sf.v`, `tb_dsp_chain_rand.v` (job 1789), `sim/tests/test_sync.py` | ✅ (functional, via downstream sc_lock/Zdiag correctness) |
 | TRPR-SCD-002 | Divider-free hit test `\|C[s]\|² ≥ THR_eff·E[s]` | T | `tb_dsp_chain_sf.v`, `tb_dsp_chain_rand.v`, `sim/tests/test_sync.py` | ✅ (functional) |
-| TRPR-SCD-003 | One hit decision per completed symbol, full-M delayed samples via PSRAM | I | `tb_dsp_chain_real_probe.v`, `test_capture_two_packet.py` (job 3273) | ✅ |
+| TRPR-SCD-003 | One hit decision per completed symbol, full-M delayed samples via PSRAM | I | `tb_dsp_chain_real_probe.v`, `test_capture_two_packet.py` (job 3273), `cocotb/trouper_capture` (jobs 5218–5220, 5227) | ✅ Current-top measured-capture sweep: SF7/BW125 locks at ~2.05 ms (job 5218), SF7/BW250 locks at ~1.54 ms and completes the full path (job 5219), and the deep SF12/BW125 window locks at ~32.77 ms (job 5220; full path job 5227). Job 5227 also proves 32 exact replay tuples at `timing_ref−1`; it runs the behavioural PSRAM at 2 MiB to avoid aliasing the approximately 1 MiB SF12 preamble. The current-top tests supersede the legacy probe as integration evidence. |
 | TRPR-SCD-004 | `sc_lock` asserts after `SC_HITS_REQ+1` consecutive hits | T | `tb_dsp_chain.v`, `tb_dsp_chain_sf.v`, `tb_dsp_chain_rand.v` (direct-wired `sc_hits_req`, not via register), `test_trouper_top.py` (via SPI `SC_HITS_REQ` write) | ✅ |
 | TRPR-SCD-005 | `timing_ref = lock_sample − (SC_HITS_REQ+1)·M + 1` | T | `cocotb/tests/test_sc_dbg_flags.py` (job 3307, adjacent evidence) | ⚠️ Still no direct closed-form assertion on `timing_ref` itself, but materially strengthened 2026-07-06: the formula's inputs were in **wrong (double-counted) units** until the Open Risks #36 fix — `timing_ref` was inflated by an amount growing over the session, and no downstream Z-correctness check ever noticed (stationary stimuli). `test_sc_dbg_flags.py` now pins the mark arithmetic (`SC_LOCK_SNAP == SC_FIRST_HIT + M`), and the corrected `n_acc = 7M−1` expectation in `test_trouper_top.py` is a direct downstream consequence of the corrected formula. |
 | TRPR-SCD-006 | RTL operates on antenna branch 0 only (by design) | I | — | ℹ️ Not a testable requirement — it's a documented design limitation. Tracked as a deferred risk (Open Risks §Deferred item 9): `planning/sc-detector-ant0-fading-risk.md` (ant0 deep-fade SPOF, no 4-branch pooling before lock). |
-| TRPR-SCD-007 | `SC_THR_HI/LO` (0x0C/0x0D) writable, RTL consumes low 12 bits, reset default `0x01CC` | I | `tb_trouper_top.v`, `test_trouper_top.py` (write `SC_THR_HI/LO` over SPI) | ⚠️ Write path exercised; reset-default value (`0x01CC`) not asserted anywhere. |
+| TRPR-SCD-007 | `SC_THR_HI/LO` (0x0C/0x0D) writable, RTL consumes low 12 bits, reset default `0x01CC` | I | `tb_trouper_top.v`, `test_trouper_top.py` (write `SC_THR_HI/LO` over SPI); `cocotb/reg_reset_sweep` | ✅ `reg_reset_sweep` reads `0x0C=0x01` and `0x0D=0xCC` immediately after reset, then dirties both bytes and verifies reset restores `0x01CC`. |
 | TRPR-SCD-008 | `SC_HITS_REQ` configurable via register **0x0E**; locks after encoded value + 1 hits | T | `test_trouper_top.py`, `tb_trouper_top.v` (write via SPI) | ✅ Address fixed 2026-07-05 (was `0x1B`); semantics clarified 2026-07-26: values 1–3 are normal 2–4-hit settings and raw 0 is diagnostic-only one-hit mode. RTL and both tests use 0x0E. |
 | TRPR-SCD-009 | `SC_STAT_HI/LO` (0x24–0x25) exposes `\|C[s]\|²` telemetry | I | `cocotb/tests/test_sc_dbg_flags.py` (job 3307) | ✅ Closed 2026-07-06: read over SPI at both addresses — zero before any symbol evaluation exists (pre-PSRAM-init baseline), nonzero after lock (frozen at the last pre-lock symbol's telemetry). |
 | TRPR-SCD-010 | Debug regs `SC_DBG_FLAGS` (0x26), `SC_FIRST_HIT` (0x28–0x2B), `SC_LOCK_SNAP` (0x2C–0x2F) | T | `cocotb/tests/test_sc_dbg_flags.py` (job 3307) | ✅ Closed 2026-07-06, with two RTL fixes found in the process: (1) `SC_DBG_FLAGS.SC_HIT` was the 1-cycle `sc_hit_dbg` pulse wired to combinational readback — firmware-invisible, same class as the W_MISSED_PACKET bug — fixed with held `sc_hit_hold` (Open Risks #35); (2) the snapshot delta check (`SC_LOCK_SNAP == SC_FIRST_HIT + M` at `SC_HITS_REQ=1`) exposed the sc_detector `sample_count` double-count (Open Risks #36). All three registers now read and value-checked over SPI, plus an all-zero pre-evaluation baseline. |
@@ -149,15 +149,36 @@ SymbiYosys k-induction formal proof (`formal/psram_buf_ctrl_formal.sv`,
 `formal/psram_buf_ctrl.sby`) covering pointer/overflow bounds, sticky-flag
 correctness, FSM legality, bus-driving safety, and delay-line warm-up.
 
+### GF180 pad-cell model coverage (2026-08-29)
+
+The PSRAM data lanes have a third, interface-level verification leg using the
+foundry `gf180mcu_fd_io__bi_t` Verilog model.  The standalone
+`cocotb/io_cell_controls` test compiles that model from the pinned OSIC PDK and
+checks both legal control modes: output (`IE=0, OE=1`) and input (`IE=1,
+OE=0`).  The integrated command below wraps all four `PSRAM_SIO` lanes in the
+same cells during a real QPI debug-readback test:
+
+```sh
+cd cocotb/psram_ops
+SIM=icarus GF180_IO_MODEL=1 COCOTB_TESTCASE=test_dbg_readback_content make
+```
+
+The wrapper asserts after each clock that `PSRAM_SIO_IE & PSRAM_SIO_OE == 0`;
+this guards the GF180-disallowed/uncharacterized `IE=OE=1` control state while
+the readback confirms the pad data path.  Icarus is required for this mode
+because the foundry model uses primitives unsupported by Verilator.  This is a
+functional foundry-model check, not post-layout or board signal-integrity
+signoff.
+
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
 | TRPR-PSR-001 | QSPI init completes within 1 ms of the `init_start` trigger (`PSRAM_EN & ~QSPI_OWNER`) — **not** of RESETB de-assertion (corrected 2026-07-26, audit item 9) | T | `cocotb/tests/test_startup.py::test_qe_init_trst_margin` (measures 750 ns RST→EnterQPI gap, job 3257) | ⚠️ The on-chip QE_INIT sequence itself is fast and measured, but the requirement's implicit dependency — firmware must not write `PSRAM_EN=1` until ≥150 µs after board power-up (tPU) — is explicitly **not** enforced in hardware. `test_startup.py::test_psram_init_has_no_tpu_wait` demonstrates this gap numerically rather than closing it; it's host/board discipline only (Open Risks #27). |
 | TRPR-PSR-002 | Continuous circular-buffer streaming; latch packet-start pointer on `sc_lock` | T | `test_capture_playback.py`, formal `a_gap_invariant` (pointer/gap tracking) | ✅ |
-| TRPR-PSR-003 | `REPLAY_ACTIVE` on `W_commit`; replay from latched start incl. preamble, at 500 kS/s | T | `test_weight_gen_spi_flow.py` (job 3286), `test_capture_playback.py`, formal `a_replay_active_matches_state`, `a_replay_clears_on_end` | ✅ |
+| TRPR-PSR-003 | `REPLAY_ACTIVE` on `W_commit`; replay from latched start incl. preamble, at 500 kS/s | T | `test_weight_gen_spi_flow.py` (job 3286), `test_capture_playback.py`, formal `a_replay_active_matches_state`, `a_replay_clears_on_end` | ✅ Measured-capture current-top full-path runs: SF7/BW125 job 5218, SF7/BW250 job 5219, and SF12/BW125 job 5227 (all 1/1 PASS). A repeatable NFS result on 2026-08-30 uses `lora_20260619_162950_SF7-BW125-Pre8.npy[360000:390000]`: `sc_lock` at 12.29 ms, training completes, and 32 replay samples match the stored decimated stream bit-exactly at `timing_ref−1`. The scoreboard records the decimated PSRAM write stream; SF12 uses a 2 MiB behavioural PSRAM model because the default 64 KiB model would alias its approximately 1 MiB preamble. This closes replay-staleness Open Risk #18 for the current architecture. |
 | TRPR-PSR-004 | `REPLAY_MISSED` asserts/latches if `W_COMMIT` is late; combiner falls back to next-packet weights | T | formal `a_replay_missed_cause`/`a_replay_missed_sticky`, `cocotb/tests/test_psram_ops.py::test_replay_missed_late_commit` (job 3313) | ✅ Closed 2026-07-06: a genuinely late `W_COMMIT` (after `packet_end`) is driven in sim — `REPLAY_MISSED` latches at its register bit, the late commit is inert (no zombie replay, packet base invalidated), `PSRAM_CLR_ERR` clears the sticky over SPI, and the next in-time-committed packet replays clean with the flag staying 0. Note the auto re-arm behavior this test had to accommodate: SC re-locks immediately at IDLE, so every uncommitted packet correctly re-latches the flag (the test's first draft flagged that correct behavior as a failure, job 3312). |
 | TRPR-PSR-005 | 8 bytes/sample storage, order i0,q0,i1,q1,i2,q2,i3,q3 | T | `test_capture_playback.py`, `test_weight_gen_spi_flow.py` (byte order implicitly confirmed — replayed/read-back samples only match reference if order is correct) | ✅ (functional, no test asserts byte order in isolation) |
 | TRPR-PSR-013 | Nominal write rate 4 MB/s, ~6% of device capacity | A | — | ✅ Corrected 2026-07-26: 4 channels × 2 bytes × 500 kS/s = 4 MB/s (32 Mbit/s); analysis-only per spec `Verif` column. |
-| TRPR-PSR-014 | QPI timing headroom: 20 spare cycles (write), 8 spare (replay) | A | Formal `a_no_drive_during_dummy`, `a_ce_n_matches_activity` indirectly confirm no overrun; `test_startup.py` timing measurements | ✅ (analysis + formal bus-timing safety) |
+| TRPR-PSR-014 | QPI timing headroom: 20 spare cycles (write), 8 spare (replay) | A | Formal `a_no_drive_during_dummy`, `a_ce_n_matches_activity` indirectly confirm no overrun; `test_startup.py` timing measurements; `cocotb/psram_ops` `SIM=icarus GF180_IO_MODEL=1` debug-readback integration | ✅ Analysis + formal bus-timing safety; the foundry-model run additionally checks legal SIO pad control and the functional pad data path, not SI timing. |
 | TRPR-PSR-015 | Max buffer depth ≈1 MiB at SF12/125 kHz, no overflow ≤ SF12 | A/T | Formal `a_gap_invariant` (bounded backlog), `test_capture_playback.py` SF sweep | ✅ Corrected 2026-07-26: `M = 2^(12+2) = 16384`; 8 symbols × 8 B/sample = 1 MiB, leaving ≥8× headroom. |
 | TRPR-PSR-006 | `PSRAM_STATUS` (0x71) bit layout: state/SAMPLE_SKIP/INIT_DONE/REPLAY_ACTIVE/REPLAY_MISSED/OVERFLOW/BUF_ACTIVE | I | `test_trouper_top.py`, `tb_trouper_top.v` (poll `INIT_DONE` bit[3]), `cocotb/tests/test_bypass_e2e.py` (job 3304, polls `REPLAY_ACTIVE` bit[4] after `W_COMMIT`) | ⚠️ 4/7 bits now read back over SPI at their register positions: `INIT_DONE` bit[3], `REPLAY_ACTIVE` bit[4] (set + negative cases), `REPLAY_MISSED` bit[5] (set + clear, `test_psram_ops.py` job 3313), `SAMPLE_SKIP` bit[2] (asserted 0 end-of-packet in every SF sweep scenario, job 3311). Remaining 3 (`state`, `OVERFLOW`, `BUF_ACTIVE`) are proven as internal *signals* by formal but not at their register bit positions. |
 | TRPR-PSR-007 | All four sticky flags (`OVERFLOW`, `REPLAY_MISSED`, `SAMPLE_SKIP`, `W_COMMIT_LATE`) clearable via `PSRAM_CLR_ERR` (0x70[1]); simultaneous set+clear not lost. Flag list corrected 2026-07-26 (audit item 12) — the requirement previously named three | T | `tb_trouper_spi.v` (W1P self-clear mechanics only), formal `a_replay_missed_sticky`/`a_sample_skip_cause` (found and fixed a same-cycle `clr_err`-timing bug in the proof itself, 2026-07-05) | ✅ (formal covers the actual race the requirement is about; RTL-sim only covers the register mechanics) |
@@ -215,7 +236,7 @@ correctness, FSM legality, bus-driving safety, and delay-line warm-up.
 
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
-| TRPR-MRC-001 | ŷ[n] = Σ conj(w_k)·x_k, x_k int8, w_k int16 Q1.15 | T | `tb_mrc_combiner.v`, `tb_mrc_fw_rand.v`, `tb_mrc_fw_precision.v`, `test_weight_gen_spi_flow.py` (job 3286, bit-exact vs. oracle) | ✅ |
+| TRPR-MRC-001 | ŷ[n] = Σ conj(w_k)·x_k, x_k int8, effective w_k int8 Q0.7 | T | `tb_mrc_combiner.v` (including Q0.7-unity transfer sweep), `tb_mrc_fw_rand.v`, `tb_mrc_fw_precision.v` (2026-08-29, repaired, 5/5 PASS), `test_weight_gen_spi_flow.py` (job 3286, bit-exact vs. oracle), NFS `test_capture_playback.py` (2026-08-30) | ✅ The direct sweep holds only branch 0 active with `W=0x7f+j0`, checks signed I/Q rails and rounding boundaries at PGS=0/1 against `(x × 127) >>> (8−PGS)`, and separately confirms literal bit-exact identity belongs to bypass mode. The measured-capture integration run reaches equal-gain `W_COMMIT`, non-zero `comb_y`, and feeds its sampled complex output into the independent final-stream reconstruction check recorded under RMD-001. |
 | TRPR-MRC-002 | 18-bit acc; combined shift `>>>(8−pgs)`; saturate int8 | T | `tb_mrc_combiner.v` (pgs clip-boundary cases #4/#5), `test_remod_backoff.py` (job 3294, `sat_i`/`sat_q` clip confirmed via forced near-full-scale `comb_y`) | ✅ |
 | TRPR-MRC-003 | 500 kS/s, one output per `iq_valid` | I | Every chain test sampling on `comb_y_valid` pulses (`test_weight_gen_spi_flow.py`, `test_remod_backoff.py`) | ✅ (functional) |
 | TRPR-MRC-004 | Live W bank is consumed after `W_COMMIT`/`W_VALID`; writes are rejected while valid | T | `test_weight_gen_spi_flow.py` | ✅ Spec corrected 2026-07-26: `mrc_combiner.v` reads `rb_w_shadow` directly; no separate `W_ACTIVE` latch or safe-switch promotion exists. The RTL write-lock prevents a mid-packet W-bank rewrite while `W_VALID` is high. |
@@ -240,19 +261,20 @@ correctness, FSM legality, bus-driving safety, and delay-line warm-up.
 
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
-| TRPR-RMD-001 | 3rd-order ΣΔ, int8 I/Q → 1-bit I/Q | T | `tb_sd_remod.v`, `tb_remod_decim_const.v` | ✅ |
+| TRPR-RMD-001 | 3rd-order ΣΔ, int8 I/Q → 1-bit I/Q | T | `tb_sd_remod.v`, `tb_remod_decim_const.v`, NFS `test_capture_playback.py` (2026-08-30) | ✅ In the measured SF7/BW125 NFS run on `lora_20260619_162950_SF7-BW125-Pre8.npy[360000:390000]`, an independent Python FFT brick-wall LPF (250 kHz) and R=64 decimation of 8,192 final 1-bit I/Q clocks yields complex correlation **0.992** with the simultaneously recorded `comb_y` interval (best ±8 output-sample alignment; acceptance threshold >0.70). This is an end-to-end transfer check, not a replacement for the standalone SQNR requirements. |
 | TRPR-RMD-002 | 32 MS/s output, OSR=64 | T | `tb_sd_remod.v` (parametrised OSR), `test_remod_backoff.py` (`clk_per_iq=64` throughout) | ✅ |
 | TRPR-RMD-003 | Saturating integrators; wrap-around prohibited (wrapped integrator ⇒ permanent instability) | T | `test_remod_backoff.py` (job 3294) | ✅ **with a methodology finding worth recording.** `sat16` structurally prevents literal register wraparound by construction (always clips to ±32767/−32768) — confirmed empirically across all forcing scenarios, integrator states never wrapped. But the requirement's "permanent instability" framing turned out not to be the right failure signature to test *for*: even a forced near-full-scale input recovers from railing rather than sticking forever (job 3290-3292 diagnostics) — s3 sits near the rail even during definitely-healthy low-amplitude operation, which is normal CIFF cascade behavior, not a fault. The real, correct instability signature for a 1-bit noise shaper is the **quantizer output losing its dither** (frozen for an extended run), which is what the test actually measures (see RMD-004/006 below). |
 | TRPR-RMD-004 | Input strictly < −3 dBFS (<90 counts); over-range SHALL be detected/flagged or prevented by AGC | T | `test_remod_backoff.py` (job 3294, `REMOD_BACKOFF_SHIFT` register) | ⚠️ Confirms the RTL mechanism (`REMOD_BACKOFF_SHIFT`) that provides margin against this constraint works end-to-end and measurably reduces output-freezing severity at a forced near-full-scale input. But neither of the requirement's two named mitigations exists as tested: there is no on-chip detection/flag for an over-range remod input, and AGC-based prevention is completely untested (Open Risks #8) — the backoff shift is a third, structural mitigation not named in the requirement text. |
-| TRPR-RMD-005 | In-band SQNR > 40 dB at −6 dBFS | T | `tb_sd_remod.v` (SQNR ≈ 55 dB, correlation-threshold check) | ✅ |
-| TRPR-RMD-006 | Stable (no divergence) for any int8 input in [−90, +90] | T | `test_remod_backoff.py` (job 3294: healthy at `comb_y` peak=30 and at `shift=1`'s effective remod input ≈60, both within ±90 — output stuck-run stays at the healthy baseline, 43-68 cycles) | ⚠️ Corroborating evidence at two points inside the claimed range, not an exhaustive sweep of it. No test drives the input at or near the ±90 boundary itself. |
-| TRPR-RMD-007 | Re-demod matches int8 input ±1 LSB RMS at −6 dBFS | T | `tb_sd_remod.v` | ✅ |
+| TRPR-RMD-005 | In-band SQNR > 40 dB at −6 dBFS | T | `tb_sd_remod.v` (SQNR ≈ 55 dB, correlation-threshold check); `test_remod_en.py::test_boundary_tone_quality` | ✅ The direct-DUT boundary-tone characterization (2026-08-30) adds output-only checks at 88/90 codes: fitted gain 0.998–1.004, correlation 0.867–0.877, fitted RMS 34.95–35.65 LSB using a simple 64-clock boxcar. These intentionally do **not** replace the −6 dBFS SQNR requirement or claim its tighter quality limit at the RMD-006 edge. |
+| TRPR-RMD-006 | Stable output dither for any int8 input in [−90, +90] | T | `test_remod_en.py::{test_all_in_spec_dc_codes_retain_dither,test_boundary_transitions_retain_dither,test_bounded_random_iq_retain_dither,test_in_valid_holds_sample_and_retains_dither,test_boundary_reenable_equals_fresh_start}` (Verilator, 2026-08-30); `cocotb/negctl_remod_stuck_run.sh` | ✅ Exhaustive 181-code constant-I=Q sweep: worst 94 clocks at −90 in each 8,192-bit window (<100 limit). Boundary/zero steps peak at 126 clocks (<200 step-response guard); bounded asymmetric random I/Q peaks at 91; invalid-cycle input changes cannot alter the held sample; re-enable at ±90 is bit-exact to fresh reset. The controlled fault injection (forced `out_i=0`) is caught by the stuck-run diagnostic. Integrator states are intentionally not used as a stability metric. Out-of-spec characterization: ±100 reaches 119 clocks and ±127 rails for 8,190/8,191 clocks. |
+| TRPR-RMD-007 | Re-demod matches int8 input ±1 LSB RMS at −6 dBFS | T | `tb_sd_remod.v`; `test_remod_en.py::test_boundary_tone_quality` (characterization only) | ✅ The 88/90-code tone results are recorded under RMD-005 as out-of-contract boundary characterization; the −6 dBFS RMD-007 acceptance evidence remains `tb_sd_remod.v`. |
 | TRPR-RMD-008 | Mode 1 passthrough: remod receives single-antenna stream directly | T | `cocotb/tests/test_bypass_e2e.py` (job 3304) | ✅ Closed 2026-07-06. `test_mode1_e2e_ant0`/`_ant2` drive real `MIMO_CTRL.MODE=1` end-to-end with per-antenna-distinct CW amplitudes: during PSRAM REPLAY, `remod_in_i/q == comb_y_i/q ==` the selected antenna's raw combiner-input sample, bit-exact at `REMOD_BACKOFF_SHIFT=0`, with `psram_silence=0` and `REMOD_A_I` toggling. Deliberately non-trivial committed weights (0x40 in every W-shadow byte) are proven ignored (`use_mrc_r=0`). The PSRAM-replay-delay complication that made `test_remod_backoff.py` avoid true bypass is sidestepped by comparing combiner input→output rather than against the original stimulus. |
+| TRPR-RMD-010 | Disabled state holds reset values; re-enable equals fresh reset | T | `cocotb/remod_en/test_remod_en.py::{test_disable_holds_reset,test_reenable_equals_fresh_start,test_boundary_reenable_equals_fresh_start}` | ✅ Direct `sd_remod` tests (the top-level ties `en` high) prove all integrators and outputs remain at reset while disabled and that re-enable produces a bit-identical stream to a fresh reset, including ±90 boundary inputs. |
 
 **Open items surfaced by this pass:**
 1. **RMD-003's "permanent instability" framing doesn't match observed RTL behavior** — `sat16` prevents literal wraparound, and even adversarial forcing doesn't produce a signal that stays stuck forever; it produces measurably more frequent output-freezing instead. Worth a spec wording pass so future test-writers don't repeat the same false start (three wasted job iterations, 3290-3292, chasing a "stuck forever" signature that isn't how this RTL actually fails).
 2. **RMD-004's detect/flag mitigation doesn't exist on-chip**, and its AGC-prevention alternative is untested (Open Risks #8) — the only proven mitigation is the `REMOD_BACKOFF_SHIFT` margin itself.
-3. **RMD-006 is only spot-checked at two amplitudes**, not swept across the full claimed stable range.
+3. ~~RMD-006 was only spot-checked at two amplitudes~~ — **RESOLVED 2026-08-30**: direct-DUT output-stuck-run boundary sweep covers ±88/±90; ±100/±127 characterize the out-of-range failure slope. Integrator states are intentionally not used as a stability metric.
 4. ~~**RMD-008 / MRC-005 / PCF-011 all converge on the same untested claim**~~ — **CLOSED 2026-07-06** by exactly the single test proposed here: `cocotb/tests/test_bypass_e2e.py` (Verilator, job 3304, 3/3 PASS) drives real `MIMO_CTRL.MODE=1` end-to-end with per-antenna-distinct amplitudes and confirms `remod_in_i/q` tracks the selected antenna's raw decimated sample bit-exact, with committed weights ignored. Also picked up `PSRAM_STATUS.REPLAY_ACTIVE` register-level readback (PSR-006, now 2/7 bits) for free.
 
 ---
@@ -264,6 +286,51 @@ procedures), `TRPR-VER` (verification-process meta) and `TRPR-SPEC` are
 system/procedural requirement groups, not RTL blocks — they are exercised
 via bring-up plans and signoff flows, not this matrix. Every RTL-block
 group is now traced below or above.
+
+**Exception added 2026-08-29:** the A40 padframe migration pushed part of
+`TRPR-PHY` *into* the RTL — `trouper_top.v` now drives every pad's IO-cell
+control interface itself. That surface is simulatable and is traced in the
+section immediately below.
+
+---
+
+## A40 pad-control tie-offs — TRPR-PHY-004 / TRPR-SPS-008
+
+The A40 (ACV) workshop padring has no output-only cell, so every functional
+output sits on a bidirectional pad whose control pins (`_OE/_IE/_CS/_SL/
+_PU/_PD/_PDRV0/_PDRV1`) are driven from `trouper_top.v` — 104 pad-control
+outputs: 96 constant tie-offs, 4 dynamic `PSRAM_SIO_n_IE`, and the 4
+pre-existing functional `PSRAM_SIO_n_OE`. Until 2026-08-29 **no simulation
+read any of them**: an inverted `_IE`, a swapped `_PU`/`_PD` or a wrong
+`_PDRV` code would pass every existing suite and surface only in silicon.
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-PHY-004 (pad-control leg) | Every A40 pad-control pin driven to the value documented in `planning/Pinout.md` "A40 pad-control tie-offs"; constants genuinely constant | T | `cocotb/pad_tieoffs/test_pad_tieoffs.py` (Verilator, job 5223, 2/2 PASS), `sim/tests/test_pad_tieoff_ports.py` (pytest, 4/4) | ✅ Closed 2026-08-29. All 96 constants are checked against a table transcribed **from Pinout.md, not from the RTL**, while reset is still asserted and again out of reset; then re-checked on *every* clock through QPI init and ~200 samples of sustained circular capture (416 k ns, >13 k clocks), so a tie-off accidentally driven by a real signal cannot hide between polls. The static companion proves no pad-control output is left undriven (would float in silicon), that only the 4 `SIO_n_IE` are non-constant, and that the 6 unused `_IN` paths are explicitly sunk. |
+| TRPR-PHY-004 (SIO lane control) | `PSRAM_SIO_n_IE == ~PSRAM_SIO_n_OE`; the uncharacterized `IE=OE=1` state of `gf180mcu_fd_io__bi_t` never occurs | T | `cocotb/pad_tieoffs/test_pad_tieoffs.py` (job 5223) | ✅ Checked per-clock on all four lanes, with counters asserting the lanes were observed both driven and released so a stuck `OE` cannot pass vacuously. Complements the existing `GF180_IO_MODEL=1` foundry-model leg in `cocotb/psram_ops`, which checks the same invariant through the real `bi_t` cell on a single testcase. |
+| TRPR-SPS-008 (pad leg) | `SPI_MISO_OE` tied 1 (Option A, point-to-point host link), not gated by `HOST_CS` | T | `cocotb/pad_tieoffs/test_pad_tieoffs.py` (job 5223) | ✅ The tie value is now asserted directly. The complementary functional half — the slave driving `SPI_MISO=0` while deselected, which is what makes `OE=1` safe — remains covered by `tb_trouper_spi.v` (job 3863). |
+
+**Negative control (job 5225).** Because a tie-off test can easily be
+vacuous, three faults were injected into `trouper_top.v` on a writable copy
+and the suite re-run against each: `SPI_MISO_SL` 1→0 (slew mistake),
+`PSRAM_SIO_2_IE` polarity inverted (`IE=OE`), and `IQ_DATA_I_1_PU` 0→1
+(stray on-chip pull-up). **All three were caught by both testcases** with
+diagnostics naming the offending port and its expected value. The script is
+`cocotb/negctl_pad_tieoffs.sh` (kept on NFS; it must mutate under `$RUN_DIR`
+because `/foss/designs` is mounted read-only).
+
+**Note on the shared wrapper.** `cocotb/hdl/tb_trouper_cocotb.v` gained 96
+pass-through output ports for this suite. They are pass-throughs only —
+required because Verilator constant-folds unconnected constant outputs out of
+the VPI hierarchy, so the tie-offs are unreachable from cocotb otherwise. The
+4 `SIO_n_OE`/`_IE` are read from the wrapper's existing internal vectors.
+
+**Open items:** `_PDRV*` and `_SL` values are *provisional pending SI review*
+(Pinout.md). This suite proves the RTL drives what the document specifies; it
+does **not** validate that those drive-strength/slew choices are electrically
+correct. That remains a signoff/SI activity, and if the SI review changes a
+value, `Pinout.md`, the expected table in `test_pad_tieoffs.py`, and the RTL
+must be updated together.
 
 ---
 
@@ -278,13 +345,13 @@ Migration record: `planning/decimator-hb-migration-impact-plan.md` (Gates
 | TRPR-DEC-002 | Fixed R=64 HB chain (CIC-3 R=16 → HB1 → HB2), 500 kS/s | T | `tb_decimator_poly_equiv.v` (bit-true vs `sd_decimator_poly_ref.v`/Python), migration Gates | ✅ |
 | TRPR-DEC-003 | SQNR ≥ 30 dB at −3 dBFS | T | migration-plan Gate record; `tb_sqnr.v`/`tb_sqnr_4ch.v` | ⚠️ The standalone SQNR tbs target the pre-migration `sd_decimator_top`; the HB chain's SQNR evidence lives in the migration record's Python analysis, not a current-RTL testbench. |
 | TRPR-DEC-004 | Identical branch inputs → bit-identical branch outputs (TDM) | T | `tb_dsp_chain_rand.v` (job 1789, per-branch oracle), `test_capture_playback.py` (distinct branches, ZDIAG ranking) | ✅ (functional) |
-| TRPR-DEC-005 | CIC saturating arithmetic, no wrap on all-1s/all-0s | T | — | ⚠️ Overflow safety of the 14-bit CIC was established analytically during the area work ("overflow-locked", area roadmap); no directed all-ones/all-zeros stimulus test exists. |
+| TRPR-DEC-005 | CIC 14-bit modulo wrap-around; saturation prohibited | A | overflow-width derivation in the spec row; `sd_decimator_poly.v` arithmetic inspection | ✅ The requirement is analytical by design: 14 bits is the overflow-safe CIC width, and two's-complement wrap is required for comb cancellation. The prior matrix text incorrectly inverted the contract by calling for saturation and no wrap. |
 | TRPR-DEC-006 | `iq_valid` every 64 clocks | T | every cocotb test (all timing math assumes `clk_per_iq=64`; any deviation fails lock/training immediately) | ✅ (functional) |
 | TRPR-DEC-007 | Stopband > 40 dB | A | migration-plan filter analysis | ✅ (analysis, per Verif=A) |
 | TRPR-DEC-008 | `bw_sel` selects BW only; R fixed at 64 | I | SF sweep (job 3311) passes both BWs with identical decimator timing | ✅ |
 | TRPR-DEC-009 | Passband droop ≤ 0.5 dB (≈ −0.17 dB inherent) | A | migration record, `sim/tests/test_cfo_droop.py` | ✅ (analysis) |
 
-**Open items:** DEC-003 standalone SQNR tb is stale vs the HB chain (regenerate or retire `tb_sqnr*.v`); DEC-005 lacks a directed saturation stimulus.
+**Open item:** DEC-003 standalone SQNR tb is stale vs the HB chain; regenerate it against `sd_decimator_poly` or retire it in favour of an explicitly versioned current-RTL SQNR regression. DEC-005 is an analysis requirement and does not call for saturation testing.
 
 ---
 
@@ -294,13 +361,13 @@ Migration record: `planning/decimator-hb-migration-impact-plan.md` (Gates
 |---|---|---|---|---|
 | TRPR-DCR-001..004, 009, 011 | Structure: 4 branches, Q8.5 acc, full-diff update, int8 I/O, fixed α=1/32, `out_valid` = `raw_valid`+1 | I | inspection + every chain test times downstream from `out_valid` | ✅ (per Verif=I; structure exercised continuously by all chain tests) |
 | TRPR-DCR-005, 007, 008, 010 | τ=64 µs, no-saturation bound, acc-overflow-impossible bound, AC droop < 0.1 dB | A | arithmetic analysis in spec rows | ✅ (analysis) |
-| TRPR-DCR-006 | Steady-state DC < 1 LSB after 256 samples | T | — | ⚠️ Only indirect: every SDM-driven test's lock/training depends on DC removal converging (driver docstrings budget < 3% attenuation), but no test asserts the residual-DC number. |
+| TRPR-DCR-006 | Steady-state DC < 1 LSB after 256 samples | T | `cocotb/dc_removal/test_dc_removal.py::test_constant_dc_is_zero_within_256_samples` | ✅ Directed direct-DUT sweep of positive and negative DC codes through all 8 I/Q paths; every residual is 0 after 256 valid samples. |
 | TRPR-DCR-012 | Reset clears accumulators/outputs | T | every cocotb test (full reset per case, immediate clean re-lock) | ✅ (functional) |
-| TRPR-DCR-013 | Post-reset settle < ~74 samples with DC present | T | — | ❌ No test drives a deliberate DC offset at reset and measures settle. |
+| TRPR-DCR-013 | Post-reset one-time-constant DC settling | T | `cocotb/dc_removal/test_dc_removal.py::test_reset_dc_settles_by_one_time_constant` | ✅ Directed full-scale ±127 DC from reset; all eight paths are within the mathematically correct ±13 LSB 90%-settling bound at 74 valid samples. The former “<1 LSB at 74” wording was inconsistent with a 32-sample IIR and was corrected in the spec. |
 | TRPR-DCR-014 | No bypass port (by design) | I | — | ✅ (by construction) |
 | TRPR-DCR-015 | ≥64-sample `sc_lock` hold-off after reset (provided by PSRAM warm-up) | T | `cocotb/tests/test_startup.py::test_sc_correlator_idle_until_del_rdy` | ✅ Spec reworded 2026-07-06: the old "open RTL gap" text predated the PSRAM migration — SC evaluations cannot begin until `del_rdy` (M ≥ 128 warm-up samples ≥ the required 64), measured by `test_startup.py`. |
 
-**Open items:** DCR-006/013 directed convergence tests missing (low value — behavior continuously exercised); DCR-015 spec text needs the warm-up rewording.
+**No remaining DC-removal traceability gap.** DCR-006/013 have direct-DUT coverage; DCR-015 is covered by PSRAM warm-up.
 
 ---
 
@@ -386,12 +453,12 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 |---|---|---|---|---|
 | TRPR-IRQ-001 | Five sticky sources at bits [4:0] | T | bit0/1: every suite; bit2: `test_w_missed_packet.py`; bit3: same; bit4: `test_noise_trig.py` (all job 3310+) | ✅ All five bits now exercised at their positions. |
 | TRPR-IRQ-002 | Per-bit clear via `IRQ_CLEAR` | T | `tb_trouper_two_packet.v` (job 3203, the Open Risks #3 fix regression) + ubiquitous use | ✅ |
-| TRPR-IRQ-003 | `IRQ_OUT` + `IRQ_GROUPER` both driven by `\|irq_status` | T | — | ⚠️ Register-level `\|irq_status` behavior is thoroughly proven, but no test asserts the two **pins** — every tb wires them and never samples them. One-line adds to any cocotb test. |
-| TRPR-IRQ-004 | Level-high until all bits cleared | T | `tb_trouper_two_packet.v` (status level semantics) | ⚠️ Same pin-level caveat as IRQ-003. |
+| TRPR-IRQ-003 | `IRQ_OUT` + `IRQ_GROUPER` both driven by `\|irq_status` | T | `cocotb/irq_pins/test_irq_pins.py::test_irq_pins_sticky_clear` (Verilator, 2026-08-29, 1/1 PASS, 2.33 s) | ✅ Both top-level pins are sampled directly: they assert together when `TRAINING_DONE` and `NOISE_READY` become sticky, and are always equal. |
+| TRPR-IRQ-004 | Level-high until all bits cleared | T | `cocotb/irq_pins/test_irq_pins.py::test_irq_pins_sticky_clear` (pin-level), `tb_trouper_two_packet.v` (status-level) | ✅ Directed selective-clear proof: clearing `NOISE_READY` while `TRAINING_DONE` remains sticky holds both pins high; clearing the final bit drops both, and a 16-clock dwell proves no re-assertion from the held `training_done` level. |
 | TRPR-IRQ-005 | *(DELETED — JTAG removed)* | — | — | — n/a |
 | TRPR-IRQ-006 | Edge-set (no re-assert of cleared bit while source held) | T | `tb_trouper_two_packet.v` (job 3203 fix) | ✅ |
 
-**Open item:** pin-level `IRQ_OUT`/`IRQ_GROUPER` assertion — trivial to add.
+**No remaining pin-level IRQ gap.**
 
 ---
 
@@ -420,8 +487,8 @@ All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace
 | TRPR-INT-001/007/008 | Fabric exists; one shared map; byte-only transactions | I | `tb_trouper_grp_arb.v` + all SPI suites | ✅ |
 | TRPR-INT-002 | Grouper path reaches full register map, same semantics | T | `tb_trouper_grp_arb.v` (GRP write → SPI readback and vice versa) | ✅ |
 | TRPR-INT-003 | Arbiter: Grouper priority, SPI-write pending slot, read retry | T | `tb_trouper_grp_arb.v` (collision cases 3a/3b/4a) | ✅ |
-| TRPR-INT-004 | Grouper idle/reset → SPI-only operation clean | T | every cocotb suite (GRP inputs tied off in `tb_trouper_cocotb.v`) | ✅ (continuously exercised) |
-| TRPR-INT-005 | IRQ line to Grouper on any status bit | T | — | ⚠️ = IRQ-003 pin-level gap. |
+| TRPR-INT-004 | Grouper idle/reset → SPI-only operation clean | T | `cocotb/tests/test_host_only_e2e.py::test_host_spi_only_same_packet_mrc_replay` (Verilator, 2026-08-29, 1/1 PASS, 2.19 s); all other top-level cocotb suites also tie `GRP_*` off in `tb_trouper_cocotb.v` | ✅ **Dedicated standalone proof added 2026-08-29.** Explicitly ties `GRP_ADDR`/`GRP_WDATA`/`GRP_WE`/`GRP_RE` low and rechecks them at every host-SPI transaction boundary. Host SPI alone enables and initialises PSRAM, configures and locks RX, observes `TRAINING_DONE`, reads `ZDIAG`, writes/commits W, and reaches monotonic same-packet MRC replay without `REPLAY_MISSED`. |
+| TRPR-INT-005 | IRQ line to Grouper on any status bit | T | `cocotb/irq_pins/test_irq_pins.py::test_irq_pins_sticky_clear` (Verilator, 2026-08-29, 1/1 PASS) | ✅ `IRQ_GROUPER` is directly sampled alongside `IRQ_OUT` through assertion, selective clear, final clear, and post-clear dwell. |
 | TRPR-INT-006 | Single 32 MHz clock; control plane CE-gated to 16 MHz effective (no `CLK_16M` net) | I | CE-gating verified by the SPI-write timing work (`[[project_ce16_partition]]`, all register suites) | ✅ Spec reworded 2026-07-06 to the implemented single-clock + clock-enable architecture (was written against a two-clock `CLK_16M` scheme that never shipped; this also retires the corresponding item of Open Risks #24's clock-architecture drift). |
 | TRPR-INT-009 | Commit flow (Z read → W write → commit → latch) | T | `test_weight_gen_spi_flow.py` (job 3286) | ✅ |
 | TRPR-INT-010 | Bypass when Grouper inactive / no commit | T | `test_w_missed_packet.py`, `test_bypass_e2e.py` (jobs 3304–3310) | ✅ |
@@ -432,5 +499,5 @@ All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace
 1. ~~Two false/stale documentation claims~~ — **RESOLVED 2026-07-06**: REG-005 reworded to the deliberate custom-RTL + map-as-source-of-truth discipline; WGN-008's `DBG_MISSED_PKTS` clarified as a firmware variable; `CLAUDE.md` block list corrected.
 2. ~~DCR-015's "open RTL gap" is stale~~ — **RESOLVED 2026-07-06**: spec reworded to the warm-up-provided hold-off.
 3. ~~FBC-002 and INT-006 describe plumbing that doesn't exist~~ — **RESOLVED 2026-07-06**: both reworded to the shipped plumbing (`sc_lock`-latched pointer; single-clock + CE). `buf_freeze` itself was deleted from the RTL 2026-07-26 (Open Risks #25).
-4. **Cheap test adds:** pin-level `IRQ_OUT`/`IRQ_GROUPER` asserts (IRQ-003/004/INT-005) and in-burst 0x76 non-increment (SPS-010). (MISO deselected-low coverage for SPS-008 closed in job 3863; full reset register sweep for REG-001 closed 2026-07-06.)
+4. **Cheap remaining test add:** in-burst 0x76 non-increment (SPS-010). Pin-level `IRQ_OUT`/`IRQ_GROUPER` assertion/clear behavior closed 2026-08-29 by `cocotb/irq_pins`. (MISO deselected-low coverage for SPS-008 closed in job 3863; full reset register sweep for REG-001 closed 2026-07-06.)
 5. **Stale standalone tbs:** `tb_sqnr*.v` predate the HB migration (DEC-003) — regenerate against `sd_decimator_poly` or retire in favor of the migration-record analysis.

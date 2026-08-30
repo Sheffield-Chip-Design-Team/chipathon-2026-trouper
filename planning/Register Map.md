@@ -48,7 +48,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
 | `0x1E` | `WGT_CTRL` | R/W | `0x00` | Combiner weight path | [0] `W_COMMIT` (W1P); [1] `W_VALID` (RO); [2] `W_PENDING` (RO); [3] `W_MISSED_PACKET` (RO); [4] `W_COMMIT_LATE` (RO); [5] `W_WR_REJECTED` (RO sticky, W1C); [7:6] reserved |
-| `0x1F` | `TACC_NOISE_TRIG` | W | `0x00` | Training Accumulator | [0] W1P: arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`) |
+| `0x1F` | `TACC_NOISE_TRIG` | R/W | `0x00` | Training Accumulator | [0] W1P: arm accumulator for firmware-triggered noise measurement (ignores `sc_lock`); [1] `NOISE_TRIG_REJECTED` (RO sticky, W1C): trigger arrived while `TRAINING_ARMED=1` **or** `PACKET_ACTIVE=1` |
 | `0x20` | `TRAINING_STATUS` | R | `0x00` | Training Accumulator | [0] `TRAINING_DONE`; [1] `TRAINING_ARMED`; [7:2] reserved |
 | `0x21` | `N_ACC_HI` | R | `0x00` | Training Accumulator | Samples accumulated [17:16] (bits [1:0]; [7:2] read 0) |
 | `0x22` | `N_ACC_MID` | R | `0x00` | Training Accumulator | Samples accumulated [15:8] |
@@ -170,6 +170,27 @@ dedicated pad. See TRPR-PHY-003 and TRPR-IRQ.
 | [7:4] | `ANTENNA_EN` | One bit per antenna; default `0xF` (all enabled) |
 
 `MODE=1` bypasses the MRC path and routes the lowest-numbered enabled antenna directly to the output path. Writes to `MODE` and `ANTENNA_EN` update shadow configuration during an active packet; hardware latches `ACTIVE_MODE` and `ACTIVE_ANTENNA_EN` only when the receiver is idle between packets.
+
+---
+
+### Runtime reconfiguration without reset
+
+Trouper supports configuration changes between packets without a chip reset.
+The safe transaction is: (1) wait until `PACKET_STATUS.PACKET_ACTIVE=0`,
+(2) write `RX_HOLD=1`, (3) update all structural configuration, check and
+clear `RX_HOLD.CFG_WR_REJECTED`, then (4) write `RX_HOLD=0`. `RX_HOLD` blocks
+new SC locks but does not abort an active packet, so it is not a substitute for
+step 1.
+
+| Register(s) | Mid-packet policy | Result / firmware rule |
+| --- | --- | --- |
+| `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
+| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
+| `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
+| W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
+| `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
+| `TACC_NOISE_TRIG` (`0x1F`) | Rejected while training or packet-active | Idle-only; `NOISE_TRIG_REJECTED` records an unsafe request. |
+| `QSPI_OWNER` / PSRAM debug (`0x70[3]`, `0x72–0x79`) | Ownership defers to a QPI burst boundary; debug requests are serviced only idle | Service/bring-up operations, not live receive reconfiguration. |
 
 ---
 
@@ -298,9 +319,15 @@ Weight-path commit control and status. Firmware is the sole weight source (there
 | [5] | `W_WR_REJECTED` | Read-only sticky: a `0x30`–`0x3F` write was dropped by the W-shadow write-lock (writes are blocked while `W_VALID` is high — the combiner reads the shadow live). W1C: write `WGT_CTRL` with bit 5 set to clear |
 | [7:6] | — | Reserved |
 
-### `0x1F` — TACC_NOISE_TRIG (write-only, W1P)
+### `0x1F` — TACC_NOISE_TRIG (W1P + busy rejection status)
 
 Firmware-triggered noise measurement. Writing bit 0 = 1 arms the training accumulator without waiting for `sc_lock`. The accumulator resets all internal state and immediately begins accumulating the next `TACC_WINDOW_SYMS × M` samples. `TRAINING_DONE` fires on completion.
+
+The trigger is an **idle-only** operation. If it arrives while
+`TRAINING_ARMED=1` or `PACKET_ACTIVE=1`, it is **rejected** rather than
+overwriting an active window or a completed packet's Z snapshot.
+`NOISE_TRIG_REJECTED` (bit 1) latches high; clear it by writing `0x02` to
+this address. Firmware must retry only after packet completion.
 
 In noise mode (no signal): off-diagonal `Z_kl ≈ 0` (uncorrelated noise); diagonal `ZDIAG_k ≈ σ²_k · n_acc`.
 
