@@ -14,6 +14,10 @@
 //      → output = 60 (combined shift: 1920>>>5=60)
 //   6. Bypass mode — mode=1, bypass_ant=2, W ignored
 //      → y_i = x_i2, y_q = x_q2 exactly
+//   7. Single-branch Q0.7 unity transfer sweep — W0=0x7f+j0, W1..3=0.
+//      Checks the exact fixed-point result for PGS=0 and PGS=1.  PGS=1 is
+//      near-unity (127/128 scale), while PGS=0 deliberately includes the
+//      combiner's guard bit; literal identity belongs to bypass mode.
 
 `timescale 1ns/100ps
 
@@ -72,11 +76,13 @@ module tb_mrc_combiner;
             @(posedge clk);
             x_valid = 1'b0;
             timeout = 0;
-            while (!y_valid && timeout < 20) begin
+            // States 1..10 are each held for MAC_WAIT+1=3 clocks in the
+            // current paced implementation, plus input capture/output cycles.
+            while (!y_valid && timeout < 40) begin
                 @(posedge clk);
                 timeout = timeout + 1;
             end
-            if (timeout >= 20) begin
+            if (timeout >= 40) begin
                 $display("FAIL: y_valid timeout");
                 fail_count = fail_count + 1;
             end
@@ -96,6 +102,22 @@ module tb_mrc_combiner;
             end
         end
     endtask
+
+    function signed [7:0] unity_expected;
+        input signed [7:0] sample;
+        input [2:0] pgs;
+        reg signed [17:0] scaled;
+        begin
+            scaled = $signed(sample) * 18'sd127;
+            scaled = scaled >>> (8 - pgs);
+            if (scaled > 18'sd127)
+                unity_expected = 8'sd127;
+            else if (scaled < -18'sd128)
+                unity_expected = -8'sd128;
+            else
+                unity_expected = scaled[7:0];
+        end
+    endfunction
 
     // -----------------------------------------------------------------------
     // Stimulus
@@ -211,11 +233,41 @@ module tb_mrc_combiner;
         check_iq(8'sd77, -8'sd33, 6);
 
         // -------------------------------------------------------------------
+        // Test 7: single-branch Q0.7 unity transfer function.
+        // W=0x7f represents 127/128, not literal integer unity.  The expected
+        // result is therefore (x * 127) >>> (8 - PGS), independently for I/Q.
+        // Sweep representative rails, signs and rounding boundaries at both
+        // the guarded (PGS=0) and near-unity (PGS=1) settings.
+        // -------------------------------------------------------------------
+        mode = 0; W_valid = 1; bypass_ant = 0;
+        W_re0=8'sd127; W_im0=0; W_re1=0; W_im1=0;
+        W_re2=0; W_im2=0; W_re3=0; W_im3=0;
+        x_i1=0; x_q1=0; x_i2=0; x_q2=0; x_i3=0; x_q3=0;
+        for (post_gain_shift = 0; post_gain_shift <= 1; post_gain_shift = post_gain_shift + 1) begin
+            x_i0 = -8'sd128; x_q0 = 8'sd127; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = -8'sd91; x_q0 = 8'sd90; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = -8'sd33; x_q0 = 8'sd32; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = -8'sd1; x_q0 = 8'sd1; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = 8'sd0; x_q0 = 8'sd0; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = 8'sd17; x_q0 = -8'sd18; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = 8'sd63; x_q0 = -8'sd64; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+            x_i0 = 8'sd126; x_q0 = -8'sd127; drive_sample;
+            check_iq(unity_expected(x_i0, post_gain_shift), unity_expected(x_q0, post_gain_shift), 7);
+        end
+
+        // -------------------------------------------------------------------
         // Done
         // -------------------------------------------------------------------
         repeat(4) @(posedge clk);
         if (fail_count == 0) begin
-            $display("ALL PASS (%0d tests)", 6);
+            $display("ALL PASS (7 test groups)");
         end else begin
             $display("FAILED: %0d test(s)", fail_count);
             $finish(1);
