@@ -16,7 +16,11 @@ bit/byte-wise against the DUT.
 
 from dataclasses import dataclass, field
 
-NO_INC_ADDR = 0x76  # PSRAM_DBG_DATA: burst-exempt, does not auto-increment
+# Burst-exempt addresses: the SPI address does not auto-increment, so
+# repeated data bytes re-access the same port (spi_slave.v NO_INC_RD_ADDR /
+# NO_INC_WR_ADDR; Register Map "Burst access"). Both hold in either
+# direction, as the RTL compares the address only.
+NO_INC_ADDRS = frozenset((0x76, 0x79))  # PSRAM_DBG_DATA / PSRAM_DBG_WDATA
 
 
 @dataclass
@@ -101,8 +105,8 @@ class SpiSlaveModel:
                 self.write_events.append((addr, data_byte))
                 rx_bytes.append(0x00)  # MISO is driven from reg_rdata only on reads
 
-            # Burst auto-increment (7-bit wrap); 0x76 (PSRAM_DBG_DATA) holds.
-            if addr != NO_INC_ADDR:
+            # Burst auto-increment (7-bit wrap); 0x76/0x79 debug ports hold.
+            if addr not in NO_INC_ADDRS:
                 addr = (addr + 1) & 0x7F
 
         # A read byte that started (>=1 bit) but never finished still fires
