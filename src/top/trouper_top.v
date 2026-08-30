@@ -585,6 +585,17 @@ module trouper_top (
     wire [17:0]        n_acc;
     wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
+    // Declared here (driven by the Stage 7 packet FSM below) because the
+    // noise-trigger qualification above needs it; Icarus rejects a net that
+    // is used before its declaration.
+    wire               packet_active;
+    // A noise window is an idle-only operation.  It cannot replace either an
+    // in-flight training window or a packet whose training window has already
+    // completed: in the latter case re-arming would overwrite the Z snapshot
+    // while the packet FSM still owns the packet.  Reject both cases and
+    // report the rejection through reg_bank 0x1F[1].
+    wire               noise_trig_accept = rb_noise_trig && !training_armed && !packet_active;
+    wire               noise_trig_rejected = rb_noise_trig && (training_armed || packet_active);
 
     training_acc u_tacc (
         .clk        (clk),
@@ -599,7 +610,7 @@ module trouper_top (
         .sf           (rb_sf_cfg),
         .sample_shift (rb_sample_shift),
         .tacc_window_syms (rb_tacc_window_syms),
-        .noise_trig   (rb_noise_trig),
+        .noise_trig   (noise_trig_accept),
         .Zpair_i0 (Zpair_i[0]), .Zpair_q0 (Zpair_q[0]),
         .Zpair_i1 (Zpair_i[1]), .Zpair_q1 (Zpair_q[1]),
         .Zpair_i2 (Zpair_i[2]), .Zpair_q2 (Zpair_q[2]),
@@ -635,7 +646,7 @@ module trouper_top (
         end else begin
             sigma2_valid_r <= 1'b0;
 
-            if (rb_noise_trig) begin
+            if (noise_trig_accept) begin
                 noise_window_active  <= 1'b1;
                 noise_window_sc_seen <= 1'b0;
             end else if (noise_window_active && (sc_hit_dbg || sc_lock)) begin
@@ -660,7 +671,6 @@ module trouper_top (
     wire        W_valid_set, W_missed_packet;
     wire        W_missed_q;   // sticky per-packet readback mirror of the pulse
     wire [2:0]  packet_phase;
-    wire        packet_active;
     wire        packet_active_ps;   // fanout-split duplicate, u_psram only
     wire [1:0]  active_mode;
     wire [3:0]  active_antenna_en;
@@ -1067,6 +1077,7 @@ module trouper_top (
         .irq_set          (rb_irq_set),
         .sc_stat         (sc_stat),
         .training_armed  (training_armed),
+        .noise_trig_rejected (noise_trig_rejected),
         .n_acc           (n_acc),
         .zpair_i0 (Zpair_i[0]), .zpair_q0 (Zpair_q[0]),
         .zpair_i1 (Zpair_i[1]), .zpair_q1 (Zpair_q[1]),
