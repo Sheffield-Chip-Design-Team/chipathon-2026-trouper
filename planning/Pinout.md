@@ -34,6 +34,8 @@ in the current PDN config uses that capability — full detail in the supply sec
 
 ### RX data from SX1257 (8 pads, input)
 
+See "Board wiring — I/Q orientation through the RX chain" below for the pin-level mapping and the SX1257 datasheet erratum.
+
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
 | `IQ_DATA_I[0]` | in | SX1257_0 I_OUT | 1-bit ΣΔ RX I stream, antenna 0 |
@@ -53,6 +55,8 @@ in the current PDN config uses that capability — full detail in the supply sec
 | `RESETB` | in | PCB reset / host | Active-low global reset |
 
 ### ΣΔ re-mod outputs to SX1302 (2 pads, output)
+
+See "Board wiring — I/Q orientation through the RX chain" below for the pin-level mapping and the SX1257 datasheet erratum.
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
@@ -96,6 +100,101 @@ Dedicated PSRAM QPI data nibble. JTAG and GPIO have been removed (no TAP in RTL;
 
 ---
 
+## Board wiring — I/Q orientation through the RX chain (2026-08-30)
+
+Trouper sits between four SX1257s and the SX1302, replacing what would otherwise
+be a direct radio→concentrator link. I and Q are **not interchangeable**:
+swapping them conjugates the signal, which inverts the LoRa chirp direction. The
+pad order below is already correct and **must not be "tidied"** — see the
+non-adjacency and erratum notes.
+
+### The rule: wire by pin *name*, end to end
+
+| Signal | SX1257 pin | → Trouper pad | → SX1302 pin |
+|---|---|---|---|
+| I, antenna 0 | 15 `I_OUT` | `IQ_DATA_I_0` (W13) | — |
+| Q, antenna 0 | 14 `Q_OUT` | `IQ_DATA_Q_0` (W14) | — |
+| I, antenna 1 | 15 `I_OUT` | `IQ_DATA_I_1` (W15) | — |
+| Q, antenna 1 | 14 `Q_OUT` | `IQ_DATA_Q_1` (W16) | — |
+| I, antenna 2 | 15 `I_OUT` | `IQ_DATA_I_2` (W17) | — |
+| Q, antenna 2 | 14 `Q_OUT` | `IQ_DATA_Q_2` (W18) | — |
+| I, antenna 3 | 15 `I_OUT` | `IQ_DATA_I_3` (W19) | — |
+| Q, antenna 3 | 14 `Q_OUT` | `IQ_DATA_Q_3` (W20) | — |
+| Combined I | — | `REMOD_A_I` (N01) | 41 `RADIO_A_IQ[3]` |
+| Combined Q | — | `REMOD_A_Q` (N02) | 44 `RADIO_A_IQ[0]` |
+| 32 MHz clock | 10 `CLK_OUT` | `IQ_CLK` (W21) | 43 `RADIO_A_CLK_I` |
+
+Name-based wiring reproduces Semtech's own reference topology: the SX1302
+datasheet's Table 2-1 peer column maps `RADIO_A_IQ[3]` ← SX125x `DIO4`/`I_OUT`
+and `RADIO_A_IQ[0]` ← `DIO1`/`Q_OUT`, i.e. by name. Inserting Trouper in the
+middle preserves that as long as both halves follow names.
+
+SX1302 pins 45 / 48 / 49 (`IQ[1]`, `IQ[4]`, `IQ[2]` — TX `I_IN`, `Q_IN`,
+`CLK_IN`) are unused: Trouper is receive-only.
+
+### ⚠ Erratum — the SX1257 pin table contradicts itself
+
+`DS_SX1257_V1.2.pdf` pin list, verbatim:
+
+```
+14   Q_OUT   O   Digital baseband data output from I (inphase) channel ADC
+15   I_OUT   O   Digital baseband data output from Q (quadrature) channel ADC
+```
+
+The pin **named** `Q_OUT` is **described** as carrying I, and vice versa. The
+table above follows the **names**, because the SX1302 side is name-consistent and
+name-based wiring reproduces the reference design. **Do not re-derive this from
+the description column.** Resolve it by measurement at bring-up (see
+`Test Plan.md` → "I/Q orientation check"), never from the document.
+
+Compounding the trap: pins 14/15 are adjacent in **Q-then-I** ascending order,
+while Trouper's pads ascend **I-then-Q**. The visually tidy, non-crossing fanout
+at the SX1257 is therefore the **wrong** one. Each antenna's pair must cross.
+
+### SX1302 I and Q are not adjacent — this is fine
+
+Pins 41 and 44 straddle `RADIO_A_MISO` (42) and `RADIO_A_CLK_I` (43), so no pad
+ordering yields a clean parallel two-wire run; the pair must fan around two pins
+at the SX1302 end regardless. That is a trivial routing cost and **not** a reason
+to reorder pads. What matters is that the ascending order matches — I on the
+lower pin, Q on the higher — so `N01→41`, `N02→44` routes **without crossing**.
+
+The west-edge interleave (`I0,Q0,I1,Q1,…`) is likewise deliberate: four separate
+SX1257s each fan out to one adjacent pad pair. Grouping all I then all Q would
+drive every Q trace across four pads.
+
+### Consequences of getting it wrong
+
+There is **no I/Q swap or invert control in the RTL or register map** — this was
+considered on 2026-08-30 and deliberately rejected (see below). A wiring error is
+a board rework, so it is worth catching at bring-up rather than in a PER sweep.
+
+- **Uniform swap (all four antennas)** — `Z → conj(Z)`, `w → conj(w)`, output
+  conjugated. Benign-ish and consistent: a uniform spectral inversion.
+- **Per-antenna swap (one branch only)** — the dangerous case. `Z_kl` between a
+  swapped and an unswapped branch becomes a pseudo-correlation averaging toward
+  zero over random phase, so **that branch gets ≈zero MRC weight while its
+  `ZDIAG` power reading stays healthy**. No crash, no flag — a silent drop from
+  4-branch to 3-branch diversity (≈1.2 dB) that a bench test would not notice.
+
+**Why no swap register bit:** a mux pair at the combiner *output* is downstream
+of the combining, so it can fix only the uniform case — which is equally fixable
+by the board rework that caused it — and cannot un-swap a single input branch,
+which is the case that actually costs diversity. The mitigation is the bring-up
+`Z_kl` check in `Test Plan.md`, which catches both cases at zero silicon cost.
+
+### Clock note
+
+`IQ_CLK` (W21), SX1302 pin 43 and the SX1257s all need the same 32 MHz. That is a
+multi-load net, and `IQ_CLK` is `input_cmos` with no hysteresis precisely because
+the duty-cycle budget has no margin (see "Pad cell type selection" below) — so
+this net wants the fanout buffer (`resources/DS_5PB12xx_ClockBuffer.pdf`) rather
+than a daisy chain. Separately **to be confirmed**: the SX1257 pin table calls
+`CLK_OUT` a "36 MHz digital clock output" while the whole design assumes 32 MHz;
+check this against the XTAL/TCXO plan, not against the datasheet line.
+
+---
+
 ## A40 pad-control tie-offs (shared-padframe integration, 2026-08-28)
 
 The A40 (ACV) workshop padring exposes each pad's full IO-cell control interface to
@@ -105,16 +204,63 @@ bidirectional pad. `trouper_top.v` therefore drives all pad-control pins itself
 is a straight wire-up with no assumptions about a padring wrapper. 106 added ports:
 100 constant outputs + 6 unused `_IN` inputs.
 
-Values (drive-strength `PDRV[1:0]` and slew `SL` are provisional, pending SI review):
+**Drive-strength encoding.** `PDRV` is a 2-bit code on `bi_t`. Written below in
+`info.yaml`-legacy order as `PDRV0,PDRV1` — note this is the *reverse* of the
+binary code, so read carefully:
+
+| `{PDRV1,PDRV0}` | written below as | Drive | Measured edge @12 pF (10–90%) |
+|---|---|---|---|
+| `00` | `0,0` | 4 mA | 4.78 ns |
+| `01` | `1,0` | 8 mA | 2.44 ns |
+| `10` | `0,1` | 12 mA | 1.68 ns |
+| `11` | `1,1` | 16 mA | 1.31 ns |
+
+`bi_24t` (`PSRAM_SCK` only) has no `PDRV` — fixed 24 mA. The mA values come from
+a peer project's annotations and are **not** confirmed against a GF180 IO
+databook, but they are corroborated by the PDK's own liberty transition times:
+the measured edges scale 1.00 / 1.94 / 2.78 / 3.50 against an ideal 1 / 2 / 3 / 4.
+
+Slew `SL` is provisional pending SI review **except `PSRAM_SCK_SL`, which is
+fixed** — see the constraint note below the table.
 
 | Pad group | Added control pins (per pad) | Tie value |
 |---|---|---|
 | 13 input pads (`IQ_DATA_{I,Q}_0..3`, `IQ_CLK`, `RESETB`, `HOST_CS`, `SPI_SCK`, `SPI_MOSI`) | `_PU`, `_PD` | `0`, `0` — on-chip pulls off; board supplies SPI-CS / reset pull-ups |
-| `PSRAM_SIO_0..3` (true bidir; `_OUT/_IN/_OE` already existed) | `_IE`, `_CS`, `_SL`, `_PU`, `_PD`, `_PDRV0`, `_PDRV1` | `1, 0, 0, 0, 0, 1, 1` — input-enabled, CMOS, fast, no pull, max drive |
+| `PSRAM_SIO_0..3` (true bidir; `_OUT/_IN/_OE` already existed) | `_IE`, `_CS`, `_SL`, `_PU`, `_PD`, `_PDRV0`, `_PDRV1` | `_IE=~_OE`, `_CS=0`, `_SL=0`, `_PU=0`, `_PD=0`, `_PDRV0=1`, `_PDRV1=1` — input enabled only while the lane is released, CMOS, fast, no pull, max drive. This prevents the uncharacterized `IE=OE=1` state of `gf180mcu_fd_io__bi_t`. |
 | `PSRAM_CE_N` (output on `bi_t`) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OE=1`, `_SL=0` fast, drive `1,1` max, rest `0` |
 | `PSRAM_SCK` (output on `bi_24t`, drive fixed) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD` | `_OE=1`, `_SL=0` fast, rest `0` |
-| `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,0` mid, rest `0` |
+| `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,1` **max (16 mA, raised from `1,0`/8 mA on 2026-08-30)**, rest `0` |
 | `SPI_MISO`, `IRQ_OUT` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
+
+**`PSRAM_SCK_SL = 0` is a hard constraint, not a provisional value.** The
+APS6404L specifies `t_KHKL` (CLK rise/fall time) as a **maximum of 1.5 ns**,
+measured 20–80%. Liberty transitions are 10–90%, so the limit is ≈2.0 ns at
+10–90% (`t₂₀₋₈₀ ≈ 0.75 × t₁₀₋₉₀` for a linear ramp). On `bi_24t` at a realistic
+~13.6 pF load: `SL=0` gives 1.12 ns (0.84 ns at 20–80%, ~44% margin), while
+`SL=1` gives 2.19 ns (1.64 ns at 20–80%) — **a datasheet violation**. `SL=0`
+holds up to roughly 28 pF. Do not slow this pad to damp ringing; use a series
+resistor instead, and keep it ≲33 Ω so the added RC stays inside `t_KHKL`.
+
+**Why the PSRAM lanes are at max drive.** Under-drive is unfixable once the die
+exists — nothing on a board can speed up a weak driver — whereas an over-driven
+net can be damped with a series resistor. Drive is therefore biased high
+deliberately. For calibration: every silicon-proven design on wafer.space Run 1
+(shuttle G801) ran **24 mA** on all bidirectional pads via `bi_24t`, including
+several booting from external SPI flash, so 16 mA here is *below* proven-working
+drive rather than above it. Series-resistor footprints (0402, populated 0 Ω)
+close to the ASIC pin on `SIO[3:0]`, `CE_N`, `SCK` and `REMOD_A_{I,Q}` are the
+intended post-silicon lever and should be on the PCB.
+
+**Verification (2026-08-29).** These values are asserted against this table by
+`cocotb/pad_tieoffs` (`cocotb/tests/test_pad_tieoffs.py`, job 5223) — all 96
+constants in reset and re-checked every clock through live QPI traffic, plus
+`PSRAM_SIO_n_IE == ~_OE` per lane — and structurally by
+`sim/tests/test_pad_tieoff_ports.py` (no undriven pad-control output). The
+suite was negative-controlled against three injected faults (job 5225). **If a
+value in the table below changes, update the RTL, this table, and the expected
+table in `test_pad_tieoffs.py` together** — the test reads this document as the
+source of truth, not the RTL. See `planning/Traceability.md` §"A40 pad-control
+tie-offs".
 
 `SPI_MISO_OE` is tied `1` (not gated by `HOST_CS`): the SPI slave already drives
 `SPI_MISO=0` when deselected (TRPR-SPS-008) and the host MISO net is point-to-point.
@@ -127,6 +273,71 @@ to the A40 generator convention `<pad>_<terminal>` — `PSRAM_SIO_{n}_OUT/_IN/_O
 (no name mapping on hook-up). Testbenches still use the old names and are being
 updated separately. Grouper `GRP_*` / AHB `H*` / `IRQ_GROUPER` are die-internal
 (south abutment edge), not pads.
+
+---
+
+## Pad cell type selection (`info.yaml` `io_type`) — reviewed 2026-08-30
+
+`io_type` in `info.yaml` selects the physical IO cell. **This is Trouper's
+choice, not the integrator's** — unlike the pull/slew/drive tie-offs above,
+there is no core-side pin for it, so it can only be changed here, and only
+while `info.yaml` is still open.
+
+| `io_type` | Cell | Core-side control pins |
+|---|---|---|
+| `input_cmos` | `gf180mcu_fd_io__in_c` | `PU`, `PD` only |
+| `input_schmitt` | `gf180mcu_fd_io__in_s` | `PU`, `PD` only |
+| `bidirectional` | `gf180mcu_fd_io__bi_t` | full set incl. `CS`, `SL`, `PDRV[1:0]` |
+| `bidirectional_24ma` | `gf180mcu_fd_io__bi_24t` | as above but **no `PDRV`** (24 mA fixed) |
+
+Note the asymmetry: on **bidirectional** pads CMOS-vs-Schmitt is a runtime pin
+(`CS`, tied 0 = CMOS on all ten). On **input** pads it is not a pin at all —
+`in_c` and `in_s` have identical `PU/PD/PAD/Y` interfaces, so the choice exists
+only in `info.yaml`. The two cells are both **75 × 350 µm**, so switching one is
+a drop-in with no padring geometry or DEF pin change.
+
+### `IQ_CLK` is `input_cmos` — deliberate, do not "fix" to Schmitt
+
+**Decision 2026-08-30: keep CMOS; guarantee edge quality at the board instead.**
+
+`psram_buf_ctrl.v` derives the PSRAM clock as a gated copy of the core clock
+(`assign sck = sck_en & clk_32m`) — it does **not** regenerate the waveform, so
+`PSRAM_SCK` inherits `IQ_CLK`'s duty cycle directly. The APS6404L requires
+`t_CH`/`t_CL` = 0.45–0.55 × `t_CLK` (45–55%). A Schmitt input's rise/fall delays
+are deliberately asymmetric, and that asymmetry grows as the process slows:
+
+| Corner | `in_c` duty @32 MHz | `in_s` duty @32 MHz |
+|---|---|---|
+| FF −40 °C 3v63 | 49.70% | 50.86% |
+| TT 25 °C 3v30 | 49.88% | 52.13% |
+| **SS 125 °C 2v97** | **50.20%** | **54.90%** ⚠️ |
+
+`in_s` at SS lands 0.1% from the PSRAM's 55% limit — and that assumes a perfect
+50% input, before any TCXO duty tolerance. `in_c` holds within 0.3% of ideal at
+every corner. CMOS is also the lower-jitter choice, and `IQ_CLK` is both the ΣΔ
+sampling clock and the source of the QPI timing budget.
+
+**The board-side obligation this creates:** CMOS has no hysteresis, so a slow or
+noisy clock edge can produce *multiple* transitions — extra clock edges, a hard
+failure rather than a degradation. Therefore **keep the `IQ_CLK` path short and
+buffered close to the package** (`resources/DS_5PB12xx_ClockBuffer.pdf`). If a
+breadboard-compatible package is used, the TCXO buffer belongs on the carrier
+next to the chip, **not** at the far end of a jumper wire. Fixing a degraded
+clock edge with a Schmitt input is the wrong trade: it spends duty-cycle margin
+that the table above shows does not exist.
+
+### Host SPI inputs are all `input_schmitt`
+
+`HOST_CS`, `SPI_SCK` and **`SPI_MOSI`** (changed from `input_cmos` 2026-08-30)
+are Schmitt. Rationale: all three arrive from the RPi on the same cable, which
+may be long jumper wire, so they share the same degraded-edge exposure. `SPI_SCK`
+and `HOST_CS` are the most sensitive (a glitch manufactures a clock edge or
+aborts a frame), but `MOSI` was made consistent with them since the cell swap is
+free and same-size. None of these feed a duty-cycle-critical path, so the
+`IQ_CLK` argument above does not apply to them.
+
+`IQ_DATA_{I,Q}_0..3` remain `input_cmos`: short board traces from the SX1257s,
+where minimising delay and jitter matters more than hysteresis.
 
 ---
 

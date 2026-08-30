@@ -1304,6 +1304,24 @@ padframe integrator) before it can be relied on.
 
 ---
 
+### 52. A40 ACV allocation reportedly has three unassigned pad slots — decide whether to dedicate one to trigger synchronisation
+
+The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
+`VDD`, and `VSS`). The reported ACV allocation is **28** pads, leaving **three** slots
+unassigned by the current `info.yaml`, A40 DEF template, and RTL pinout. This must be
+confirmed against the current integrator `A40_ACV_pad_map.yaml` / regenerated DEF: the
+slot names, IO-cell types, bonding status, and locations are not yet recorded locally.
+
+**Decision required before finalising the A40 pin list:** retain all three as spares, or
+allocate one to the physical `sc_lock_in` trigger-synchronisation link for
+[multi-chip cascade operation](NR2-multi-ASIC-cascade.md) (the proposed shared
+acquisition/SC-lock trigger extension). If selected, update `info.yaml`,
+`planning/Pinout.md`, the top-level pad interface, the A40 template, and the integration
+and regression evidence together; do not assume a spare slot is electrically or
+package-bond available until the integrator confirms it.
+
+---
+
 ## Low
 
 ### 47. Trouper standalone flow has never run a real-source IR-drop analysis
@@ -1339,30 +1357,30 @@ stays open until real physical downbond locations replace the geometric
 via-connected estimates currently in `vsrc/*.loc`, same caveat the
 combined-die doc itself carries.
 
-### 18. PSRAM-replay sample staleness unquantified
+### 18. PSRAM-replay sample staleness — CLOSED 2026-08-29
 
-**Retitled/repointed 2026-07-11:** originally filed against
-`frontend_buf_ctrl.v`, which is dead code — not instantiated in
-`trouper_top.v`, replaced by `psram_buf_ctrl.v` (see CLAUDE.md system
-summary). The underlying question is still real and still unanswered: does
-same-packet PSRAM replay (`psram_buf_ctrl.v` `S_REPLAY`, `rpl_i*/rpl_q*`
-feeding the combiner) introduce measurable sample staleness relative to the
-live path, and has that been quantified? Not yet investigated against the
-current PSRAM-based architecture — this entry just points at the right
-module now instead of the removed one.
-**See:** `planning/DSP Chain SNR Loss Budget.md` §4 (still titled/framed
-around the old `frontend_buf_ctrl.v`, needs the same retarget).
+`cocotb/trouper_capture` now records the exact decimated 8-byte sample tuple
+accepted at the `psram_buf_ctrl` write boundary while replaying a labelled,
+measured SF7/BW125 capture.  It then requires the first 32 `rpl_*` tuples to
+match one and only one offset in `timing_ref ± 3`.  Job 5218 passed with the
+defined relation `rpl[k] == recorded[timing_ref - 1 + k]` for all 32 samples.
+This detects a stale packet base, byte-lane error, or replay sample slip using
+a non-periodic measured waveform, avoiding the periodic-CW ambiguity in the
+older RPV-6 test.  It closes the RTL replay-alignment question for the current
+PSRAM architecture; it does not constitute board-level PSRAM timing/SI proof.
 
-### 19. `tb_mrc_fw_precision.v` testbench has a pre-existing DUT/testbench mismatch
+### 19. `tb_mrc_fw_precision.v` DUT/testbench mismatch — CLOSED 2026-08-29
 
-4 of 5 cases fail with `y_valid` timeout / large output error, confirmed
-identical on unmodified git-HEAD RTL (SGE jobs 3194/3195) — i.e. not caused
-by the ZDIAG register-widening change made alongside it. Root cause not
-investigated; out of scope when found.
+Root cause was testbench timing, not RTL: it drove and sampled on `posedge`
+and retained a 20-cycle output timeout from the pre-pacing combiner. The
+current combiner accepts at state 0 then holds states 1–10 for three cycles
+each, so its defined latency is 31 clocks. The race mixed the prior case's
+output into the next case and sometimes timed out before the current output.
 
-**Verification-coverage gap, not a silicon risk** — the testbench doesn't
-currently exercise this path correctly, so a real regression there could go
-undetected.
+The bench now drives/samples on `negedge` and allows 40 clocks. All five
+parametric Q0.7 precision cases pass bit-exactly (`make sim_mrc_fw_precision`,
+2026-08-29). This restores the unit-level complement to the existing SPI
+end-to-end oracle coverage.
 
 ### 22. NR=2/3-chip cascade risks unsimulated
 
@@ -1432,11 +1450,12 @@ Verified: 7 cocotb suites + `sc_force_lock` + `tb_trouper_two_packet`
 regression after the deletions (SGE jobs 3359/3360).
 
 **Still open (non-FSM items):** `mimo_mode[1]` never writable
-(`reg_bank.v`) yet read back and forwarded; a `noise_trig` written while a
-live training is armed is silently swallowed (top opens
-`noise_window_active`, `training_acc` ignores the arm — TODO in
-`trouper_top.v`); `mrc_combiner.v:126` assigns `26'sd0` to an 18-bit reg;
-`mrc_combiner` port `clk_16m` is actually driven at 32 MHz.
+(`reg_bank.v`) yet read back and forwarded; `mrc_combiner.v:126` assigns
+`26'sd0` to an 18-bit reg; `mrc_combiner` port `clk_16m` is actually driven
+at 32 MHz. The live-training `noise_trig` swallow is **closed 2026-08-29**:
+the top gates the trigger while `training_armed`, raises sticky/W1C
+`TACC_NOISE_TRIG.NOISE_TRIG_REJECTED` (0x1F[1]), and a directed cocotb test
+proves no false `NOISE_READY` occurs.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
