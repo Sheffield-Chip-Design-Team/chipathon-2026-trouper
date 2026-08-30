@@ -5,7 +5,7 @@
 # trouper_top ties en to 1'b1, so the port is only reachable directly.
 #
 # Usage (inside the chipathon26 container):
-#   make            # both testcases
+#   make            # all nine testcases
 #   make clean
 
 SIM           ?= verilator
@@ -17,7 +17,8 @@ DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src
 TESTS          = $(DESIGN_ROOT)/cocotb/tests
 
-VERILOG_SOURCES = $(SRC)/remod/sd_remod.v
+REMOD_SOURCE ?= $(SRC)/remod/sd_remod.v
+VERILOG_SOURCES = $(REMOD_SOURCE)
 
 EXTRA_ARGS += --timing -Wno-fatal --public-flat-rw
 
