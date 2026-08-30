@@ -76,6 +76,11 @@ module reg_bank (
     output reg [3:0]   sf_cfg,          // SF_CFG[3:0], direct-coded 7–12
     output reg         bw_sel,        // BW_CFG[0]: 0=250 kHz (sample_shift=1), 1=125 kHz (sample_shift=2)
     output reg [1:0]   sc_ant_sel,    // BW_CFG[2:1]: SC correlator source antenna (0-3)
+    // ARRAY_SYNC_CTRL[0]: arm the multi-ASIC acquisition-sync link. Resets to
+    // 0 -- the shared ARRAY_ACQ_N pin does nothing until firmware opts in, so
+    // a single-chip board cannot be started by noise on an unused pad. See
+    // planning/array-acquisition-sync.md.
+    output reg         array_sync_en,
     // SC thresholds
     output reg [15:0]  sc_thr,
     output reg [1:0]   sc_hits_req,
@@ -176,7 +181,7 @@ module reg_bank (
     // The five quasi-static config registers whose MCP exceptions depend on
     // the rx_hold interlock.  SC_THR (0x0C/0x0D) is deliberately absent: it
     // appears in no MCP group and times honestly single-cycle.
-    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) ||
+    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) || (addr == 8'h1B) ||
                            (addr == 8'h0B) || (addr == 8'h0E) ||
                            (addr == 8'h27);
 
@@ -196,6 +201,7 @@ module reg_bank (
             sf_cfg           <= 4'h7;
             bw_sel           <= 1'b0;
             sc_ant_sel       <= 2'd0;
+            array_sync_en    <= 1'b0;
             sc_thr           <= 16'h01CC;   // 0x7333 ÷ 64; sc_thr[11:0] used (12-bit positive)
             sc_hits_req      <= 2'h2;
             pkt_timeout_syms <= 8'h50;
@@ -270,6 +276,11 @@ module reg_bank (
                     // the packet_active half only; 0x0B/0x0E/0x27 had no gate
                     // at all.  See cfg_wr_ok above and Open Risks #43.
                     8'h09: if (cfg_wr_ok) sf_cfg <= wdata[3:0];
+                    // ARRAY_SYNC_CTRL. Gated with the other quasi-static
+                    // config: arming or disarming the array link mid-packet
+                    // would change whether a peer event can restart this
+                    // receiver while it is already running one.
+                    8'h1B: if (cfg_wr_ok) array_sync_en <= wdata[0];
                     8'h0A: if (cfg_wr_ok) begin
                         bw_sel     <= wdata[0];
                         sc_ant_sel <= wdata[2:1];
@@ -349,6 +360,7 @@ module reg_bank (
             8'h08: rdata_next = {antenna_en, 2'h0, mimo_mode};
             8'h09: rdata_next = {4'h0, sf_cfg};
             8'h0A: rdata_next = {5'h0, sc_ant_sel, bw_sel};
+            8'h1B: rdata_next = {7'h0, array_sync_en};
             8'h0B: rdata_next = pkt_timeout_syms;
             8'h0C: rdata_next = sc_thr[15:8];
             8'h0D: rdata_next = sc_thr[7:0];

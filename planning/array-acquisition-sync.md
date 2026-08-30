@@ -40,7 +40,8 @@ net with a single external pull-up resistor to the IO supply.
 | Release | The asserting chip releases the pad on `packet_done`, `rx_hold`, or reset/disable |
 | Pad implementation | `gf180mcu_fd_io__bi_t` (`info.yaml` `io_type: bidirectional`); drive `A=0`, assert `OE`, and sample `Y` |
 | Drive strength | `PDRV[1:0]=00` (4 mA) — ample to sink the board pull-up, and the slowest available falling edge on a shared multi-drop net |
-| Internal pulls | Disabled (`PU=0`, `PD=0`); the board pull-up is mandatory |
+| Internal pulls | `PU=1`, `PD=0`. The board pull-up is still mandatory on a multi-chip net; the internal device only keeps an *unpopulated* pin from floating. On a shared net one internal pull-up per chip sits in parallel with the board resistor and counts against the pull-up / V_OL budget. |
+| Enable | `ARRAY_SYNC_CTRL[0]` (`0x1B`) `ARRAY_SYNC_EN`, **resets to 0**. The pin is inert in both directions until firmware sets it. |
 | Input conditioning | Schmitt trigger enabled (`CS=1`) and input enabled (`IE=1`) |
 
 The GF180 PDK does not supply a dedicated open-drain pad primitive.  The
@@ -51,6 +52,33 @@ conventional encoded signalling pair.
 The pull-up value, maximum bus capacitance, trace length, and required rising
 edge time are board-level design items.  All participating outputs must remain
 open-drain; no device may actively drive this net high.
+
+### Disabling the link
+
+`ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x1B`, reset 0) gates **both**
+directions in
+`array_acq_sync`: it is a term in `armed`, so a disabled chip cannot accept a
+peer event, and a term on the `drive_oe` set condition, so a disabled chip
+cannot pull the net down when it acquires. Clearing it also forces `drive_oe`
+low immediately.
+
+Off is the reset state, which is what makes an unused pin safe: a single-chip
+board may leave `ARRAY_ACQ_N` unpopulated with no external pull-up, and nothing
+the floating pad does can start the receiver. A two-chip array must therefore
+set `ARRAY_SYNC_CTRL[0]` on *both* chips at bring-up — it is a gated config
+register, so write it with `RX_HOLD=1` before releasing the receiver, alongside
+SF and BW.
+
+It has its own register rather than a spare `BW_CFG` bit: `BW_CFG` is the
+bandwidth register (already carrying `sc_ant_sel`), and arming a multi-chip link
+has nothing to do with bandwidth. `0x1B` was reserved and sits with the other
+SC/receiver control registers, `SC_FORCE_LOCK` (`0x19`) and `RX_HOLD` (`0x1A`).
+Its upper seven bits are free for future array status/control.
+
+`test_disabled_link_ignores_the_wire` covers the default state, and
+`test_disabled_receiver_rejects_a_real_edge` applies a genuine falling edge from
+an enabled peer to a disabled receiver — the case where gating only the drive
+side would look identical to gating both.
 
 ## RTL protocol and simultaneous events
 

@@ -383,7 +383,14 @@ module trouper_top (
     assign ARRAY_ACQ_N_IE    = 1'b1;
     assign ARRAY_ACQ_N_CS    = 1'b1; // Schmitt input for a board-level wire
     assign ARRAY_ACQ_N_SL    = 1'b1;
-    assign ARRAY_ACQ_N_PU    = 1'b0;
+    // Internal pull-up ENABLED, unlike every other input pad on this chip.
+    // ARRAY_ACQ_N is the one pin a board may legitimately leave unpopulated
+    // (a single-chip receiver has no array to sync with), and an undriven
+    // input with IE=1 sits the receiver near mid-rail drawing static current.
+    // This is belt-and-braces only: the external pull-up is still mandatory on
+    // a real multi-chip net, where these internal devices sit in parallel with
+    // it and must be counted in the pull-up/VOL budget (Open Risks #53).
+    assign ARRAY_ACQ_N_PU    = 1'b1;
     assign ARRAY_ACQ_N_PD    = 1'b0;
     assign ARRAY_ACQ_N_PDRV0 = 1'b0; // minimum drive is enough to sink pull-up
     assign ARRAY_ACQ_N_PDRV1 = 1'b0;
@@ -461,6 +468,7 @@ module trouper_top (
     wire        rb_bw_sel;
     wire [1:0]  rb_sample_shift = rb_bw_sel ? 2'd2 : 2'd1;
     wire [1:0]  rb_sc_ant_sel;
+    wire        rb_array_sync_en;  // ARRAY_SYNC_CTRL[0] (0x1B); resets 0 = link off
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
@@ -733,7 +741,7 @@ module trouper_top (
     array_acq_sync u_array_acq_sync (
         .clk             (clk),
         .rst_n           (rst_n),
-        .array_sync_en   (1'b1),
+        .array_sync_en   (rb_array_sync_en),
         .local_lock_pulse(sc_lock_natural_pulse),
         .local_lock_level(sc_lock),
         .packet_active   (packet_active),
@@ -1175,6 +1183,7 @@ module trouper_top (
         .sf_cfg          (rb_sf_cfg),
         .bw_sel          (rb_bw_sel),
         .sc_ant_sel      (rb_sc_ant_sel),
+        .array_sync_en   (rb_array_sync_en),
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
         .pkt_timeout_syms(rb_pkt_timeout_syms),

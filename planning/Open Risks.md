@@ -1391,11 +1391,21 @@ committed to the board/pad allocation on RTL inference alone.
 - Run a post-integration electrical/functional test with the real pad wrapper
   before relying on multi-chip beamforming or direction-finding experiments.
 
-**Current RTL safeguards:** internal pull-up/down controls are disabled,
-Schmitt input is enabled, the driver only ever presents zero, a natural local
-SC lock wins over a same-cycle peer edge, and a receiver ignores peer events
-while `packet_active`.  These reduce protocol risk but are not substitutes for
-the electrical review.
+**Current RTL safeguards (updated 2026-08-30):** `ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x1B`)
+resets to 0, so the pin is inert in both directions until firmware arms it; the
+internal pull-up is **enabled** on this pad alone so an unpopulated pin cannot
+float; Schmitt input is enabled; the driver only ever presents zero; a natural
+local SC lock wins over a same-cycle peer edge; and a receiver ignores peer
+events while `packet_active`.  These reduce protocol risk but are not
+substitutes for the electrical review.
+
+**Added to the pull-up review by the internal pull-up:** the board resistor is
+now in parallel with one internal pull-up per participating chip. Size the
+external resistor against the *combined* pull-up current, and confirm the
+resulting V_OL at the 4 mA `PDRV=00` sink still meets every receiver's V_IL
+across the worst-case number of chips on the net. The internal device's
+strength is not characterised in our own data and must be read from the PDK
+before this is closed.
 
 **See:** item 52 above (the pad-slot allocation decision this depends on);
 `planning/array-acquisition-sync.md`; `src/top/trouper_top.v`

@@ -251,7 +251,7 @@ fixed** — see the constraint note below the table.
 | `PSRAM_SCK` (output on `bi_24t`, drive fixed) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD` | `_OE=1`, `_SL=0` fast, rest `0` |
 | `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,1` **max (16 mA, raised from `1,0`/8 mA on 2026-08-30)**, rest `0` |
 | `SPI_MISO`, `IRQ_OUT` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
-| `ARRAY_ACQ_N` (emulated open drain on `bi_t`) | `_OUT`,`_IN`,`_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OUT=0` always, `_OE` = core drive request (this is the open-drain emulation), `_IE=1`, `_CS=1` **Schmitt** (long shared board net), `_SL=1` slow, `_PU=0`/`_PD=0` (board pull-up is mandatory), drive `0,0` min 4 mA |
+| `ARRAY_ACQ_N` (emulated open drain on `bi_t`) | `_OUT`,`_IN`,`_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OUT=0` always, `_OE` = core drive request (this is the open-drain emulation), `_IE=1`, `_CS=1` **Schmitt** (long shared board net), `_SL=1` slow, **`_PU=1`** (the only pad on the chip with an internal pull enabled — see below), `_PD=0`, drive `0,0` min 4 mA |
 
 **`PSRAM_SCK_SL = 0` is a hard constraint, not a provisional value.** The
 APS6404L specifies `t_KHKL` (CLK rise/fall time) as a **maximum of 1.5 ns**,
@@ -282,6 +282,21 @@ value in the table below changes, update the RTL, this table, and the expected
 table in `test_pad_tieoffs.py` together** — the test reads this document as the
 source of truth, not the RTL. See `planning/Traceability.md` §"A40 pad-control
 tie-offs".
+
+**`ARRAY_ACQ_N_PU=1` is deliberate and unique.** Every other input pad on the
+chip disables its internal pulls, because every other input is always driven by
+something on the board. `ARRAY_ACQ_N` is the one pin a board may legitimately
+leave unpopulated — a single-chip receiver has no array to synchronise with —
+and an undriven input with `IE=1` sits the receiver near mid-rail drawing static
+current. The internal pull-up removes that, and holds the pin at its idle level
+so nothing can be misread as a peer event.
+
+It is **not** a substitute for the external pull-up. On a real multi-chip net
+the board resistor is still mandatory; the internal devices then sit in parallel
+with it, one per participating chip, and must be counted in the pull-up sizing
+and V_OL budget (Open Risks #53). The functional protection for an unused pin is
+`ARRAY_SYNC_CTRL[0] ARRAY_SYNC_EN` (register `0x1B`), which resets to 0 — see
+`planning/Register Map.md`.
 
 `SPI_MISO_OE` is tied `1` (not gated by `HOST_CS`): the SPI slave already drives
 `SPI_MISO=0` when deselected (TRPR-SPS-008) and the host MISO net is point-to-point.

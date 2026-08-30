@@ -429,7 +429,7 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         # cocotb/tests/test_reg_bank_rx_hold.py (row #8/#43 interlock, not
         # this row).
         0x1A: ('RW', 0x01),
-        0x1B: ('reserved', 0x00),
+        0x1B: ('RW', 0x01),  # ARRAY_SYNC_CTRL: [0] ARRAY_SYNC_EN; [7:1] reserved
         0x1C: ('RO', 0xFF),  # PACKET_STATUS (all RO)
         0x1D: ('RO', 0xF3),  # ACTIVE_STATUS: [7:4]=ANTENNA_EN, [1:0]=MODE; [3:2] reserved
         0x1E: ('RW', 0x3F),  # WGT_CTRL: [0]=W_COMMIT(W1P), [1:5]=RO, [7:6] reserved
@@ -624,16 +624,16 @@ async def test_reserved_addresses_zero_and_ignored(dut):
     """
     await _bring_up(dut)
 
-    # 21 reserved slots (0x1A is RX_HOLD, a real RW register -- see NOTE above).
+    # 20 reserved slots. 0x1A is RX_HOLD, a real RW register (see NOTE above),
+    # and 0x1B became ARRAY_SYNC_CTRL on 2026-08-30 -- both are excluded.
     reserved_addrs = [
         0x04, 0x05, 0x06, 0x07,                         # former DEBUG_CTRL/GPIO
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,  # former RX_GAIN_*
-        0x1B,                                            # reserved
         0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,             # reserved for future
         0x7F,                                            # protocol escape
     ]
 
-    assert len(reserved_addrs) == 21, f"Expected 21 reserved addresses, got {len(reserved_addrs)}"
+    assert len(reserved_addrs) == 20, f"Expected 20 reserved addresses, got {len(reserved_addrs)}"
 
     # Test each reserved address with multiple patterns
     patterns = [0x00, 0xFF, 0xAA, 0x55, 0xA5, 0x5A]

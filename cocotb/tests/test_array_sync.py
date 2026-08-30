@@ -71,6 +71,8 @@ SYM_NS = sym_ns(SF, BW_KHZ)
 
 REG_PKT_TIMEOUT   = 0x0B
 
+REG_ARRAY_SYNC_CTRL = 0x1B    # [0] ARRAY_SYNC_EN, resets to 0 (link off)
+
 # Register map (planning/Register Map.md)
 REG_SF_CFG        = 0x09
 REG_BW_CFG        = 0x0A
@@ -200,7 +202,8 @@ async def reset_pair(dut):
     await Timer(8 * CLK_NS, unit="ns")
 
 
-async def configure(dut, chip, sf=SF, bw_khz=BW_KHZ, pkt_timeout_syms=None):
+async def configure(dut, chip, sf=SF, bw_khz=BW_KHZ, pkt_timeout_syms=None,
+                    array_sync_en=True):
     """Identical LoRa configuration on one chip.
 
     planning/array-acquisition-sync.md lists identical SF, BW and hit count as
@@ -215,6 +218,7 @@ async def configure(dut, chip, sf=SF, bw_khz=BW_KHZ, pkt_timeout_syms=None):
 
     await spi_write(dut, chip, REG_SF_CFG, sf & 0x0F)
     await spi_write(dut, chip, REG_BW_CFG, 0 if bw_khz == 250 else 1)
+    await spi_write(dut, chip, REG_ARRAY_SYNC_CTRL, 0x01 if array_sync_en else 0x00)
     if pkt_timeout_syms is not None:
         await spi_write(dut, chip, REG_PKT_TIMEOUT, pkt_timeout_syms & 0xFF)
     await spi_write(dut, chip, REG_SC_THR_HI, 0x01)   # sc_thr = 0x0100
@@ -384,8 +388,14 @@ async def test_open_drain_invariant_and_tieoffs(dut):
     continuously rather than trusting it.
 
     The tie-off values are from planning/Pinout.md: bi_t, Schmitt input enabled,
-    slow slew, no internal pulls (the board pull-up is mandatory), minimum
-    drive. PDRV is the reason this pad is bi_t and not bi_24t.
+    slow slew, minimum drive. PDRV is the reason this pad is bi_t and not
+    bi_24t.
+
+    PU=1 is the exception worth calling out: this is the ONLY pad on the chip
+    with an internal pull enabled. ARRAY_ACQ_N is the one pin a board may
+    legitimately leave unpopulated, and an undriven input with IE=1 sits the
+    receiver near mid-rail drawing static current. The external pull-up is
+    still mandatory on a real multi-chip net -- see planning/Pinout.md.
     """
     await reset_pair(dut)
     await configure(dut, "A")
@@ -394,7 +404,8 @@ async def test_open_drain_invariant_and_tieoffs(dut):
 
     expected = {
         "IE": 1, "CS": 1, "SL": 1,
-        "PU": 0, "PD": 0,
+        "PU": 1,          # deliberate, and unique on this chip -- see above
+        "PD": 0,
         "PDRV0": 0, "PDRV1": 0,
     }
     for name, want in expected.items():
@@ -579,3 +590,71 @@ async def test_sync_releases_and_rearms(dut):
     assert await wait_for_lock(dut, "B", max_syms=4), \
         "chip B did not re-sync on the second packet -- line_idle_seen never re-armed"
     dut._log.info("second packet synced over the same link")
+
+
+@cocotb.test()
+async def test_disabled_link_ignores_the_wire(dut):
+    """With ARRAY_SYNC_EN=0 the pin is inert in both directions.
+
+    This is the default state out of reset, and it is what protects a
+    single-chip board: ARRAY_ACQ_N may be left unpopulated with no pull-up, and
+    whatever the floating pad does, nothing can start the receiver.
+
+    Both directions matter, so both are checked:
+      - chip A must not DRIVE the wire when it acquires (array_sync_en gates
+        drive_oe), so it cannot disturb anything else sharing the net;
+      - chip B must not ACCEPT an event (array_sync_en gates `armed`), even
+        when a real falling edge is applied.
+
+    The second is forced explicitly rather than left to chance: A is disabled
+    here, so nothing would pull the line down on its own.
+    """
+    await reset_pair(dut)
+    await configure(dut, "A", array_sync_en=False)
+    await configure(dut, "B", array_sync_en=False)
+
+    # Reset default really is off -- confirm the readback before relying on it.
+    ctrl_a = await spi_read(dut, "A", REG_ARRAY_SYNC_CTRL)
+    assert (ctrl_a & 0x01) == 0, \
+        f"ARRAY_SYNC_EN did not clear (ARRAY_SYNC_CTRL=0x{ctrl_a:02X})"
+
+    cocotb.start_soon(sdm_driver(dut, "A"))
+    assert await wait_for_lock(dut, "A"), "chip A never acquired"
+
+    assert int(dut.A_ARRAY_ACQ_N_OE.value) == 0, \
+        "chip A drove ARRAY_ACQ_N with ARRAY_SYNC_EN=0"
+    assert int(dut.ARRAY_ACQ_N.value) == 1, "net went low with the link disabled"
+
+    for _ in range(4):
+        await Timer(SYM_NS, unit="ns")
+        assert not await sc_locked(dut, "B"), \
+            "chip B locked with ARRAY_SYNC_EN=0"
+
+    dut._log.info("disabled link: chip A did not drive, chip B did not lock")
+
+
+@cocotb.test()
+async def test_disabled_receiver_rejects_a_real_edge(dut):
+    """A genuine falling edge on the wire must be ignored when B is disabled.
+
+    Separated from the test above because there the line never moved -- B
+    passing proved only that nothing happened. Here chip A has the link ENABLED
+    and really does pull the net low; only B is disabled. If ARRAY_SYNC_EN did
+    not gate the accept path, B would lock.
+    """
+    await reset_pair(dut)
+    await configure(dut, "A", array_sync_en=True)
+    await configure(dut, "B", array_sync_en=False)
+
+    cocotb.start_soon(sdm_driver(dut, "A"))
+    assert await wait_for_lock(dut, "A"), "chip A never acquired"
+    assert int(dut.A_ARRAY_ACQ_N_OE.value) == 1, "setup: chip A should be driving"
+    assert int(dut.ARRAY_ACQ_N.value) == 0, "setup: net should be low"
+
+    for _ in range(4):
+        await Timer(SYM_NS, unit="ns")
+        assert not await sc_locked(dut, "B"), \
+            "chip B accepted a peer event with ARRAY_SYNC_EN=0 -- the enable " \
+            "gates only the drive side, not the accept side"
+
+    dut._log.info("disabled receiver correctly ignored a real falling edge")

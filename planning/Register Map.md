@@ -43,7 +43,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x10`–`0x18` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below) |
 | `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`) |
 | `0x1A` | `RX_HOLD` | R/W | `0x01` | Schmidl-Cox / config interlock | [0] `RX_HOLD` (level): 1 = SC detector held disabled (ORed into `sc_clr`) and the gated config registers are writable; 0 = detector may lock and those writes are refused. **Set out of reset — firmware must configure, then clear it to receive.** [1] `CFG_WR_REJECTED` RO sticky, W1C: a gated config write was dropped |
-| `0x1B` | — | — | — | — | Reserved |
+| `0x1B` | `ARRAY_SYNC_CTRL` | R/W | `0x00` | Array acquisition sync | [0] `ARRAY_SYNC_EN`: arm the shared `ARRAY_ACQ_N` link. **Resets to 0** — the pin is inert in both directions until firmware opts in, so an unused/unpopulated pad cannot start the receiver. Gated: write ignored unless `RX_HOLD=1` and `PACKET_ACTIVE=0`. See `planning/array-acquisition-sync.md` |
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
@@ -104,7 +104,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 107 implemented + 21 reserved = 128. (Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port — moving one address from reserved to implemented; reserved growth slots are now `0x7A`–`0x7E`. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 21 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x1A`–`0x1B`, `0x7A`–`0x7E` and `0x7F`.)
+**Occupancy:** 109 implemented + 19 reserved = 128. (Updated 2026-08-30: `ARRAY_SYNC_CTRL` implemented at `0x1B`, moving one address from reserved to implemented; and a **counting error corrected** — the reserved enumeration below previously listed `0x1A`–`0x1B`, but `0x1A` is `RX_HOLD`/`CFG_WR_REJECTED` and has been implemented since it was added, so the real split before this change was 108 + 20, not 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port — moving one address from reserved to implemented; reserved growth slots are now `0x7A`–`0x7E`. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 19 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x7A`–`0x7E` and `0x7F`.)
 
 ---
 
@@ -185,7 +185,7 @@ step 1.
 | Register(s) | Mid-packet policy | Result / firmware rule |
 | --- | --- | --- |
 | `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
-| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
+| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `TACC_WINDOW_SYMS`, `ARRAY_SYNC_CTRL` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x27`, `0x1B`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
 | `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
 | W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
 | `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
