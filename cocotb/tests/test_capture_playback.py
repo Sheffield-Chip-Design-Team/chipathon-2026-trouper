@@ -33,6 +33,7 @@ Environment:
 """
 
 import os
+import numpy as np
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
@@ -41,6 +42,7 @@ from test_trouper_top import (
     CLK_NS, spi_read, spi_write, spi_burst_write, release_rx_hold,
 )
 import iq_capture
+from sim.tests.remod_order_sweep import brickwall_lp_decim
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +84,91 @@ async def read_zdiag(dut):
         b0 = await spi_read(dut, ZDIAG_ADDR[b][2])
         z.append((b2 << 16) | (b1 << 8) | b0)
     return z
+
+
+class _ReplayRecorder:
+    """Record the exact decimated stream accepted by psram_buf_ctrl.
+
+    The measured-capture test must compare at this boundary, not at the IQ
+    pads: the decimator and DC remover have state and their output is the data
+    actually stored in PSRAM.  A real capture is non-periodic enough that a
+    stale packet base or a sample-slip cannot accidentally satisfy this check.
+    """
+
+    def __init__(self, dut):
+        self.dut = dut
+        self.samples = {}
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    async def _run(self):
+        p = self.dut.u_dut.u_psram
+        while True:
+            await RisingEdge(self.dut.IQ_CLK)
+            if int(p.iq_valid.value):
+                self.samples[int(p.iq_sample_cnt.value)] = (
+                    p.iq_i0.value.to_signed(), p.iq_q0.value.to_signed(),
+                    p.iq_i1.value.to_signed(), p.iq_q1.value.to_signed(),
+                    p.iq_i2.value.to_signed(), p.iq_q2.value.to_signed(),
+                    p.iq_i3.value.to_signed(), p.iq_q3.value.to_signed())
+
+
+class _RemodRecorder:
+    """Capture a contiguous final 1-bit output interval for independent R=64 reconstruction."""
+    def __init__(self, dut):
+        self.dut, self.i, self.q, self.running = dut, [], [], True
+    def start(self):
+        cocotb.start_soon(self._run())
+    async def _run(self):
+        while self.running:
+            await RisingEdge(self.dut.IQ_CLK)
+            self.i.append(1 if int(self.dut.REMOD_A_I.value) else -1)
+            self.q.append(1 if int(self.dut.REMOD_A_Q.value) else -1)
+
+
+def _reconstruct_remod(bits_i, bits_q):
+    """Independent 32 MS/s -> 500 kS/s reconstruction used by the remod SQNR model."""
+    y = np.asarray(bits_i, dtype=float) + 1j * np.asarray(bits_q, dtype=float)
+    return brickwall_lp_decim(y, 250e3, 32e6, 64)
+
+
+async def _assert_measured_replay_alignment(dut, rec, timing_ref, tag):
+    """Require the first 32 replay samples to be one constant small offset
+    from the recorded measured-capture stream at ``timing_ref``.
+
+    ``timing_ref - 1`` is the defined current implementation relation; the
+    ±3 search accounts only for sampling/register observation skew, while the
+    all-32 exact-match condition detects a wrong packet base, byte-lane swap,
+    or a replay sample slip.
+    """
+    p = dut.u_dut.u_psram
+    got = []
+    # Default REPLAY_DELAY_SAMPLES is 1500.  Give it 2000 input-sample
+    # periods plus the 32 replay transfers; 80 clocks/sample comfortably
+    # covers the 64-clock sample cadence and QPI burst phase.
+    for _ in range((2000 + 32) * 80):
+        await RisingEdge(dut.IQ_CLK)
+        if int(p.rpl_valid.value):
+            got.append((
+                p.rpl_i0.value.to_signed(), p.rpl_q0.value.to_signed(),
+                p.rpl_i1.value.to_signed(), p.rpl_q1.value.to_signed(),
+                p.rpl_i2.value.to_signed(), p.rpl_q2.value.to_signed(),
+                p.rpl_i3.value.to_signed(), p.rpl_q3.value.to_signed()))
+            if len(got) == 32:
+                break
+    assert len(got) == 32, f"{tag}: collected only {len(got)}/32 replay samples"
+
+    candidates = [
+        off for off in range(-3, 4)
+        if all(rec.samples.get(timing_ref + off + k) == got[k]
+               for k in range(len(got)))
+    ]
+    assert len(candidates) == 1, \
+        f"{tag}: measured replay does not have one exact timing_ref alignment " \
+        f"in ±3 samples (candidates={candidates})"
+    dut._log.info(f"{tag}: 32 measured-capture replay samples bit-exact "
+                  f"at timing_ref offset {candidates[0]}")
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +229,8 @@ async def test_capture_playback(dut):
     await Timer(8 * CLK_NS, unit="ns")
 
     # -- start capture playback ----------------------------------------------
+    rec = _ReplayRecorder(dut)
+    rec.start()
     drv = cocotb.start_soon(capture_driver(dut, bits_i, bits_q))
 
     # -- SPI settle ----------------------------------------------------------
@@ -213,6 +302,13 @@ async def test_capture_playback(dut):
     assert train_ok, f"{tag}: training_done never fired within the window"
     dut._log.info(f"{tag}: training_done OK")
 
+    # Prove the actual PSRAM replay is aligned to this measured packet's
+    # stored stream before touching the combiner.  Unlike the historical CW
+    # replay test, this stimulus is not periodic, so the value comparison
+    # binds the packet origin as well as the per-sample ordering.
+    timing_ref = int(dut.u_dut.u_psram.timing_ref.value)
+    await _assert_measured_replay_alignment(dut, rec, timing_ref, tag)
+
     # -- per-branch energy: ZDIAG_k = Σ|raw_k|² ------------------------------
     zdiag = await read_zdiag(dut)
     dut._log.info(f"{tag}: ZDIAG = {zdiag}")
@@ -271,13 +367,25 @@ async def test_capture_playback(dut):
         dut._log.info(f"{tag}: WGT_CTRL after commit = 0x{wgt:02X} "
                       f"(W_VALID={ (wgt>>1)&1 })")
 
+        # Start both observations at the same boundary.  Starting the bit
+        # recorder before the SPI writes folds an arbitrary number of stale
+        # re-modulated samples into its FFT frame, which cannot be repaired
+        # by a short lag search.
+        remod_rec = _RemodRecorder(dut)
+        remod_rec.start()
+
         # Watch the combiner output and the remod pads together: confirm the
         # combiner produces non-trivial output AND both remod bits toggle.
         seen_i = {0: False, 1: False}
         seen_q = {0: False, 1: False}
         comb_nonzero = False
         comb_active  = False
-        for _ in range(4000):
+        comb_ref = []
+        # 8192 high-rate clocks give 128 complete 64x re-modulator intervals.
+        # Do not stop on first activity: FFT reconstruction needs a useful
+        # multi-sample frame and must be compared with the matching combiner
+        # interval.
+        for _ in range(8192):
             await RisingEdge(dut.IQ_CLK)
             seen_i[int(dut.REMOD_A_I.value) & 1] = True
             seen_q[int(dut.REMOD_A_Q.value) & 1] = True
@@ -285,16 +393,27 @@ async def test_capture_playback(dut):
             if vv.is_resolvable and int(vv):
                 comb_active = True
                 yi, yq = dut.u_dut.comb_y_i.value, dut.u_dut.comb_y_q.value
+                comb_ref.append(complex(yi.to_signed(), yq.to_signed()))
                 if yi.is_resolvable and yq.is_resolvable and (int(yi) or int(yq)):
                     comb_nonzero = True
-            if all(seen_i.values()) and all(seen_q.values()) and comb_nonzero:
-                break
 
         assert comb_active, f"{tag}: combiner never asserted y_valid (no MRC output)"
         assert comb_nonzero, f"{tag}: combiner output stuck at 0 (signal not reaching combine)"
         assert all(seen_i.values()), f"{tag}: REMOD_A_I stuck (sd_remod not modulating)"
         assert all(seen_q.values()), f"{tag}: REMOD_A_Q stuck"
+        remod_rec.running = False
+        recovered = _reconstruct_remod(remod_rec.i, remod_rec.q)
+        # The FFT reference has filter delay; find the best short alignment.
+        best = 0.0
+        for lag in range(-8, 9):
+            a = recovered[max(0, lag):len(recovered) + min(0, lag)]
+            b = np.asarray(comb_ref[max(0, -lag):len(comb_ref) - max(0, lag)])
+            n = min(len(a), len(b))
+            if n > 8:
+                best = max(best, abs(np.vdot(b[:n], a[:n])) /
+                           np.sqrt(np.vdot(a[:n], a[:n]).real * np.vdot(b[:n], b[:n]).real))
+        assert best > 0.70, f"{tag}: remod reconstruction correlation {best:.3f}"
         dut._log.info(f"{tag}: full chain OK — combine active + non-zero, "
-                      f"REMOD_A_I/Q both toggling")
+                      f"REMOD_A_I/Q both toggling, reconstructed correlation={best:.3f}")
 
     drv.cancel()

@@ -15,6 +15,9 @@ SIM           ?= verilator
 TOPLEVEL_LANG  = verilog
 TOPLEVEL            = tb_trouper_cocotb
 COCOTB_TEST_MODULES = test_capture_playback
+# 16 bits models 64 KiB and is adequate for short captures.  A full SF12/
+# BW125 replay writes beyond that range, so its SGE run requests 21 (2 MiB).
+PSRAM_ADDR_BITS ?= 16
 
 DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src
@@ -39,9 +42,10 @@ VERILOG_SOURCES = \
 # Verilator needs --timing for the SPI helpers' Timer()-based bit-bang, plus
 # access to dut.u_dut.u_sc.* hierarchical signals the test reads on failure.
 EXTRA_ARGS += --timing -Wno-fatal --trace --public-flat-rw
+COMPILE_ARGS += -GPSRAM_ADDR_BITS=$(PSRAM_ADDR_BITS)
 
 # cocotb finds the Python test + iq_capture helper via PYTHONPATH
-PYTHONPATH    := $(TESTS)
+PYTHONPATH    := $(DESIGN_ROOT):$(TESTS)
 
 # Pass capture configuration through to the test (export so cocotb sees them)
 export CAPTURE_NPY
