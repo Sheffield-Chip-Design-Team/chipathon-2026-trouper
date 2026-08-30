@@ -510,6 +510,89 @@ a dedicated proof.
 
 ## High
 
+### 6. DRT-1231 clkbuf CTS pin-access failure — RE-OPENED 2026-08-30 (job 5281); `DIODE_PADDING: 4` is a mitigation, not a fix
+
+A minimal fix is confirmed clean at 1380×1100 (v15c), but the same DRT-1231
+violation (`clkbuf_*_IQ_CLK_regs/I` pin access) **returns** under the
+honest-MCP/scoped-SDC config (v24, job 2211) and at every relaxed-SDC
+floorplan tried since (jobs 2165–2168). Described in the source doc as
+"timing-SDC-sensitive" — the fix does not generalize across SDC edits.
+
+**Blocks:** further die-shrink; the honest-MCP signoff configuration (item 1).
+**See:** `planning/area-reduction-roadmap.md` §4 (Gate 0 blocker);
+`planning/ss-corner-decimator-pacing-closure.md`.
+
+**CLOSED 2026-08-30 — root cause found and fixed; the framing above was chasing the
+wrong variable.** `DRT-1231`/`DRT-0073` on `clkbuf_*_IQ_CLK_regs/I` was never a CTS
+buffer-set, SDC, or density problem: **antenna diodes were abutting the clock buffers
+and stealing their routing pin access**, because `DIODE_PADDING` was unset (`None`).
+Setting `DIODE_PADDING: 4` clears it outright — job **5198** at 1675×1110: 0 antenna
+net / 0 pin, magic DRC 0, XOR 0, LVS clear, hold met at all corners, clock skew
+0.312 ns. Same evidence that closed item 51.
+
+This also retires the "timing-SDC-sensitive, does not generalize" reasoning: the
+investigation proved buffer *size* is irrelevant — variant C4 (job 5197) dropped
+`clkbuf_16` from `CTS_CLK_BUFFERS` and the failure simply moved to a `clkbuf_12`
+(`clkbuf_4_3_0_IQ_CLK_regs/I`). The failure follows the clock tree to whichever
+buffer the diodes box in, so every earlier CTS-side "fix" was treating a symptom.
+Note `DPL_CELL_PADDING` is *not* an alternative lever (3 causes `DPL-0036`);
+`DIODE_PADDING` applies to diode cells only and avoids that.
+
+Both of this item's stated blocks are also stale: the honest-MCP/scoped-SDC
+configuration is canonical (`pnr_32m_scoped_v25_b6.sdc`) and routes, and die-shrink
+is now gated on routing congestion (item 12) and pad allocation (item 46), not on this.
+
+**Residual (accepted, not blocking):** the fix is confirmed on the current signoff
+floorplan only. Two 2026-08 runs on *other* floorplan variants hit `DRT-1231` —
+job 4485 (1167.5², default margins) and job 5159 (density 78 at 1675×1110) — and
+neither was re-run with `DIODE_PADDING` set, so generalization across floorplans is
+untested rather than disproven.
+**Re-open if:** `DRT-1231`/`DRT-0073` recurs on a floorplan that already has
+`DIODE_PADDING: 4` — that would mean a second, distinct mechanism.
+**See:** `planning/antenna-closure-investigation-2026-08.md` §0; item 51;
+`planning/1117sq-margin-reclaim-2026-08.md` §4.
+
+**RE-OPENED the same day, by its own stated trigger (job 5281).** The closure
+above was written on **n=1** — a single clean floorplan — and the first
+perturbation broke it. Job 5281 re-ran the *byte-identical* config to job 5279
+(`resolved.json` diff is empty: same `DIODE_PADDING: 4`, `DPL_CELL_PADDING: 2`,
+65 % density, 1675×1110 die, same `CTS_CLK_BUFFERS`) and died at step 46/78:
+
+```
+[DRT-1231] Pin clkbuf_2_3__f_SPI_SCK/I does not have access point
+```
+
+**The only delta between the two runs is a two-line RTL change** — adding the
+`0x19` term to `reg_bank.v`'s `cfg_wr_rejected` condition. Detailed routing was
+already in trouble before it died (520 violations at 10–20 % completion, plus
+`GRT-0243 Unable to repair antennas on net with diodes`).
+
+Two corrections to the closure reasoning above:
+
+1. **`DIODE_PADDING: 4` is a mitigation, not a root-cause fix.** Diode crowding
+   was *a* mechanism and setting the padding did clear job 5198 — but it does not
+   make the design robust, because the underlying fragility is unchanged: the
+   `IQ_CLK` net still has a **5213-terminal fanout** (`GRT-0281`), the clock trees
+   are still routed with no slack for pin access, and whether any given buffer
+   gets boxed in remains a placement lottery that a trivial netlist change can
+   re-roll.
+2. **It is not confined to `IQ_CLK`.** Every prior instance on record named an
+   `IQ_CLK` buffer; this one is on the **`SPI_SCK`** tree. Any statement scoping
+   this failure to the IQ clock is wrong.
+
+**What this means practically:** the tapeout floorplan cannot absorb routine RTL
+edits. Any change — even one that is functionally correct and regression-clean,
+as this one is (job 5280: all 42 cocotb suites pass) — may fail P&R for reasons
+unrelated to its content. Item 1's SS-closure work implies many such edits.
+
+**Action / exit:** stop treating this as closed by a config knob. Needed is a
+structural fix that gives the clock trees routing headroom — candidates: reduce
+the `IQ_CLK` 5213-terminal fanout at RTL level, give CTS-inserted buffers
+explicit placement room, or lower density further at the cost of area. Any
+future "fixed" claim needs **several** perturbed netlists routing clean, not one.
+**See:** job 5281 log `/srv/eda/logs/timothyn-dev/job-5281.o`; job 5279 (clean,
+same config); `planning/antenna-closure-investigation-2026-08.md`; item 51.
+
 ### 8. AGC calibration and edge-case behavior are unverified on silicon
 
 Trouper has no on-chip analogue AGC target/guard registers, and (as of
@@ -1633,48 +1716,6 @@ The bench now drives/samples on `negedge` and allows 40 clocks. All five
 parametric Q0.7 precision cases pass bit-exactly (`make sim_mrc_fw_precision`,
 2026-08-29). This restores the unit-level complement to the existing SPI
 end-to-end oracle coverage.
-
-### 6. DRT-1231 clkbuf CTS pin-access failure — CLOSED 2026-08-30 (root-caused: diode crowding, fixed by `DIODE_PADDING: 4`)
-
-A minimal fix is confirmed clean at 1380×1100 (v15c), but the same DRT-1231
-violation (`clkbuf_*_IQ_CLK_regs/I` pin access) **returns** under the
-honest-MCP/scoped-SDC config (v24, job 2211) and at every relaxed-SDC
-floorplan tried since (jobs 2165–2168). Described in the source doc as
-"timing-SDC-sensitive" — the fix does not generalize across SDC edits.
-
-**Blocks:** further die-shrink; the honest-MCP signoff configuration (item 1).
-**See:** `planning/area-reduction-roadmap.md` §4 (Gate 0 blocker);
-`planning/ss-corner-decimator-pacing-closure.md`.
-
-**CLOSED 2026-08-30 — root cause found and fixed; the framing above was chasing the
-wrong variable.** `DRT-1231`/`DRT-0073` on `clkbuf_*_IQ_CLK_regs/I` was never a CTS
-buffer-set, SDC, or density problem: **antenna diodes were abutting the clock buffers
-and stealing their routing pin access**, because `DIODE_PADDING` was unset (`None`).
-Setting `DIODE_PADDING: 4` clears it outright — job **5198** at 1675×1110: 0 antenna
-net / 0 pin, magic DRC 0, XOR 0, LVS clear, hold met at all corners, clock skew
-0.312 ns. Same evidence that closed item 51.
-
-This also retires the "timing-SDC-sensitive, does not generalize" reasoning: the
-investigation proved buffer *size* is irrelevant — variant C4 (job 5197) dropped
-`clkbuf_16` from `CTS_CLK_BUFFERS` and the failure simply moved to a `clkbuf_12`
-(`clkbuf_4_3_0_IQ_CLK_regs/I`). The failure follows the clock tree to whichever
-buffer the diodes box in, so every earlier CTS-side "fix" was treating a symptom.
-Note `DPL_CELL_PADDING` is *not* an alternative lever (3 causes `DPL-0036`);
-`DIODE_PADDING` applies to diode cells only and avoids that.
-
-Both of this item's stated blocks are also stale: the honest-MCP/scoped-SDC
-configuration is canonical (`pnr_32m_scoped_v25_b6.sdc`) and routes, and die-shrink
-is now gated on routing congestion (item 12) and pad allocation (item 46), not on this.
-
-**Residual (accepted, not blocking):** the fix is confirmed on the current signoff
-floorplan only. Two 2026-08 runs on *other* floorplan variants hit `DRT-1231` —
-job 4485 (1167.5², default margins) and job 5159 (density 78 at 1675×1110) — and
-neither was re-run with `DIODE_PADDING` set, so generalization across floorplans is
-untested rather than disproven.
-**Re-open if:** `DRT-1231`/`DRT-0073` recurs on a floorplan that already has
-`DIODE_PADDING: 4` — that would mean a second, distinct mechanism.
-**See:** `planning/antenna-closure-investigation-2026-08.md` §0; item 51;
-`planning/1117sq-margin-reclaim-2026-08.md` §4.
 
 ### 44. 4.5 V-core signoff is P&R-proven but NOT adopted — CLOSED 2026-08-30 (uniform rail, no 4.5 V core)
 
