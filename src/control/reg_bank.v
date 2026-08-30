@@ -76,6 +76,11 @@ module reg_bank (
     output reg [3:0]   sf_cfg,          // SF_CFG[3:0], direct-coded 7–12
     output reg         bw_sel,        // BW_CFG[0]: 0=250 kHz (sample_shift=1), 1=125 kHz (sample_shift=2)
     output reg [1:0]   sc_ant_sel,    // SC_ANT_SEL[1:0]: SC correlator source antenna (0-3)
+    // ARRAY_SYNC_CTRL[0] (0x18): arm the multi-ASIC acquisition-sync link.
+    // Resets to 0 -- the shared ARRAY_ACQ_N pin does nothing until firmware
+    // opts in, so a single-chip board cannot be started by noise on an unused
+    // pad. See planning/array-acquisition-sync.md.
+    output reg         array_sync_en,
     // SC thresholds
     output reg [15:0]  sc_thr,
     output reg [1:0]   sc_hits_req,
@@ -97,6 +102,14 @@ module reg_bank (
                                           //  psram_buf_ctrl directly from the
                                           //  SPI slave, like the 0x76 read pop)
     // Manual SC lock override (bring-up / catastrophic-detector-failure escape hatch)
+    // Two-pin digital debug (planning/two-pin-digital-debug-plan.md).
+    // dbg_ctrl drives the probe mux in trouper_top; dbg_pad_value is the
+    // post-mux, post-enable value read back at DBG_STATUS as a connectivity
+    // check.  irq_status_dbg exports the sticky IRQ vector so the mux can
+    // probe an individual source -- observability only, no functional use.
+    output reg  [7:0]  dbg_ctrl,        // 0x04: [7] EN, [6:4] GROUP, [3:2] ANT, [1:0] SEL
+    input  wire [1:0]  dbg_pad_value,   // 0x05: [0] DBG0, [1] DBG1
+    output wire [7:0]  irq_status_dbg,
     output reg         sc_force_lock,  // 0x19[0]: W1P — blocked while packet_active
     // 0x1A[0]: level.  1 = SC detector held disabled (ORed into sc_clr at the
     // top level) AND the quasi-static config registers are writable.  0 = the
@@ -154,6 +167,7 @@ module reg_bank (
     // -----------------------------------------------------------------------
     reg [7:0] irq_status;
     assign irq_out = |irq_status;
+    assign irq_status_dbg = irq_status;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -176,7 +190,7 @@ module reg_bank (
     // The six quasi-static config registers whose MCP exceptions depend on
     // the rx_hold interlock.  SC_THR (0x0C/0x0D) is deliberately absent: it
     // appears in no MCP group and times honestly single-cycle.
-    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) ||
+    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) || (addr == 8'h18) ||
                            (addr == 8'h0B) || (addr == 8'h0E) ||
                            (addr == 8'h1B) || (addr == 8'h27);
 
@@ -196,6 +210,7 @@ module reg_bank (
             sf_cfg           <= 4'h7;
             bw_sel           <= 1'b0;
             sc_ant_sel       <= 2'd0;
+            array_sync_en    <= 1'b0;
             sc_thr           <= 16'h01CC;   // 0x7333 ÷ 64; sc_thr[11:0] used (12-bit positive)
             sc_hits_req      <= 2'h2;
             pkt_timeout_syms <= 8'h50;
@@ -208,6 +223,7 @@ module reg_bank (
             psram_dbg_rd_trig <= 1'b0;
             psram_dbg_wr_trig <= 1'b0;
             sc_force_lock    <= 1'b0;
+            dbg_ctrl         <= 8'h00;
             noise_trig       <= 1'b0;
             tacc_window_syms <= 4'd8;
             replay_delay_samples <= 16'd1500; // ≈3 ms: measured Grouper rv32emc
@@ -248,7 +264,8 @@ module reg_bank (
             // Rejection is latched so firmware can detect an out-of-sequence
             // driver -- a dropped write is otherwise invisible (cf. Open Risks
             // #16 and the W_MISSED_PACKET readback bug).
-            if (we && !cfg_wr_ok && cfg_locked_addr)
+            if ((we && !cfg_wr_ok && cfg_locked_addr) ||
+                (we && (addr == 8'h04) && packet_active))
                 cfg_wr_rejected <= 1'b1;
             else if (we && addr == 8'h1A && wdata[1])
                 cfg_wr_rejected <= 1'b0;
@@ -270,6 +287,11 @@ module reg_bank (
                     // the packet_active half only; 0x0B/0x0E/0x27 had no gate
                     // at all.  See cfg_wr_ok above and Open Risks #43.
                     8'h09: if (cfg_wr_ok) sf_cfg <= wdata[3:0];
+                    // ARRAY_SYNC_CTRL. Gated with the other quasi-static
+                    // config: arming or disarming the array link mid-packet
+                    // would change whether a peer event can restart this
+                    // receiver while it is already running one.
+                    8'h18: if (cfg_wr_ok) array_sync_en <= wdata[0];
                     8'h0A: if (cfg_wr_ok) bw_sel <= wdata[0];
                     8'h0B: if (cfg_wr_ok) pkt_timeout_syms <= wdata;
                     8'h0C: sc_thr[15:8]     <= wdata;
@@ -279,6 +301,14 @@ module reg_bank (
                                comb_post_gain_shift <= wdata[2:0];
                                remod_backoff_shift  <= wdata[5:4];
                            end
+                    // DBG_CTRL.  Gated on !packet_active ONLY -- deliberately a
+                    // weaker gate than cfg_wr_ok.  The requirement is that the
+                    // probe selection is fixed for the whole of any one packet,
+                    // not that the receiver be held: re-pointing a probe between
+                    // packets without disabling the detector is the normal
+                    // bring-up loop.  A rejected write still raises the shared
+                    // CFG_WR_REJECTED sticky so a dropped write is visible.
+                    8'h04: if (!packet_active) dbg_ctrl <= wdata;
                     8'h19: if (!packet_active) sc_force_lock <= wdata[0]; // blocked during active packet
                     // RX_HOLD is intentionally NOT self-gated: firmware must
                     // always be able to re-assert the hold to reconfigure.
@@ -352,6 +382,9 @@ module reg_bank (
             8'h08: rdata_next = {antenna_en, 2'h0, mimo_mode};
             8'h09: rdata_next = {4'h0, sf_cfg};
             8'h0A: rdata_next = {7'h0, bw_sel};
+            8'h04: rdata_next = dbg_ctrl;                           // DBG_CTRL
+            8'h05: rdata_next = {6'h0, dbg_pad_value};              // DBG_STATUS (RO)
+            8'h18: rdata_next = {7'h0, array_sync_en};              // ARRAY_SYNC_CTRL
             8'h0B: rdata_next = pkt_timeout_syms;
             8'h0C: rdata_next = sc_thr[15:8];
             8'h0D: rdata_next = sc_thr[7:0];
