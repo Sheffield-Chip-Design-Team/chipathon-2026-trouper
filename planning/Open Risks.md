@@ -637,19 +637,42 @@ violations appear at SS where 5279 had none (`_38228_/ZN` −0.0029 pF,
 `_38209_/ZN` −0.000018 pF against an 0.082 pF limit); both are internal gates,
 neither is on an SPI net.
 
-**Remaining action.** The fix is still **n=1** — the same mistake that produced
-the premature closure above. Before adopting `nospicts` as canonical: reproduce
-it on at least one more perturbed netlist, and note that `SPI_SCK` becomes a
-plain routed net with whatever skew the router gives it, which makes item 54
-(host-SPI post-route GLS/SDF) more load-bearing, not less. The alternative that
-avoids the whole question is making the `reg_bank` edit netlist-neutral — the
-+144 cells came from ABC duplicating an address decoder, not from the logic
-itself.
-**Runs:** 5279/5281/5282/5283/5284/5285 under
+**ADOPTED 2026-08-31 into the canonical SDC (job 5286).** The exclusion now
+lives in `src/config/pnr_32m_scoped_v25_b6.sdc` itself rather than a variant, so
+all 8 configs under `src/config` and 13 under `rtl-test/ol_trouper_top` inherit
+it; `rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc` was byte-identical and
+was updated in step. Job 5286 re-ran the stock `trouper_top_dbgpins.json`
+against that promoted SDC and reproduced job 5284 on every metric — SS WNS
+−18.23 ns, TNS −459.8, antenna 0/0, DRC 0, XOR 0, LVS clean, util 66.2 % — so
+the promotion is faithful to what was validated, not an approximation of it.
+The `nospicts` variant config and SDC are deleted as redundant. The `_d63`,
+`_d60` and `_smallbuf` probe configs are kept but annotated: they now inherit
+the fix and no longer reproduce the failures tabulated above.
+
+**Why this item stays OPEN despite a working, adopted fix.** Jobs 5284 and 5286
+are the *same netlist twice*, so the evidence is still **n=1** on the thing that
+matters — whether the fix survives a netlist change. That is precisely the
+mistake that produced the premature closure above, and it is not being repeated.
+
+**Exit criterion (unchanged):** one clean route on a *different* perturbed
+netlist. Until then, treat the floorplan as still fragile.
+
+**Live caveat.** `SPI_SCK` is now a plain routed net carrying whatever skew the
+router gives it. Signoff STA still constrains the domain and shows vast margin
+(241.77 ns setup / 2.10 ns hold against a 500 ns period, job 5284), but nothing
+in P&R optimises those paths any more — which makes item 54 (host-SPI post-route
+GLS/SDF) more load-bearing, not less.
+
+**Rejected alternative.** Making the `reg_bank` edit netlist-neutral, so the
++144 cells never appear, was considered and **rejected as too fragile**: it
+would rest on ABC continuing to share an address decoder, which no constraint
+enforces and any future edit could silently undo.
+**Runs:** 5279/5281/5282/5283/5284/5285/5286 under
 `/srv/eda/runs/timothyn-dev/lora-mimo-dbgpnr/`; configs
-`src/config/trouper_top_dbgpins{,_d63,_d60,_nospicts,_smallbuf}.json`.
+`src/config/trouper_top_dbgpins{,_d63,_d60,_smallbuf}.json`.
 **See:** job 5281 log `/srv/eda/logs/timothyn-dev/job-5281.o`; job 5279 (clean,
-same config); `planning/antenna-closure-investigation-2026-08.md`; item 51.
+same config); the rationale block inside `pnr_32m_scoped_v25_b6.sdc`;
+`planning/antenna-closure-investigation-2026-08.md`; item 51.
 
 ### 8. AGC calibration and edge-case behavior are unverified on silicon
 
