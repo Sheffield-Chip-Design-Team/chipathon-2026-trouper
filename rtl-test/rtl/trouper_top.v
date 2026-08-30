@@ -287,28 +287,31 @@ module trouper_top (
     assign SPI_SCK_PD = 1'b0;
     assign SPI_MOSI_PU = 1'b0;
     assign SPI_MOSI_PD = 1'b0;
-    assign PSRAM_SIO_0_IE = 1'b1;
+    // gf180mcu_fd_io__bi_t does not characterize IE=OE=1.  The PSRAM
+    // controller owns OE per lane, so enable the pad receiver only while
+    // that lane is released to the PSRAM.
+    assign PSRAM_SIO_0_IE = ~PSRAM_SIO_OE[0];
     assign PSRAM_SIO_0_CS = 1'b0;
     assign PSRAM_SIO_0_SL = 1'b0;
     assign PSRAM_SIO_0_PU = 1'b0;
     assign PSRAM_SIO_0_PD = 1'b0;
     assign PSRAM_SIO_0_PDRV0 = 1'b1;
     assign PSRAM_SIO_0_PDRV1 = 1'b1;
-    assign PSRAM_SIO_1_IE = 1'b1;
+    assign PSRAM_SIO_1_IE = ~PSRAM_SIO_OE[1];
     assign PSRAM_SIO_1_CS = 1'b0;
     assign PSRAM_SIO_1_SL = 1'b0;
     assign PSRAM_SIO_1_PU = 1'b0;
     assign PSRAM_SIO_1_PD = 1'b0;
     assign PSRAM_SIO_1_PDRV0 = 1'b1;
     assign PSRAM_SIO_1_PDRV1 = 1'b1;
-    assign PSRAM_SIO_2_IE = 1'b1;
+    assign PSRAM_SIO_2_IE = ~PSRAM_SIO_OE[2];
     assign PSRAM_SIO_2_CS = 1'b0;
     assign PSRAM_SIO_2_SL = 1'b0;
     assign PSRAM_SIO_2_PU = 1'b0;
     assign PSRAM_SIO_2_PD = 1'b0;
     assign PSRAM_SIO_2_PDRV0 = 1'b1;
     assign PSRAM_SIO_2_PDRV1 = 1'b1;
-    assign PSRAM_SIO_3_IE = 1'b1;
+    assign PSRAM_SIO_3_IE = ~PSRAM_SIO_OE[3];
     assign PSRAM_SIO_3_CS = 1'b0;
     assign PSRAM_SIO_3_SL = 1'b0;
     assign PSRAM_SIO_3_PU = 1'b0;
@@ -582,10 +585,17 @@ module trouper_top (
     wire [17:0]        n_acc;
     wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
-    // A noise window cannot replace an in-flight normal training window.
-    // Reject it explicitly and report the rejection through reg_bank 0x1F[1].
-    wire               noise_trig_accept = rb_noise_trig && !training_armed;
-    wire               noise_trig_rejected = rb_noise_trig && training_armed;
+    // Declared here (driven by the Stage 7 packet FSM below) because the
+    // noise-trigger qualification above needs it; Icarus rejects a net that
+    // is used before its declaration.
+    wire               packet_active;
+    // A noise window is an idle-only operation.  It cannot replace either an
+    // in-flight training window or a packet whose training window has already
+    // completed: in the latter case re-arming would overwrite the Z snapshot
+    // while the packet FSM still owns the packet.  Reject both cases and
+    // report the rejection through reg_bank 0x1F[1].
+    wire               noise_trig_accept = rb_noise_trig && !training_armed && !packet_active;
+    wire               noise_trig_rejected = rb_noise_trig && (training_armed || packet_active);
 
     training_acc u_tacc (
         .clk        (clk),
@@ -661,7 +671,6 @@ module trouper_top (
     wire        W_valid_set, W_missed_packet;
     wire        W_missed_q;   // sticky per-packet readback mirror of the pulse
     wire [2:0]  packet_phase;
-    wire        packet_active;
     wire        packet_active_ps;   // fanout-split duplicate, u_psram only
     wire [1:0]  active_mode;
     wire [3:0]  active_antenna_en;

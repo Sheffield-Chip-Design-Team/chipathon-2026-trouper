@@ -132,6 +132,9 @@ module reg_bank (
     // exclusive, which is what the scoped-MCP settling exceptions actually
     // need (Open Risks #43).
     reg cfg_wr_rejected;
+    // Sticky rejection for a noise trigger issued while training_acc is
+    // already busy.  Without this, top-level qualification could treat the
+    // normal training_done as completion of a noise window that never armed.
     reg noise_trig_rejected_sticky;
 
     assign w_shadow[127:120] = w_shadow_r[0];  assign w_shadow[119:112] = w_shadow_r[1];
