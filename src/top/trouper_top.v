@@ -594,8 +594,30 @@ module trouper_top (
     // completed: in the latter case re-arming would overwrite the Z snapshot
     // while the packet FSM still owns the packet.  Reject both cases and
     // report the rejection through reg_bank 0x1F[1].
-    wire               noise_trig_accept = rb_noise_trig && !training_armed && !packet_active;
-    wire               noise_trig_rejected = rb_noise_trig && (training_armed || packet_active);
+    //
+    // Qualify the RISING EDGE, not the level.  reg_bank holds a W1P output for
+    // one CE period = 2 clk cycles, and training_acc arms on the same rising
+    // edge -- so on the pulse's second cycle training_armed is already 1 and a
+    // level-sensitive test would report the accepted trigger as rejected.
+    reg                rb_noise_trig_q;
+    wire               noise_trig_rise = rb_noise_trig && !rb_noise_trig_q;
+    wire               noise_trig_accept = noise_trig_rise && !training_armed && !packet_active;
+    wire               noise_trig_rej_now = noise_trig_rise && (training_armed || packet_active);
+    // training_acc edge-detects, so the 1-cycle accept pulse is enough for it.
+    // The rejection reaches reg_bank, which only samples on ce_16m -- a
+    // one-cycle pulse lands on the idle phase half the time and is lost.
+    // Stretch it to two clk cycles so it always covers one CE edge.
+    reg                noise_trig_rej_d;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rb_noise_trig_q  <= 1'b0;
+            noise_trig_rej_d <= 1'b0;
+        end else begin
+            rb_noise_trig_q  <= rb_noise_trig;
+            noise_trig_rej_d <= noise_trig_rej_now;
+        end
+    end
+    wire               noise_trig_rejected = noise_trig_rej_now || noise_trig_rej_d;
 
     training_acc u_tacc (
         .clk        (clk),
