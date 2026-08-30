@@ -48,12 +48,28 @@ from cocotb.triggers import RisingEdge, Timer
 CLK_NS   = 31.25    # 32 MHz
 SCK_HALF = 62.5     # 8 MHz SPI half-period (ns)
 
-SF          = 7
+SF          = 7      # default for the single-configuration tests
 BW_KHZ      = 250
-SAMPLE_SHIFT = 1                      # 250 kHz BW -> 2x oversampled
-M           = 1 << (SF + SAMPLE_SHIFT)  # output samples per symbol
-CLK_PER_IQ  = 64                      # decimator is fixed R=64
-SYM_NS      = M * CLK_PER_IQ * CLK_NS
+CLK_PER_IQ  = 64     # decimator is fixed R=64, so a sample is always 64 clocks
+
+
+def sample_shift(bw_khz):
+    return 1 if bw_khz == 250 else 2      # 250 kHz = 2x oversampled, 125 kHz = 4x
+
+
+def sym_len(sf, bw_khz):
+    """Symbol period in output samples."""
+    return 1 << (sf + sample_shift(bw_khz))
+
+
+def sym_ns(sf, bw_khz):
+    return sym_len(sf, bw_khz) * CLK_PER_IQ * CLK_NS
+
+
+M      = sym_len(SF, BW_KHZ)
+SYM_NS = sym_ns(SF, BW_KHZ)
+
+REG_PKT_TIMEOUT   = 0x0B
 
 # Register map (planning/Register Map.md)
 REG_SF_CFG        = 0x09
@@ -184,7 +200,7 @@ async def reset_pair(dut):
     await Timer(8 * CLK_NS, unit="ns")
 
 
-async def configure(dut, chip):
+async def configure(dut, chip, sf=SF, bw_khz=BW_KHZ, pkt_timeout_syms=None):
     """Identical LoRa configuration on one chip.
 
     planning/array-acquisition-sync.md lists identical SF, BW and hit count as
@@ -197,8 +213,10 @@ async def configure(dut, chip):
     await spi_read(dut, chip, 0x00)          # prime the SPI interface
     await spi_read(dut, chip, REG_SF_CFG)
 
-    await spi_write(dut, chip, REG_SF_CFG, SF & 0x0F)
-    await spi_write(dut, chip, REG_BW_CFG, 0 if BW_KHZ == 250 else 1)
+    await spi_write(dut, chip, REG_SF_CFG, sf & 0x0F)
+    await spi_write(dut, chip, REG_BW_CFG, 0 if bw_khz == 250 else 1)
+    if pkt_timeout_syms is not None:
+        await spi_write(dut, chip, REG_PKT_TIMEOUT, pkt_timeout_syms & 0xFF)
     await spi_write(dut, chip, REG_SC_THR_HI, 0x01)   # sc_thr = 0x0100
     await spi_write(dut, chip, REG_SC_THR_LO, 0x00)
     await spi_write(dut, chip, REG_SC_HITS_REQ, 0x00)  # 1 hit fires lock
@@ -213,10 +231,11 @@ async def configure(dut, chip):
         raise AssertionError(f"chip {chip}: PSRAM INIT_DONE never set")
 
 
-async def wait_for_lock(dut, chip, max_syms=20):
+async def wait_for_lock(dut, chip, max_syms=20, period_ns=None):
     """Poll one chip's sc_lock for up to max_syms symbol periods."""
+    period_ns = SYM_NS if period_ns is None else period_ns
     for _ in range(max_syms):
-        await Timer(SYM_NS, unit="ns")
+        await Timer(period_ns, unit="ns")
         if await sc_locked(dut, chip):
             return True
     return False
@@ -278,16 +297,15 @@ async def test_peer_sync_starts_idle_chip(dut):
     dut._log.info(f"timing_ref A={ref_a} B={ref_b} delta={delta} samples "
                   f"(M={M} samples/symbol)")
 
-    # Measured 2026-08-30 at SF7/BW250: delta = +2 samples. Bounded here rather
-    # than pinned exactly, since the eval pipeline depth is an implementation
-    # detail -- but bounded tightly, because this offset is the array's epoch
-    # error and nothing downstream corrects it. A regression that widens it
-    # should fail here, not silently degrade multi-chip combining.
-    assert 0 <= delta <= 4, (
-        f"peer-synced epoch drifted: chip B's timing_ref is {delta} samples "
-        f"from chip A's (expected 0..4). The peer path reads live sample_count "
-        f"while the natural path latches eval_sample_mark; see "
-        f"planning/array-acquisition-sync.md."
+    # The raw peer path runs +2 samples late (measured; see
+    # test_epoch_offset_is_stable_across_sf_bw). sc_detector subtracts
+    # SYNC_EPOCH_LAG_SAMPLES to cancel exactly that, so the two chips must now
+    # agree to the sample. Exact, not bounded: if the evaluation pipeline ever
+    # changes depth the constant goes stale, and a tolerance would hide it.
+    assert delta == 0, (
+        f"peer-synced epoch is {delta} samples off chip A's. "
+        f"SYNC_EPOCH_LAG_SAMPLES in src/frontend/sc_detector.v no longer "
+        f"matches the real detect-to-sync latency."
     )
 
     # And B really is running a packet, not just holding a lock bit.
@@ -389,3 +407,175 @@ async def test_open_drain_invariant_and_tieoffs(dut):
         assert int(dut.B_ARRAY_ACQ_N_OUT.value) == 0, "chip B drove ARRAY_ACQ_N high"
 
     dut._log.info("open-drain invariant and pad tie-offs hold")
+
+
+@cocotb.test()
+async def test_epoch_offset_is_stable_across_sf_bw(dut):
+    """Is the A->B epoch offset a fixed constant, or does it move with config?
+
+    This decides whether the offset can be compensated at all. The peer path's
+    lateness is set by the detector's evaluation pipeline plus the OE and
+    synchroniser delays -- all measured in IQ_CLK cycles. The decimator is
+    fixed R=64, so one output sample is always 64 clocks no matter what SF or
+    BW is programmed. If that reasoning holds, the offset expressed *in
+    samples* is the same for every configuration and a single constant
+    corrects it. If it moves, compensation needs a runtime term.
+
+    Measured, not assumed.
+    """
+    results = {}
+    for sf, bw in ((7, 250), (7, 125), (8, 250)):
+        await reset_pair(dut)
+        await configure(dut, "A", sf=sf, bw_khz=bw)
+        await configure(dut, "B", sf=sf, bw_khz=bw)
+
+        stim = cocotb.start_soon(sdm_driver(dut, "A"))
+        period = sym_ns(sf, bw)
+
+        assert await wait_for_lock(dut, "A", max_syms=20, period_ns=period), \
+            f"SF{sf}/BW{bw}: chip A never acquired"
+        assert await wait_for_lock(dut, "B", max_syms=4, period_ns=period), \
+            f"SF{sf}/BW{bw}: chip B never synced"
+
+        ref_a = int(dut.u_a.u_dut.u_sc.timing_ref.value)
+        ref_b = int(dut.u_b.u_dut.u_sc.timing_ref.value)
+        results[(sf, bw)] = ref_b - ref_a
+        dut._log.info(f"SF{sf}/BW{bw}: timing_ref A={ref_a} B={ref_b} "
+                      f"delta={ref_b - ref_a} (M={sym_len(sf, bw)})")
+        stim.kill()
+
+    deltas = set(results.values())
+    dut._log.info(f"epoch offsets by config: {results}")
+    assert len(deltas) == 1, (
+        f"the A->B epoch offset is NOT constant across configurations: {results}. "
+        f"SYNC_EPOCH_LAG_SAMPLES is a single constant, so it would be wrong for "
+        f"at least one of them -- see planning/array-acquisition-sync.md."
+    )
+    assert deltas == {0}, (
+        f"compensated epoch offset is {deltas}, expected 0 in every "
+        f"configuration. Adjust SYNC_EPOCH_LAG_SAMPLES in "
+        f"src/frontend/sc_detector.v to the measured raw lag."
+    )
+
+
+@cocotb.test()
+async def test_peer_lock_suppresses_local_detector(dut):
+    """What happens when B's own detector would fire AFTER a peer sync?
+
+    In a real array both chips hear the packet, so this is the normal case, not
+    a corner: whichever chip detects first syncs the other, and the second
+    chip's own correlator then reaches its own hit run a moment later.
+
+    sc_detector gates the whole natural-lock block behind
+    `metric_valid_pulse && !sc_lock` (src/frontend/sc_detector.v), so once B is
+    peer-locked its own detection is suppressed until sc_clr. That matters for
+    three separate reasons, all checked here:
+
+      - timing_ref must NOT be rewritten mid-packet. packet_ctrl_fsm latches it
+        once in ST_ACQ_SETUP and derives absolute deadlines from it; a late
+        overwrite would leave the FSM and the detector disagreeing about when
+        the packet started.
+      - sc_lock_natural_pulse must NOT fire, or B would drive the shared wire
+        on what is really a peer-originated lock.
+      - packet_ctrl_fsm has no mid-packet re-lock path. It was removed as
+        structurally unreachable (Open Risks #25), and the code comment there
+        explicitly warns that a cascade input WITHOUT the !sc_lock gate would
+        make it reachable again. This test is what keeps that gate honest.
+    """
+    await reset_pair(dut)
+    await configure(dut, "A")
+    await configure(dut, "B")
+
+    cocotb.start_soon(sdm_driver(dut, "A"))
+
+    assert await wait_for_lock(dut, "A"), "chip A never acquired"
+    assert await wait_for_lock(dut, "B", max_syms=4), "chip B never synced"
+
+    ref_b_at_sync = int(dut.u_b.u_dut.u_sc.timing_ref.value)
+    phase_at_sync = (await spi_read(dut, "B", REG_PACKET_STATUS) >> 1) & 0x7
+    dut._log.info(f"chip B synced: timing_ref={ref_b_at_sync} phase={phase_at_sync}")
+
+    # NOW give chip B the same RF it would really have been receiving all along.
+    # Its correlator starts finding hits while it is already locked.
+    cocotb.start_soon(sdm_driver(dut, "B"))
+
+    for _ in range(6):
+        await Timer(SYM_NS, unit="ns")
+        ref_now = int(dut.u_b.u_dut.u_sc.timing_ref.value)
+        assert ref_now == ref_b_at_sync, (
+            f"chip B's timing_ref moved after its own detector saw the packet: "
+            f"{ref_b_at_sync} -> {ref_now}. The natural-lock path is no longer "
+            f"gated by !sc_lock, and packet_ctrl_fsm's latched deadlines are now "
+            f"anchored to a different epoch than the detector's."
+        )
+        assert int(dut.B_ARRAY_ACQ_N_OE.value) == 0, (
+            "chip B asserted ARRAY_ACQ_N after its own detector fired on a "
+            "packet it was already peer-locked to -- a synced chip is echoing "
+            "back onto the shared wire"
+        )
+
+    assert await sc_locked(dut, "B"), "chip B lost its lock"
+    dut._log.info("chip B: local detector correctly suppressed while peer-locked")
+
+
+@cocotb.test()
+async def test_sync_releases_and_rearms(dut):
+    """How the link resets, and that it can carry a second packet.
+
+    Release is entirely event-driven -- there is no timer in array_acq_sync:
+
+      drive_oe   clears on packet_done, rx_hold, or !array_sync_en
+      line_idle_seen clears on packet_done or rx_hold, and is only re-set
+                     after the net has been *observed* high again
+
+    That second flop is what makes reset safe. A chip coming out of reset while
+    the net is already low must not treat that standing low level as a fresh
+    event; it has to see the line released first. The same flop is what makes a
+    second packet work.
+
+    packet_done is guaranteed: packet_ctrl_fsm's pkt_cnt deadline always
+    returns the FSM to ST_IDLE, so a chip cannot hold the array's wire down
+    forever on a false lock. PKT_TIMEOUT_SYMS is set short here so the packet
+    ends inside a reasonable sim.
+    """
+    await reset_pair(dut)
+    await configure(dut, "A", pkt_timeout_syms=4)
+    await configure(dut, "B", pkt_timeout_syms=4)
+
+    stim = cocotb.start_soon(sdm_driver(dut, "A"))
+
+    assert await wait_for_lock(dut, "A"), "chip A never acquired"
+    assert await wait_for_lock(dut, "B", max_syms=4), "chip B never synced"
+    assert int(dut.ARRAY_ACQ_N.value) == 0, "net should be low while A drives"
+
+    # Stop the stimulus so the packet runs out rather than re-triggering.
+    stim.kill()
+    dut.A_IQ_DATA_I.value = 0
+    dut.A_IQ_DATA_Q.value = 0
+
+    # Wait for both chips to time out back to IDLE and release the wire.
+    released = False
+    for _ in range(40):
+        await Timer(SYM_NS, unit="ns")
+        a_active = (await spi_read(dut, "A", REG_PACKET_STATUS)) & 0x01
+        b_active = (await spi_read(dut, "B", REG_PACKET_STATUS)) & 0x01
+        if not a_active and not b_active:
+            released = True
+            break
+    assert released, "packet never timed out -- the wire would stay held down"
+
+    assert int(dut.A_ARRAY_ACQ_N_OE.value) == 0, \
+        "chip A still driving ARRAY_ACQ_N after packet_done"
+    assert int(dut.ARRAY_ACQ_N.value) == 1, \
+        "ARRAY_ACQ_N did not return to its idle level after the packet"
+    assert not await sc_locked(dut, "A"), "chip A's sc_lock did not clear"
+    assert not await sc_locked(dut, "B"), "chip B's sc_lock did not clear"
+    dut._log.info("both chips released the wire and re-armed")
+
+    # Second packet over the same link.
+    cocotb.start_soon(sdm_driver(dut, "A"))
+    assert await wait_for_lock(dut, "A", max_syms=20), \
+        "chip A did not re-acquire on the second packet"
+    assert await wait_for_lock(dut, "B", max_syms=4), \
+        "chip B did not re-sync on the second packet -- line_idle_seen never re-armed"
+    dut._log.info("second packet synced over the same link")

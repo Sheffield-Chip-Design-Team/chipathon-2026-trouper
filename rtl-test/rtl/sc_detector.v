@@ -187,6 +187,11 @@ module sc_detector (
     // genuine 3-cycle (MCP=3) budget.  Operands (tlat_* + the step pre-select)
     // are stable across the hold, so the arithmetic is unchanged.
     localparam [1:0] TDM_WAIT = 2'd2;
+
+    // Peer-sync epoch compensation, in 500 kS/s output samples.  See the
+    // sc_lock_sync block below for the derivation; measured, and regression-
+    // locked by cocotb/array_sync.
+    localparam [31:0] SYNC_EPOCH_LAG_SAMPLES = 32'd2;
     reg [1:0]  tdm_wait;
     reg        iq_inc_pending;   // defer a sample_count++ that lands mid-burst
 
@@ -472,6 +477,23 @@ module sc_detector (
             // array_acq_sync and uses the same hit-run back-calculation as a
             // natural SC lock. Linked arrays must share SF/BW, IQ_CLK, and
             // reset deassertion. A simultaneous local qualified hit wins.
+            //
+            // The peer path is inherently LATE relative to the chip that
+            // detected: that chip back-calculates from eval_sample_mark (the
+            // correlation window mark, latched when the hit was evaluated),
+            // while this path can only read the live sample_count when the
+            // wire edge arrives -- after the peer's evaluation pipeline, its
+            // lock-to-OE delay, and this chip's two-flop synchroniser.
+            //
+            // SYNC_EPOCH_LAG_SAMPLES removes that lag so both chips land on
+            // the SAME timing_ref. The constant is legitimate because the
+            // decimator is fixed R=64: one output sample is always 64 IQ_CLK
+            // cycles, so a latency that is constant in clocks is constant in
+            // samples for every SF and BW. Measured +2 samples at SF7/BW250,
+            // SF7/BW125 and SF8/BW250 before compensation (cocotb/array_sync,
+            // test_epoch_offset_is_stable_across_sf_bw, SGE job 5264); that
+            // test now asserts the compensated delta is exactly 0 and will
+            // fail if a future change to the evaluation pipeline moves it.
             if (sc_lock_sync && !sc_lock &&
                 !(metric_valid_pulse && eval_hit && (hit_count == sc_hits_req))) begin
                 sc_lock            <= 1'b1;
@@ -481,7 +503,8 @@ module sc_detector (
                     reg [16:0] sc_off;
                     n_hits_p1 = {1'b0, sc_hits_req} + 2'd1;
                     sc_off = {14'd0, n_hits_p1} << (sf + sample_shift);
-                    timing_ref <= sample_count - {15'd0, sc_off} + 32'd1;
+                    timing_ref <= sample_count - {15'd0, sc_off} + 32'd1
+                                  - SYNC_EPOCH_LAG_SAMPLES;
                 end
             end
 
