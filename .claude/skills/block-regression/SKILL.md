@@ -72,44 +72,37 @@ diff "src/$DUT" "$NFS/src/$DUT" && echo "DUT IN SYNC"
 Do **not** `rsync --delete` or sync `ip/` (≈400 MB, third-party, unchanged) — this NFS tree may
 hold other users'/other blocks' state you don't want to disturb.
 
-### 2. Write and submit the self-contained-suites job
+### 2. Submit the block's suites through the unified runner
+
+Do **not** hand-roll a suite loop. `cocotb/run_toplevel_regression_sge.sh` already does the
+per-suite `make`, the writable `SIM_BUILD`/`COCOTB_RESULTS_FILE` redirection (`/foss/designs`
+is read-only under SGE), the per-suite `run.log` + tally, and the summary. Pass the block's
+suites via `SUITES`, which overrides its group selection:
 
 ```bash
 cat > /srv/eda/designs/$USER/<block>_regression.sh << 'EOF'
 #!/bin/bash
-set -uo pipefail
-cd /foss/designs/lora-mimo
-
-SUITES="<space-separated suite list from the table above, minus special-arg suites>"
-
-FAILED=""
-for d in $SUITES; do
-  echo "=== cocotb/$d ==="
-  ( cd "cocotb/$d" && make )
-  rc=$?
-  if [ $rc -ne 0 ]; then
-    echo "*** FAILED: $d (exit $rc) ***"
-    FAILED="$FAILED $d"
-  else
-    echo "*** PASSED: $d ***"
-  fi
-done
-
-echo ""
-echo "===== SUMMARY ====="
-if [ -z "$FAILED" ]; then
-  echo "ALL SUITES PASSED"
-  exit 0
-else
-  echo "FAILED SUITES:$FAILED"
-  exit 1
-fi
+# SUITES = the block's row from the mapping table above.
+export SUITES="<space-separated suite list from the table above>"
+export JOBS=4     # suites run concurrently; needs ~1 core each
+exec "${DESIGN_ROOT:-/foss/designs}/cocotb/run_toplevel_regression_sge.sh"
 EOF
 
 export HLAB_SGE_URL=http://nas.home:4783
-hqsub --name <block>-regression --cpus 4 --mem 8G \
+hqsub --name <block>-regression --project lora-mimo --cpus 8 --mem 24G \
   /srv/eda/designs/$USER/<block>_regression.sh
 ```
+
+The capture-driven suites (`trouper_capture`, `weight_gen_spi_flow`, `capture_two_packet`)
+are runnable from the same script — they default to a `.npy` on the read-only shared mount
+(`$SHARED_DIR/lora-mimo-captures/captures`) and are selected by `SUITE_GROUPS=capture` (or
+`all`), so §3 below is only needed when you want a *different* capture or window. Note the
+env var is `SUITE_GROUPS`, not `GROUPS` — bash owns that name.
+
+For a whole-chip check rather than one block, submit the script with no `SUITES` at all:
+`SUITE_GROUPS=core` (default) runs every self-contained suite, `SUITE_GROUPS=all` adds the
+capture ones. It fails if any `cocotb/<dir>/Makefile` is in neither group, so a newly added
+suite cannot go unrun.
 
 Poll to completion per the `hlab-sge` skill (`hqstat --json` or `hqwait`, terminal states
 `DONE`/`FAILED`/`CANCELLED`). Prefer `Bash` with `run_in_background: true` running the poll loop
