@@ -1256,8 +1256,9 @@ Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
 
 **Update 2026-08-30 — the pin-budget half of this item is closed.** The A40 ACV
 allocation is confirmed at **28 pad slots**, not 22. `info.yaml` declares 26 pins — 24
-signal + `VDD_CORE` + `VSS`, every one of which occupies a slot — so 26 of 28 are used
-and **2 are spare**, `ARRAY_ACQ_N` included in the 26. Neither the `IRQ_OUT`-removal
+signal + `VDD_CORE` + `VSS`, every one of which occupies a slot. (Superseded later the
+same day: `DBG0_OUT`/`DBG1_OUT` took the last two, so the pinout is now **28 of 28 with
+no spare** — item 54.) Neither the `IRQ_OUT`-removal
 waiver nor NR=3 is needed to close a pin gap, because there is no pin gap. Everything below
 about pins is retained as the record of the superseded assumption; the **die-size** half
 (1117.5×1117.5 µm) is unaffected by this and is separately superseded for the A40 build,
@@ -1337,7 +1338,8 @@ package-bond available until the integrator confirms it.
 **Update 2026-08-30 — allocation confirmed at 28; one slot spent, two remain.** The
 28-pad ACV allocation is confirmed. `ARRAY_ACQ_N` is declared in `info.yaml` (appended
 after `VDD`, so it takes N15 and no existing pin moves) and wired in `trouper_top.v`,
-bringing `info.yaml` to 26 declared pins and leaving **2 of the 28 slots spare**. This
+bringing `info.yaml` to 26 declared pins and leaving 2 of the 28 slots spare — both of
+which were then spent on the debug probes the same day, see item 54. This
 also closes the pin half of item 46: the 22-pad budget that
 drove the NR=3 / `IRQ_OUT`-waiver contingency was never the real allocation.
 
@@ -1412,6 +1414,43 @@ before this is closed.
 **See:** item 52 above (the pad-slot allocation decision this depends on);
 `planning/array-acquisition-sync.md`; `src/top/trouper_top.v`
 (`array_acq_sync` and `ARRAY_ACQ_N_*` pad wiring).
+
+---
+
+### 54. The pin allocation is now exactly full (28/28), and three of those slots are unconfirmed
+
+`info.yaml` declares **28** pins against a **28**-slot allocation: 26 signal +
+`VDD_CORE` + `VSS`. There is **no spare slot left**. The last three went to
+`ARRAY_ACQ_N` (N15) and `DBG0_OUT`/`DBG1_OUT` (N16/N17), all added 2026-08-30.
+
+**Two distinct problems, often conflated:**
+
+1. **No margin.** Any further pin need — a second supply, a strap, a bring-up
+   escape, a late interface fix — must now *displace* something already
+   allocated. Historically this project has wanted a spare pin roughly once a
+   month (`sc_lock_in`, the IRQ waiver, the NR=3 study). Zero margin at this
+   stage is a real exposure, not a bookkeeping note.
+2. **The three newest slots are not confirmed.** N15/N16/N17 exist in our
+   `info.yaml` and in a locally extended floorplan template
+   (`src/config/A40_ACV_rtlnames_dbgpins.def`, built by
+   `rtl-test/scripts/a40_append_provisional_pads.py`). The integrator has not
+   confirmed that those slots exist, are bondable, or can carry the cell types
+   we assume. Nothing in any P&R run validates that — the run only proves the
+   *design* closes with three more north-edge pads at coordinates **we chose**.
+
+**What would close it:** a regenerated `A40_ACV.def` from the integrator
+containing all 28 pads, a P&R run against that template rather than ours, and a
+decision on whether spending the final slot on a debug probe is the right use of
+the last pin.
+
+**If a slot is refused,** the two features are independently removable and
+documented as such: `planning/array-acquisition-sync.md` and
+`planning/two-pin-digital-debug-plan.md` each list the exact back-out steps.
+The debug probe is the cheaper thing to drop — it is bring-up-only, whereas the
+acquisition link is a functional feature.
+
+**See:** item 52 (the slot-availability decision this grew out of), item 53
+(`ARRAY_ACQ_N` pad electrics), `planning/Pinout.md` allocation status.
 
 ---
 

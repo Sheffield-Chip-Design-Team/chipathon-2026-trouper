@@ -447,6 +447,21 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 
 ---
 
+## Two-Pin Digital Debug — TRPR-DBG
+
+| ID | Requirement (short) | Verif | Test(s) | Status |
+|---|---|---|---|---|
+| TRPR-DBG-001 | Pads drive 0 in reset and while `EN=0` | T | `test_dbg_probe.test_reset_and_disabled_drive_low` (job 5275) | ✅ |
+| TRPR-DBG-002 | Reserved encodings stored verbatim, drive 0 | T | `test_dbg_probe.test_reserved_encodings_drive_zero` | ✅ |
+| TRPR-DBG-003 | `DBG_CTRL` idle-only; rejection sets `CFG_WR_REJECTED` | T | `test_dbg_probe.test_config_is_idle_only_and_sticky_records_rejection` | ✅ |
+| TRPR-DBG-004 | Probe cannot alter any functional output or state | T | `test_dbg_probe.test_probe_does_not_perturb_the_receiver` (4000 cycles of `REMOD_A_I/Q` + `IRQ_OUT` bit-identical, probe off vs on, identical SPI traffic); `test_every_group_is_harmless_while_selected` (all 32 group/SEL) | ✅ |
+| TRPR-DBG-005 | Raw RX registered, never a combinational pad-to-pad path | T | `test_dbg_probe.test_raw_rx_probe_follows_iq_pads` (one-cycle latency, all 4 branches) | ✅ |
+| TRPR-DBG-006 | Pad tie-offs: `OE=1`, `IE=0`, CMOS, fast slew, 8 mA | T | `test_dbg_probe.test_pad_tieoffs` | ✅ |
+| TRPR-DBG-007 | Area cost measured against an identical build | A | Yosys hierarchical synth, jobs 5277 (baseline `53eb221`) / 5278 (`3342b87`) | ✅ **+4,454 µm², +0.470%** |
+| TRPR-DBG-008 | Mux group/SEL sources are bit-accurate | T | `test_dbg_probe.test_packet_group_tracks_fsm` (cross-checked against `PACKET_STATUS`, not against the probe itself); `test_dbg_status_mirrors_the_pads` | ⚠️ Partial — packet, raw-RX and DBG_STATUS groups covered; decimated-IQ, SC, PSRAM, combiner and IRQ groups are structurally identical muxing but not individually asserted. |
+| TRPR-DBG-009 | P&R closes with the two pads; no new antenna/DRC/LVS | A | SGE job 5279 (signoff config + extended FP template) | ⏳ Running |
+| TRPR-DBG-010 | Bench electrical check: clean 32 MHz pattern at the pad | A | — | ❌ Not started; needs silicon + low-capacitance probe |
+
 ## IRQ — TRPR-IRQ
 
 | ID | Requirement (short) | Verif | Test(s) | Status |

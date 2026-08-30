@@ -1,6 +1,14 @@
 # Two-Pin Digital Debug / Bring-Up Plan
 
-**Status:** proposed for explicit pin-allocation decision; no RTL or package change yet.
+**Status: IMPLEMENTED 2026-08-30** — RTL, registers, pads and tests are in
+(`debug_probe_mux` in `src/top/trouper_top.v`, `DBG_CTRL`/`DBG_STATUS` in
+`reg_bank.v`, suite `cocotb/dbg_probe` 9/9). `info.yaml` declares
+`DBG0_OUT`/`DBG1_OUT`, taking the allocation to **28 of 28 — full, no spare**.
+
+Not yet closed: integrator confirmation of slots N16/N17, a P&R run against a
+real integrator DEF (the current run uses a locally extended template), and the
+bench electrical check. See "As built" and "Acceptance criteria" below, and
+Open Risks #52/#54.
 
 ## Objective
 
@@ -73,6 +81,36 @@ SPI map.
 `ANT` selects branch 0–3 for branch-qualified groups. `SEL` chooses a bit,
 pair, or event within the selected group as specified below. The hardware must
 not clamp invalid values; it drives zero for reserved encodings.
+
+## As built — deviations from the proposal above
+
+The implementation follows this plan except where noted here. Read these before
+using the encoding table.
+
+- **`IRQ` group reaches only `irq_status[3:0]`.** The table below lists
+  `SEL=0`–`4`, but `SEL` is a 2-bit field, so only four of the five sticky
+  sources are selectable. The fifth stays readable over SPI at `IRQ_STATUS`
+  (`0x02`). Widening `SEL` would have cost a `DBG_CTRL` bit for one probe
+  position; not judged worth it.
+- **`qpi_busy` is derived, not a dedicated signal.** It is `|state_dbg` from
+  `psram_buf_ctrl` — true whenever the QPI FSM is out of its idle state, which
+  is what the plan's bring-up use asks for.
+- **Three small observability exports were added** so the mux taps real
+  registered state rather than re-deriving it: `sc_tdm_busy_dbg` (`sc_detector`),
+  `del_rdy_dbg` (`psram_buf_ctrl`) and `irq_status_dbg` (`reg_bank`). All are
+  pure fanout of existing flops.
+- **`DBG_CTRL` is gated on `!PACKET_ACTIVE` only**, as specified — deliberately
+  weaker than the `cfg_wr_ok` (`RX_HOLD` + `!PACKET_ACTIVE`) gate the other
+  quasi-static registers use. The requirement is a fixed selection per packet,
+  not a held receiver; re-pointing a probe between packets without disabling the
+  detector is the normal bring-up loop. Rejected writes still raise
+  `CFG_WR_REJECTED`.
+- **Raw-RX capture flops are free-running**, not gated by `EN`. Gating them
+  would fan the enable out across the IQ input cone — the one place this plan
+  requires the feature not to disturb.
+- **Measured area cost: +4,454 µm² (+0.470%)** against an otherwise identical
+  build (Yosys hierarchical synth, jobs 5277/5278 on commits `53eb221` and
+  `3342b87`).
 
 ## Debug-mux encoding
 
@@ -156,3 +194,18 @@ mux selections are bit-accurate in simulation, disabled/reserved selections
 are provably zero, debug-control writes cannot change during a packet, the pads
 meet their specified control tie-offs, the 32 MHz raw pattern is electrically
 clean at the intended probe load, and top-level P&R/signoff remains clean.
+
+Status against each, 2026-08-30 (traceability: `planning/Traceability.md`
+TRPR-DBG-001..010):
+
+| Criterion | State |
+|---|---|
+| Allocation approved | ❌ Slots N16/N17 unconfirmed by the integrator; takes the pinout to 28/28 with no spare |
+| All valid mux selections bit-accurate | ⚠️ Partial — raw-RX (all 4 branches), packet group and `DBG_STATUS` asserted; decimated-IQ, SC, PSRAM, combiner and IRQ groups are structurally identical muxing but not individually checked |
+| Disabled / reserved provably zero | ✅ `test_reset_and_disabled_drive_low`, `test_reserved_encodings_drive_zero` |
+| Config cannot change during a packet | ✅ `test_config_is_idle_only_and_sticky_records_rejection` |
+| Pad control tie-offs | ✅ `test_pad_tieoffs` |
+| Probe cannot perturb the receiver | ✅ `test_probe_does_not_perturb_the_receiver` — 4000 cycles bit-identical (this is not in the original list and should be: it is the criterion that makes the feature safe to ship) |
+| 32 MHz pattern electrically clean at the probe | ❌ Needs silicon and a low-capacitance active probe |
+| Top-level P&R / signoff clean | ⏳ Job 5279, signoff config + extended template |
+| Area cost measured | ✅ +4,454 µm² (+0.470%) |

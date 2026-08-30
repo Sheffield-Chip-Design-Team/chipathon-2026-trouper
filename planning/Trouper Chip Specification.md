@@ -496,8 +496,9 @@ RTL, and the former GPIO direction/output/input path was never wired out of the
 hardened-macro boundary. The four pads formerly described as
 `TCK_IRQ`/`TMS_GPIO0`/`TDI_GPIO1`/`TDO_GPIO2` now carry only `PSRAM_SIO[3:0]`
 on four dedicated pads; `IRQ_OUT` has its own dedicated pad (see TRPR-PHY-003).
-Registers `0x04`–`0x07` (`DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN`) are
-reserved: reads return `0x00`, writes ignored. Structural scan-chain DFT, if
+Registers `0x06`–`0x07` (`GPIO_OUT`/`GPIO_IN`) remain reserved: reads return
+`0x00`, writes ignored. `0x04`/`0x05` were reclaimed 2026-08-30 as
+`DBG_CTRL`/`DBG_STATUS` for the two-pin digital debug probe (§4.17). Structural scan-chain DFT, if
 required, is inserted by the LibreLane flow independently of any functional TAP.
 Host debug uses the SPI register/PSRAM-readback path (TRPR-SPS, TRPR-PSR-017).
 
@@ -507,6 +508,37 @@ Host debug uses the SPI register/PSRAM-readback path (TRPR-SPS, TRPR-PSR-017).
 | TRPR-JTG-002 | — | — | **DELETED.** No JTAG TAP in RTL. | — |
 | TRPR-JTG-003 | — | — | **DELETED.** | — |
 | TRPR-JTG-004 | — | — | **DELETED.** | — |
+
+---
+
+### 4.17 Two-Pin Digital Debug Probe (`debug_probe_mux` in `trouper_top.v`) — TRPR-DBG
+
+Two output-only, register-selected logic-analyser probes, `DBG0_OUT` and
+`DBG1_OUT`, for first-silicon bring-up. Deliberately **not** a JTAG TAP: a
+two-pin TAP would need a clock/control protocol and DFT verification and would
+be a poorer bring-up tool than probes that correlate directly against the
+board's existing 32 MHz `IQ_CLK` reference.
+
+`DBG_CTRL` (`0x04`) = `{EN, GROUP[2:0], ANT[1:0], SEL[1:0]}` selects one of
+eight source groups onto the pads; `DBG_STATUS` (`0x05`) reads the post-mux,
+post-enable pad values back as a connectivity check. Full mux encoding, the
+first-silicon sequence, and the board-side obligations are in
+`planning/two-pin-digital-debug-plan.md`.
+
+The probe is **feed-forward only**. Its sole outputs are the two pads and the
+`DBG_STATUS` readback; nothing returns to the datapath, the FSMs, the interrupt
+tree, PSRAM ownership, or register-write gating, so a stuck or shorted debug pad
+cannot change how the receiver behaves.
+
+| ID | Pri | Type | Requirement | Verif |
+|---|---|---|---|---|
+| TRPR-DBG-001 | Should | F | Both pads SHALL drive `0` during reset and whenever `DBG_CTRL.EN=0`. | T |
+| TRPR-DBG-002 | Should | F | Reserved `GROUP`/`SEL` encodings SHALL be stored verbatim (**not** clamped) and SHALL drive both pads `0`, so an unrecognised selection is indistinguishable from disabled. | T |
+| TRPR-DBG-003 | Should | F | `DBG_CTRL` writes SHALL be ignored while `PACKET_ACTIVE=1`, and a rejected write SHALL set `RX_HOLD.CFG_WR_REJECTED`. The selection is therefore fixed for the whole of any one packet. | T |
+| TRPR-DBG-004 | **Must** | F | The probe SHALL NOT alter any functional output or state. No debug signal may drive the datapath, FSMs, interrupts, PSRAM ownership, or register gating. | T |
+| TRPR-DBG-005 | Should | F | Raw-RX (`GROUP=001`) SHALL be sampled into dedicated flops at `IQ_CLK`, giving an exact copy with one cycle of latency and never a combinational IQ-pad-to-debug-pad path. | T |
+| TRPR-DBG-006 | Should | S | Both pads SHALL use `bi_t` with `OE` tied high, `IE=0`, CMOS, **fast** slew and 8 mA drive — raw mode can toggle every 32 MHz edge, so the slow-slew setting used for `SPI_MISO`/`IRQ_OUT` is not adequate. | T |
+| TRPR-DBG-007 | Should | A | The feature's area cost SHALL be measured against an otherwise identical build. **Measured +4,454 µm² (+0.470%)**, SGE jobs 5277/5278. | A |
 
 ---
 
