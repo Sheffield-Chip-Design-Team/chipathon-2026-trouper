@@ -47,3 +47,31 @@ cd cocotb/trouper_capture && \
 
 `DESIGN_ROOT` defaults to `/foss/designs/lora-mimo` (the container mount); override it to run
 against a different checkout.
+
+## Regression
+
+`run_toplevel_regression_sge.sh` runs **every** suite in this directory as one SGE job:
+
+```bash
+export HLAB_SGE_URL=http://nas.home:4783
+hqsub --name top_regression --project lora-mimo --cpus 8 --mem 24G \
+      /srv/eda/designs/$USER/lora-mimo/cocotb/run_toplevel_regression_sge.sh
+```
+
+Two groups, split by what a suite *needs*, not by how much it is trusted:
+
+| Group | Suites | Notes |
+|---|---|---|
+| `core` (default) | everything self-contained | RTL + `hdl/` only; ~40 suites |
+| `capture` | `trouper_capture`, `weight_gen_spi_flow`, `capture_two_packet` | need a measured `.npy` from `$SHARED_DIR/lora-mimo-captures/captures` (read-only in every SGE job); `capture_two_packet` is ~50 min |
+
+Environment: `SUITE_GROUPS=core|capture|all` (default `core` — **not** `GROUPS`, which
+bash owns), `SUITES="a b c"` to override the selection entirely, `JOBS=n` to run n
+suites concurrently, `DESIGN_ROOT` / `RUN_DIR` / `SHARED_DIR` for the mounts.
+
+The script **fails if a `cocotb/<dir>/Makefile` is in neither group** — add every new
+suite to `SUITES_CORE` or `SUITES_CAPTURE` at the top of the script. That check exists
+because the previous hand-maintained list had drifted to 20 of 41 suites while still
+printing "REGRESSION CLEAN"; two real breakages were sitting in the unrun half
+(2026-08-30). A capture suite whose `.npy` mount is absent reports `SKIPPED`, never
+`PASSED`, and a skip keeps the run from being reported clean.

@@ -287,28 +287,31 @@ module trouper_top (
     assign SPI_SCK_PD = 1'b0;
     assign SPI_MOSI_PU = 1'b0;
     assign SPI_MOSI_PD = 1'b0;
-    assign PSRAM_SIO_0_IE = 1'b1;
+    // gf180mcu_fd_io__bi_t does not characterize IE=OE=1.  The PSRAM
+    // controller owns OE per lane, so enable the pad receiver only while
+    // that lane is released to the PSRAM.
+    assign PSRAM_SIO_0_IE = ~PSRAM_SIO_OE[0];
     assign PSRAM_SIO_0_CS = 1'b0;
     assign PSRAM_SIO_0_SL = 1'b0;
     assign PSRAM_SIO_0_PU = 1'b0;
     assign PSRAM_SIO_0_PD = 1'b0;
     assign PSRAM_SIO_0_PDRV0 = 1'b1;
     assign PSRAM_SIO_0_PDRV1 = 1'b1;
-    assign PSRAM_SIO_1_IE = 1'b1;
+    assign PSRAM_SIO_1_IE = ~PSRAM_SIO_OE[1];
     assign PSRAM_SIO_1_CS = 1'b0;
     assign PSRAM_SIO_1_SL = 1'b0;
     assign PSRAM_SIO_1_PU = 1'b0;
     assign PSRAM_SIO_1_PD = 1'b0;
     assign PSRAM_SIO_1_PDRV0 = 1'b1;
     assign PSRAM_SIO_1_PDRV1 = 1'b1;
-    assign PSRAM_SIO_2_IE = 1'b1;
+    assign PSRAM_SIO_2_IE = ~PSRAM_SIO_OE[2];
     assign PSRAM_SIO_2_CS = 1'b0;
     assign PSRAM_SIO_2_SL = 1'b0;
     assign PSRAM_SIO_2_PU = 1'b0;
     assign PSRAM_SIO_2_PD = 1'b0;
     assign PSRAM_SIO_2_PDRV0 = 1'b1;
     assign PSRAM_SIO_2_PDRV1 = 1'b1;
-    assign PSRAM_SIO_3_IE = 1'b1;
+    assign PSRAM_SIO_3_IE = ~PSRAM_SIO_OE[3];
     assign PSRAM_SIO_3_CS = 1'b0;
     assign PSRAM_SIO_3_SL = 1'b0;
     assign PSRAM_SIO_3_PU = 1'b0;
@@ -323,6 +326,8 @@ module trouper_top (
     assign PSRAM_CE_N_PD = 1'b0;
     assign PSRAM_CE_N_PDRV0 = 1'b1;
     assign PSRAM_CE_N_PDRV1 = 1'b1;
+    // REMOD 16 mA (PDRV=1,1) not 8 mA: 32 MHz output into an SX1302 whose
+    // input capacitance is unpublished; under-drive is unfixable post-silicon.
     assign REMOD_A_I_OE = 1'b1;
     assign REMOD_A_I_IE = 1'b0;
     assign REMOD_A_I_CS = 1'b0;
@@ -330,7 +335,7 @@ module trouper_top (
     assign REMOD_A_I_PU = 1'b0;
     assign REMOD_A_I_PD = 1'b0;
     assign REMOD_A_I_PDRV0 = 1'b1;
-    assign REMOD_A_I_PDRV1 = 1'b0;
+    assign REMOD_A_I_PDRV1 = 1'b1;
     assign REMOD_A_Q_OE = 1'b1;
     assign REMOD_A_Q_IE = 1'b0;
     assign REMOD_A_Q_CS = 1'b0;
@@ -338,7 +343,7 @@ module trouper_top (
     assign REMOD_A_Q_PU = 1'b0;
     assign REMOD_A_Q_PD = 1'b0;
     assign REMOD_A_Q_PDRV0 = 1'b1;
-    assign REMOD_A_Q_PDRV1 = 1'b0;
+    assign REMOD_A_Q_PDRV1 = 1'b1;
     assign SPI_MISO_OE = 1'b1;
     assign SPI_MISO_IE = 1'b0;
     assign SPI_MISO_CS = 1'b0;
@@ -580,6 +585,39 @@ module trouper_top (
     wire [17:0]        n_acc;
     wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
+    // Declared here (driven by the Stage 7 packet FSM below) because the
+    // noise-trigger qualification above needs it; Icarus rejects a net that
+    // is used before its declaration.
+    wire               packet_active;
+    // A noise window is an idle-only operation.  It cannot replace either an
+    // in-flight training window or a packet whose training window has already
+    // completed: in the latter case re-arming would overwrite the Z snapshot
+    // while the packet FSM still owns the packet.  Reject both cases and
+    // report the rejection through reg_bank 0x1F[1].
+    //
+    // Qualify the RISING EDGE, not the level.  reg_bank holds a W1P output for
+    // one CE period = 2 clk cycles, and training_acc arms on the same rising
+    // edge -- so on the pulse's second cycle training_armed is already 1 and a
+    // level-sensitive test would report the accepted trigger as rejected.
+    reg                rb_noise_trig_q;
+    wire               noise_trig_rise = rb_noise_trig && !rb_noise_trig_q;
+    wire               noise_trig_accept = noise_trig_rise && !training_armed && !packet_active;
+    wire               noise_trig_rej_now = noise_trig_rise && (training_armed || packet_active);
+    // training_acc edge-detects, so the 1-cycle accept pulse is enough for it.
+    // The rejection reaches reg_bank, which only samples on ce_16m -- a
+    // one-cycle pulse lands on the idle phase half the time and is lost.
+    // Stretch it to two clk cycles so it always covers one CE edge.
+    reg                noise_trig_rej_d;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rb_noise_trig_q  <= 1'b0;
+            noise_trig_rej_d <= 1'b0;
+        end else begin
+            rb_noise_trig_q  <= rb_noise_trig;
+            noise_trig_rej_d <= noise_trig_rej_now;
+        end
+    end
+    wire               noise_trig_rejected = noise_trig_rej_now || noise_trig_rej_d;
 
     training_acc u_tacc (
         .clk        (clk),
@@ -594,7 +632,7 @@ module trouper_top (
         .sf           (rb_sf_cfg),
         .sample_shift (rb_sample_shift),
         .tacc_window_syms (rb_tacc_window_syms),
-        .noise_trig   (rb_noise_trig),
+        .noise_trig   (noise_trig_accept),
         .Zpair_i0 (Zpair_i[0]), .Zpair_q0 (Zpair_q[0]),
         .Zpair_i1 (Zpair_i[1]), .Zpair_q1 (Zpair_q[1]),
         .Zpair_i2 (Zpair_i[2]), .Zpair_q2 (Zpair_q[2]),
@@ -630,7 +668,7 @@ module trouper_top (
         end else begin
             sigma2_valid_r <= 1'b0;
 
-            if (rb_noise_trig) begin
+            if (noise_trig_accept) begin
                 noise_window_active  <= 1'b1;
                 noise_window_sc_seen <= 1'b0;
             end else if (noise_window_active && (sc_hit_dbg || sc_lock)) begin
@@ -655,7 +693,6 @@ module trouper_top (
     wire        W_valid_set, W_missed_packet;
     wire        W_missed_q;   // sticky per-packet readback mirror of the pulse
     wire [2:0]  packet_phase;
-    wire        packet_active;
     wire        packet_active_ps;   // fanout-split duplicate, u_psram only
     wire [1:0]  active_mode;
     wire [3:0]  active_antenna_en;
@@ -1062,6 +1099,7 @@ module trouper_top (
         .irq_set          (rb_irq_set),
         .sc_stat         (sc_stat),
         .training_armed  (training_armed),
+        .noise_trig_rejected (noise_trig_rejected),
         .n_acc           (n_acc),
         .zpair_i0 (Zpair_i[0]), .zpair_q0 (Zpair_q[0]),
         .zpair_i1 (Zpair_i[1]), .zpair_q1 (Zpair_q[1]),

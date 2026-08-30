@@ -222,7 +222,12 @@ module tb_trouper_two_packet;
     // -----------------------------------------------------------------------
     // SPI master model (Mode 0, MSB first, 8 MHz)
     // -----------------------------------------------------------------------
-    localparam real SCK_HALF = 62.5;
+    // 2 MHz, the interface's re-scoped maximum (TRPR-SPS: host SPI is
+    // specified up to 2 MHz, derated from 10 MHz). At 8 MHz a read's command
+    // byte gives reg_bank's CE-gated readback register only half an SCK period
+    // to settle, so the FIRST read after reset returns the reset value instead
+    // of the addressed one -- an out-of-spec stimulus artefact, not a DUT bug.
+    localparam real SCK_HALF = 250.0;  // ns -> 2 MHz
 
     task spi_byte;
         input  [7:0] tx;
@@ -395,6 +400,16 @@ module tb_trouper_two_packet;
         spi_write(7'h0E, 8'h01);   // sc_hits_req = 1
         spi_write(7'h0B, 8'h10);   // PKT_TIMEOUT_SYMS = 16
         $display("INFO  sc_thr=0x0100 hits_req=1 pkt_timeout=16 at cycle %0d", cycle_count);
+
+        // RX_HOLD (0x1A[0]) is SET out of reset -- the receiver comes up
+        // disabled so that "config writable" and "detector able to lock" are
+        // mutually exclusive (Open Risks #43, planning/mcp-config-settle-gate-
+        // design.md 4a).  It must be released here, AFTER the gated config
+        // writes above (SF_CFG/BW_CFG/PKT_TIMEOUT_SYMS/SC_HITS_REQ/
+        // TACC_WINDOW_SYMS): once released hardware refuses those writes and
+        // silently keeps the previous values.  Without this the detector never
+        // sees a sample and every case aborts on "sc_lock never fired".
+        spi_write(7'h1A, 8'h00);   // release RX_HOLD
 
         // -------------------------------------------------------------------
         // PACKET 1: acquire

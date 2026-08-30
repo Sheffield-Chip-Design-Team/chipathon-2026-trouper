@@ -260,6 +260,54 @@ These checks are intended to de-risk coherent combining before full packet-path 
 
 First test with all blocks connected. Run after all block tests pass.
 
+### I/Q orientation check — run first, before any MRC gain test
+
+**Why:** the SX1257 datasheet contradicts itself on pins 14/15 (the pin *named*
+`Q_OUT` is *described* as carrying I), and the natural non-crossing fanout at the
+SX1257 is the wrong one — see `Pinout.md` → "Board wiring — I/Q orientation".
+There is no I/Q swap control in silicon, so an error here is a board rework. A
+per-antenna swap does **not** announce itself: it silently drops one branch's
+contribution, costing ≈1.2 dB, which the gain test below would read as a
+disappointing-but-plausible result rather than a wiring fault.
+
+**Setup:** one signal common to all four antennas — a node in the near field, or
+a splitter into the four SX1257 RF inputs. Equal drive on all four branches.
+
+**Procedure:** trigger training (real `sc_lock`, or `SC_FORCE_LOCK` reg `0x19`
+for bench work), wait `TRAINING_DONE` (`0x20[0]`), then read the six `Z_kl` pairs
+(`0x40`–`0x63`, 24-bit in `[31:8]`) and the four `ZDIAG_k` (`0x64`–`0x6F`).
+
+Compute the normalised coherence for each pair, which divides out any per-branch
+power imbalance:
+
+```
+coh(k,l) = |Z_kl| / sqrt(ZDIAG_k * ZDIAG_l)
+```
+
+| Observation | Verdict |
+|---|---|
+| All six `coh` high (≳0.7 for a strong common signal) | I/Q orientation consistent across branches — proceed |
+| `ZDIAG_k` healthy, but all three `coh` involving branch `k` ≈ 0 | **I/Q swapped on branch `k`** — rework that branch |
+| `ZDIAG_k` low *and* its `coh` low | Dead/weak branch (cabling, LNA, antenna), not a swap |
+| All `ZDIAG` low | Common-mode problem — check clock and drive first |
+
+Calibrate the exact threshold on the first known-good board; the separation is
+large (a swapped branch collapses toward the finite-`n_acc` noise floor, not to a
+marginal value), so the check is robust to the precise number.
+
+**The `Z_kl` check cannot see a *uniform* swap** — swapping I/Q on all four
+branches conjugates every `Z_kl` without changing any magnitude, so all six
+coherences stay high. That case surfaces instead as the SX1302 failing to decode.
+Discriminate it with **mode-1 bypass** (`MIMO_CTRL` `0x08[0]=1`, lowest-numbered enabled antenna straight
+through the re-modulator, no combining): if bypass *also* fails to decode a
+packet the SX1302 handles on a direct SX1257 link, the inversion is in the
+wiring, not in the combiner or weights.
+
+**Gate:** do not interpret the "gain vs single antenna" or sensitivity results
+below until this check passes. A missing branch and a mediocre combiner look
+identical in a PER sweep.
+
+
 | Test | Method | Pass criterion |
 | --- | --- | --- |
 | NT=1 MRC, single node, SF7 | Real node → SX1257 ×4 → ASIC RTL → SX1302 → ChirpStack | Packet received and decoded |

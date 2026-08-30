@@ -44,7 +44,7 @@ EXTRA_ARGS += --timing -Wno-fatal --public-flat-rw
 
 # No --trace: a ~4.15 M-sample run would produce an unusably large VCD.
 
-PYTHONPATH    := $(TESTS)
+PYTHONPATH    := $(DESIGN_ROOT):$(TESTS)
 
 export CAPTURE_NPY
 export CAPTURE_SF

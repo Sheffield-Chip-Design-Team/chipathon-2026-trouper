@@ -39,6 +39,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
 from test_trouper_top import CLK_NS, spi_read, spi_write, release_rx_hold
+from test_bypass_e2e import _reset_and_lock
 
 
 class _StimMode:
@@ -253,3 +254,90 @@ async def test_noise_trig_functional(dut):
 
     dut._log.info(f"{tag}: PASS -- clean window measured (NOISE_READY + Zdiag/Z_kl sane), "
                   f"contaminated window suppressed")
+
+
+@cocotb.test()
+async def test_noise_trig_rejected_during_live_training(dut):
+    """A busy normal-training window must reject, not mislabel, a noise request.
+
+    Before the fix, the top-level noise qualifier opened a window on every
+    TACC_NOISE_TRIG, while training_acc ignored a trigger if already armed.
+    The normal training_done could therefore be misreported as NOISE_READY.
+    """
+    tag = "noise_trig_live_reject"
+    sym_ns = await _reset_and_lock(dut, mode=0, ant_mask=0xF, tag=tag,
+                                   pkt_timeout_syms=20, replay_delay=600)
+
+    assert int(dut.u_dut.training_armed.value) == 1, \
+        f"{tag}: normal training was not armed after sc_lock"
+    await spi_write(dut, 0x1F, 0x01)
+
+    # 0x1F[1] is a sticky, W1C rejection acknowledgement.  It means the
+    # firmware cannot mistake a dropped W1P request for an accepted window.
+    rejected = False
+    for _ in range(8):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x1F)) & 0x02:
+            rejected = True
+            break
+    assert rejected, f"{tag}: busy TACC_NOISE_TRIG was not reported rejected"
+
+    # The original training window still completes, but its TRAINING_DONE is
+    # never promoted into NOISE_READY by the rejected request.
+    done = False
+    for _ in range(40):
+        await Timer(sym_ns, unit="ns")
+        irq = await spi_read(dut, 0x02)
+        assert not (irq & 0x10), \
+            f"{tag}: false NOISE_READY after rejected trigger (IRQ=0x{irq:02X})"
+        if irq & 0x02:
+            done = True
+            break
+    assert done, f"{tag}: original live training did not complete"
+
+    await spi_write(dut, 0x1F, 0x02)  # W1C clear NOISE_TRIG_REJECTED
+    assert not ((await spi_read(dut, 0x1F)) & 0x02), \
+        f"{tag}: NOISE_TRIG_REJECTED did not clear W1C"
+    dut._log.info(f"{tag}: PASS -- busy trigger rejected, normal training completed, "
+                  "and NOISE_READY stayed clear")
+
+
+@cocotb.test()
+async def test_noise_trig_rejected_after_training_during_active_packet(dut):
+    """An idle-only noise request cannot overwrite a completed packet's Z data.
+
+    This is deliberately distinct from the early live-training test above:
+    normal training has completed and its Z snapshot is now firmware-visible,
+    but packet_active remains high during replay/payload. The implementation
+    keeps TRAINING_ARMED high until packet completion, and the explicit
+    packet-active interlock protects this same boundary against a future
+    training-lifetime change.
+    """
+    tag = "noise_trig_packet_reject"
+    sym_ns = await _reset_and_lock(dut, mode=0, ant_mask=0xF, tag=tag,
+                                   pkt_timeout_syms=24, replay_delay=600)
+
+    done = False
+    for _ in range(24):
+        await Timer(sym_ns, unit="ns")
+        if (await spi_read(dut, 0x02)) & 0x02:
+            done = True
+            break
+    assert done, f"{tag}: normal training did not complete"
+    assert int(dut.u_dut.packet_active.value) == 1, f"{tag}: packet ended before test"
+    assert int(dut.u_dut.training_armed.value) == 1, f"{tag}: training unexpectedly disarmed"
+
+    z_before = await _read_u24(dut, 0x64)
+    await spi_write(dut, 0x1F, 0x01)
+
+    rejected = False
+    for _ in range(8):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x1F)) & 0x02:
+            rejected = True
+            break
+    assert rejected, f"{tag}: active-packet TACC_NOISE_TRIG was not rejected"
+    assert int(dut.u_dut.training_armed.value) == 1, f"{tag}: rejected trigger altered training state"
+    assert await _read_u24(dut, 0x64) == z_before, f"{tag}: rejected trigger overwrote Zdiag"
+    assert not ((await spi_read(dut, 0x02)) & 0x10), f"{tag}: rejected trigger raised NOISE_READY"
+    dut._log.info(f"{tag}: PASS -- active-packet trigger rejected after normal training")

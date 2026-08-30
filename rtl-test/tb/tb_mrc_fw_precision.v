@@ -82,16 +82,23 @@ module tb_mrc_fw_precision;
     task drive_sample;
         integer timeout;
         begin
-            @(posedge clk);
+            // Drive on falling edges and observe after the DUT's NBA update.
+            // The old posedge-only task raced x_valid/y_valid, so a case could
+            // consume the prior case's output or miss its own one-cycle pulse.
+            @(negedge clk);
             x_valid = 1'b1;
-            @(posedge clk);
+            @(negedge clk);
             x_valid = 1'b0;
             timeout = 0;
-            while (!y_valid && timeout < 20) begin
-                @(posedge clk);
+            // The production combiner is deliberately paced: state 0 catches
+            // x_valid in one clock and states 1..10 each hold three clocks,
+            // so y_valid arrives after 31 clocks.  Leave margin for the
+            // falling-edge observation above.
+            while (!y_valid && timeout < 40) begin
+                @(negedge clk);
                 timeout = timeout + 1;
             end
-            if (timeout >= 20) begin
+            if (timeout >= 40) begin
                 $display("FAIL: y_valid timeout");
                 fail_count = fail_count + 1;
             end

@@ -43,6 +43,7 @@ module reg_bank (
     input  wire [15:0] sc_stat,
     // Training accumulator readback
     input  wire        training_armed,
+    input  wire        noise_trig_rejected, // pulse: 0x1F trigger arrived while a window was armed
     input  wire [17:0] n_acc,
     // Z_kl pair readback — top 24 bits [31:8] of the int32 accumulators,
     // big-endian, 3 bytes per component (I then Q), 6 bytes per pair.
@@ -131,6 +132,10 @@ module reg_bank (
     // exclusive, which is what the scoped-MCP settling exceptions actually
     // need (Open Risks #43).
     reg cfg_wr_rejected;
+    // Sticky rejection for a noise trigger issued while training_acc is
+    // already busy.  Without this, top-level qualification could treat the
+    // normal training_done as completion of a noise window that never armed.
+    reg noise_trig_rejected_sticky;
 
     assign w_shadow[127:120] = w_shadow_r[0];  assign w_shadow[119:112] = w_shadow_r[1];
     assign w_shadow[111:104] = w_shadow_r[2];  assign w_shadow[103:96]  = w_shadow_r[3];
@@ -215,6 +220,7 @@ module reg_bank (
             // losing config writes.
             rx_hold          <= 1'b1;
             cfg_wr_rejected  <= 1'b0;
+            noise_trig_rejected_sticky <= 1'b0;
         end else if (clk_en) begin
             // Auto-clear write-1-pulse outputs (held one CE period = 2 clocks,
             // safely caught by 32 MHz consumers; we is 2 cycles wide so each
@@ -247,6 +253,11 @@ module reg_bank (
             else if (we && addr == 8'h1A && wdata[1])
                 cfg_wr_rejected <= 1'b0;
 
+            if (noise_trig_rejected)
+                noise_trig_rejected_sticky <= 1'b1;
+            else if (we && addr == 8'h1F && wdata[1])
+                noise_trig_rejected_sticky <= 1'b0;
+
             if (we) begin
                 case (addr)
                     // --- RX / modem configuration ---
@@ -278,7 +289,7 @@ module reg_bank (
                     8'h1A: rx_hold <= wdata[0];
                     // --- Packet / weight / training control ---
                     8'h1E: w_commit_pulse   <= wdata[0];
-                    8'h1F: noise_trig       <= wdata[0];
+                    8'h1F: noise_trig       <= wdata[0]; // bit[1] W1C handled above
                     8'h27: if (cfg_wr_ok)
                                tacc_window_syms <= (wdata[3:0] < 4'd8) ? 4'd8 : wdata[3:0];
                     // --- W shadow bank 0x30–0x3F: indexed write below (outside
@@ -350,7 +361,7 @@ module reg_bank (
                             training_done_rb, packet_phase, packet_active};
             8'h1D: rdata_next = {active_antenna_en_rb, 2'h0, active_mode_rb};
             8'h1E: rdata_next = {2'h0, w_wr_rejected, w_commit_late_rb, w_missed_rb, w_pending_rb, w_valid_rb, 1'b0};
-            8'h1F: rdata_next = 8'h00;                              // TACC_NOISE_TRIG (WO)
+            8'h1F: rdata_next = {6'h0, noise_trig_rejected_sticky, 1'b0};
             8'h20: rdata_next = {6'h0, training_armed, training_done_rb};
             8'h21: rdata_next = {6'h0, n_acc[17:16]};  // N_ACC[17:16] (big-endian byte 0)
             8'h22: rdata_next = n_acc[15:8];             // N_ACC[15:8]  (big-endian byte 1)

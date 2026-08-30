@@ -243,6 +243,27 @@ sim_trouper_two_packet: tb_trouper_two_packet.vvp
 tb_trouper_two_packet.vvp: $(TB)/tb_trouper_two_packet.v $(TROUPER_TOP_SRCS)
 	$(IVERILOG) $(IFLAGS) -o $@ $^
 
+# SPI register-map and GRP/SPI arbitration benches. These had NO make target
+# until 2026-08-30 and so had never been run against the current RTL -- both
+# were broken (see the tb reset comments). A bench with no runner is not
+# coverage; keep every trouper_top bench reachable from here.
+.PHONY: sim_trouper_spi sim_trouper_grp_arb sim_trouper_all
+
+sim_trouper_spi: tb_trouper_spi.vvp
+	$(VVP) $<
+
+tb_trouper_spi.vvp: $(TB)/tb_trouper_spi.v $(TROUPER_TOP_SRCS)
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+sim_trouper_grp_arb: tb_trouper_grp_arb.vvp
+	$(VVP) $<
+
+tb_trouper_grp_arb.vvp: $(TB)/tb_trouper_grp_arb.v $(TROUPER_TOP_SRCS)
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+# Every trouper_top-level bench in one go.
+sim_trouper_all: sim_trouper_top sim_trouper_two_packet sim_trouper_spi sim_trouper_grp_arb
+
 # -----------------------------------------------------------------------
 # cocotb integration tests (SF7–SF12 × BW250/125) — requires chipathon26 container
 # -----------------------------------------------------------------------

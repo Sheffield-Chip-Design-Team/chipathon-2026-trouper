@@ -50,12 +50,13 @@ lock decisions on antenna 0 only, so a deep antenna-0 fade can block
 
 ## 4. PSRAM replay sample staleness (`psram_buf_ctrl.v`)
 
-**Retitled 2026-07-11 (Open Risks #18):** previously filed against
-`frontend_buf_ctrl.v`, which is dead code (not instantiated, replaced by
-`psram_buf_ctrl.v`). **Not yet quantified.** No known lossy signal-path
-element, but same-packet PSRAM replay (`S_REPLAY`, `rpl_i*/rpl_q*` feeding
-the combiner) has not been checked for replay timing-induced sample
-staleness relative to the live path.
+**Closed 2026-08-29 (Open Risks #18):** same-packet PSRAM replay
+(`S_REPLAY`, `rpl_i*/rpl_q*` feeding the combiner) was checked on a labelled,
+measured SF7/BW125 capture by recording the decimated write stream at the
+`psram_buf_ctrl` boundary and comparing the first 32 replayed tuples.  Job
+5218 proves the constant relation `rpl[k] == recorded[timing_ref - 1 + k]`;
+there is no sample slip or stale packet base in the RTL replay path.  This is
+functional alignment evidence, not board-level PSRAM signal-integrity proof.
 
 ## 5. Noise Estimation (`noise_est.v`) — dead code, superseded
 

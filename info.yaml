@@ -87,7 +87,7 @@ pins:
   - name: SPI_SCK
     io_type: input_schmitt
   - name: SPI_MOSI
-    io_type: input_cmos
+    io_type: input_schmitt
   - name: SPI_MISO
     io_type: bidirectional
 
