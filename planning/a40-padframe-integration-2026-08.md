@@ -18,12 +18,20 @@ contiguous arc of pad slots and emits per-project artifacts:
 Current bundle: `tmp/A40.def.tgz`, `spec_blob_sha 7398a4da…`, dated 2026-08-23.
 
 **`info.yaml` list order drives the placement.** The tooling took Trouper's 25
-pins in list order and wrapped them around the NW corner:
+pins in list order and wrapped them around the NW corner (a 26th, `ARRAY_ACQ_N`,
+was appended 2026-08-30 and is not yet in any integrator-generated DEF):
 
 | `info.yaml` entries | A40 slots | Edge |
 |---|---|---|
 | `VSS`, `IQ_DATA_{I,Q}_0..3`, `IQ_CLK`, `RESETB` (11) | W12–W22 | **West**, bottom→top |
 | `REMOD_A_{I,Q}`, `PSRAM_SCK`, `PSRAM_CE_N`, `PSRAM_SIO_0..3`, `HOST_CS`, `SPI_{SCK,MOSI,MISO}`, `IRQ_OUT`, `VDD` (14) | N01–N14 | **North**, left→right |
+| `ARRAY_ACQ_N` (1) — *added 2026-08-30, slot unconfirmed* | N15 | **North**, left→right |
+
+`ARRAY_ACQ_N` is appended **after** `VDD` rather than inserted before it, so
+every pin above keeps the slot job 5150 validated. Inserting it before `VDD`
+would push `VDD` to N15 and break the reserved W12/N14 power slots (see the
+VDD/VSS decision below). N15 spends one of the three reportedly unassigned ACV
+slots — Open Risks #52.
 
 The **Grouper interface is die-internal** ("Grouper will be internal"):
 `GRP_*` (28), the AHB `H*` endpoint (~40 bits), and `IRQ_GROUPER` are **not**
@@ -123,8 +131,10 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
 
 ## Open / next
 
-- **`info.yaml` order** — the current order is P&R-validated (all runs above).
-  Finalise it, then request the integrator regenerate `A40_ACV.def` from it.
+- **`info.yaml` order** — the 25-pin order is P&R-validated (all runs above);
+  the appended `ARRAY_ACQ_N` (N15) is **not** — no run has been built against a
+  26-pin DEF. Confirm the slot with the integrator, then request a regenerated
+  `A40_ACV.def` and re-run before treating the pin as committed.
 - **Die size — DECIDED 2026-08-28: defer to the integrator DEF (1675×1110).**
   The template defines the slot the shared padring actually reserves for
   Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already

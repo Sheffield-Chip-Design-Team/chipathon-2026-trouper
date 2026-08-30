@@ -38,7 +38,8 @@ net with a single external pull-up resistor to the IO supply.
 | Idle level | High, provided by the external pull-up |
 | Assert | A chip pulls the net low after a local natural Schmidl-Cox lock |
 | Release | The asserting chip releases the pad on `packet_done`, `rx_hold`, or reset/disable |
-| Pad implementation | `gf180mcu_fd_io__bi_24t`; drive `A=0`, assert `OE`, and sample `Y` |
+| Pad implementation | `gf180mcu_fd_io__bi_t` (`info.yaml` `io_type: bidirectional`); drive `A=0`, assert `OE`, and sample `Y` |
+| Drive strength | `PDRV[1:0]=00` (4 mA) — ample to sink the board pull-up, and the slowest available falling edge on a shared multi-drop net |
 | Internal pulls | Disabled (`PU=0`, `PD=0`); the board pull-up is mandatory |
 | Input conditioning | Schmitt trigger enabled (`CS=1`) and input enabled (`IE=1`) |
 
@@ -97,7 +98,15 @@ not preserved.
 The hard-macro boundary adds ten logical ports: three functional signals
 (`ARRAY_ACQ_N_OUT`, `ARRAY_ACQ_N_IN`, `ARRAY_ACQ_N_OE`) and seven pad-control
 signals (`IE`, `CS`, `SL`, `PU`, `PD`, `PDRV0`, `PDRV1`).  They map to one
-physical bidirectional pad at chip-top integration.
+physical `bi_t` bidirectional pad at chip-top integration.  `bi_t` is required
+rather than `bi_24t`: only `bi_t` exposes `PDRV[1:0]`, and `bi_24t` has no
+drive control at all (fixed 24 mA) — see `planning/Pinout.md`, "Pad cell type
+selection".
+
+The pad is declared last in `info.yaml`, after `VDD`, so it takes the next free
+A40 slot (N15) without displacing any P&R-validated pin.  That slot is **not
+yet confirmed by the integrator**; it spends one of the three reportedly
+unassigned ACV slots tracked in Open Risks #52.
 
 The standalone RTL test `rtl-test/tb/tb_array_acq_sync.v` covers local drive,
 packet-complete release, a synchronised peer falling edge, and rejection of a

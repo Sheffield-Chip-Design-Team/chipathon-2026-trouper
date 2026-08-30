@@ -1320,6 +1320,16 @@ acquisition/SC-lock trigger extension). If selected, update `info.yaml`,
 and regression evidence together; do not assume a spare slot is electrically or
 package-bond available until the integrator confirms it.
 
+**Update 2026-08-30 — provisionally allocated, not committed.** `ARRAY_ACQ_N` is
+now declared in `info.yaml` (appended after `VDD`, so it takes N15 and no
+existing pin moves) and wired in `trouper_top.v`. This is a *provisional* claim
+on one of the three slots: the integrator has not confirmed N15 exists, is
+bondable, or can carry a `bi_t` cell, and no P&R run has been built against a
+26-pin DEF. The pad is self-contained — deleting the `info.yaml` entry, the two
+`io_placement` entries, and the `ARRAY_ACQ_N_*` ports backs it out completely if
+the slot is refused. Note this moves the pad count 24 -> 25 against a possibly
+22-pad budget (item 46).
+
 ---
 
 ### 53. `ARRAY_ACQ_N` open-drain emulation has not received pad-level electrical review
