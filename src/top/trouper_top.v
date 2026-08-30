@@ -119,6 +119,11 @@ module trouper_top (
     output wire        IRQ_GROUPER,   // → Grouper inter-project IRQ line; same signal as IRQ_OUT
 
     // ---- Array acquisition synchronisation (external pull-up required) ----
+    // Two-pin digital debug probes (planning/two-pin-digital-debug-plan.md).
+    // Output-only at the logical top level; feed-forward observability with no
+    // path back into the datapath, FSMs, interrupts, or register gating.
+    output wire        DBG0_OUT,
+    output wire        DBG1_OUT,
     output wire        ARRAY_ACQ_N_OUT, // permanently 0; OE provides open-drain emulation
     input  wire        ARRAY_ACQ_N_IN,
     output wire        ARRAY_ACQ_N_OE,
@@ -237,6 +242,25 @@ module trouper_top (
     output wire        IRQ_OUT_PDRV0,
     output wire        IRQ_OUT_PDRV1,
     // -- ARRAY_ACQ_N: bidir pad emulating open drain (OUT=0, OE=drive) --
+    // -- DBG0/DBG1: outputs on bi_t (A40 has no output-only cell) --
+    input  wire        DBG0_IN,          // unused; pad is bidirectional in the padframe
+    output wire        DBG0_OE,
+    output wire        DBG0_IE,
+    output wire        DBG0_CS,
+    output wire        DBG0_SL,
+    output wire        DBG0_PU,
+    output wire        DBG0_PD,
+    output wire        DBG0_PDRV0,
+    output wire        DBG0_PDRV1,
+    input  wire        DBG1_IN,
+    output wire        DBG1_OE,
+    output wire        DBG1_IE,
+    output wire        DBG1_CS,
+    output wire        DBG1_SL,
+    output wire        DBG1_PU,
+    output wire        DBG1_PD,
+    output wire        DBG1_PDRV0,
+    output wire        DBG1_PDRV1,
     output wire        ARRAY_ACQ_N_IE,
     output wire        ARRAY_ACQ_N_CS,
     output wire        ARRAY_ACQ_N_SL,
@@ -383,6 +407,28 @@ module trouper_top (
     assign ARRAY_ACQ_N_IE    = 1'b1;
     assign ARRAY_ACQ_N_CS    = 1'b1; // Schmitt input for a board-level wire
     assign ARRAY_ACQ_N_SL    = 1'b1;
+    // DBG0/DBG1 pad controls. Permanently enabled outputs, CMOS, FAST slew and
+    // mid (8 mA) drive: unlike SPI_MISO/IRQ_OUT these can toggle on every
+    // 32 MHz edge in raw-RX mode, so the slow-slew choice used for the host
+    // link is not adequate here (see the plan's electrical contract; the board
+    // carries a 0-ohm series footprint at each pin for damping instead).
+    assign DBG0_OE    = 1'b1;
+    assign DBG0_IE    = 1'b0;   // output only; never turn the receiver on
+    assign DBG0_CS    = 1'b0;   // CMOS
+    assign DBG0_SL    = 1'b0;   // fast
+    assign DBG0_PU    = 1'b0;
+    assign DBG0_PD    = 1'b0;
+    assign DBG0_PDRV0 = 1'b1;   // {PDRV1,PDRV0} = 01 -> 8 mA
+    assign DBG0_PDRV1 = 1'b0;
+    assign DBG1_OE    = 1'b1;
+    assign DBG1_IE    = 1'b0;
+    assign DBG1_CS    = 1'b0;
+    assign DBG1_SL    = 1'b0;
+    assign DBG1_PU    = 1'b0;
+    assign DBG1_PD    = 1'b0;
+    assign DBG1_PDRV0 = 1'b1;
+    assign DBG1_PDRV1 = 1'b0;
+
     // Internal pull-up ENABLED, unlike every other input pad on this chip.
     // ARRAY_ACQ_N is the one pin a board may legitimately leave unpopulated
     // (a single-chip receiver has no array to sync with), and an undriven
@@ -468,7 +514,13 @@ module trouper_top (
     wire        rb_bw_sel;
     wire [1:0]  rb_sample_shift = rb_bw_sel ? 2'd2 : 2'd1;
     wire [1:0]  rb_sc_ant_sel;
-    wire        rb_array_sync_en;  // ARRAY_SYNC_CTRL[0] (0x1B); resets 0 = link off
+    wire        rb_array_sync_en;
+    // Two-pin digital debug (planning/two-pin-digital-debug-plan.md)
+    wire [7:0]  rb_dbg_ctrl;
+    wire [7:0]  rb_irq_status_dbg;
+    wire        sc_tdm_busy_dbg;
+    wire        psram_del_rdy_dbg;
+    wire [1:0]  dbg_pad_value;  // ARRAY_SYNC_CTRL[0] (0x18); resets 0 = link off
     wire [15:0] rb_sc_thr;
     wire [1:0]  rb_sc_hits_req;
     wire [7:0]  rb_pkt_timeout_syms;
@@ -594,6 +646,7 @@ module trouper_top (
         .timing_ref     (timing_ref),
         .c_i0 (), .c_q0 (),
         .sc_stat              (sc_stat),
+        .sc_tdm_busy_dbg      (sc_tdm_busy_dbg),
         .sc_hit_dbg           (sc_hit_dbg),
         .sc_hit_hold          (sc_hit_hold),
         .sc_hit_count_dbg     (sc_hit_cnt_dbg),
@@ -851,6 +904,7 @@ module trouper_top (
         .overflow     (psram_overflow),
         .sample_skip  (psram_sample_skip),
         .state_dbg    (psram_state_dbg),
+        .del_rdy_dbg  (psram_del_rdy_dbg),
         .dbg_addr     (rb_psram_dbg_addr),
         .dbg_auto_inc (rb_psram_dbg_auto_inc),
         .dbg_rd_trig  (rb_psram_dbg_rd_trig),
@@ -1184,6 +1238,9 @@ module trouper_top (
         .bw_sel          (rb_bw_sel),
         .sc_ant_sel      (rb_sc_ant_sel),
         .array_sync_en   (rb_array_sync_en),
+        .dbg_ctrl        (rb_dbg_ctrl),
+        .dbg_pad_value   (dbg_pad_value),
+        .irq_status_dbg  (rb_irq_status_dbg),
         .sc_thr          (rb_sc_thr),
         .sc_hits_req     (rb_sc_hits_req),
         .pkt_timeout_syms(rb_pkt_timeout_syms),
@@ -1203,6 +1260,200 @@ module trouper_top (
         .replay_delay_samples (rb_replay_delay_samples)
     );
 
+    // =========================================================================
+    // Two-pin digital debug probe
+    // =========================================================================
+    // Feed-forward observability only: every input below is an already-existing
+    // registered signal, and the only outputs are the two pads plus the
+    // DBG_STATUS readback.  Nothing here drives the datapath, the FSMs, the
+    // interrupt tree, PSRAM ownership, or register-write gating, so a stuck or
+    // shorted debug pad cannot change how the receiver behaves.
+    // See planning/two-pin-digital-debug-plan.md.
+    debug_probe_mux u_dbg (
+        .clk            (clk),
+        .rst_n          (rst_n),
+        .dbg_ctrl       (rb_dbg_ctrl),
+        // group 001 raw RX (registered inside the mux, never combinational
+        // pad-to-pad)
+        .iq_data_i      (IQ_DATA_I),
+        .iq_data_q      (IQ_DATA_Q),
+        // group 010 decimated + DC-removed IQ
+        .dc_i0 (dcr_i[0]), .dc_i1 (dcr_i[1]), .dc_i2 (dcr_i[2]), .dc_i3 (dcr_i[3]),
+        .dc_q0 (dcr_q[0]), .dc_q1 (dcr_q[1]), .dc_q2 (dcr_q[2]), .dc_q3 (dcr_q[3]),
+        // group 011 SC
+        .sc_hit         (sc_hit_dbg),
+        .sc_lock        (sc_lock),
+        .del_rdy        (psram_del_rdy_dbg),
+        .sc_tdm_busy    (sc_tdm_busy_dbg),
+        // group 100 packet / weights
+        .packet_active  (packet_active),
+        .training_done  (training_done),
+        .w_pending      (w_pending),
+        .w_valid        (W_valid),
+        .packet_phase   (packet_phase),
+        // group 101 PSRAM
+        .psram_init_done(psram_qe_init_done),
+        .qpi_busy       (|psram_state_dbg),
+        .buf_active     (psram_buf_active),
+        .replay_active  (psram_replay_active_w),
+        .sample_skip    (psram_sample_skip),
+        .replay_missed  (psram_replay_missed),
+        .psram_dbg_busy (psram_dbg_busy_w),
+        .qspi_owner     (rb_psram_ctrl[3]),
+        // group 110 combiner (the registered int8 pair presented to sd_remod)
+        .comb_i         (remod_in_i),
+        .comb_q         (remod_in_q),
+        // group 111 IRQ
+        .irq_status     (rb_irq_status_dbg),
+        .irq_out        (rb_irq_out_sticky),
+        .dbg0           (DBG0_OUT),
+        .dbg1           (DBG1_OUT)
+    );
+    assign dbg_pad_value = {DBG1_OUT, DBG0_OUT};
+
+endmodule
+
+
+// Debug probe mux: DBG_CTRL -> two pads.
+//
+// DBG_CTRL = {EN, GROUP[2:0], ANT[1:0], SEL[1:0]}.  Reserved encodings are not
+// clamped -- they drive zero, which is the same as disabled, so an unrecognised
+// selection can never be mistaken for live data.
+//
+// The raw-RX group is the only one that needs storage: the IQ pads change on
+// every 32 MHz edge, and routing them combinationally from input pad to output
+// pad would create a pad-to-pad path with no flop between.  Eight dedicated
+// flops sample them first, so the probe is an exact copy delayed by one cycle.
+// Every other group taps a signal that is already registered upstream.
+module debug_probe_mux (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire [7:0]  dbg_ctrl,
+    input  wire [3:0]  iq_data_i,
+    input  wire [3:0]  iq_data_q,
+    input  wire signed [7:0] dc_i0, dc_i1, dc_i2, dc_i3,
+    input  wire signed [7:0] dc_q0, dc_q1, dc_q2, dc_q3,
+    input  wire        sc_hit,
+    input  wire        sc_lock,
+    input  wire        del_rdy,
+    input  wire        sc_tdm_busy,
+    input  wire        packet_active,
+    input  wire        training_done,
+    input  wire        w_pending,
+    input  wire        w_valid,
+    input  wire [2:0]  packet_phase,
+    input  wire        psram_init_done,
+    input  wire        qpi_busy,
+    input  wire        buf_active,
+    input  wire        replay_active,
+    input  wire        sample_skip,
+    input  wire        replay_missed,
+    input  wire        psram_dbg_busy,
+    input  wire        qspi_owner,
+    input  wire signed [7:0] comb_i,
+    input  wire signed [7:0] comb_q,
+    input  wire [7:0]  irq_status,
+    input  wire        irq_out,
+    output wire        dbg0,
+    output wire        dbg1
+);
+    wire       en    = dbg_ctrl[7];
+    wire [2:0] group = dbg_ctrl[6:4];
+    wire [1:0] ant   = dbg_ctrl[3:2];
+    wire [1:0] sel   = dbg_ctrl[1:0];
+
+    localparam [2:0] G_OFF    = 3'b000;
+    localparam [2:0] G_RAW    = 3'b001;
+    localparam [2:0] G_DEC    = 3'b010;
+    localparam [2:0] G_SC     = 3'b011;
+    localparam [2:0] G_PKT    = 3'b100;
+    localparam [2:0] G_PSRAM  = 3'b101;
+    localparam [2:0] G_COMB   = 3'b110;
+    localparam [2:0] G_IRQ    = 3'b111;
+
+    // Raw-RX capture flops.  Free-running: they cost the same either way and
+    // keeping them out of the enable term avoids a wide enable fanout onto the
+    // IQ input cone, which is the one place the plan requires this feature not
+    // to disturb (see the P&R note in the plan).
+    reg [3:0] raw_i_q, raw_q_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            raw_i_q <= 4'd0;
+            raw_q_q <= 4'd0;
+        end else begin
+            raw_i_q <= iq_data_i;
+            raw_q_q <= iq_data_q;
+        end
+    end
+
+    reg [7:0] dc_i_sel, dc_q_sel;
+    always @* begin
+        case (ant)
+            2'd0: begin dc_i_sel = dc_i0; dc_q_sel = dc_q0; end
+            2'd1: begin dc_i_sel = dc_i1; dc_q_sel = dc_q1; end
+            2'd2: begin dc_i_sel = dc_i2; dc_q_sel = dc_q2; end
+            default: begin dc_i_sel = dc_i3; dc_q_sel = dc_q3; end
+        endcase
+    end
+
+    // Byte selection for the two sample groups.  SEL maps to bits 7, 6, 1, 0 --
+    // sign bit first, because it is the one that shows a tone without needing a
+    // numerical reading.  Built as a re-ordered 4-bit lane so SEL indexes it
+    // directly: lane[0] is bit 7, lane[1] is bit 6, lane[2] is bit 1,
+    // lane[3] is bit 0.
+    wire [3:0] dc_i_lane   = {dc_i_sel[0], dc_i_sel[1], dc_i_sel[6], dc_i_sel[7]};
+    wire [3:0] dc_q_lane   = {dc_q_sel[0], dc_q_sel[1], dc_q_sel[6], dc_q_sel[7]};
+    wire [3:0] comb_i_lane = {comb_i[0],   comb_i[1],   comb_i[6],   comb_i[7]};
+    wire [3:0] comb_q_lane = {comb_q[0],   comb_q[1],   comb_q[6],   comb_q[7]};
+
+    reg d0, d1;
+    always @* begin
+        d0 = 1'b0;
+        d1 = 1'b0;
+        case (group)
+            G_RAW: begin
+                d0 = raw_i_q[ant];
+                d1 = raw_q_q[ant];
+            end
+            G_DEC: begin
+                d0 = dc_i_lane[sel];
+                d1 = dc_q_lane[sel];
+            end
+            G_SC: case (sel)
+                2'd0: begin d0 = sc_hit;  d1 = sc_lock;       end
+                2'd1: begin d0 = del_rdy; d1 = sc_tdm_busy;   end
+                2'd2: begin d0 = sc_lock; d1 = packet_active; end
+                default: begin d0 = 1'b0; d1 = 1'b0; end   // reserved
+            endcase
+            G_PKT: case (sel)
+                2'd0: begin d0 = packet_active;   d1 = training_done;   end
+                2'd1: begin d0 = w_pending;       d1 = w_valid;         end
+                2'd2: begin d0 = packet_phase[0]; d1 = packet_phase[1]; end
+                default: begin d0 = 1'b0; d1 = 1'b0; end   // reserved
+            endcase
+            G_PSRAM: case (sel)
+                2'd0: begin d0 = psram_init_done; d1 = qpi_busy;       end
+                2'd1: begin d0 = buf_active;      d1 = replay_active;  end
+                2'd2: begin d0 = sample_skip;     d1 = replay_missed;  end
+                default: begin d0 = psram_dbg_busy; d1 = qspi_owner;   end
+            endcase
+            G_COMB: begin
+                d0 = comb_i_lane[sel];
+                d1 = comb_q_lane[sel];
+            end
+            G_IRQ: begin
+                // SEL is 2 bits, so only irq_status[3:0] is reachable here.
+                // The plan's SEL=0..4 assumed a wider field; the remaining
+                // sticky bits stay readable over SPI at IRQ_STATUS (0x02).
+                d0 = irq_status[sel];
+                d1 = irq_out;
+            end
+            default: begin d0 = 1'b0; d1 = 1'b0; end   // G_OFF and reserved
+        endcase
+    end
+
+    assign dbg0 = en ? d0 : 1'b0;
+    assign dbg1 = en ? d1 : 1'b0;
 endmodule
 
 // Grouper origin/dev external-peripheral endpoint.  HSEL/HREADYIN are

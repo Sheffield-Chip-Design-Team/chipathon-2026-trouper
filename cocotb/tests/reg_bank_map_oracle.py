@@ -94,6 +94,10 @@ def _sc_ant_sel_outputs(dut, p):
     _eq(dut, "sc_ant_sel", p & 0x3, 0x1B, p)
 
 
+def _dbg_ctrl_outputs(dut, p):
+    _eq(dut, "dbg_ctrl", p, 0x04, p)
+
+
 def _array_sync_ctrl_outputs(dut, p):
     _eq(dut, "array_sync_en", p & 0x1, 0x18, p)
 
@@ -173,6 +177,7 @@ GENERIC_RW_FIELDS = (
         RegField(0x08, "MIMO_CTRL", lambda p: (p & 0xF0) | (p & 0x01), _mimo_ctrl_outputs),
         RegField(0x09, "SF_CFG", lambda p: p & 0x0F, _sf_cfg_outputs),
         RegField(0x0A, "BW_CFG", lambda p: p & 0x01, _bw_cfg_outputs),
+        RegField(0x04, "DBG_CTRL", lambda p: p, _dbg_ctrl_outputs),
         RegField(0x18, "ARRAY_SYNC_CTRL", lambda p: p & 0x01, _array_sync_ctrl_outputs),
         RegField(0x0B, "PKT_TIMEOUT_SYMS", lambda p: p, _pkt_timeout_outputs),
         RegField(0x0C, "SC_THR_HI", lambda p: p, _sc_thr_hi_outputs),

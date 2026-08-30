@@ -144,6 +144,7 @@ module psram_buf_ctrl (
     output reg         overflow,      // sticky: wr_ptr lapped rd_ptr
     output reg         sample_skip,   // sticky: iq_valid arrived while QPI busy (sample lost)
     output reg  [2:0]  state_dbg,
+    output wire        del_rdy_dbg,   // debug-probe observability only (DBG_CTRL group 011/101)
     input  wire [22:0] dbg_addr,
     input  wire        dbg_auto_inc,
     input  wire        dbg_rd_trig,
@@ -211,6 +212,7 @@ module psram_buf_ctrl (
     // Re-armed whenever sf or sample_shift changes so a BW/SF change cannot present
     // a stale delayed sample before the new delay distance has been fully written.
     reg             del_rdy;
+    assign del_rdy_dbg = del_rdy;
     reg [14:0]      del_cnt;
     reg [3:0]       sf_prev;
     reg [1:0]       sample_shift_prev;

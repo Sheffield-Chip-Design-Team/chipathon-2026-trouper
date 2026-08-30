@@ -35,7 +35,8 @@ enum {
     REG_IRQ_CLEAR        = 0x03,   /* W  write-1-to-clear */
 
     /* RX / modem config (0x08-0x0F).
-     * NOTE: SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ, SC_ANT_SEL and
+     * NOTE: SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ, SC_ANT_SEL,
+     * ARRAY_SYNC_CTRL and
      * (below) TACC_WINDOW_SYMS are GATED — hardware rejects writes unless RX_HOLD is
      * set and no packet is active. See REG_RX_HOLD and asic_cfg_begin(). */
     REG_MIMO_CTRL        = 0x08,   /* [0] MODE, [7:4] ANTENNA_EN */
@@ -57,6 +58,11 @@ enum {
     /* [1:0] sc_ant_sel: which antenna branch feeds the SC correlator.  Lives
      * with the SC group rather than in BW_CFG -- it is correlator routing, not
      * a bandwidth setting.  Same gate as the other structural config. */
+    /* Multi-ASIC acquisition sync (0x18). [0] ARRAY_SYNC_EN, resets to 0:
+     * the shared ARRAY_ACQ_N pin is inert in both directions until set, so an
+     * unused pad cannot start the receiver. Both chips of a linked pair must
+     * set it at bring-up. Gated. See planning/array-acquisition-sync.md. */
+    REG_ARRAY_SYNC_CTRL  = 0x18,   /* [0] ARRAY_SYNC_EN              (gated) */
     REG_SC_ANT_SEL       = 0x1B,   /* [1:0] SC correlator branch     (gated) */
 
     /* Packet / weight-path / training control (0x1C-0x23) */

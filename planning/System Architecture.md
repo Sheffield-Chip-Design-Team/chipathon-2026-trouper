@@ -292,7 +292,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | VDD_CORE | 1 | Digital core + pad-driver supply, 3.3 V baseline — IR drop must be verified in floorplan. No separate `VDD_IO` pin: the reference PDN config ties the padring to this same net (`planning/5v-core-voltage-strategy.md` §2026-08-19); `VDD_IO` removed from the pinout 2026-08-19. |
 | GND | 1 | Single pad — place at highest switching-current region. Shared across the whole die, not Trouper-private (see [Pinout](Pinout.md)). |
 | ARRAY_ACQ_N | 1 | Multi-ASIC acquisition-sync wired-AND line, added 2026-08-30 — acquisition aid only, no data/phase/clock (see [array-acquisition-sync](array-acquisition-sync.md)) |
-| **Total** | **26** | Within the 28-pad per-team allocation confirmed 2026-08-30, with 2 slots spare (25 pads per `planning/Pinout.md`, which excludes `GND` as a shared/non-counted pad; this table counts it, hence 26) |
+| **Total** | **26** | 26 of the 28 slots confirmed 2026-08-30, leaving 2 spare. This count matches `info.yaml` exactly: every declared pin, `VDD_CORE` and `VSS` included, occupies an A40 slot |
 
 ---
 

@@ -1255,8 +1255,9 @@ Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
 ### 46. Trouper's pinout vs. a stricter 22-pad / 1117.5×1117.5 allocation — PIN HALF RESOLVED 2026-08-30 (allocation is 28 pads); die-size half stands
 
 **Update 2026-08-30 — the pin-budget half of this item is closed.** The A40 ACV
-allocation is confirmed at **28 pad slots**, not 22. At 25 pads (26 `info.yaml` entries
-including `VSS`) Trouper has 3 spare, 2 after `ARRAY_ACQ_N`. Neither the `IRQ_OUT`-removal
+allocation is confirmed at **28 pad slots**, not 22. `info.yaml` declares 26 pins — 24
+signal + `VDD_CORE` + `VSS`, every one of which occupies a slot — so 26 of 28 are used
+and **2 are spare**, `ARRAY_ACQ_N` included in the 26. Neither the `IRQ_OUT`-removal
 waiver nor NR=3 is needed to close a pin gap, because there is no pin gap. Everything below
 about pins is retained as the record of the superseded assumption; the **die-size** half
 (1117.5×1117.5 µm) is unaffected by this and is separately superseded for the A40 build,
@@ -1336,7 +1337,8 @@ package-bond available until the integrator confirms it.
 **Update 2026-08-30 — allocation confirmed at 28; one slot spent, two remain.** The
 28-pad ACV allocation is confirmed. `ARRAY_ACQ_N` is declared in `info.yaml` (appended
 after `VDD`, so it takes N15 and no existing pin moves) and wired in `trouper_top.v`,
-leaving **2 slots spare**. This also closes the pin half of item 46: the 22-pad budget that
+bringing `info.yaml` to 26 declared pins and leaving **2 of the 28 slots spare**. This
+also closes the pin half of item 46: the 22-pad budget that
 drove the NR=3 / `IRQ_OUT`-waiver contingency was never the real allocation.
 
 **Still open on this pin** (the budget was never the hard part):
@@ -1391,7 +1393,7 @@ committed to the board/pad allocation on RTL inference alone.
 - Run a post-integration electrical/functional test with the real pad wrapper
   before relying on multi-chip beamforming or direction-finding experiments.
 
-**Current RTL safeguards (updated 2026-08-30):** `ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x1B`)
+**Current RTL safeguards (updated 2026-08-30):** `ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x18`)
 resets to 0, so the pin is inert in both directions until firmware arms it; the
 internal pull-up is **enabled** on this pad alone so an unpopulated pin cannot
 float; Schmitt input is enabled; the driver only ever presents zero; a natural

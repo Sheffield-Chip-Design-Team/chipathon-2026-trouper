@@ -1,15 +1,20 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pad list. Total: **25 pads** (24 signal + `VDD_CORE`;
-`GND`/`VSS` is shared across the whole die, not a per-project pad, not counted here).
+GF180MCU MIMO ASIC logical pad list. **26 pads occupying 26 A40 slots**: 24 signal +
+`VDD_CORE` + `VSS`. Older revisions of this doc quoted 24 or 25 by excluding `VSS` on the
+grounds that ground was shared die-wide and not a per-project pad — that is no longer
+true. The A40 padring requires a per-project `VSS` pin, `info.yaml` declares it, and the
+integrator places it at slot W12, so **it consumes a slot and must be counted** in any
+budget comparison. `info.yaml`'s entry count (26) is the authoritative occupancy number.
 **`VDD_IO` removed 2026-08-19** — it is the same net as `VDD_CORE` in every current PDN
 config (no independent IO rail is actually built), so it isn't a second pin. See
 `planning/5v-core-voltage-strategy.md` §2026-08-19, Open Risks #27.
 
 **Allocation status — RESOLVED 2026-08-30: the assigned budget is 28 pads.** Trouper's
-A40 ACV allocation is **28 pad slots**, confirmed with the integrator. The current pinout
-is **25** (24 signal + `VDD_CORE`, with `VSS` also declared in `info.yaml`), so there are
-**3 slots spare** — 2 after `ARRAY_ACQ_N` takes N15. The pin budget is no longer a
+A40 ACV allocation is **28 pad slots**, confirmed with the integrator. `info.yaml`
+declares **26** pins — 24 signal + `VDD_CORE` + `VSS`, all of which take a slot — so
+**26 of 28 are used and 2 are spare**. (That is 2 spare *including* `ARRAY_ACQ_N`, which
+is already one of the 26; it is not a further deduction.) The pin budget is no longer a
 constraint on this design.
 
 This supersedes the earlier working assumption of a **22-pad** team allocation, and with
@@ -295,7 +300,7 @@ It is **not** a substitute for the external pull-up. On a real multi-chip net
 the board resistor is still mandatory; the internal devices then sit in parallel
 with it, one per participating chip, and must be counted in the pull-up sizing
 and V_OL budget (Open Risks #53). The functional protection for an unused pin is
-`ARRAY_SYNC_CTRL[0] ARRAY_SYNC_EN` (register `0x1B`), which resets to 0 — see
+`ARRAY_SYNC_CTRL[0] ARRAY_SYNC_EN` (register `0x18`), which resets to 0 — see
 `planning/Register Map.md`.
 
 `SPI_MISO_OE` is tied `1` (not gated by `HOST_CS`): the SPI slave already drives

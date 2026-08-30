@@ -235,6 +235,8 @@ module trouper_chip #(
         .IRQ_OUT_OUT         (IRQ_OUT),
         .IRQ_GROUPER         (),
         .ARRAY_ACQ_N_OUT     (ARRAY_ACQ_N_OUT),
+        .DBG0_IN             (1'b0),
+        .DBG1_IN             (1'b0),
         .ARRAY_ACQ_N_IN      (ARRAY_ACQ_N_IN),
         .ARRAY_ACQ_N_OE      (ARRAY_ACQ_N_OE),
         .IQ_CLK_PU           (),

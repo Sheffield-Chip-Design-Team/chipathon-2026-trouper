@@ -71,7 +71,7 @@ SYM_NS = sym_ns(SF, BW_KHZ)
 
 REG_PKT_TIMEOUT   = 0x0B
 
-REG_ARRAY_SYNC_CTRL = 0x1B    # [0] ARRAY_SYNC_EN, resets to 0 (link off)
+REG_ARRAY_SYNC_CTRL = 0x18    # [0] ARRAY_SYNC_EN, resets to 0 (link off)
 
 # Register map (planning/Register Map.md)
 REG_SF_CFG        = 0x09

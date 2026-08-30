@@ -103,6 +103,7 @@ module sc_detector (
     output reg         sc_lock_natural_pulse,
     output reg  [31:0] timing_ref,
     output reg  signed [31:0] c_i0, c_q0,
+    output wire        sc_tdm_busy_dbg,  // debug-probe observability only (DBG_CTRL group 011)
     output reg  [15:0] sc_stat,
     output reg         sc_hit_dbg,
     // Held mirror of sc_hit_dbg for register readback (SC_DBG_FLAGS[0]):
@@ -176,6 +177,7 @@ module sc_detector (
     reg signed [7:0] tlat_ci0, tlat_qi0, tlat_di0, tlat_dq0;
 
     reg        tdm_busy;
+    assign sc_tdm_busy_dbg = tdm_busy;
     reg [3:0]  tdm_step;
     reg signed [7:0]  tdm_a_r, tdm_b_r;
     wire signed [15:0] tdm_mul = tdm_a_r * tdm_b_r;

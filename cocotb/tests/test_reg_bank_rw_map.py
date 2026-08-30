@@ -191,6 +191,10 @@ async def test_psram_ctrl_field(dut):
     await _bring_up(dut)
     dut.packet_active.value = 0
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     for p in PATTERNS:
         await write_reg(dut, 0x70, p)
         got_immediate = await peek(dut, 0x70)
@@ -223,6 +227,10 @@ async def test_psram_ctrl_field(dut):
     await write_reg(dut, 0x70, 0xFF)
     after = await peek(dut, 0x70)
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     assert (after & 0x01) == (before & 0x01), (
         f"PSRAM_EN updated while packet_active=1: before=0x{before:02X} after=0x{after:02X}"
     )
@@ -305,6 +313,10 @@ async def test_sc_force_lock_and_noise_trig(dut):
     await _bring_up(dut)
     dut.packet_active.value = 0
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     # SC_FORCE_LOCK: W1P, reads back 0x00 (WO), pulses sc_force_lock for
     # one cycle then self-clears.
     await write_reg(dut, 0x19, 0x01)
@@ -323,6 +335,10 @@ async def test_sc_force_lock_and_noise_trig(dut):
     )
     dut.packet_active.value = 0
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     # TACC_NOISE_TRIG: W1P, reads back 0x00 (WO), pulses noise_trig for one
     # cycle then self-clears; not gated by packet_active.
     await write_reg(dut, 0x1F, 0x01)
@@ -347,12 +363,20 @@ async def test_packet_active_gate_smoke(dut):
 
     async def _blocked(addr, output_sig):
         dut.packet_active.value = 0
+        # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+        # module directly, so an undriven input would return X and break
+        # any read of that address.
+        dut.dbg_pad_value.value = 0
         await write_reg(dut, addr, 0x00)
         dut.packet_active.value = 1
         before = int(getattr(dut, output_sig).value)
         await write_reg(dut, addr, 0xFF)
         after = int(getattr(dut, output_sig).value)
         dut.packet_active.value = 0
+        # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+        # module directly, so an undriven input would return X and break
+        # any read of that address.
+        dut.dbg_pad_value.value = 0
         assert after == before, (
             f"0x{addr:02X} ({output_sig}) updated while packet_active=1: "
             f"before={before} after={after}"
@@ -391,8 +415,8 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         0x01: ('RO', 0xFF),  # CHIP_REV fixed 0x01
         0x02: ('RO', 0xFF),  # IRQ_STATUS (RO sticky)
         0x03: ('WO', 0x00),  # IRQ_CLEAR (WO, reads as 0)
-        0x04: ('reserved', 0x00),
-        0x05: ('reserved', 0x00),
+        0x04: ('RW', 0xFF),  # DBG_CTRL: [7] EN, [6:4] GROUP, [3:2] ANT, [1:0] SEL
+        0x05: ('RO', 0x03),  # DBG_STATUS: [1:0] pad values; [7:2] reserved
         0x06: ('reserved', 0x00),
         0x07: ('reserved', 0x00),
         # RX / Modem Configuration
@@ -605,7 +629,7 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
 
 @cocotb.test()
 async def test_reserved_addresses_zero_and_ignored(dut):
-    """Verify all 21 reserved addresses read zero and writes are ignored.
+    """Verify all 17 reserved addresses read zero and writes are ignored.
 
     Closes verification-plan row #3: "Fixed IDs and all reserved addresses
     read zero/write ignored" (TRPR-REG-004). Exhaustively verifies the
@@ -628,18 +652,19 @@ async def test_reserved_addresses_zero_and_ignored(dut):
     """
     await _bring_up(dut)
 
-    # 19 reserved slots. Three former-reserved addresses are now real registers
+    # 17 reserved slots. Five former-reserved addresses are now real registers
     # and are excluded: 0x1A is RX_HOLD (see NOTE above), 0x1B became
-    # SC_ANT_SEL, and 0x18 -- the last of the former RX_GAIN block -- became
-    # ARRAY_SYNC_CTRL, both on 2026-08-30.
+    # SC_ANT_SEL, 0x18 -- the last of the former RX_GAIN block -- became
+    # ARRAY_SYNC_CTRL, and 0x04/0x05 became DBG_CTRL/DBG_STATUS, all on
+    # 2026-08-30.
     reserved_addrs = [
-        0x04, 0x05, 0x06, 0x07,                         # former DEBUG_CTRL/GPIO
+        0x06, 0x07,                                     # former DEBUG_CTRL/GPIO
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,  # former RX_GAIN_*
         0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,             # reserved for future
         0x7F,                                            # protocol escape
     ]
 
-    assert len(reserved_addrs) == 19, f"Expected 19 reserved addresses, got {len(reserved_addrs)}"
+    assert len(reserved_addrs) == 17, f"Expected 17 reserved addresses, got {len(reserved_addrs)}"
 
     # Test each reserved address with multiple patterns
     patterns = [0x00, 0xFF, 0xAA, 0x55, 0xA5, 0x5A]

@@ -20,7 +20,8 @@ project:
 
 # ======================================================
 # Pin definitions (see planning/Pinout.md for the authoritative
-# pad-by-pad description; 24 signal + 2 power pads, upper-left quadrant.
+# pad-by-pad description; 26 signal + 2 power pads = 28, the full
+# allocation with no spare slot remaining.
 # VDD_IO removed 2026-08-19: the reference padring ties VDD_CORE/VDD_IO
 # to one net by default (no independent IO rail is actually built), so
 # there is one supply pin (VDD), not two. VSS added <TODO: date> — the
@@ -41,8 +42,9 @@ project:
 # shared padring reserves for power, and the integrator may yet require the
 # macro to declare them at exactly those positions
 # (planning/a40-padframe-integration-2026-08.md, VDD/VSS decision 2026-08-29).
-# The ACV allocation is 28 slots (confirmed 2026-08-30), so N15 is within
-# budget and two spares remain. Still outstanding before this pin is committed:
+# The ACV allocation is 28 slots (confirmed 2026-08-30). ARRAY_ACQ_N takes
+# N15 and DBG0_OUT/DBG1_OUT take N16/N17, which fills the allocation
+# exactly -- there is no spare slot left for a late addition. Still outstanding before this pin is committed:
 # a regenerated A40_ACV.def and a P&R run against the 26-pin list, plus the
 # pad-level electrical review. See Open Risks #52 and #53.
 # The Grouper bus (GRP_*, AHB H*, IRQ_GROUPER) is die-internal, not pads,
@@ -112,4 +114,13 @@ pins:
   # bi_t, not bi_24t: the core drives PDRV[1:0]=00 (4 mA), which is ample to
   # sink a board pull-up and keeps the falling edge slow on a shared net.
   - name: ARRAY_ACQ_N
+    io_type: bidirectional
+
+  # Two-pin digital debug probes (planning/two-pin-digital-debug-plan.md).
+  # Output-only in function, but bi_t like every other output on the A40
+  # padframe, which has no output-only cell. These two take the allocation to
+  # 28 of 28 -- FULL, no spare slot remains.
+  - name: DBG0_OUT
+    io_type: bidirectional
+  - name: DBG1_OUT
     io_type: bidirectional

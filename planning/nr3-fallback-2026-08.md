@@ -1,7 +1,7 @@
 # NR=3 fallback — pin budget / die size contingency (2026-08-18)
 
 > **PIN HALF SUPERSEDED 2026-08-30.** The A40 ACV allocation is confirmed at **28 pad
-> slots**, not 22, so the pin-budget motivation for NR=3 is gone — Trouper fits at 25 pads
+> slots**, not 22, so the pin-budget motivation for NR=3 is gone — Trouper fits at 26 pads
 > with slots to spare. This doc is retained for the **die-size** half of the analysis and
 > as the record of the NR=3 area/gain trade, which is still the reference if 4-antenna MRC
 > ever has to be cut for area or timing rather than pins. See `planning/Pinout.md`

@@ -80,10 +80,18 @@ SINGLE_PORT_GATED = [
 async def test_packet_active_blocks_single_port_gated_fields(dut):
     await _bring_up(dut)
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     assert int(dut.rx_hold.value) == 1, "expected RX_HOLD permissive out of reset"
 
     for addr, unblocked_val, blocked_val, port, mask in SINGLE_PORT_GATED:
         dut.packet_active.value = 0
+        # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+        # module directly, so an undriven input would return X and break
+        # any read of that address.
+        dut.dbg_pad_value.value = 0
         await write_reg(dut, addr, unblocked_val)
 
         if addr == 0x77:
@@ -111,6 +119,10 @@ async def test_packet_active_blocks_single_port_gated_fields(dut):
         # Confirm the block is real, not a coincidence: releasing
         # packet_active lets the same write land.
         dut.packet_active.value = 0
+        # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+        # module directly, so an undriven input would return X and break
+        # any read of that address.
+        dut.dbg_pad_value.value = 0
         await write_reg(dut, addr, blocked_val)
         if addr == 0x77:
             released = int(dut.replay_delay_samples.value) & 0xFF
@@ -127,12 +139,24 @@ async def test_packet_active_blocks_single_port_gated_fields(dut):
     dut.packet_active.value = 0
 
 
+
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+
+    # module directly, so an undriven input would return X and break
+
+    # any read of that address.
+
+    dut.dbg_pad_value.value = 0
 @cocotb.test()
 async def test_packet_active_blocks_bw_cfg(dut):
     """BW_CFG (0x0A) carries bw_sel[0] only; gated by cfg_wr_ok."""
     await _bring_up(dut)
     dut.packet_active.value = 0
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x0A, 0x01)  # bw_sel=1
     assert int(dut.bw_sel.value) == 1
 
@@ -141,11 +165,23 @@ async def test_packet_active_blocks_bw_cfg(dut):
     assert int(dut.bw_sel.value) == 1, "bw_sel updated while packet_active=1"
 
     dut.packet_active.value = 0
+
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+
+    # module directly, so an undriven input would return X and break
+
+    # any read of that address.
+
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x0A, 0x00)
     assert int(dut.bw_sel.value) == 0, "bw_sel did not update once packet_active=0"
     dut.packet_active.value = 0
 
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
 @cocotb.test()
 async def test_packet_active_blocks_sc_ant_sel(dut):
     """SC_ANT_SEL (0x1B) carries the correlator branch select, moved out of
@@ -154,6 +190,10 @@ async def test_packet_active_blocks_sc_ant_sel(dut):
     await _bring_up(dut)
     dut.packet_active.value = 0
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x1B, 0x02)
     assert int(dut.sc_ant_sel.value) == 2
 
@@ -162,11 +202,23 @@ async def test_packet_active_blocks_sc_ant_sel(dut):
     assert int(dut.sc_ant_sel.value) == 2, "sc_ant_sel updated while packet_active=1"
 
     dut.packet_active.value = 0
+
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+
+    # module directly, so an undriven input would return X and break
+
+    # any read of that address.
+
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x1B, 0x03)
     assert int(dut.sc_ant_sel.value) == 3, "sc_ant_sel did not update once packet_active=0"
     dut.packet_active.value = 0
 
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
 @cocotb.test()
 async def test_packet_active_blocks_sc_force_lock(dut):
     """SC_FORCE_LOCK (0x19) is a W1P gated by packet_active alone (no
@@ -178,6 +230,10 @@ async def test_packet_active_blocks_sc_force_lock(dut):
         "sc_force_lock pulsed while packet_active=1"
     )
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x19, 0x01)
     assert int(dut.sc_force_lock.value) == 1, (
         "sc_force_lock did not pulse once packet_active=0"
@@ -185,12 +241,20 @@ async def test_packet_active_blocks_sc_force_lock(dut):
     dut.packet_active.value = 0
 
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
 @cocotb.test()
 async def test_packet_active_blocks_psram_en_only(dut):
     """PSRAM_CTRL (0x70): bit[0] EN is gated by packet_active; bit[1]
     CLR_ERR (W1P) and bit[3] QSPI_OWNER are not, in the same register."""
     await _bring_up(dut)
     dut.packet_active.value = 0
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x70, 0x00)  # clear EN/OWNER
 
     dut.packet_active.value = 1
@@ -205,11 +269,23 @@ async def test_packet_active_blocks_psram_en_only(dut):
     assert int(dut.psram_ctrl.value) & 0x02, "CLR_ERR (ungated) did not pulse while packet_active=1"
 
     dut.packet_active.value = 0
+
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+
+    # module directly, so an undriven input would return X and break
+
+    # any read of that address.
+
+    dut.dbg_pad_value.value = 0
     await write_reg(dut, 0x70, 0x01)
     assert int(dut.psram_ctrl.value) & 0x01, "PSRAM_EN did not update once packet_active=0"
     dut.packet_active.value = 0
 
 
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+    # module directly, so an undriven input would return X and break
+    # any read of that address.
+    dut.dbg_pad_value.value = 0
 # ---------------------------------------------------------------------------
 # Ungated fields must remain writable while packet_active=1
 # ---------------------------------------------------------------------------
@@ -272,3 +348,12 @@ async def test_ungated_fields_unaffected_by_packet_active(dut):
     )
 
     dut.packet_active.value = 0
+
+
+    # DBG_STATUS (0x05) reads this back; the reg_bank bench drives the
+
+    # module directly, so an undriven input would return X and break
+
+    # any read of that address.
+
+    dut.dbg_pad_value.value = 0

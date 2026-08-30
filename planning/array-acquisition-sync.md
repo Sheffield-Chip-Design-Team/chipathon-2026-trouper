@@ -41,7 +41,7 @@ net with a single external pull-up resistor to the IO supply.
 | Pad implementation | `gf180mcu_fd_io__bi_t` (`info.yaml` `io_type: bidirectional`); drive `A=0`, assert `OE`, and sample `Y` |
 | Drive strength | `PDRV[1:0]=00` (4 mA) — ample to sink the board pull-up, and the slowest available falling edge on a shared multi-drop net |
 | Internal pulls | `PU=1`, `PD=0`. The board pull-up is still mandatory on a multi-chip net; the internal device only keeps an *unpopulated* pin from floating. On a shared net one internal pull-up per chip sits in parallel with the board resistor and counts against the pull-up / V_OL budget. |
-| Enable | `ARRAY_SYNC_CTRL[0]` (`0x1B`) `ARRAY_SYNC_EN`, **resets to 0**. The pin is inert in both directions until firmware sets it. |
+| Enable | `ARRAY_SYNC_CTRL[0]` (`0x18`) `ARRAY_SYNC_EN`, **resets to 0**. The pin is inert in both directions until firmware sets it. |
 | Input conditioning | Schmitt trigger enabled (`CS=1`) and input enabled (`IE=1`) |
 
 The GF180 PDK does not supply a dedicated open-drain pad primitive.  The
@@ -55,7 +55,7 @@ open-drain; no device may actively drive this net high.
 
 ### Disabling the link
 
-`ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x1B`, reset 0) gates **both**
+`ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x18`, reset 0) gates **both**
 directions in
 `array_acq_sync`: it is a term in `armed`, so a disabled chip cannot accept a
 peer event, and a term on the `drive_oe` set condition, so a disabled chip
@@ -70,10 +70,16 @@ register, so write it with `RX_HOLD=1` before releasing the receiver, alongside
 SF and BW.
 
 It has its own register rather than a spare `BW_CFG` bit: `BW_CFG` is the
-bandwidth register (already carrying `sc_ant_sel`), and arming a multi-chip link
-has nothing to do with bandwidth. `0x1B` was reserved and sits with the other
-SC/receiver control registers, `SC_FORCE_LOCK` (`0x19`) and `RX_HOLD` (`0x1A`).
-Its upper seven bits are free for future array status/control.
+bandwidth register, and arming a multi-chip link has nothing to do with
+bandwidth. `0x18` is the last slot of the freed `RX_GAIN` block and sits
+immediately below the other SC/receiver control registers — `SC_FORCE_LOCK`
+(`0x19`), `RX_HOLD` (`0x1A`) and `SC_ANT_SEL` (`0x1B`) — extending that cluster
+downward. Its upper seven bits are free for future array status/control.
+
+(`0x1B` was this register's first home; it moved to `0x18` when the
+`SC_ANT_SEL` work, which had independently claimed `0x1B`, was merged in.
+`SC_ANT_SEL` kept the address because relocating it would have churned the
+firmware header and five test files for no benefit.)
 
 `test_disabled_link_ignores_the_wire` covers the default state, and
 `test_disabled_receiver_rejects_a_real_edge` applies a genuine falling edge from
