@@ -33,7 +33,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | **RX / Modem Configuration** (`0x08`–`0x0F`) | | | | | |
 | `0x08` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
 | `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12, firmware-enforced — not clamped in HW); write ignored while `PACKET_ACTIVE` |
-| `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); [2:1] `sc_ant_sel` SC correlator antenna (0-3); write ignored while `PACKET_ACTIVE` |
+| `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); [7:1] reserved; write gated by `RX_HOLD` + `!PACKET_ACTIVE` |
 | `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
 | `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
@@ -41,9 +41,9 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
 | **Reserved** (`0x10`–`0x18`) | | | | | |
 | `0x10`–`0x18` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below) |
-| `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`) |
+| `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`/`SC_ANT_SEL`) |
 | `0x1A` | `RX_HOLD` | R/W | `0x01` | Schmidl-Cox / config interlock | [0] `RX_HOLD` (level): 1 = SC detector held disabled (ORed into `sc_clr`) and the gated config registers are writable; 0 = detector may lock and those writes are refused. **Set out of reset — firmware must configure, then clear it to receive.** [1] `CFG_WR_REJECTED` RO sticky, W1C: a gated config write was dropped |
-| `0x1B` | — | — | — | — | Reserved |
+| `0x1B` | `SC_ANT_SEL` | R/W | `0x00` | Schmidl-Cox | [1:0] `sc_ant_sel` SC correlator source antenna (0-3); [7:2] reserved; write gated by `RX_HOLD` + `!PACKET_ACTIVE` |
 | **Packet / Weight-Path / Training Control** (`0x1C`–`0x23`) | | | | | |
 | `0x1C` | `PACKET_STATUS` | R | `0x00` | Packet Control FSM | [0] `PACKET_ACTIVE`; [3:1] `PACKET_PHASE`; [4] `TRAINING_DONE`; [5] `W_PENDING`; [6] `W_VALID`; [7] `W_MISSED_PACKET` |
 | `0x1D` | `ACTIVE_STATUS` | R | `0x10` | Packet Control FSM | [1:0] `ACTIVE_MODE` latched at packet-safe boundary; [7:4] `ACTIVE_ANTENNA_EN`; [3:2] reserved. Reset = FSM defaults (mode 0, antenna_en 0x1) until the first lock latches the shadow |
@@ -104,7 +104,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 107 implemented + 21 reserved = 128. (Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port — moving one address from reserved to implemented; reserved growth slots are now `0x7A`–`0x7E`. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. The 21 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x1A`–`0x1B`, `0x7A`–`0x7E` and `0x7F`.)
+**Occupancy:** 109 implemented + 19 reserved = 128. (Updated 2026-08-30: `SC_ANT_SEL` implemented at `0x1B` — moved out of `BW_CFG[2:1]`, which is correlator branch routing rather than a bandwidth setting — taking one address from reserved to implemented. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. The 19 reserved slots are `0x04`–`0x07`, `0x10`–`0x18`, `0x7A`–`0x7E` and `0x7F`.)
 
 ---
 
@@ -185,7 +185,7 @@ step 1.
 | Register(s) | Mid-packet policy | Result / firmware rule |
 | --- | --- | --- |
 | `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
-| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
+| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x1B`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
 | `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
 | W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
 | `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
@@ -212,22 +212,13 @@ This configures `M = 2^SF` for the PSRAM delay line, SC detector, training accum
 | Bits | Field | Description |
 | --- | --- | --- |
 | [0] | `bw_sel` | LoRa bandwidth select: 0 = 250 kHz (2× oversample, `sample_shift=1`), 1 = 125 kHz (4× oversample, `sample_shift=2`) |
-| [2:1] | `sc_ant_sel` | Which antenna branch (0-3) feeds the SC correlator's `cur_i0/cur_q0`/`del_i0/del_q0` delay-line taps in `psram_buf_ctrl`. Reset 0 (antenna 0, prior fixed behavior). |
-| [7:3] | — | Reserved, write 0 |
+| [7:1] | — | Reserved, write 0 |
 
 The decimator is a fixed R=64 half-band chain (500 kS/s output); bandwidth is **not**
 a decimation-ratio change. `bw_sel` selects only `sample_shift`, which sets the
 symbol period `M = 1 << (SF + sample_shift)` used by every symbol-domain block (SC
 detector, training accumulator, packet-control FSM, PSRAM delay). Writes are ignored
 while `PACKET_ACTIVE = 1`; a BW (or SF) change re-arms decimator/delay warm-up.
-
-`sc_ant_sel` lets firmware route the SC correlator to a different antenna at packet
-idle time (e.g. after a noise-mode `Z_kk` energy scan flags antenna 0 as faded); it
-does **not** implement the spec's `Σ_j` incoherent 4-branch combine (Open Risk #9) —
-the correlator still evaluates exactly one antenna at a time, so acquisition still
-fails if the *currently selected* antenna is in a deep fade. Like `bw_sel`, writes are
-blocked while `PACKET_ACTIVE=1` (`psram_buf_ctrl`'s delay-line addressing must not
-change mid-packet).
 
 ### `0x0B` — PKT_TIMEOUT_SYMS (read/write)
 
@@ -276,11 +267,36 @@ Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper
 | --- | --- | --- |
 | [0] | `SC_FORCE_LOCK` | W1P: asserts `sc_lock` directly in `sc_detector`, bypassing the correlator's hit-count logic. Ignored while `PACKET_ACTIVE=1`. |
 
-**Purpose:** a bring-up / catastrophic-detector-failure escape hatch, not a packet-recovery mechanism. `sc_detector` has no other firmware-triggerable path into `ST_PREAMBLE_ACQ` — only a genuine hit-count-qualified correlator lock reaches it otherwise. If the correlator itself is suspected non-functional on silicon (as opposed to a merely faded antenna — see `sc_ant_sel`, `0x0A`), this proves the rest of the chain (`packet_ctrl_fsm` → PSRAM buffering → combiner → IRQ) is alive without depending on the correlator.
+**Purpose:** a bring-up / catastrophic-detector-failure escape hatch, not a packet-recovery mechanism. `sc_detector` has no other firmware-triggerable path into `ST_PREAMBLE_ACQ` — only a genuine hit-count-qualified correlator lock reaches it otherwise. If the correlator itself is suspected non-functional on silicon (as opposed to a merely faded antenna — see `SC_ANT_SEL`, `0x1B`), this proves the rest of the chain (`packet_ctrl_fsm` → PSRAM buffering → combiner → IRQ) is alive without depending on the correlator.
 
 **Not a valid timing reference.** A forced lock latches `timing_ref` from the free-running `sample_count` at the moment of the write, not a symbol-boundary-corrected value derived from a real preamble edge. MRC training off a forced lock is not meaningful — treat the resulting `Z` values as noise, not a channel estimate.
 
 **Register-only today; pin variant deferred.** This is the SPI/GRP half of the OR-lock scheme sketched for the NR2/3 multi-ASIC cascade (`planning/NR2-multi-ASIC-cascade.md`, `sc_lock_in`/`sc_lock_out` pins) — that scheme's `effective_lock = sc_lock_detected || sc_lock_in` is the same shape as this register's OR into `sc_lock`. Wiring an actual `sc_lock_in` pad is not done yet — still deferred pending an explicit decision, though **2026-08-19: the pinout dropped to 24 pads (`VDD_IO` removed, see `planning/Pinout.md`)**, so there is now headroom for a spare pad against the 26-pad ceiling rather than none. If allocated, OR it into the same internal force signal (`sc_detector.sc_lock_force`) documented here rather than building a second mechanism.
+
+---
+
+### `0x1B` — SC_ANT_SEL (read/write)
+
+| Bits | Field | Description |
+| --- | --- | --- |
+| [1:0] | `sc_ant_sel` | Which antenna branch (0-3) feeds the SC correlator's `cur_i0/cur_q0`/`del_i0/del_q0` delay-line taps in `psram_buf_ctrl`. Reset 0 (antenna 0, the original fixed behaviour). |
+| [7:2] | — | Reserved, write 0 |
+
+Lets firmware route the SC correlator to a different antenna at packet idle time
+(e.g. after a noise-mode `Z_kk` energy scan flags antenna 0 as faded). It does
+**not** implement the spec's `Σ_j` incoherent 4-branch combine (Open Risk #9) —
+the correlator still evaluates exactly one antenna at a time, so acquisition still
+fails if the *currently selected* antenna is in a deep fade.
+
+Writes are gated by `RX_HOLD=1` **and** `PACKET_ACTIVE=0`, the same interlock as
+`SF_CFG`/`BW_CFG`: `psram_buf_ctrl`'s delay-line addressing must not change
+mid-packet.
+
+**History:** this field lived at `BW_CFG[2:1]` (`0x0A`) from its introduction
+(2026-07-11) until 2026-08-30. It was moved here because it is Schmidl-Cox
+correlator routing, not a bandwidth or decimation setting, and `BW_CFG` merely
+happened to have spare bits under the same write gate. `BW_CFG` now carries
+`bw_sel` alone.
 
 ---
 

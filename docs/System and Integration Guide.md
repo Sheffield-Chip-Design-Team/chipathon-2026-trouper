@@ -133,7 +133,7 @@ driving everything from the host RPi over SPI (no Grouper firmware needed).
    do this before the first lock, or between packets):
    - `SF_CFG` (`0x09`) — spreading factor 7–12
    - `BW_CFG` (`0x0A`) — `bw_sel` (bit 0: 0=250 kHz, 1=125 kHz) and
-     `sc_ant_sel` (bits 2:1: which antenna feeds the SC correlator, default
+     `sc_ant_sel` (`SC_ANT_SEL` 0x1B[1:0]: which antenna feeds the SC correlator, default
      0 — see Register Map `0x0A`)
    - `PKT_TIMEOUT_SYMS` (`0x0B`), SC threshold/hits (`0x0C`–`0x0E`)
    - `MIMO_CTRL` (`0x08`) — mode + `ANTENNA_EN`, must land **before** the

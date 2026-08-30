@@ -1542,7 +1542,8 @@ antenna vs 52% for the spec-intended combine). A spec-faithful fix (serial
 4-channel TDM correlator, ~+20 k µm², no clock-period cost) is designed but
 not implemented, pending an area-headroom check against the floorplan.
 
-**Mitigation added 2026-07-11:** `BW_CFG.sc_ant_sel` (`reg_bank` 0x0A[2:1])
+**Mitigation added 2026-07-11:** `sc_ant_sel` (`reg_bank` `SC_ANT_SEL` 0x1B[1:0];
+was `BW_CFG` 0x0A[2:1] until 2026-08-30)
 lets firmware pick *which* single antenna feeds the correlator, instead of
 the old hardcoded antenna 0 — cheap (a byte-lane mux + address offset in
 `psram_buf_ctrl.v`, no measurable area cost), verified bit-exact
@@ -1593,7 +1594,7 @@ increase, or the 4.5 V-core decision in item 44 freeing utilisation headroom).
 Whoever hits that trigger re-files this as Moderate with the measured headroom
 number attached.
 
-**Until then, accepted as-is:** `sc_ant_sel` (0x0A[2:1]) is the shipped
+**Until then, accepted as-is:** `sc_ant_sel` (0x1B[1:0]) is the shipped
 mitigation, the firmware-side branch-selection policy is the only outstanding
 work item, and the detection-diversity gap is a documented silicon limitation
 rather than an open action.

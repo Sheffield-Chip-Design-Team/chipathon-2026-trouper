@@ -5,10 +5,11 @@
 //   (a) SC detector delay line — per iq_valid, write 8 bytes then read back
 //       del_i0/del_q0 (one branch, selected by sc_ant_sel) from N samples ago.
 //       cur_i0/cur_q0 are captured from the write data at write-done time,
-//       same branch.  sc_ant_sel is write-locked during a packet (reg_bank
-//       0x0A[2:1]) — the SC correlator itself is still single-antenna, this
-//       just lets firmware route it away from a known-bad branch instead of
-//       always hardcoding antenna 0 (Open Risk #9).
+//       same branch.  sc_ant_sel (reg_bank SC_ANT_SEL 0x1B[1:0]) is
+//       write-locked during a packet — the SC correlator itself is still
+//       single-antenna, this just lets firmware route it away from a
+//       known-bad branch instead of always hardcoding antenna 0 (Open
+//       Risk #9).
 //   (b) Same-packet MRC replay — continuous-delay redesign (TRPR-RMD-009, see
 //       planning/psram-replay-continuous-delay-redesign.md): at the
 //       training_done rising edge a margin wait of replay_delay_samples

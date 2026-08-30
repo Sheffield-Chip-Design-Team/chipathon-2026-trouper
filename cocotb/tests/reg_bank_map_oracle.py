@@ -88,7 +88,10 @@ def _sf_cfg_outputs(dut, p):
 
 def _bw_cfg_outputs(dut, p):
     _eq(dut, "bw_sel", p & 0x1, 0x0A, p)
-    _eq(dut, "sc_ant_sel", (p >> 1) & 0x3, 0x0A, p)
+
+
+def _sc_ant_sel_outputs(dut, p):
+    _eq(dut, "sc_ant_sel", p & 0x3, 0x1B, p)
 
 
 def _pkt_timeout_outputs(dut, p):
@@ -158,19 +161,20 @@ def _replay_delay_hi_outputs(dut, p):
 
 
 # Plain (non-W1P, non-gated-in-this-sweep) RW fields. Gated fields (0x09,
-# 0x0A, 0x77, 0x78) are included here with packet_active held low -- the
+# 0x0A, 0x1B, 0x77, 0x78) are included here with packet_active held low -- the
 # {gate x packet_active 0/1} matrix itself belongs to row #8; a light
 # gate-blocked smoke check lives in test_reg_bank_rw_map.py.
 GENERIC_RW_FIELDS = (
     [
         RegField(0x08, "MIMO_CTRL", lambda p: (p & 0xF0) | (p & 0x01), _mimo_ctrl_outputs),
         RegField(0x09, "SF_CFG", lambda p: p & 0x0F, _sf_cfg_outputs),
-        RegField(0x0A, "BW_CFG", lambda p: p & 0x07, _bw_cfg_outputs),
+        RegField(0x0A, "BW_CFG", lambda p: p & 0x01, _bw_cfg_outputs),
         RegField(0x0B, "PKT_TIMEOUT_SYMS", lambda p: p, _pkt_timeout_outputs),
         RegField(0x0C, "SC_THR_HI", lambda p: p, _sc_thr_hi_outputs),
         RegField(0x0D, "SC_THR_LO", lambda p: p, _sc_thr_lo_outputs),
         RegField(0x0E, "SC_HITS_REQ", lambda p: p & 0x3, _sc_hits_req_outputs),
         RegField(0x0F, "COMB_CFG", lambda p: p & 0x37, _comb_cfg_outputs),
+        RegField(0x1B, "SC_ANT_SEL", lambda p: p & 0x03, _sc_ant_sel_outputs),
     ]
     + [_w_shadow_field(i) for i in range(16)]
     + [

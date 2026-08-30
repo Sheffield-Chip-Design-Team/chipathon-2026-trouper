@@ -398,7 +398,7 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         # RX / Modem Configuration
         0x08: ('RW', 0xF1),  # MIMO_CTRL: [7:4]=ANTENNA_EN, [0]=MODE; [3:1] reserved
         0x09: ('RW', 0x0F),  # SF_CFG: [3:0]=SF; [7:4] reserved
-        0x0A: ('RW', 0x07),  # BW_CFG: [2:1]=SC_ANT_SEL, [0]=BW_SEL; [7:3] reserved
+        0x0A: ('RW', 0x01),  # BW_CFG: [0]=BW_SEL; [7:1] reserved
         0x0B: ('RW', 0xFF),  # PKT_TIMEOUT_SYMS
         0x0C: ('RW', 0xFF),  # SC_THR_HI
         0x0D: ('RW', 0xFF),  # SC_THR_LO
@@ -429,7 +429,7 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         # cocotb/tests/test_reg_bank_rx_hold.py (row #8/#43 interlock, not
         # this row).
         0x1A: ('RW', 0x01),
-        0x1B: ('reserved', 0x00),
+        0x1B: ('RW', 0x03),  # SC_ANT_SEL: [1:0]; [7:2] reserved
         0x1C: ('RO', 0xFF),  # PACKET_STATUS (all RO)
         0x1D: ('RO', 0xF3),  # ACTIVE_STATUS: [7:4]=ANTENNA_EN, [1:0]=MODE; [3:2] reserved
         0x1E: ('RW', 0x3F),  # WGT_CTRL: [0]=W_COMMIT(W1P), [1:5]=RO, [7:6] reserved
@@ -620,20 +620,23 @@ async def test_reserved_addresses_zero_and_ignored(dut):
     green run of this test was against a stale NFS sync, not this RTL (see
     job 4670 for a reproduction of the failure against a correctly-synced
     DUT). 0x1A is RW (see row #2's addr_map and test_reg_bank_rx_hold.py) and
-    is excluded here; 21 addresses remain genuinely reserved.
+    is excluded here; 20 addresses remain genuinely reserved at this level.
+
+    UPDATE: 0x1B is now SC_ANT_SEL (moved out of BW_CFG[2:1]) and is excluded
+    too. 0x79 is PSRAM_DBG_WDATA at the *top level* only -- reg_bank itself
+    has no 0x79 decode, so it is still reserved from this DUT's point of view.
     """
     await _bring_up(dut)
 
-    # 21 reserved slots (0x1A is RX_HOLD, a real RW register -- see NOTE above).
+    # 20 reserved slots (0x1A is RX_HOLD and 0x1B is SC_ANT_SEL -- see NOTE).
     reserved_addrs = [
         0x04, 0x05, 0x06, 0x07,                         # former DEBUG_CTRL/GPIO
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,  # former RX_GAIN_*
-        0x1B,                                            # reserved
         0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,             # reserved for future
         0x7F,                                            # protocol escape
     ]
 
-    assert len(reserved_addrs) == 21, f"Expected 21 reserved addresses, got {len(reserved_addrs)}"
+    assert len(reserved_addrs) == 20, f"Expected 20 reserved addresses, got {len(reserved_addrs)}"
 
     # Test each reserved address with multiple patterns
     patterns = [0x00, 0xFF, 0xAA, 0x55, 0xA5, 0x5A]
