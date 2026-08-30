@@ -19,6 +19,8 @@ DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src
 HDL            = $(DESIGN_ROOT)/cocotb/hdl
 TESTS          = $(DESIGN_ROOT)/cocotb/tests
+GF180_IO_MODEL ?= 0
+IO_MODEL       ?= /foss/pdks/ciel/gf180mcu/versions/7b70722e33c03fcb5dabcf4d479fb0822d9251c9/gf180mcuD/libs.ref/gf180mcu_fd_io/verilog/gf180mcu_fd_io.v
 
 VERILOG_SOURCES = \
     $(SRC)/top/trouper_top.v             \
@@ -35,7 +37,18 @@ VERILOG_SOURCES = \
     $(HDL)/psram_model.v                 \
     $(HDL)/tb_trouper_cocotb.v
 
+ifeq ($(GF180_IO_MODEL),1)
+VERILOG_SOURCES += $(IO_MODEL)
+ifeq ($(SIM),icarus)
+COMPILE_ARGS += -DGF180_IO_MODEL
+else
+EXTRA_ARGS += -DGF180_IO_MODEL
+endif
+endif
+
+ifneq ($(SIM),icarus)
 EXTRA_ARGS += --timing -Wno-fatal --public-flat-rw
+endif
 
 # cocotb finds the Python test module via PYTHONPATH
 PYTHONPATH    := $(TESTS)
