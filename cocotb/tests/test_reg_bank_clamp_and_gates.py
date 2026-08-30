@@ -129,23 +129,40 @@ async def test_packet_active_blocks_single_port_gated_fields(dut):
 
 @cocotb.test()
 async def test_packet_active_blocks_bw_cfg(dut):
-    """BW_CFG (0x0A) packs bw_sel[0] and sc_ant_sel[2:1] into one register;
-    both halves are gated together by the same cfg_wr_ok write."""
+    """BW_CFG (0x0A) carries bw_sel[0] only; gated by cfg_wr_ok."""
     await _bring_up(dut)
     dut.packet_active.value = 0
 
-    await write_reg(dut, 0x0A, 0x01)  # bw_sel=1, sc_ant_sel=0
+    await write_reg(dut, 0x0A, 0x01)  # bw_sel=1
     assert int(dut.bw_sel.value) == 1
-    assert int(dut.sc_ant_sel.value) == 0
 
     dut.packet_active.value = 1
-    await write_reg(dut, 0x0A, 0x06)  # bw_sel=0, sc_ant_sel=3 -- should be blocked
+    await write_reg(dut, 0x0A, 0x00)  # bw_sel=0 -- should be blocked
     assert int(dut.bw_sel.value) == 1, "bw_sel updated while packet_active=1"
-    assert int(dut.sc_ant_sel.value) == 0, "sc_ant_sel updated while packet_active=1"
 
     dut.packet_active.value = 0
-    await write_reg(dut, 0x0A, 0x06)
+    await write_reg(dut, 0x0A, 0x00)
     assert int(dut.bw_sel.value) == 0, "bw_sel did not update once packet_active=0"
+    dut.packet_active.value = 0
+
+
+@cocotb.test()
+async def test_packet_active_blocks_sc_ant_sel(dut):
+    """SC_ANT_SEL (0x1B) carries the correlator branch select, moved out of
+    BW_CFG. It keeps the same cfg_wr_ok gate: psram_buf_ctrl's delay-line
+    addressing must not change mid-packet."""
+    await _bring_up(dut)
+    dut.packet_active.value = 0
+
+    await write_reg(dut, 0x1B, 0x02)
+    assert int(dut.sc_ant_sel.value) == 2
+
+    dut.packet_active.value = 1
+    await write_reg(dut, 0x1B, 0x03)  # should be blocked
+    assert int(dut.sc_ant_sel.value) == 2, "sc_ant_sel updated while packet_active=1"
+
+    dut.packet_active.value = 0
+    await write_reg(dut, 0x1B, 0x03)
     assert int(dut.sc_ant_sel.value) == 3, "sc_ant_sel did not update once packet_active=0"
     dut.packet_active.value = 0
 

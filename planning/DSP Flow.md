@@ -129,7 +129,7 @@ and `del_valid` to the SC detector; the live path for all four branches passes t
 directly from `dc_removal`.
 
 Budget: write 25 cycles + delay read 19 cycles = 44 of the 64 cycles between `iq_valid`
-pulses (TRPR-PSR-014). Branch selection is `BW_CFG[2:1]` (`sc_ant_sel`).
+pulses (TRPR-PSR-014). Branch selection is `SC_ANT_SEL[1:0]` (`0x1B`).
 
 See [PSRAM Buffer Controller](blocks/PSRAM%20Buffer%20Controller.md).
 
@@ -137,7 +137,7 @@ See [PSRAM Buffer Controller](blocks/PSRAM%20Buffer%20Controller.md).
 
 ## Stage 5 — SC Preamble Detector
 
-Complex autocorrelation over the full symbol period `M = 1 << (SF + sample_shift)`, against the PSRAM-supplied `x[n−M]`. Single selected branch (`sc_ant_sel`, `BW_CFG[2:1]`; default branch 0 — see `sc-detector-ant0-fading-risk.md` for the deep-fade single-point-of-failure this leaves open). Detects the LoRa preamble and provides sample-accurate `timing_ref`. No dechirp required. (Corrected 2026-07-26: the old `L = min(M, 256)` block-based form went with the on-chip SRAM.)
+Complex autocorrelation over the full symbol period `M = 1 << (SF + sample_shift)`, against the PSRAM-supplied `x[n−M]`. Single selected branch (`sc_ant_sel`, `SC_ANT_SEL` `0x1B[1:0]`; default branch 0 — see `sc-detector-ant0-fading-risk.md` for the deep-fade single-point-of-failure this leaves open). Detects the LoRa preamble and provides sample-accurate `timing_ref`. No dechirp required. (Corrected 2026-07-26: the old `L = min(M, 256)` block-based form went with the on-chip SRAM.)
 
 **Per-block statistic (channel 0):**
 

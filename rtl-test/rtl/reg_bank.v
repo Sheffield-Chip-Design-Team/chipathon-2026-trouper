@@ -75,11 +75,11 @@ module reg_bank (
     output reg [3:0]   antenna_en,      // MIMO_CTRL[7:4]
     output reg [3:0]   sf_cfg,          // SF_CFG[3:0], direct-coded 7–12
     output reg         bw_sel,        // BW_CFG[0]: 0=250 kHz (sample_shift=1), 1=125 kHz (sample_shift=2)
-    output reg [1:0]   sc_ant_sel,    // BW_CFG[2:1]: SC correlator source antenna (0-3)
-    // ARRAY_SYNC_CTRL[0]: arm the multi-ASIC acquisition-sync link. Resets to
-    // 0 -- the shared ARRAY_ACQ_N pin does nothing until firmware opts in, so
-    // a single-chip board cannot be started by noise on an unused pad. See
-    // planning/array-acquisition-sync.md.
+    output reg [1:0]   sc_ant_sel,    // SC_ANT_SEL[1:0]: SC correlator source antenna (0-3)
+    // ARRAY_SYNC_CTRL[0] (0x18): arm the multi-ASIC acquisition-sync link.
+    // Resets to 0 -- the shared ARRAY_ACQ_N pin does nothing until firmware
+    // opts in, so a single-chip board cannot be started by noise on an unused
+    // pad. See planning/array-acquisition-sync.md.
     output reg         array_sync_en,
     // SC thresholds
     output reg [15:0]  sc_thr,
@@ -178,12 +178,12 @@ module reg_bank (
     // -----------------------------------------------------------------------
     integer i;
 
-    // The five quasi-static config registers whose MCP exceptions depend on
+    // The six quasi-static config registers whose MCP exceptions depend on
     // the rx_hold interlock.  SC_THR (0x0C/0x0D) is deliberately absent: it
     // appears in no MCP group and times honestly single-cycle.
-    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) || (addr == 8'h1B) ||
+    wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) || (addr == 8'h18) ||
                            (addr == 8'h0B) || (addr == 8'h0E) ||
-                           (addr == 8'h27);
+                           (addr == 8'h1B) || (addr == 8'h27);
 
     // BOTH conditions are required, and rx_hold does NOT imply !packet_active:
     // firmware may assert RX_HOLD mid-packet, which holds sc_clr and clears the
@@ -271,7 +271,7 @@ module reg_bank (
                                mimo_mode[0] <= wdata[0];
                                antenna_en   <= wdata[7:4];
                            end
-                    // 0x09/0x0A/0x0B/0x0E/0x27 are gated on cfg_wr_ok =
+                    // 0x09/0x0A/0x0B/0x0E/0x1B/0x27 are gated on cfg_wr_ok =
                     // rx_hold && !packet_active.  0x09/0x0A previously carried
                     // the packet_active half only; 0x0B/0x0E/0x27 had no gate
                     // at all.  See cfg_wr_ok above and Open Risks #43.
@@ -280,11 +280,8 @@ module reg_bank (
                     // config: arming or disarming the array link mid-packet
                     // would change whether a peer event can restart this
                     // receiver while it is already running one.
-                    8'h1B: if (cfg_wr_ok) array_sync_en <= wdata[0];
-                    8'h0A: if (cfg_wr_ok) begin
-                        bw_sel     <= wdata[0];
-                        sc_ant_sel <= wdata[2:1];
-                    end
+                    8'h18: if (cfg_wr_ok) array_sync_en <= wdata[0];
+                    8'h0A: if (cfg_wr_ok) bw_sel <= wdata[0];
                     8'h0B: if (cfg_wr_ok) pkt_timeout_syms <= wdata;
                     8'h0C: sc_thr[15:8]     <= wdata;
                     8'h0D: sc_thr[7:0]      <= wdata;
@@ -298,6 +295,12 @@ module reg_bank (
                     // always be able to re-assert the hold to reconfigure.
                     // Bit [1] is the W1C for cfg_wr_rejected, handled above.
                     8'h1A: rx_hold <= wdata[0];
+                    // SC_ANT_SEL lives with the SC group, not in BW_CFG: it is
+                    // correlator branch routing, not a bandwidth/decimation
+                    // setting.  Same cfg_wr_ok gate it carried as BW_CFG[2:1] —
+                    // psram_buf_ctrl's delay-line addressing must not change
+                    // mid-packet.
+                    8'h1B: if (cfg_wr_ok) sc_ant_sel <= wdata[1:0];
                     // --- Packet / weight / training control ---
                     8'h1E: w_commit_pulse   <= wdata[0];
                     8'h1F: noise_trig       <= wdata[0]; // bit[1] W1C handled above
@@ -359,8 +362,8 @@ module reg_bank (
             // --- RX / modem configuration ---
             8'h08: rdata_next = {antenna_en, 2'h0, mimo_mode};
             8'h09: rdata_next = {4'h0, sf_cfg};
-            8'h0A: rdata_next = {5'h0, sc_ant_sel, bw_sel};
-            8'h1B: rdata_next = {7'h0, array_sync_en};
+            8'h0A: rdata_next = {7'h0, bw_sel};
+            8'h18: rdata_next = {7'h0, array_sync_en};              // ARRAY_SYNC_CTRL
             8'h0B: rdata_next = pkt_timeout_syms;
             8'h0C: rdata_next = sc_thr[15:8];
             8'h0D: rdata_next = sc_thr[7:0];
@@ -368,6 +371,7 @@ module reg_bank (
             8'h0F: rdata_next = {2'h0, remod_backoff_shift, 1'b0, comb_post_gain_shift};
             8'h19: rdata_next = 8'h00;                              // SC_FORCE_LOCK (WO)
             8'h1A: rdata_next = {6'h0, cfg_wr_rejected, rx_hold};   // RX_HOLD / CFG_WR_REJECTED
+            8'h1B: rdata_next = {6'h0, sc_ant_sel};                 // SC_ANT_SEL
             // --- Packet / weight / training control ---
             8'h1C: rdata_next = {w_missed_rb, w_valid_rb, w_pending_rb,
                             training_done_rb, packet_phase, packet_active};

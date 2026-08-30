@@ -15,9 +15,9 @@ ENFORCED, not merely documented. A convention firmware is asked to follow is
 not evidence; a write the hardware refuses is.
 
   test_cfg_writes_accepted_while_held   -- baseline: with RX_HOLD set (its
-      reset value), all five gated registers take writes normally.
+      reset value), all six gated registers take writes normally.
   test_cfg_writes_rejected_while_live   -- with RX_HOLD clear, every one of the
-      five is refused and the old value survives.
+      six is refused and the old value survives.
   test_cfg_wr_rejected_sticky_and_w1c   -- the rejection is latched into
       0x1A[1] and cleared by writing 1 to it, so an out-of-sequence driver is
       detectable. Without this, a dropped write is invisible (cf. Open Risks
@@ -42,6 +42,7 @@ GATED = [
     (0x0A, 0x01, 0x01, "bw_sel"),            # BW_CFG[0]
     (0x0B, 0x33, 0x33, "pkt_timeout_syms"),  # PKT_TIMEOUT_SYMS
     (0x0E, 0x03, 0x03, "sc_hits_req"),       # SC_HITS_REQ[1:0]
+    (0x1B, 0x02, 0x02, "sc_ant_sel"),        # SC_ANT_SEL[1:0] (was BW_CFG[2:1])
     (0x27, 0x0C, 0x0C, "tacc_window_syms"),  # TACC_WINDOW_SYMS (clamped >= 8)
 ]
 

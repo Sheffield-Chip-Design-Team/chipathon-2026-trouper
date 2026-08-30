@@ -136,7 +136,8 @@ will wait forever.
 | Addr | Register |
 |---|---|
 | `0x09` | `SF_CFG` |
-| `0x0A` | `BW_CFG` (`bw_sel`, `sc_ant_sel`) |
+| `0x0A` | `BW_CFG` (`bw_sel`) |
+| `0x1B` | `SC_ANT_SEL` (`sc_ant_sel`) |
 | `0x0B` | `PKT_TIMEOUT_SYMS` |
 | `0x0E` | `SC_HITS_REQ` |
 | `0x27` | `TACC_WINDOW_SYMS` |

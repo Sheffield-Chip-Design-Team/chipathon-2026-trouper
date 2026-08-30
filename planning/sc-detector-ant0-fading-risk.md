@@ -2,7 +2,7 @@
 
 **Status:** **DEFERRED** — accepted silicon limitation, not an open action item
 (found 2026-06-21 via measured-IQ MIMO playback; deferred 2026-07-06, re-filed
-under Open Risks §Deferred 2026-08-14). `sc_ant_sel` (0x0A[2:1]) is the shipped
+under Open Risks §Deferred 2026-08-14). `sc_ant_sel` (`SC_ANT_SEL`, 0x1B[1:0]) is the shipped
 mitigation. Re-open only on the trigger in `planning/Open Risks.md` item 9:
 a signed-off floorplan with ≥ 20 k µm² spare cell area. Do not re-propose or
 re-cost the correlator before then.

@@ -65,7 +65,7 @@ Device runs at 24% of rated speed; refresh is self-managed (CE# deasserts betwee
 Serves the SC detector's M-sample delayed stream `x[n−M]`, M = 1 << (SF + sample_shift). Worst case SF12/125 kHz: M = 16384 samples = 128 kB — this is why the on-chip SRAM (512×8) was removed and the delay lives off-chip.
 
 - On each `iq_valid` (pre-lock), after the capture write, the controller issues a QPI read at `write_ptr − M×8` bytes and presents `del_i0/del_q0` + `del_valid` to the SC detector before the next `iq_valid`. `cur_i0/cur_q0` are captured from the write data at write-done time — same branch, aligned pair.
-- **Branch select** (`sc_ant_sel`, BW_CFG 0x0A[2:1]): routes which of the four branches feeds the correlator's cur/del pair. Write-locked during `packet_active`. This is the cheap mitigation for the antenna-0 deep-fade SPOF (Open Risks #9); the correlator itself remains single-branch.
+- **Branch select** (`sc_ant_sel`, `SC_ANT_SEL` 0x1B[1:0]): routes which of the four branches feeds the correlator's cur/del pair. Write-locked during `packet_active`. This is the cheap mitigation for the antenna-0 deep-fade SPOF (Open Risks #9); the correlator itself remains single-branch.
 - **Warm-up:** `del_valid` (via `del_rdy`) is suppressed until N = M fresh samples have been captured since `qe_init_done`; the warm-up re-arms whenever `sf` or `sample_shift` changes (SF is fixed per session — TRPR-PSR-019). This warm-up also provides the DC-removal settling hold-off structurally (TRPR-DCR-015).
 - After `sc_lock`, SC delay reads cease until the packet FSM returns to IDLE.
 
