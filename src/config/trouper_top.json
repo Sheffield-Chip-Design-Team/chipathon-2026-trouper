@@ -13,12 +13,13 @@
     "dir::../control/spi_slave.v",
     "dir::../combiner/training_acc.v"
   ],
+  "_comment_canonical": "CANONICAL top-level A40 P&R config. Last validated by SGE job 5392 (2026-09-02): SS WNS -10.13 ns, TNS -383.5, antenna 0/0, DRC 0, XOR 0, LVS clean, util 66.1%, worst IR drop 3.61 mV VDD / 2.15 mV VSS. Job 5392 adds PDN_CORE_RING_CONNECT_TO_PADS and exactly reproduces job 5379's macro-level metrics; it confirms the option is safe but cannot validate a literal DVDD/DVSS connection because this macro contains zero pad cells. Supersedes job 5286 as the reference run: 5286 predates the 2026-09-01 Grouper-boundary removal from src/top/trouper_top.v and runs a different netlist (35670 vs 35300 cells), so its -18.23 ns SS WNS is NOT comparable -- the same-netlist stock-PDN control (job 5378) measures -11.17 ns. Do not attribute that ~7 ns to anything but the RTL change. Collapsed 2026-09-01 from the trouper_top_dbgpins.json variant chain, then again 2026-09-02 from the trouper_top_pdn_* PDN trial chain (_pdn / _thickonly / _ring5 / _widthonly, deleted as superseded). Every knob below that differs from a stock LibreLane run carries a _comment_ explaining which job established it -- change them only with a job number to point at.",
   "CLOCK_PORT": "IQ_CLK",
   "CLOCK_PERIOD": 31.25,
   "FP_SIZING": "absolute",
   "DIE_AREA": "0 0 1675 1110",
-  "PL_TARGET_DENSITY_PCT": 72,
-  "DPL_CELL_PADDING": 3,
+  "PL_TARGET_DENSITY_PCT": 65,
+  "DPL_CELL_PADDING": 2,
   "PL_MAX_DISPLACEMENT_X": 500,
   "PL_MAX_DISPLACEMENT_Y": 400,
   "PL_ROUTABILITY_DRIVEN": true,
@@ -42,6 +43,7 @@
     "gf180mcu_fd_sc_mcu7t5v0__clkbuf_12",
     "gf180mcu_fd_sc_mcu7t5v0__clkbuf_16"
   ],
+  "_comment_cts_spi_sck": "Open Risks #6 -- DRT-1231 pin-access failures on SPI_SCK clock buffers. MECHANISM: CTS has nothing below clkbuf_8 to reach for, so it drives 2-sink SPI_SCK leaf nets with clkbuf_16, the widest cell in the set, on an NDR net whose I pin the detailed router then cannot access (e.g. clkbuf_2_3__f_SPI_SCK/I, job 5281). TRIGGER: job 5281's only delta from the clean job 5279 was a 6-line reg_bank.v edit that grew the netlist 144 cells (35526 -> 35670) -- i.e. this failure is sensitive to netlist size, not to anything about SPI. ADOPTED FIX: the SPI_SCK CTS exclusion now in pnr_32m_scoped_v25_b6.sdc (commit 2f3393e, confirmed by job 5286), which makes SPI_SCK a plain routed net -- so nothing in P&R optimises those paths and item 54 (host-SPI post-route GLS/SDF) carries more weight. REJECTED, do not retry: (a) adding clkbuf_4 to CTS_CLK_BUFFERS (probe B / trouper_top_dbgpins_smallbuf.json, deleted; the library also has 1/2/3/20, 4 being the smallest step that keeps drive sane); (b) density probes at 63 % and 60 % (trouper_top_dbgpins_d63/_d60.json, deleted). Also do NOT remove clkbuf_16 from CTS_CLK_BUFFERS or downsize CTS_ROOT_BUFFER: job 5197 dropped clkbuf_16 from the list entirely and the failure simply moved to a clkbuf_12 on the IQ_CLK tree. The root buffer stays clkbuf_16 so the IQ_CLK root is untouched. The SDC fix is still n=1 on netlist perturbation: if DRT-1231 recurs on SPI_SCK, that is the risk-6 exit criterion firing, not a reason to re-roll these knobs.",
   "LIB": {
     "*_tt_025C_3v30": [
       "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib"
@@ -67,9 +69,10 @@
   "DESIGN_REPAIR_MAX_CAP_PCT": 65,
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 65,
   "GRT_DESIGN_REPAIR_MAX_CAP_PCT": 65,
-  "GRT_ANTENNA_REPAIR_MARGIN": 90,
-  "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
-  "DRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+  "GRT_ANTENNA_REPAIR_JUMPER_ONLY": false,
+  "DRT_ANTENNA_REPAIR_JUMPER_ONLY": false,
+  "DIODE_PADDING": 4,
+  "_comment_antenna": "Antenna closure, ported from job 5198 (config_1675_c5_diodepad4.json, zero antenna violations) onto this A40 FP_DEF_TEMPLATE flow and re-proven here. Three knobs carry it: DIODE_PADDING 4, DPL_CELL_PADDING 2 (down from 3 -- 3 causes DPL-0036, diodes failing to legalize at all), and mixed GRT/DRT antenna repair (jumper-only OFF on both). GRT_ANTENNA_REPAIR_MARGIN must stay ABSENT (library default): setting it to 90 drives far more aggressive repair rerouting and crashed OpenROAD at step 43 in job 5212 -- GRT-0243 'Unable to repair antennas on net with diodes' then GRT-0183 'Net net973: heap underflow during 3D maze routing'. PL_TARGET_DENSITY_PCT 65 (down from 72) was required alongside the margin removal: variant A (margin only, density 72) did not suffice, variant B (both) did, and job 5214 signed it off at 0 antenna / 0 DRC / 0 LVS. Do NOT downsize the clock tree to chase antenna -- diodes crowding IQ_CLK clkbufs was the original DRT-0073 cause.",
   "HOLD_VIOLATION_CORNERS": [
     ""
   ],
@@ -78,6 +81,27 @@
   "PDN_CFG": "dir::pdn_cfg.tcl",
   "IO_PIN_V_LAYER": "Metal2",
   "IO_PIN_H_LAYER": "Metal2",
-  "_comment_a40": "A40 padframe integration. Pin placement comes from the integrator floorplan template A40_ACV_rtlnames.def (A40_ACV.def; RTL port names now match the generator's <pad>_<terminal> convention verbatim after commit 6c50e12, so no rename map is applied - the script only drops the VDD/VSS pin entries, which the PDN builds, and appends the 68 die-internal Grouper GRP_* / AHB H* / IRQ_GROUPER pins on the south edge at synthetic coords). Die follows the template: 1675x1110 (not Trouper's own 1650x1100). IO_PIN_ORDER_CFG is unused in this flow - io_placement_bl.cfg is kept only as the standalone (non-padframe) pin order.",
-  "FP_DEF_TEMPLATE": "dir::A40_ACV_rtlnames.def"
+  "FP_DEF_TEMPLATE": "dir::A40_ACV_rtlnames_dbgpins.def",
+  "_comment_a40": "A40 padframe integration. Pin placement comes from the integrator floorplan template A40_ACV_rtlnames.def (derived from A40_ACV.def by rtl-test/scripts/a40_def_to_rtlnames.py; RTL port names match the generator's <pad>_<terminal> convention verbatim after commit 6c50e12, so no rename map is applied - the script only drops the VDD/VSS pin entries, which the PDN builds; the 68 die-internal Grouper GRP_* / AHB H* / IRQ_GROUPER pins it used to append on the south edge are gone, removed with the Grouper boundary on 2026-09-01 since Grouper is not taping out). Die follows the template: 1675x1110 (not Trouper's own 1650x1100). IO_PIN_ORDER_CFG is unused in this flow - io_placement_bl.cfg is kept only as the standalone (non-padframe) pin order.",
+  "_comment_dbgpins": "FP_DEF_TEMPLATE points at A40_ACV_rtlnames_dbgpins.def, not the bare A40_ACV_rtlnames.def: the integrator DEF predates three pads we need -- ARRAY_ACQ_N and DBG0_OUT/DBG1_OUT. rtl-test/scripts/a40_append_provisional_pads.py appends the 30 new boundary pins at synthetic north-edge coordinates past VDD, consuming the bare DEF (which is why both DEFs are kept). THE COORDINATES ARE OURS, NOT THE INTEGRATOR'S: slots N15/N16/N17 are unconfirmed (Open Risks #52). Regenerate from a real integrator DEF before tapeout.",
+  "_comment_density": "PL_TARGET_DENSITY_PCT 65 is load-bearing on this 1675x1110 die, established by routability not by area. History: 78 % and 72 % both hit DRT-0073/DRT-1231 on this die; 65 % cleared it (job 5198) and every clean signoff since (5214/5279/5284/5286) has run at 65 %. The companion 72 % run of the antenna recipe, job 5213, failed in detailed routing with DRT-0073 pin-access errors on the newly-created SPI_SCK CTS tree -- 65 % provides the routing room that tree and the antenna diodes both need. Lowering further (63/60) was probed and rejected: see _comment_cts_spi_sck. Raising it back toward 72 % to recover area requires re-proving routing, not just timing.",
+  "_comment_pdn": "PDN thickening + Metal4/Metal5 core ring, adopted from SGE job 5379 (2026-09-02). STRIPES: Metal4/Metal5 width 1.6 -> 4.0 um. PITCHES DELIBERATELY LEFT AT THE PDK DEFAULT (153.6 / 153.18) -- do not halve them. RING: 5 um on Metal4/Metal5, the layers with headroom (job 5378 GRT congestion: Metal4 2.4%, Metal5 10.8%, against Metal2 40.0% / Metal3 47.2%); explicitly NOT Metal2/Metal3 as the reference padring config does (ip/chipathon-2026-gf180mcu-padring/librelane/config.yaml), which would land on the layers carrying all the signal routing here. ALLOW_OUT_OF_DIE forced false so a ring that does not fit hard-fails instead of silently pushing PG shapes into the integrator's padring. PDN_RAIL_WIDTH stays at its 0.6 um default: the Metal1 followpin rail is fixed by the standard cell rail and widening it shorts or blocks Metal1 pin access. WHY THIS AND NOT A DENSER MESH: halving the pitch as well (job 5370) cuts IR drop much harder (1.32 mV VDD / 0.90 mV VSS) but costs 57% of SS TNS (-336.1 -> -528.5 against control 5378) and 3.9% wirelength. MECHANISM: add_pdn_connect ties the Metal1 followpin rails up to Metal4, so every stripe crossing punches a via ladder through Metal2 and Metal3 -- the layers that actually carry signal. Halving the pitch doubled PDN special-net geometry (9572 -> 19794 shapes) and took Metal2 resource down 8.7% (255538 -> 233221); holding the pitch keeps geometry at 9900 and recovers Metal2 to 247153, cutting the TNS cost from ~192 ns to ~47 ns. Metal4/Metal5 occupancy was never the binding constraint -- Metal2 resource is. HONEST ACCOUNTING: this is bought for robustness, NOT to fix a measured problem. IR drop was already 0.10% at control. Adopted because the A40 template feeds VDD and VSS in as two localized Metal2 pin clusters at opposite edges (VSS west, VDD north), and a ring spreads that single point of entry -- which is why VSS improves 34% here while VDD does not (3.28 -> 3.61 mV, a small regression with no established mechanism; the 2.5x VDD gain in 5370 came from stripe density, not the ring). At n=1 per config some of the ~47 ns TNS delta is placement/repair lottery, not the PDN (note 5379's WNS came in 1.04 ns BETTER than its control). PITCH RELAXATION ALSO TESTED AND REJECTED (2026-09-02, jobs 5393/5394): with the ring in place, sparser stripes were tried on the theory that the ring removes the need for stripe count. It does not help. Pitch x1.4 (5394) is a clean signoff but SS TNS -388.3 vs -383.5 here, i.e. no gain -- the predicted mechanism DID fire (-0.80 % wirelength, -0.53 % vias, ~18 % fewer via ladders) but cannot move a TNS dominated by cell delay at a starved SS corner. Pitch x1.2 (5393) FAILED outright in detailed routing on DRT-0073 clkbuf_2_1_0_IQ_CLK_regs/I. So the pitch is flat in the sparse direction and expensive in the dense direction: 153.6/153.18 is where it stays. Do not re-propose in either direction without a new mechanism -- see planning/pdn-thickening-and-core-ring-2026-09.md section 3.1.",
+  "PDN_VWIDTH": 4.0,
+  "PDN_HWIDTH": 4.0,
+  "PDN_VPITCH": 153.6,
+  "PDN_HPITCH": 153.18,
+  "PDN_CORE_RING": true,
+  "PDN_CORE_RING_VWIDTH": 5,
+  "PDN_CORE_RING_HWIDTH": 5,
+  "PDN_CORE_RING_VSPACING": 2,
+  "PDN_CORE_RING_HSPACING": 2,
+  "PDN_CORE_RING_VOFFSET": 2,
+  "PDN_CORE_RING_HOFFSET": 2,
+  "PDN_CORE_RING_CONNECT_TO_PADS": true,
+  "PDN_CORE_RING_ALLOW_OUT_OF_DIE": false,
+  "_comment_core_margin": "The core ring is paid for out of the core margin, NOT out of the die: DIE_AREA stays 1675x1110 and the A40 pin coordinates are untouched. A ring needs offset + 2*width + spacing = 2+5+2+5 = 14 um per side. The baseline vertical margin (TOP/BOTTOM_MARGIN_MULT 4 x 3.92 um row = 15.68 um) ALREADY CLEARS THAT, so it is left alone and the core loses no height; only the horizontal multiplier moves, 12 -> 27 (6.72 -> 15.12 um), giving core 1644.8 x 1078.6 um -- about 1.0% of core area, util 65.4% -> 66.1%. THIS IS WHY THE RING IS 5 um AND NOT WIDER: at 9 um it needs 22 um per side, forcing the vertical margin up too, costing 4.4% of core area and pushing util to ~69% -- job 5367 died in detailed routing with DRT-0073 (no access point for clkbuf_regs_0_IQ_CLK/I). See _comment_density: 72% hit DRT-0073/DRT-1231 on this die and 65% is what cleared it, so core area here is routability budget, not spare room. Do not widen the ring without re-proving detailed routing.",
+  "LEFT_MARGIN_MULT": 27,
+  "RIGHT_MARGIN_MULT": 27,
+  "TOP_MARGIN_MULT": 4,
+  "BOTTOM_MARGIN_MULT": 4
 }
