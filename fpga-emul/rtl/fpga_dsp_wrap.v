@@ -13,9 +13,9 @@
 // trouper_top's spi_slave exactly as the real host RPi would (no external
 // pins, no loopback wiring needed).
 //
-// GRP_* (Grouper inter-chip register bus) is tied inactive: no Grouper chip
-// is present on this board. Its arbiter behaviour against the host SPI path
-// is exercised separately in simulation (rtl-test/tb/tb_trouper_grp_arb.v).
+// The Grouper inter-chip register bus was removed from trouper_top.v on
+// 2026-09-01 (Grouper is not taping out), so the host SPI path is the only
+// register master here as well.
 //
 // Dropped vs. the previous hand-wired wrapper:
 //   - DECIM_ETH mode / eth_data,eth_push,eth_full: trouper_top.v exposes no
@@ -122,21 +122,13 @@ module fpga_dsp_wrap #(
     output wire        ext_spi_miso,
 
     // -----------------------------------------------------------------------
-    // Sticky IRQ (IRQ_OUT / IRQ_GROUPER are the same signal on trouper_top).
+    // Sticky IRQ, driven from trouper_top's IRQ_OUT.
     // irq feeds the internal AXI GPIO (firmware poll); ext_irq is the same
     // signal on a pin for a real external host.
     // -----------------------------------------------------------------------
     output wire        irq,
     output wire        ext_irq
 );
-
-    // No Grouper chip on this board — GRP bus stays idle so the host-SPI path
-    // always wins arbitration (see trouper_top.v's grp_active priority mux).
-    localparam [7:0] GRP_IDLE_ADDR  = 8'h00;
-    localparam [7:0] GRP_IDLE_WDATA = 8'h00;
-
-    wire [7:0] grp_rdata_unused;
-    wire       grp_ready_unused;
 
     // QPI pad nets between trouper_top's psram_buf_ctrl and the selected
     // back-end (internal BRAM model or external IOBUFs — see generate below).
@@ -211,49 +203,7 @@ module fpga_dsp_wrap #(
         .SPI_SCK       (sel_spi_sck),
         .SPI_MOSI      (sel_spi_mosi),
         .SPI_MISO_OUT      (miso_w),
-                .GRP_ADDR_0 (GRP_IDLE_ADDR[0]),
-        .GRP_ADDR_1 (GRP_IDLE_ADDR[1]),
-        .GRP_ADDR_2 (GRP_IDLE_ADDR[2]),
-        .GRP_ADDR_3 (GRP_IDLE_ADDR[3]),
-        .GRP_ADDR_4 (GRP_IDLE_ADDR[4]),
-        .GRP_ADDR_5 (GRP_IDLE_ADDR[5]),
-        .GRP_ADDR_6 (GRP_IDLE_ADDR[6]),
-        .GRP_ADDR_7 (GRP_IDLE_ADDR[7]),
-                .GRP_WDATA_0 (GRP_IDLE_WDATA[0]),
-        .GRP_WDATA_1 (GRP_IDLE_WDATA[1]),
-        .GRP_WDATA_2 (GRP_IDLE_WDATA[2]),
-        .GRP_WDATA_3 (GRP_IDLE_WDATA[3]),
-        .GRP_WDATA_4 (GRP_IDLE_WDATA[4]),
-        .GRP_WDATA_5 (GRP_IDLE_WDATA[5]),
-        .GRP_WDATA_6 (GRP_IDLE_WDATA[6]),
-        .GRP_WDATA_7 (GRP_IDLE_WDATA[7]),
-        .GRP_WE        (1'b0),
-        .GRP_RE        (1'b0),
-                .GRP_RDATA_0 (grp_rdata_unused[0]),
-        .GRP_RDATA_1 (grp_rdata_unused[1]),
-        .GRP_RDATA_2 (grp_rdata_unused[2]),
-        .GRP_RDATA_3 (grp_rdata_unused[3]),
-        .GRP_RDATA_4 (grp_rdata_unused[4]),
-        .GRP_RDATA_5 (grp_rdata_unused[5]),
-        .GRP_RDATA_6 (grp_rdata_unused[6]),
-        .GRP_RDATA_7 (grp_rdata_unused[7]),
-        .GRP_READY     (grp_ready_unused),
-        // Grouper dev AHB-Lite endpoint: tied idle.  HTRANS must be driven
-        // (HTRANS[1] is the adapter's request term); floating it would drive
-        // ahb_we/ahb_re -- and hence grp_active -- to X.
-        .HADDR         (8'd0),
-        .HBURST        (3'd0),
-        .HMASTLOCK     (1'b0),
-        .HPROT         (4'd0),
-        .HSIZE         (3'd0),
-        .HTRANS        (2'd0),
-        .HWDATA        (8'd0),
-        .HWRITE        (1'b0),
-        .HRDATA        (),
-        .HREADY        (),
-        .HRESP         (),
-        .IRQ_OUT_OUT       (irq_w),
-        .IRQ_GROUPER   ()
+        .IRQ_OUT_OUT       (irq_w)
     );
 
     // =========================================================================
