@@ -18,9 +18,10 @@ Control function. See [System Architecture](../System%20Diagram.md) for context.
 
 `reg_bank` collects interrupt-source pulses from the DSP/control blocks, latches
 them into the sticky `IRQ_STATUS` register, and OR-reduces them into a single
-level-high `irq_out`. That signal is fanned out in `trouper_top` to two
-destinations: the dedicated `IRQ_OUT` package pad (host RPi) and the inter-project
-`IRQ_GROUPER` wire (to the Grouper PicoRV32). Both carry the same level.
+level-high `irq_out`. That signal drives one destination in `trouper_top`: the
+dedicated `IRQ_OUT` package pad (host RPi). (It also fanned out to an
+inter-project `IRQ_GROUPER` wire until 2026-09-01, when the Grouper boundary was
+removed because Grouper is not taping out.)
 
 ---
 
@@ -52,9 +53,10 @@ domain — the IRQ logic is part of the register bank and shares its single
 | `irq_status` | internal `reg [7:0]` | Sticky latch: `irq_status <= irq_status \| irq_set` |
 | `irq_out` | out | `assign irq_out = \|irq_status;` (level-high) |
 
-Register access uses the same paths as every other reg_bank register: the Grouper
-bus via the `re`/`rdata`/`ready` handshake, and the host SPI via the combinational
-`peek_rdata` tap. No CDC is required on the output path because `irq_out` is
+Register access uses the same path as every other reg_bank register: the host SPI
+via the combinational `peek_rdata` tap. (The Grouper bus previously also read
+through the `re`/`rdata`/`ready` handshake; with it removed, `re` is tied low at
+the `trouper_top` instantiation and that registered read path is unused.) No CDC is required on the output path because `irq_out` is
 generated in the core clock domain.
 
 ---
@@ -126,5 +128,5 @@ removed (no TAP in RTL), so the IRQ pad is dedicated and never muxed away.
 - [Training Accumulator](Training%20Accumulator.md) — `training_done` source
 - [Packet Control FSM](Packet%20Control%20FSM.md) — `W_missed_packet`, `packet_done` sources
 - [Register Bank](Register%20Bank.md) — hosts the IRQ logic; authoritative register interface
-- [PicoRV32 Integration](PicoRV32%20Integration.md) — Grouper-side IRQ target (`IRQ_GROUPER`)
+- [PicoRV32 Integration](PicoRV32%20Integration.md) — *obsolete*: former Grouper-side IRQ target (`IRQ_GROUPER`, removed 2026-09-01)
 - [System Architecture](../System%20Diagram.md) — `IRQ_OUT` pad to RPi

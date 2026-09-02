@@ -106,9 +106,9 @@ The MISO front-end test board (AFE) design is at
   on ext_spi_sck. Full P&R clean: all timing met, ext_spi_sck +39.4 ns setup /
   +0.143 hold (0 failing/80), IOB 50/210. (The 2 `Place 30-73` critical warnings
   are PRE-EXISTING axi_quad_spi_1 IOB-packing artifacts, not from this change.)
-  - GRP bus intentionally NOT exposed: it is an on-die inter-project bus (not
-    bond pads — see trouper_top pad count 23, GRP excluded), tied idle here;
-    arbitration is covered by rtl-test tb_trouper_grp_arb. IRQ_GROUPER unused.
+  - GRP bus: was an on-die inter-project bus (never bond pads) tied idle here,
+    and was removed from trouper_top.v entirely on 2026-09-01 since Grouper is
+    not taping out. Host SPI is the only register master.
   - `tb_fpga_spi_reg.v` ties spi_sel=0 + ext_* inputs low (internal path). When
     spi_sel=1 the internal master is muxed out; firmware SPI is then a no-op.
 - [x] **NSS decoder enable (1E-bar), FPGA side.** DONE 2026-08-19. The board

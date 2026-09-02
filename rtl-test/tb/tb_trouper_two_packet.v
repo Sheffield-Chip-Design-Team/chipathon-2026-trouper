@@ -99,49 +99,14 @@ module tb_trouper_two_packet;
         .SPI_SCK      (spi_sck),
         .SPI_MOSI     (spi_mosi),
         .SPI_MISO_OUT     (spi_miso),
-                .GRP_ADDR_0 (1'b0),
-        .GRP_ADDR_1 (1'b0),
-        .GRP_ADDR_2 (1'b0),
-        .GRP_ADDR_3 (1'b0),
-        .GRP_ADDR_4 (1'b0),
-        .GRP_ADDR_5 (1'b0),
-        .GRP_ADDR_6 (1'b0),
-        .GRP_ADDR_7 (1'b0),
-                .GRP_WDATA_0 (1'b0),
-        .GRP_WDATA_1 (1'b0),
-        .GRP_WDATA_2 (1'b0),
-        .GRP_WDATA_3 (1'b0),
-        .GRP_WDATA_4 (1'b0),
-        .GRP_WDATA_5 (1'b0),
-        .GRP_WDATA_6 (1'b0),
-        .GRP_WDATA_7 (1'b0),
-        .GRP_WE       (1'b0),
-        .GRP_RE       (1'b0),
-                .GRP_RDATA_0 (grp_rdata[0]),
-        .GRP_RDATA_1 (grp_rdata[1]),
-        .GRP_RDATA_2 (grp_rdata[2]),
-        .GRP_RDATA_3 (grp_rdata[3]),
-        .GRP_RDATA_4 (grp_rdata[4]),
-        .GRP_RDATA_5 (grp_rdata[5]),
-        .GRP_RDATA_6 (grp_rdata[6]),
-        .GRP_RDATA_7 (grp_rdata[7]),
-        .GRP_READY    (grp_ready),
-        // Grouper dev AHB-Lite endpoint: tied idle.  HTRANS must be driven
-        // (HTRANS[1] is the adapter's request term); floating it would drive
-        // ahb_we/ahb_re -- and hence grp_active -- to X.
-        .HADDR         (8'd0),
-        .HBURST        (3'd0),
-        .HMASTLOCK     (1'b0),
-        .HPROT         (4'd0),
-        .HSIZE         (3'd0),
-        .HTRANS        (2'd0),
-        .HWDATA        (8'd0),
-        .HWRITE        (1'b0),
-        .HRDATA        (),
-        .HREADY        (),
-        .HRESP         (),
         .IRQ_OUT_OUT      (irq_out),
-        .IRQ_GROUPER  (irq_grouper)
+        // Array acquisition sync: idle high, as the mandatory board
+        // pull-up holds it. planning/array-acquisition-sync.md.
+        .ARRAY_ACQ_N_IN (1'b1),
+        // Debug probes: inputs tied off (the pads are output-only in function);
+        // outputs left unconnected.
+        .DBG0_IN        (1'b0),
+        .DBG1_IN        (1'b0)
     );
 
     // -----------------------------------------------------------------------

@@ -156,7 +156,7 @@ RTL settles it for TRPR-SYS-018: `init_start = rb_psram_ctrl[0] & ~rb_psram_ctrl
 
 *Resolution (2026-07-26):* TRPR-PSR-001's 1 ms budget is now measured from the
 `init_start` trigger, with the register expression cited and the firmware-owned ≥150 µs
-tPU delay cross-referenced (Open Risks #27.1).
+tPU delay cross-referenced (Open Risks #55.1).
 
 | # | Status | Item |
 |---|---|---|

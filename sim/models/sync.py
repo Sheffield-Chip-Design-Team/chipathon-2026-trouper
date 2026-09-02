@@ -28,7 +28,7 @@ class SchmidlCoxDetector:
     is back-calculated to the candidate preamble start; SC phase is retained
     only as a diagnostic.
 
-    `sc_ant_sel` mirrors BW_CFG[2:1] / `psram_buf_ctrl.v`: current RTL is a
+    `sc_ant_sel` mirrors SC_ANT_SEL 0x1B[1:0] / `psram_buf_ctrl.v`: current RTL is a
     deliberately single-branch detector, not a diversity combiner. The
     selected branch is held stable during a packet by reg_bank. This model
     accepts an NR×N input for system studies but only consumes that branch.

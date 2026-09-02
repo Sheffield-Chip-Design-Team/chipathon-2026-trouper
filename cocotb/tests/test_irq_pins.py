@@ -1,9 +1,10 @@
 """Pin-level sticky IRQ behavior.
 
-The register bank tests prove IRQ_STATUS.  This test binds that state to both
-physical/integration outputs: IRQ_OUT and IRQ_GROUPER must be identical,
-assert for either sticky source, remain asserted while one source is uncleared,
-and return low only once the final sticky bit is cleared.
+The register bank tests prove IRQ_STATUS.  This test binds that state to the
+physical output: IRQ_OUT must assert for either sticky source, remain asserted
+while one source is uncleared, and return low only once the final sticky bit
+is cleared.  (It also covered IRQ_GROUPER until that pin was removed with the
+rest of the Grouper boundary on 2026-09-01.)
 """
 
 import cocotb
@@ -16,9 +17,8 @@ from test_noise_trig import _StimMode, _noise_or_cw_driver
 
 async def _assert_pins(dut, expected, where):
     irq_out = int(dut.IRQ_OUT.value)
-    irq_grp = int(dut.IRQ_GROUPER.value)
-    assert irq_out == expected and irq_grp == expected, \
-        f"{where}: IRQ_OUT={irq_out}, IRQ_GROUPER={irq_grp}, expected both {expected}"
+    assert irq_out == expected, \
+        f"{where}: IRQ_OUT={irq_out}, expected {expected}"
 
 
 @cocotb.test()

@@ -36,6 +36,12 @@ SX1257_4 ──►
 
 The system consists of two separate hardened projects on the same MPW: **Trouper** (radio datapath macro) and **Grouper** (system-control macro).
 
+> **Update 2026-09-01: Grouper is not taping out.** Trouper's inter-project
+> boundary to it — the `GRP_*` register bus, the AHB-Lite `H*` endpoint and
+> `IRQ_GROUPER` — has been removed from `src/top/trouper_top.v`. Trouper now
+> tapes out as a fully standalone macro whose only control path is the host SPI
+> slave. Grouper-facing statements in the rest of this document are historical.
+
 - **Grouper Project:** Contains the hardened **PicoRV32 RV32IM** controller macro and any broader system-bus fabric.
 - **Trouper Project:** Contains only the radio datapath, local register bank, PSRAM replay path, and status/IRQ handoff signals required by the future top-level integration. Host SPI and Grouper bus adaptation are outside the standalone Trouper macro boundary.
 
@@ -199,8 +205,6 @@ decimated IQ capture + replay buffer"]
 | PSRAM QSPI | Trouper `psram_buf_ctrl` or a future firmware-managed external-memory mode | APS6404L (ext.) | replay buffer or firmware-managed off-chip RAM | 32 MHz QPI |
 | Host SPI | RPi SPI0 CS1 | Trouper SPI slave | Dedicated host register access and debug | 2 MHz |
 | SX1302 SPI | RPi SPI0 CS0 | SX1302 | SX1302 HAL (packets, config) | 10 MHz |
-| AHB-Lite | Grouper (Bus Master) | Trouper (Slave) + Other Peripherals | MPW System Bus | 32 MHz |
-| IRQ | Trouper (ASIC) | Grouper (PicoRV32) | Packet ready, error | Interrupt |
 
 ### SX1257 → ASIC (RX, per antenna)
 
@@ -252,9 +256,11 @@ The following SX1257 pins require a PCB-level decision; none connect to ASIC pad
 | `SPI_MISO` | ASIC → RPi | Status register readback |
 | `IRQ_OUT` | ASIC → RPi | Interrupt: packet ready, preamble lock (dedicated pad) |
 
-### Grouper-Inactive / Host-Assisted Operation
+### Host-Assisted Operation (the only mode)
 
-Trouper remains usable when the Grouper firmware path is inactive. In that mode:
+**Since 2026-09-01 this is not a degraded mode but the whole design:** Grouper is
+not taping out, and the `GRP_*` bus, AHB-Lite endpoint and `IRQ_GROUPER` were
+removed from `trouper_top.v`. Host SPI is the sole control path.
 
 - the RX datapath still runs: decimation, DC removal, SC detection, training accumulation, combining, and ΣΔ re-modulation remain active
 - no weight commits occur unless an external host writes `W_SHADOW` and pulses `W_COMMIT` over the host SPI path
@@ -291,7 +297,9 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | PSRAM SIO[3:0] | 4 | PSRAM QPI data bus (dedicated; JTAG/GPIO removed — see [Pinout](Pinout.md)) |
 | VDD_CORE | 1 | Digital core + pad-driver supply, 3.3 V baseline — IR drop must be verified in floorplan. No separate `VDD_IO` pin: the reference PDN config ties the padring to this same net (`planning/5v-core-voltage-strategy.md` §2026-08-19); `VDD_IO` removed from the pinout 2026-08-19. |
 | GND | 1 | Single pad — place at highest switching-current region. Shared across the whole die, not Trouper-private (see [Pinout](Pinout.md)). |
-| **Total** | **25** | Within the ≤26 per-team allocation limit (24 pads per `planning/Pinout.md`, which excludes `GND` as a shared/non-counted pad; this table counts it, hence 25) |
+| ARRAY_ACQ_N | 1 | Multi-ASIC acquisition-sync wired-AND line, added 2026-08-30 — acquisition aid only, no data/phase/clock (see [array-acquisition-sync](array-acquisition-sync.md)) |
+| DBG0_OUT, DBG1_OUT | 2 | Register-selected digital debug probes, added 2026-08-30 — bring-up observability only, feed-forward, cannot alter receiver behaviour (see [two-pin-digital-debug-plan](two-pin-digital-debug-plan.md)) |
+| **Total** | **28** | **All 28 allocated slots used — none spare** (Open Risks #57). This count matches `info.yaml` exactly: every declared pin, `VDD_CORE` and `VSS` included, occupies an A40 slot |
 
 ---
 

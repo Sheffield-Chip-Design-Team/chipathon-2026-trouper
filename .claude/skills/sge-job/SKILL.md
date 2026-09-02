@@ -276,6 +276,9 @@ wastes the afternoon.
   cocotb run that waits ~2 s of simulated time between packets legitimately
   prints nothing for 98% of its wall-clock. Observed 2026-08-16: job 4409 wrote
   nothing for 11 minutes mid-run and then passed.
+  (A job that follows "Emit progress into the log too" below *is* readable this
+  way — but only because it was instrumented to be; assume it wasn't until you
+  see a heartbeat line.)
 - **`docker ps` on one node.** The job may be on another worker. Checking only
   the local box has already produced a wrong "job is dead" call.
 - **`hqstat`.** It does not display `STAGING` jobs and reports "No jobs found"
@@ -305,7 +308,60 @@ consume the verdict. A wall-clock heartbeat is not enough on its own — it prov
 the wrapper is alive, not that the work advanced; always include a quantity that
 comes from the job itself.
 
+Mirror that same line to stdout so it also shows up in the web UI — see below.
+
 For test-side instrumentation of cocotb sims, see the `block-regression` skill.
+
+### Emit progress into the log too, so the web UI shows it
+
+The web UI (and `hqlog --follow`) renders the job's live stdout/stderr. A
+progress artifact under `$RUN_DIR` is invisible there — it's on NFS, not in the
+stream — so a job that only writes `progress.txt` still *looks* dead in the
+browser. Write progress to **both**: the file for cheap mid-run polling, stdout
+for the UI.
+
+Two things have to be right for that to actually appear:
+
+**1. Unbuffer the stream.** stdout is a pipe here, not a TTY, so C stdio and
+Python switch to 4 KiB block buffering: a job can produce output for an hour and
+the UI shows nothing until it exits or fills a block. Force line buffering on
+anything long-running:
+
+```bash
+export PYTHONUNBUFFERED=1        # python, cocotb
+stdbuf -oL -eL vvp sim.vvp       # iverilog/vvp, ngspice, magic, most C tools
+librelane ... 2>&1 | stdbuf -oL cat   # ...including through a pipe
+```
+
+`echo`/`printf` from the job script itself is already unbuffered — this only
+bites tools.
+
+**2. Print a heartbeat on a bounded interval.** Same rule as `progress.txt`:
+a phase, a **monotonic quantity from the job itself**, and the **denominator**.
+Wall-clock alone proves the wrapper is alive, not that work advanced.
+
+```bash
+progress() {   # phase, done, total
+  printf '[%s] %-14s %s/%s (%d%%)\n' \
+    "$(date -u +%H:%M:%S)" "$1" "$2" "$3" $(( 100 * $2 / $3 ))
+  printf '%s %s/%s\n' "$1" "$2" "$3" > "$RUN_DIR/progress.txt"
+}
+```
+
+For a tool that emits its own progress but too densely, throttle rather than
+suppress — one line per N units, not per unit:
+
+```bash
+stdbuf -oL librelane ... 2>&1 | awk 'NR%50==0 || /^\[(ERROR|WARNING)/'
+```
+
+**Budget the writes against the 2 MiB log cap.** Once a job hits the cap its
+output is truncated and the *verdict* — the pass/fail line at the end — can be
+the part that's lost, which is strictly worse than the silence you were trying
+to fix. Pick the interval from the expected wall time so the whole run costs a
+few hundred lines, not tens of thousands: roughly **one line per 30–60 s** for
+a multi-hour P&R, per 10 s for a ~20-minute sim. Never per simulated packet or
+per placement iteration.
 
 ### Checking a job's true state
 

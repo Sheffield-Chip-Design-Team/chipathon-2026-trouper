@@ -1,4 +1,4 @@
-# Pin-level IRQ_OUT/IRQ_GROUPER sticky-clear regression (TRPR-IRQ-003/004,
+# Pin-level IRQ_OUT sticky-clear regression (TRPR-IRQ-003/004,
 # TRPR-INT-005). Runs with the regular PSRAM model; the test leaves PSRAM off.
 SIM           ?= verilator
 TOPLEVEL_LANG  = verilog

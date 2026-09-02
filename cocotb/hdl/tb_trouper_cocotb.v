@@ -19,7 +19,6 @@ module tb_trouper_cocotb #(
     input  wire        SPI_MOSI,
     output wire        SPI_MISO,
     output wire        IRQ_OUT,
-    output wire        IRQ_GROUPER,
     // ---- A40 pad-control tie-offs, exposed for cocotb/pad_tieoffs.
     //      Passed straight through from trouper_top so Verilator cannot
     //      constant-fold them out of the VPI hierarchy.
@@ -118,7 +117,34 @@ module tb_trouper_cocotb #(
     output wire        PSRAM_SCK_CS,
     output wire        PSRAM_SCK_SL,
     output wire        PSRAM_SCK_PU,
-    output wire        PSRAM_SCK_PD
+    output wire        PSRAM_SCK_PD,
+    output wire        ARRAY_ACQ_N_OUT,
+    output wire        ARRAY_ACQ_N_OE,
+    output wire        ARRAY_ACQ_N_IE,
+    output wire        ARRAY_ACQ_N_CS,
+    output wire        ARRAY_ACQ_N_SL,
+    output wire        ARRAY_ACQ_N_PU,
+    output wire        ARRAY_ACQ_N_PD,
+    output wire        ARRAY_ACQ_N_PDRV0,
+    output wire        ARRAY_ACQ_N_PDRV1,
+    output wire        DBG0_OUT,
+    output wire        DBG1_OUT,
+    output wire        DBG0_OE,
+    output wire        DBG0_IE,
+    output wire        DBG0_CS,
+    output wire        DBG0_SL,
+    output wire        DBG0_PU,
+    output wire        DBG0_PD,
+    output wire        DBG0_PDRV0,
+    output wire        DBG0_PDRV1,
+    output wire        DBG1_OE,
+    output wire        DBG1_IE,
+    output wire        DBG1_CS,
+    output wire        DBG1_SL,
+    output wire        DBG1_PU,
+    output wire        DBG1_PD,
+    output wire        DBG1_PDRV0,
+    output wire        DBG1_PDRV1
 );
     wire        psram_ce_n;
     wire [3:0]  psram_sio_out, psram_sio_oe, psram_sio_in, psram_sio_ie;
@@ -127,20 +153,13 @@ module tb_trouper_cocotb #(
     tri  [3:0]  psram_sio_pad;
 `endif
 
-    // Grouper inter-chip bus (GRP_*). Not brought out as a top-level cocotb
-    // port -- almost every suite never touches it and relies on it being
-    // tied low, exactly as it was wired below before these signals existed.
-    // Declaring them as regs initialized to 0 keeps that tie-low behaviour
-    // identical for every other suite while giving the SPI/Grouper
-    // arbitration test in test_spi_cdc.py a hierarchical handle
-    // (dut.GRP_ADDR/.GRP_WDATA/.GRP_WE/.GRP_RE) it can drive directly, the
-    // same way existing tests already reach into dut.u_dut.u_spi.* signals.
-    reg  [7:0] GRP_ADDR  = 8'h00;
-    reg  [7:0] GRP_WDATA = 8'h00;
-    reg        GRP_WE    = 1'b0;
-    reg        GRP_RE    = 1'b0;
-    wire [7:0] GRP_RDATA;
-    wire       GRP_READY;
+    // Array acquisition sync input. Idle high -- that is what the mandatory
+    // external pull-up does when no chip is asserting. Declared as a reg
+    // rather than a module port so every existing suite gets the correct idle
+    // level with no change, while a test that cares can drive
+    // dut.ARRAY_ACQ_N_IN directly.
+    // See planning/array-acquisition-sync.md.
+    reg        ARRAY_ACQ_N_IN = 1'b1;
 
     trouper_top u_dut (
         .IQ_CLK        (IQ_CLK),
@@ -177,46 +196,7 @@ module tb_trouper_cocotb #(
         .SPI_SCK       (SPI_SCK),
         .SPI_MOSI      (SPI_MOSI),
         .SPI_MISO_OUT      (SPI_MISO),
-                .GRP_ADDR_0 (GRP_ADDR[0]),
-        .GRP_ADDR_1 (GRP_ADDR[1]),
-        .GRP_ADDR_2 (GRP_ADDR[2]),
-        .GRP_ADDR_3 (GRP_ADDR[3]),
-        .GRP_ADDR_4 (GRP_ADDR[4]),
-        .GRP_ADDR_5 (GRP_ADDR[5]),
-        .GRP_ADDR_6 (GRP_ADDR[6]),
-        .GRP_ADDR_7 (GRP_ADDR[7]),
-                .GRP_WDATA_0 (GRP_WDATA[0]),
-        .GRP_WDATA_1 (GRP_WDATA[1]),
-        .GRP_WDATA_2 (GRP_WDATA[2]),
-        .GRP_WDATA_3 (GRP_WDATA[3]),
-        .GRP_WDATA_4 (GRP_WDATA[4]),
-        .GRP_WDATA_5 (GRP_WDATA[5]),
-        .GRP_WDATA_6 (GRP_WDATA[6]),
-        .GRP_WDATA_7 (GRP_WDATA[7]),
-        .GRP_WE        (GRP_WE),
-        .GRP_RE        (GRP_RE),
-                .GRP_RDATA_0 (GRP_RDATA[0]),
-        .GRP_RDATA_1 (GRP_RDATA[1]),
-        .GRP_RDATA_2 (GRP_RDATA[2]),
-        .GRP_RDATA_3 (GRP_RDATA[3]),
-        .GRP_RDATA_4 (GRP_RDATA[4]),
-        .GRP_RDATA_5 (GRP_RDATA[5]),
-        .GRP_RDATA_6 (GRP_RDATA[6]),
-        .GRP_RDATA_7 (GRP_RDATA[7]),
-        .GRP_READY     (GRP_READY),
-        .HADDR         (8'd0),
-        .HBURST        (3'd0),
-        .HMASTLOCK     (1'b0),
-        .HPROT         (4'd0),
-        .HSIZE         (3'd0),
-        .HTRANS        (2'd0),
-        .HWDATA        (8'd0),
-        .HWRITE        (1'b0),
-        .HRDATA        (),
-        .HREADY        (),
-        .HRESP         (),
         .IRQ_OUT_OUT       (IRQ_OUT),
-        .IRQ_GROUPER   (IRQ_GROUPER),
         .IQ_CLK_PU           (IQ_CLK_PU),
         .IQ_CLK_PD           (IQ_CLK_PD),
         .RESETB_PU           (RESETB_PU),
@@ -312,7 +292,37 @@ module tb_trouper_cocotb #(
         .PSRAM_SCK_CS        (PSRAM_SCK_CS),
         .PSRAM_SCK_SL        (PSRAM_SCK_SL),
         .PSRAM_SCK_PU        (PSRAM_SCK_PU),
-        .PSRAM_SCK_PD        (PSRAM_SCK_PD)
+        .PSRAM_SCK_PD        (PSRAM_SCK_PD),
+        .ARRAY_ACQ_N_IN      (ARRAY_ACQ_N_IN),
+        .ARRAY_ACQ_N_OUT     (ARRAY_ACQ_N_OUT),
+        .ARRAY_ACQ_N_OE      (ARRAY_ACQ_N_OE),
+        .ARRAY_ACQ_N_IE      (ARRAY_ACQ_N_IE),
+        .ARRAY_ACQ_N_CS      (ARRAY_ACQ_N_CS),
+        .ARRAY_ACQ_N_SL      (ARRAY_ACQ_N_SL),
+        .ARRAY_ACQ_N_PU      (ARRAY_ACQ_N_PU),
+        .ARRAY_ACQ_N_PD      (ARRAY_ACQ_N_PD),
+        .ARRAY_ACQ_N_PDRV0   (ARRAY_ACQ_N_PDRV0),
+        .ARRAY_ACQ_N_PDRV1   (ARRAY_ACQ_N_PDRV1),
+        .DBG0_IN             (1'b0),
+        .DBG1_IN             (1'b0),
+        .DBG0_OUT            (DBG0_OUT),
+        .DBG1_OUT            (DBG1_OUT),
+        .DBG0_OE             (DBG0_OE),
+        .DBG0_IE             (DBG0_IE),
+        .DBG0_CS             (DBG0_CS),
+        .DBG0_SL             (DBG0_SL),
+        .DBG0_PU             (DBG0_PU),
+        .DBG0_PD             (DBG0_PD),
+        .DBG0_PDRV0          (DBG0_PDRV0),
+        .DBG0_PDRV1          (DBG0_PDRV1),
+        .DBG1_OE             (DBG1_OE),
+        .DBG1_IE             (DBG1_IE),
+        .DBG1_CS             (DBG1_CS),
+        .DBG1_SL             (DBG1_SL),
+        .DBG1_PU             (DBG1_PU),
+        .DBG1_PD             (DBG1_PD),
+        .DBG1_PDRV0          (DBG1_PDRV0),
+        .DBG1_PDRV1          (DBG1_PDRV1)
     );
 
 `ifdef GF180_IO_MODEL

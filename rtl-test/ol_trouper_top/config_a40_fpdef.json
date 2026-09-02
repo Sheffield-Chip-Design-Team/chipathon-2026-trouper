@@ -78,6 +78,6 @@
   "PDN_CFG": "dir::pdn_cfg.tcl",
   "IO_PIN_V_LAYER": "Metal2",
   "IO_PIN_H_LAYER": "Metal2",
-  "_comment_a40": "A40 FP_DEF_TEMPLATE dry-run. Consumes A40_ACV_rtlnames.def (integrator A40_ACV.def with 18 pins renamed DEF->RTL convention: PSRAM_SIO_0_OUT->PSRAM_SIO_OUT_0, REMOD_A_I_OUT->REMOD_A_I, etc.; VDD/VSS pin entries dropped - PDN builds power; GRP bus + AHB H* + IRQ_GROUPER appended on the south edge at synthetic coords since the integrator template has no Grouper pins - not needed for now, just placed so the flow completes). Die follows the template: 1675x1110 (vs 1650x1100 elsewhere). PL_TARGET_DENSITY_PCT 72. Goal: exercise the FP_DEF_TEMPLATE mechanism + name matching end to end.",
+  "_comment_a40": "A40 FP_DEF_TEMPLATE dry-run. Consumes A40_ACV_rtlnames.def (integrator A40_ACV.def with 18 pins renamed DEF->RTL convention: PSRAM_SIO_0_OUT->PSRAM_SIO_OUT_0, REMOD_A_I_OUT->REMOD_A_I, etc.; VDD/VSS pin entries dropped - PDN builds power; the GRP bus + AHB H* + IRQ_GROUPER used to be appended on the south edge at synthetic coords, but were removed on 2026-09-01 along with the Grouper boundary in trouper_top.v since Grouper is not taping out). Die follows the template: 1675x1110 (vs 1650x1100 elsewhere). PL_TARGET_DENSITY_PCT 72. Goal: exercise the FP_DEF_TEMPLATE mechanism + name matching end to end.",
   "FP_DEF_TEMPLATE": "dir::A40_ACV_rtlnames.def"
 }

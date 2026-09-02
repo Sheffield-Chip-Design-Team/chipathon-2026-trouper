@@ -50,49 +50,14 @@ module tb_trouper_cocotb (
         .SPI_SCK       (SPI_SCK),
         .SPI_MOSI      (SPI_MOSI),
         .SPI_MISO_OUT      (SPI_MISO),
-                .GRP_ADDR_0 (1'b0),
-        .GRP_ADDR_1 (1'b0),
-        .GRP_ADDR_2 (1'b0),
-        .GRP_ADDR_3 (1'b0),
-        .GRP_ADDR_4 (1'b0),
-        .GRP_ADDR_5 (1'b0),
-        .GRP_ADDR_6 (1'b0),
-        .GRP_ADDR_7 (1'b0),
-                .GRP_WDATA_0 (1'b0),
-        .GRP_WDATA_1 (1'b0),
-        .GRP_WDATA_2 (1'b0),
-        .GRP_WDATA_3 (1'b0),
-        .GRP_WDATA_4 (1'b0),
-        .GRP_WDATA_5 (1'b0),
-        .GRP_WDATA_6 (1'b0),
-        .GRP_WDATA_7 (1'b0),
-        .GRP_WE        (1'b0),
-        .GRP_RE        (1'b0),
-                .GRP_RDATA_0 (),
-        .GRP_RDATA_1 (),
-        .GRP_RDATA_2 (),
-        .GRP_RDATA_3 (),
-        .GRP_RDATA_4 (),
-        .GRP_RDATA_5 (),
-        .GRP_RDATA_6 (),
-        .GRP_RDATA_7 (),
-        .GRP_READY     (),
-        // Grouper dev AHB-Lite endpoint: tied idle.  HTRANS must be driven
-        // (HTRANS[1] is the adapter's request term); floating it would drive
-        // ahb_we/ahb_re -- and hence grp_active -- to X.
-        .HADDR         (8'd0),
-        .HBURST        (3'd0),
-        .HMASTLOCK     (1'b0),
-        .HPROT         (4'd0),
-        .HSIZE         (3'd0),
-        .HTRANS        (2'd0),
-        .HWDATA        (8'd0),
-        .HWRITE        (1'b0),
-        .HRDATA        (),
-        .HREADY        (),
-        .HRESP         (),
         .IRQ_OUT_OUT       (IRQ_OUT),
-        .IRQ_GROUPER   ()
+        // Array acquisition sync: idle high, as the mandatory board
+        // pull-up holds it. planning/array-acquisition-sync.md.
+        .ARRAY_ACQ_N_IN (1'b1),
+        // Debug probes: inputs tied off (the pads are output-only in function);
+        // outputs left unconnected.
+        .DBG0_IN        (1'b0),
+        .DBG1_IN        (1'b0)
     );
 
     psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(3)) u_psram (

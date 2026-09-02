@@ -1,4 +1,4 @@
-# Standalone host-SPI end-to-end regression: all GRP_* inputs remain tied low
+# Standalone host-SPI end-to-end regression: SPI is the only register master
 # while the host initialises PSRAM, trains, commits weights, and reaches MRC
 # replay.  Uses the standard top-level wrapper and behavioural PSRAM model.
 

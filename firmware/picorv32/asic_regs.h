@@ -35,12 +35,13 @@ enum {
     REG_IRQ_CLEAR        = 0x03,   /* W  write-1-to-clear */
 
     /* RX / modem config (0x08-0x0F).
-     * NOTE: SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ and (below)
-     * TACC_WINDOW_SYMS are GATED — hardware rejects writes unless RX_HOLD is
+     * NOTE: SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ, SC_ANT_SEL,
+     * ARRAY_SYNC_CTRL and
+     * (below) TACC_WINDOW_SYMS are GATED — hardware rejects writes unless RX_HOLD is
      * set and no packet is active. See REG_RX_HOLD and asic_cfg_begin(). */
     REG_MIMO_CTRL        = 0x08,   /* [0] MODE, [7:4] ANTENNA_EN */
     REG_SF_CFG           = 0x09,   /* [3:0] SF 7-12                  (gated) */
-    REG_BW_CFG           = 0x0A,   /* [0] bw_sel, [2:1] sc_ant_sel   (gated) */
+    REG_BW_CFG           = 0x0A,   /* [0] bw_sel                     (gated) */
     REG_PKT_TIMEOUT_SYMS = 0x0B,   /* packet timeout in symbols      (gated) */
     REG_SC_HITS_REQ      = 0x0E,   /* [1:0] locks after value+1 hits (gated) */
     REG_COMB_CFG         = 0x0F,   /* [2:0] COMB_POST_GAIN_SHIFT, [5:4] REMOD_BACKOFF_SHIFT */
@@ -53,6 +54,16 @@ enum {
      * [1] CFG_WR_REJECTED: RO sticky, write 1 to clear.  Set when a gated
      *     write was dropped, i.e. the driver got the sequence wrong. */
     REG_RX_HOLD          = 0x1A,
+
+    /* [1:0] sc_ant_sel: which antenna branch feeds the SC correlator.  Lives
+     * with the SC group rather than in BW_CFG -- it is correlator routing, not
+     * a bandwidth setting.  Same gate as the other structural config. */
+    /* Multi-ASIC acquisition sync (0x18). [0] ARRAY_SYNC_EN, resets to 0:
+     * the shared ARRAY_ACQ_N pin is inert in both directions until set, so an
+     * unused pad cannot start the receiver. Both chips of a linked pair must
+     * set it at bring-up. Gated. See planning/array-acquisition-sync.md. */
+    REG_ARRAY_SYNC_CTRL  = 0x18,   /* [0] ARRAY_SYNC_EN              (gated) */
+    REG_SC_ANT_SEL       = 0x1B,   /* [1:0] SC correlator branch     (gated) */
 
     /* Packet / weight-path / training control (0x1C-0x23) */
     REG_PACKET_STATUS    = 0x1C,   /* [0]ACTIVE [3:1]PHASE [4]TRAINING_DONE [5]W_PENDING [6]W_VALID [7]W_MISSED */

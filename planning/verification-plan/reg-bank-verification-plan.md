@@ -1,5 +1,13 @@
 # Register Bank — Verification Plan
 
+> **UPDATE 2026-09-01 — Grouper is not taping out.** The `GRP_*` byte bus, the
+> AHB-Lite `H*` endpoint and `IRQ_GROUPER` were removed from
+> `src/top/trouper_top.v`, and `rtl-test/tb/tb_trouper_grp_arb.v` was deleted.
+> Every row below concerning Grouper access, priority or SPI-vs-Grouper
+> arbitration is **VOID** — host SPI is the sole register master and there is
+> nothing left to arbitrate. Rows are kept for traceability, not as open work.
+
+
 **DUT:** `src/control/reg_bank.v` (mirrored to `rtl-test/rtl/reg_bank.v`)
 
 **Scope:** the complete 7-bit register map, reset/read/write/side-effect policy,
@@ -135,7 +143,7 @@ At minimum, collect:
 | 15 | `irq_out` and both top-level IRQ outputs | SPEC-SIM / INTERFACE | standalone suite plus top-level IRQ test | TRPR-IRQ-003/004 | ⬜ direct check — require `irq_out==OR(IRQ_STATUS)` and top-level `IRQ_OUT==IRQ_GROUPER` until all bits clear |
 | 16 | Combinational `peek_rdata` and registered one-wait-state read protocol | SPEC-SIM + FORMAL | standalone suite | register-bus interface | ⬜ new — check address changes, stable `rdata`, exact `ready` behavior, and held/back-to-back reads |
 | 17 | `clk_en` phase and reset interruption | EDGE-SIM | standalone suite | 16 MHz CE contract | ⬜ new — sweep writes, reads, and events around enabled/disabled edges |
-| 18 | Grouper byte-bus reachability and ready timing | SPEC-SIM / INTERFACE | `tb_trouper_grp_arb.v`; extend with cycle assertions | TRPR-REG-002 | 🟨 partial — functional reachability is done; add exact request/acknowledge and held-request timing |
+| 18 | ⛔ VOID 2026-09-01 — ~~Grouper byte-bus reachability and ready timing~~ | SPEC-SIM / INTERFACE | `tb_trouper_grp_arb.v`; extend with cycle assertions | TRPR-REG-002 | 🟨 partial — functional reachability is done; add exact request/acknowledge and held-request timing |
 | 19 | Full property set, non-vacuous | FORMAL | new `formal/reg_bank_formal.sv` + `.sby` | TRPR-REG-001/004/006/007 | ⬜ new — prove reset, legal writes/masks, W1P duration, IRQ causality, write locks, and reserved-address immutability |
 
 ### 2a. Directed closure order
@@ -152,7 +160,7 @@ At minimum, collect:
    fields) closed via `cocotb/tests/test_reg_bank_w1p_precedence.py`
    (job 4843/4845).
 4. Extend the standalone harness and map oracle for #13–#17.
-5. Strengthen Grouper bus timing coverage in #18.
+5. ~~Strengthen Grouper bus timing coverage in #18.~~ Dropped 2026-09-01 — bus removed.
 6. Add and prove the formal checker in #19.
 7. Merge code and functional coverage, then randomize until §1a is closed or
    waived.
@@ -179,16 +187,6 @@ iverilog -g2005 -o /tmp/tb_trouper_spi.vvp \
   ../src/control/spi_slave.v ../src/control/reg_bank.v \
   ../src/remod/sd_remod.v
 vvp /tmp/tb_trouper_spi.vvp
-
-iverilog -g2005 -o /tmp/tb_trouper_grp_arb.vvp \
-  tb/tb_trouper_grp_arb.v \
-  ../src/top/trouper_top.v ../src/decimator/sd_decimator_poly.v \
-  ../src/frontend/dc_removal.v ../src/frontend/sc_detector.v \
-  ../src/combiner/training_acc.v ../src/combiner/mrc_combiner.v \
-  ../src/control/packet_ctrl_fsm.v ../src/control/psram_buf_ctrl.v \
-  ../src/control/spi_slave.v ../src/control/reg_bank.v \
-  ../src/remod/sd_remod.v
-vvp /tmp/tb_trouper_grp_arb.vvp
 ```
 
 The `cocotb/reg_bank` suite above is the standalone direct-DUT harness (rows

@@ -8,11 +8,6 @@ current_design trouper_top
 create_clock -name IQ_CLK -period 31.2500 [get_ports {IQ_CLK}]
 set_clock_uncertainty 0.5000 IQ_CLK
 set_propagated_clock [get_clocks {IQ_CLK}]
-create_clock -name SPI_SCK -period 500.0000 [get_ports {SPI_SCK}]
-set_propagated_clock [get_clocks {SPI_SCK}]
-set_clock_groups -name group1 -asynchronous \
- -group [get_clocks {IQ_CLK}]\
- -group [get_clocks {SPI_SCK}]
 set_input_delay 1.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IQ_DATA_I_0}]
 set_input_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IQ_DATA_I_0}]
 set_input_delay 1.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IQ_DATA_I_1}]
@@ -29,49 +24,64 @@ set_input_delay 1.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {
 set_input_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IQ_DATA_Q_2}]
 set_input_delay 1.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IQ_DATA_Q_3}]
 set_input_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IQ_DATA_Q_3}]
-set_input_delay 0.0000 -clock [get_clocks {SPI_SCK}] -add_delay [get_ports {SPI_MOSI}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_0}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_0}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_1}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_1}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_2}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_2}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_3}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_3}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_4}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_4}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_5}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_5}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_6}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_6}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_RDATA_7}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_RDATA_7}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {GRP_READY}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {GRP_READY}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_CS}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_CS}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_IE}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_IE}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_OE}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_OE}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_OUT}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_OUT}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_PD}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_PD}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_PDRV0}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_PDRV0}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_PDRV1}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_PDRV1}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_PU}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_PU}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {ARRAY_ACQ_N_SL}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {ARRAY_ACQ_N_SL}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_CS}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_CS}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_IE}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_IE}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_OE}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_OE}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_OUT}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_OUT}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_PD}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_PD}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_PDRV0}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_PDRV0}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_PDRV1}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_PDRV1}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_PU}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_PU}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG0_SL}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG0_SL}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_CS}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_CS}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_IE}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_IE}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_OE}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_OE}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_OUT}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_OUT}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_PD}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_PD}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_PDRV0}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_PDRV0}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_PDRV1}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_PDRV1}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_PU}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_PU}]
+set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {DBG1_SL}]
+set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {DBG1_SL}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HOST_CS_PD}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HOST_CS_PD}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HOST_CS_PU}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HOST_CS_PU}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[0]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[0]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[1]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[1]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[2]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[2]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[3]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[3]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[4]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[4]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[5]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[5]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[6]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[6]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRDATA[7]}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRDATA[7]}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HREADY}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HREADY}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {HRESP}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {HRESP}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IQ_CLK_PD}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IQ_CLK_PD}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IQ_CLK_PU}]
@@ -108,8 +118,6 @@ set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports 
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IQ_DATA_Q_3_PD}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IQ_DATA_Q_3_PU}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IQ_DATA_Q_3_PU}]
-set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IRQ_GROUPER}]
-set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IRQ_GROUPER}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IRQ_OUT_CS}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {IRQ_OUT_CS}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {IRQ_OUT_IE}]
@@ -278,7 +286,6 @@ set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports 
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {SPI_MISO_IE}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {SPI_MISO_OE}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {SPI_MISO_OE}]
-set_output_delay 0.0000 -clock [get_clocks {SPI_SCK}] -add_delay [get_ports {SPI_MISO_OUT}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {SPI_MISO_PD}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {SPI_MISO_PD}]
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {SPI_MISO_PDRV0}]
@@ -298,148 +305,9 @@ set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports 
 set_output_delay 0.0000 -clock [get_clocks {IQ_CLK}] -min -add_delay [get_ports {SPI_SCK_PU}]
 set_output_delay 2.0000 -clock [get_clocks {IQ_CLK}] -max -add_delay [get_ports {SPI_SCK_PU}]
 set_multicycle_path -hold\
-    -to [list [get_cells {_61543_}]\
-           [get_cells {_61544_}]\
-           [get_cells {_61545_}]\
-           [get_cells {_61562_}]\
-           [get_cells {_61563_}]\
-           [get_cells {_61564_}]\
-           [get_cells {_61565_}]\
-           [get_cells {_61566_}]\
-           [get_cells {_61567_}]\
-           [get_cells {_61568_}]\
-           [get_cells {_61569_}]\
-           [get_cells {_61570_}]\
-           [get_cells {_61571_}]\
-           [get_cells {_61572_}]\
-           [get_cells {_61573_}]\
-           [get_cells {_61574_}]\
-           [get_cells {_61575_}]] 1
-set_multicycle_path -hold\
-    -through [list [get_nets {rb_bw_sel}]\
-           [get_nets {rb_sample_shift[0]}]\
-           [get_nets {rb_sf_cfg[0]}]\
-           [get_nets {rb_sf_cfg[1]}]\
-           [get_nets {rb_sf_cfg[2]}]\
-           [get_nets {rb_sf_cfg[3]}]]\
-    -to [list [get_cells {_62268_}]\
-           [get_cells {_62269_}]\
-           [get_cells {_62270_}]\
-           [get_cells {_62271_}]\
-           [get_cells {_62272_}]\
-           [get_cells {_62273_}]\
-           [get_cells {_62274_}]\
-           [get_cells {_62275_}]\
-           [get_cells {_62276_}]\
-           [get_cells {_62277_}]\
-           [get_cells {_62278_}]\
-           [get_cells {_62279_}]\
-           [get_cells {_62280_}]\
-           [get_cells {_62281_}]\
-           [get_cells {_62282_}]\
-           [get_cells {_62283_}]\
-           [get_cells {_62284_}]\
-           [get_cells {_62285_}]\
-           [get_cells {_62286_}]\
-           [get_cells {_62287_}]\
-           [get_cells {_62288_}]\
-           [get_cells {_62289_}]\
-           [get_cells {_62290_}]\
-           [get_cells {_62291_}]\
-           [get_cells {_62292_}]\
-           [get_cells {_62293_}]\
-           [get_cells {_62294_}]\
-           [get_cells {_62295_}]\
-           [get_cells {_62296_}]\
-           [get_cells {_62297_}]\
-           [get_cells {_62298_}]\
-           [get_cells {_62299_}]\
-           [get_cells {_62300_}]\
-           [get_cells {_62301_}]\
-           [get_cells {_62302_}]\
-           [get_cells {_62303_}]\
-           [get_cells {_62304_}]\
-           [get_cells {_62305_}]\
-           [get_cells {_62306_}]\
-           [get_cells {_62307_}]\
-           [get_cells {_62308_}]\
-           [get_cells {_62309_}]\
-           [get_cells {_62310_}]\
-           [get_cells {_62311_}]\
-           [get_cells {_62312_}]\
-           [get_cells {_62313_}]\
-           [get_cells {_62314_}]\
-           [get_cells {_62315_}]\
-           [get_cells {_62316_}]\
-           [get_cells {_62317_}]\
-           [get_cells {_62318_}]\
-           [get_cells {_62319_}]\
-           [get_cells {_62320_}]\
-           [get_cells {_62321_}]\
-           [get_cells {_62322_}]\
-           [get_cells {_62323_}]\
-           [get_cells {_62324_}]\
-           [get_cells {_62325_}]\
-           [get_cells {_62326_}]\
-           [get_cells {_62327_}]\
-           [get_cells {_62328_}]\
-           [get_cells {_62329_}]\
-           [get_cells {_62330_}]\
-           [get_cells {_62331_}]\
-           [get_cells {_62332_}]\
-           [get_cells {_62333_}]\
-           [get_cells {_62334_}]\
-           [get_cells {_62335_}]\
-           [get_cells {_62336_}]\
-           [get_cells {_62337_}]\
-           [get_cells {_62338_}]\
-           [get_cells {_62339_}]\
-           [get_cells {_62340_}]\
-           [get_cells {_62341_}]\
-           [get_cells {_62342_}]\
-           [get_cells {_62343_}]\
-           [get_cells {_62344_}]\
-           [get_cells {_62345_}]\
-           [get_cells {_62346_}]\
-           [get_cells {_62347_}]\
-           [get_cells {_62348_}]\
-           [get_cells {_62349_}]\
-           [get_cells {_62350_}]\
-           [get_cells {_62351_}]\
-           [get_cells {_62352_}]\
-           [get_cells {_62353_}]\
-           [get_cells {_62354_}]\
-           [get_cells {_62355_}]\
-           [get_cells {_62356_}]\
-           [get_cells {_62357_}]\
-           [get_cells {_62358_}]\
-           [get_cells {_62359_}]\
-           [get_cells {_62360_}]\
-           [get_cells {_62361_}]\
-           [get_cells {_62362_}]\
-           [get_cells {_62363_}]\
-           [get_cells {_62364_}]\
-           [get_cells {_62365_}]\
-           [get_cells {_62366_}]\
-           [get_cells {_62367_}]\
-           [get_cells {_62368_}]\
-           [get_cells {_62369_}]\
-           [get_cells {_62370_}]\
-           [get_cells {_62371_}]\
-           [get_cells {_62372_}]\
-           [get_cells {_62373_}]\
-           [get_cells {_62374_}]\
-           [get_cells {_62473_}]\
-           [get_cells {_62474_}]\
-           [get_cells {_62475_}]\
-           [get_cells {_62476_}]\
-           [get_cells {_62477_}]\
-           [get_cells {_62478_}]\
-           [get_cells {_62479_}]\
-           [get_cells {_62480_}]\
-           [get_cells {_62481_}]\
-           [get_cells {_62482_}]\
-           [get_cells {_62483_}]\
+    -to [list [get_cells {_62466_}]\
+           [get_cells {_62467_}]\
+           [get_cells {_62468_}]\
            [get_cells {_62484_}]\
            [get_cells {_62485_}]\
            [get_cells {_62486_}]\
@@ -453,180 +321,71 @@ set_multicycle_path -hold\
            [get_cells {_62494_}]\
            [get_cells {_62495_}]\
            [get_cells {_62496_}]\
-           [get_cells {_62497_}]\
-           [get_cells {_62498_}]\
-           [get_cells {_62499_}]\
-           [get_cells {_62500_}]\
-           [get_cells {_62501_}]\
-           [get_cells {_62502_}]\
-           [get_cells {_62503_}]\
-           [get_cells {_62504_}]\
-           [get_cells {_62505_}]\
-           [get_cells {_62506_}]\
-           [get_cells {_62507_}]\
-           [get_cells {_62508_}]\
-           [get_cells {_62509_}]\
-           [get_cells {_62510_}]\
-           [get_cells {_62511_}]\
-           [get_cells {_62512_}]\
-           [get_cells {_62513_}]\
-           [get_cells {_62514_}]\
-           [get_cells {_62515_}]\
-           [get_cells {_62516_}]\
-           [get_cells {_62517_}]\
-           [get_cells {_62518_}]\
-           [get_cells {_62519_}]\
-           [get_cells {_62520_}]\
-           [get_cells {_62521_}]\
-           [get_cells {_62522_}]\
-           [get_cells {_62523_}]\
-           [get_cells {_62524_}]\
-           [get_cells {_62525_}]\
-           [get_cells {_62526_}]\
-           [get_cells {_62527_}]\
-           [get_cells {_62528_}]\
-           [get_cells {_62529_}]\
-           [get_cells {_62530_}]\
-           [get_cells {_62531_}]\
-           [get_cells {_62532_}]\
-           [get_cells {_62533_}]\
-           [get_cells {_62534_}]\
-           [get_cells {_62535_}]\
-           [get_cells {_62536_}]\
-           [get_cells {_62537_}]\
-           [get_cells {_62538_}]\
-           [get_cells {_62539_}]\
-           [get_cells {_62540_}]\
-           [get_cells {_62541_}]\
-           [get_cells {_62542_}]\
-           [get_cells {_62543_}]\
-           [get_cells {_62544_}]\
-           [get_cells {_62545_}]\
-           [get_cells {_62546_}]\
-           [get_cells {_62547_}]\
-           [get_cells {_62548_}]\
-           [get_cells {_62549_}]\
-           [get_cells {_62550_}]\
-           [get_cells {_62551_}]\
-           [get_cells {_62552_}]\
-           [get_cells {_62553_}]\
-           [get_cells {_62554_}]\
-           [get_cells {_62555_}]\
-           [get_cells {_62556_}]\
-           [get_cells {_63842_}]\
-           [get_cells {_63890_}]\
-           [get_cells {_63891_}]\
-           [get_cells {_63892_}]\
-           [get_cells {_63893_}]\
-           [get_cells {_63894_}]\
-           [get_cells {_63895_}]\
-           [get_cells {_63896_}]\
-           [get_cells {_63897_}]\
-           [get_cells {_63898_}]\
-           [get_cells {_63899_}]\
-           [get_cells {_63900_}]\
-           [get_cells {_63901_}]\
-           [get_cells {_63902_}]\
-           [get_cells {_63903_}]\
-           [get_cells {_63904_}]\
-           [get_cells {_63905_}]\
-           [get_cells {_63906_}]\
-           [get_cells {_63907_}]\
-           [get_cells {_63908_}]\
-           [get_cells {_63909_}]\
-           [get_cells {_63910_}]\
-           [get_cells {_63911_}]\
-           [get_cells {_63912_}]\
-           [get_cells {_63913_}]\
-           [get_cells {_63914_}]\
-           [get_cells {_63915_}]\
-           [get_cells {_63916_}]\
-           [get_cells {_63917_}]\
-           [get_cells {_63919_}]\
-           [get_cells {_63920_}]\
-           [get_cells {_63921_}]\
-           [get_cells {_63922_}]\
-           [get_cells {_63923_}]\
-           [get_cells {_63924_}]\
-           [get_cells {_63925_}]\
-           [get_cells {_63926_}]\
-           [get_cells {_63927_}]\
-           [get_cells {_63928_}]\
-           [get_cells {_63929_}]\
-           [get_cells {_63930_}]\
-           [get_cells {_63931_}]\
-           [get_cells {_63932_}]\
-           [get_cells {_63933_}]\
-           [get_cells {_63934_}]\
-           [get_cells {_63935_}]\
-           [get_cells {_63936_}]\
-           [get_cells {_63937_}]\
-           [get_cells {_63938_}]\
-           [get_cells {_63939_}]\
-           [get_cells {_63940_}]\
-           [get_cells {_63941_}]\
-           [get_cells {_63942_}]\
-           [get_cells {_63943_}]\
-           [get_cells {_63944_}]\
-           [get_cells {_63945_}]\
-           [get_cells {_63946_}]\
-           [get_cells {_63948_}]\
-           [get_cells {_63957_}]\
-           [get_cells {_63958_}]\
-           [get_cells {_63959_}]\
-           [get_cells {_63960_}]] 2
+           [get_cells {_62497_}]] 1
 set_multicycle_path -hold\
     -through [list [get_nets {rb_bw_sel}]\
            [get_nets {rb_sample_shift[0]}]\
-           [get_nets {rb_sc_hits_req[0]}]\
-           [get_nets {rb_sc_hits_req[1]}]\
            [get_nets {rb_sf_cfg[0]}]\
            [get_nets {rb_sf_cfg[1]}]\
            [get_nets {rb_sf_cfg[2]}]\
            [get_nets {rb_sf_cfg[3]}]]\
-    -to [list [get_cells {_62167_}]\
-           [get_cells {_62168_}]\
-           [get_cells {_62169_}]\
-           [get_cells {_62170_}]\
-           [get_cells {_62171_}]\
-           [get_cells {_62172_}]\
-           [get_cells {_62173_}]\
-           [get_cells {_62174_}]\
-           [get_cells {_62175_}]\
-           [get_cells {_62176_}]\
-           [get_cells {_62177_}]\
-           [get_cells {_62178_}]\
-           [get_cells {_62179_}]\
-           [get_cells {_62180_}]\
-           [get_cells {_62181_}]\
-           [get_cells {_62182_}]\
-           [get_cells {_62183_}]\
-           [get_cells {_62184_}]\
-           [get_cells {_62185_}]\
-           [get_cells {_62186_}]\
-           [get_cells {_62187_}]\
-           [get_cells {_62188_}]\
-           [get_cells {_62189_}]\
-           [get_cells {_62190_}]\
-           [get_cells {_62191_}]\
-           [get_cells {_62192_}]\
-           [get_cells {_62193_}]\
-           [get_cells {_62194_}]\
-           [get_cells {_62195_}]\
-           [get_cells {_62196_}]\
-           [get_cells {_62197_}]\
-           [get_cells {_62198_}]] 2
-set_multicycle_path -hold\
-    -through [list [get_nets {rb_bw_sel}]\
-           [get_nets {rb_sample_shift[0]}]\
-           [get_nets {rb_sf_cfg[0]}]\
-           [get_nets {rb_sf_cfg[1]}]\
-           [get_nets {rb_sf_cfg[2]}]\
-           [get_nets {rb_sf_cfg[3]}]\
-           [get_nets {rb_tacc_window_syms[0]}]\
-           [get_nets {rb_tacc_window_syms[1]}]\
-           [get_nets {rb_tacc_window_syms[2]}]]\
-    -to [list [get_cells {_63230_}]\
+    -to [list [get_cells {_63174_}]\
+           [get_cells {_63175_}]\
+           [get_cells {_63176_}]\
+           [get_cells {_63177_}]\
+           [get_cells {_63178_}]\
+           [get_cells {_63179_}]\
+           [get_cells {_63180_}]\
+           [get_cells {_63181_}]\
+           [get_cells {_63182_}]\
+           [get_cells {_63183_}]\
+           [get_cells {_63184_}]\
+           [get_cells {_63185_}]\
+           [get_cells {_63186_}]\
+           [get_cells {_63187_}]\
+           [get_cells {_63188_}]\
+           [get_cells {_63189_}]\
+           [get_cells {_63190_}]\
+           [get_cells {_63191_}]\
+           [get_cells {_63192_}]\
+           [get_cells {_63193_}]\
+           [get_cells {_63194_}]\
+           [get_cells {_63195_}]\
+           [get_cells {_63196_}]\
+           [get_cells {_63197_}]\
+           [get_cells {_63198_}]\
+           [get_cells {_63199_}]\
+           [get_cells {_63200_}]\
+           [get_cells {_63201_}]\
+           [get_cells {_63202_}]\
+           [get_cells {_63203_}]\
+           [get_cells {_63204_}]\
+           [get_cells {_63205_}]\
+           [get_cells {_63206_}]\
+           [get_cells {_63207_}]\
+           [get_cells {_63208_}]\
+           [get_cells {_63209_}]\
+           [get_cells {_63210_}]\
+           [get_cells {_63211_}]\
+           [get_cells {_63212_}]\
+           [get_cells {_63213_}]\
+           [get_cells {_63214_}]\
+           [get_cells {_63215_}]\
+           [get_cells {_63216_}]\
+           [get_cells {_63217_}]\
+           [get_cells {_63218_}]\
+           [get_cells {_63219_}]\
+           [get_cells {_63220_}]\
+           [get_cells {_63221_}]\
+           [get_cells {_63222_}]\
+           [get_cells {_63223_}]\
+           [get_cells {_63224_}]\
+           [get_cells {_63225_}]\
+           [get_cells {_63226_}]\
+           [get_cells {_63227_}]\
+           [get_cells {_63228_}]\
+           [get_cells {_63229_}]\
+           [get_cells {_63230_}]\
            [get_cells {_63231_}]\
            [get_cells {_63232_}]\
            [get_cells {_63233_}]\
@@ -677,19 +436,267 @@ set_multicycle_path -hold\
            [get_cells {_63278_}]\
            [get_cells {_63279_}]\
            [get_cells {_63280_}]\
-           [get_cells {_63281_}]\
-           [get_cells {_63282_}]\
-           [get_cells {_63283_}]\
-           [get_cells {_63284_}]\
-           [get_cells {_63285_}]\
-           [get_cells {_63286_}]\
-           [get_cells {_63287_}]\
-           [get_cells {_63288_}]\
-           [get_cells {_63289_}]\
-           [get_cells {_63290_}]\
-           [get_cells {_63291_}]\
-           [get_cells {_63292_}]\
-           [get_cells {_63293_}]] 2
+           [get_cells {_63379_}]\
+           [get_cells {_63380_}]\
+           [get_cells {_63381_}]\
+           [get_cells {_63382_}]\
+           [get_cells {_63383_}]\
+           [get_cells {_63384_}]\
+           [get_cells {_63385_}]\
+           [get_cells {_63386_}]\
+           [get_cells {_63387_}]\
+           [get_cells {_63388_}]\
+           [get_cells {_63389_}]\
+           [get_cells {_63390_}]\
+           [get_cells {_63391_}]\
+           [get_cells {_63392_}]\
+           [get_cells {_63393_}]\
+           [get_cells {_63394_}]\
+           [get_cells {_63395_}]\
+           [get_cells {_63396_}]\
+           [get_cells {_63397_}]\
+           [get_cells {_63398_}]\
+           [get_cells {_63399_}]\
+           [get_cells {_63400_}]\
+           [get_cells {_63401_}]\
+           [get_cells {_63402_}]\
+           [get_cells {_63403_}]\
+           [get_cells {_63404_}]\
+           [get_cells {_63405_}]\
+           [get_cells {_63406_}]\
+           [get_cells {_63407_}]\
+           [get_cells {_63408_}]\
+           [get_cells {_63409_}]\
+           [get_cells {_63410_}]\
+           [get_cells {_63411_}]\
+           [get_cells {_63412_}]\
+           [get_cells {_63413_}]\
+           [get_cells {_63414_}]\
+           [get_cells {_63415_}]\
+           [get_cells {_63416_}]\
+           [get_cells {_63417_}]\
+           [get_cells {_63418_}]\
+           [get_cells {_63419_}]\
+           [get_cells {_63420_}]\
+           [get_cells {_63421_}]\
+           [get_cells {_63422_}]\
+           [get_cells {_63423_}]\
+           [get_cells {_63424_}]\
+           [get_cells {_63425_}]\
+           [get_cells {_63426_}]\
+           [get_cells {_63427_}]\
+           [get_cells {_63428_}]\
+           [get_cells {_63429_}]\
+           [get_cells {_63430_}]\
+           [get_cells {_63431_}]\
+           [get_cells {_63432_}]\
+           [get_cells {_63433_}]\
+           [get_cells {_63434_}]\
+           [get_cells {_63435_}]\
+           [get_cells {_63436_}]\
+           [get_cells {_63437_}]\
+           [get_cells {_63438_}]\
+           [get_cells {_63439_}]\
+           [get_cells {_63440_}]\
+           [get_cells {_63441_}]\
+           [get_cells {_63442_}]\
+           [get_cells {_63443_}]\
+           [get_cells {_63444_}]\
+           [get_cells {_63445_}]\
+           [get_cells {_63446_}]\
+           [get_cells {_63447_}]\
+           [get_cells {_63448_}]\
+           [get_cells {_63449_}]\
+           [get_cells {_63450_}]\
+           [get_cells {_63451_}]\
+           [get_cells {_63452_}]\
+           [get_cells {_63453_}]\
+           [get_cells {_63454_}]\
+           [get_cells {_63455_}]\
+           [get_cells {_63456_}]\
+           [get_cells {_63457_}]\
+           [get_cells {_63458_}]\
+           [get_cells {_63459_}]\
+           [get_cells {_63460_}]\
+           [get_cells {_63461_}]\
+           [get_cells {_63462_}]\
+           [get_cells {_64736_}]\
+           [get_cells {_64737_}]\
+           [get_cells {_64738_}]\
+           [get_cells {_64739_}]\
+           [get_cells {_64740_}]\
+           [get_cells {_64741_}]\
+           [get_cells {_64791_}]\
+           [get_cells {_64792_}]\
+           [get_cells {_64793_}]\
+           [get_cells {_64794_}]\
+           [get_cells {_64795_}]\
+           [get_cells {_64796_}]\
+           [get_cells {_64797_}]\
+           [get_cells {_64798_}]\
+           [get_cells {_64799_}]\
+           [get_cells {_64800_}]\
+           [get_cells {_64801_}]\
+           [get_cells {_64802_}]\
+           [get_cells {_64803_}]\
+           [get_cells {_64804_}]\
+           [get_cells {_64805_}]\
+           [get_cells {_64806_}]\
+           [get_cells {_64807_}]\
+           [get_cells {_64808_}]\
+           [get_cells {_64809_}]\
+           [get_cells {_64810_}]\
+           [get_cells {_64811_}]\
+           [get_cells {_64812_}]\
+           [get_cells {_64813_}]\
+           [get_cells {_64814_}]\
+           [get_cells {_64815_}]\
+           [get_cells {_64816_}]\
+           [get_cells {_64817_}]\
+           [get_cells {_64818_}]\
+           [get_cells {_64828_}]\
+           [get_cells {_64829_}]\
+           [get_cells {_64830_}]\
+           [get_cells {_64831_}]\
+           [get_cells {_64832_}]\
+           [get_cells {_64833_}]\
+           [get_cells {_64834_}]\
+           [get_cells {_64835_}]\
+           [get_cells {_64836_}]\
+           [get_cells {_64837_}]\
+           [get_cells {_64838_}]\
+           [get_cells {_64839_}]\
+           [get_cells {_64840_}]\
+           [get_cells {_64841_}]\
+           [get_cells {_64842_}]\
+           [get_cells {_64843_}]\
+           [get_cells {_64844_}]\
+           [get_cells {_64845_}]\
+           [get_cells {_64846_}]\
+           [get_cells {_64847_}]\
+           [get_cells {_64848_}]\
+           [get_cells {_64849_}]\
+           [get_cells {_64850_}]\
+           [get_cells {_64851_}]\
+           [get_cells {_64852_}]\
+           [get_cells {_64853_}]\
+           [get_cells {_64854_}]\
+           [get_cells {_64855_}]] 2
+set_multicycle_path -hold\
+    -through [list [get_nets {rb_bw_sel}]\
+           [get_nets {rb_sample_shift[0]}]\
+           [get_nets {rb_sc_hits_req[0]}]\
+           [get_nets {rb_sc_hits_req[1]}]\
+           [get_nets {rb_sf_cfg[0]}]\
+           [get_nets {rb_sf_cfg[1]}]\
+           [get_nets {rb_sf_cfg[2]}]\
+           [get_nets {rb_sf_cfg[3]}]]\
+    -to [list [get_cells {_63073_}]\
+           [get_cells {_63074_}]\
+           [get_cells {_63075_}]\
+           [get_cells {_63076_}]\
+           [get_cells {_63077_}]\
+           [get_cells {_63078_}]\
+           [get_cells {_63079_}]\
+           [get_cells {_63080_}]\
+           [get_cells {_63081_}]\
+           [get_cells {_63082_}]\
+           [get_cells {_63083_}]\
+           [get_cells {_63084_}]\
+           [get_cells {_63085_}]\
+           [get_cells {_63086_}]\
+           [get_cells {_63087_}]\
+           [get_cells {_63088_}]\
+           [get_cells {_63089_}]\
+           [get_cells {_63090_}]\
+           [get_cells {_63091_}]\
+           [get_cells {_63092_}]\
+           [get_cells {_63093_}]\
+           [get_cells {_63094_}]\
+           [get_cells {_63095_}]\
+           [get_cells {_63096_}]\
+           [get_cells {_63097_}]\
+           [get_cells {_63098_}]\
+           [get_cells {_63099_}]\
+           [get_cells {_63100_}]\
+           [get_cells {_63101_}]\
+           [get_cells {_63102_}]\
+           [get_cells {_63103_}]\
+           [get_cells {_63104_}]] 2
+set_multicycle_path -hold\
+    -through [list [get_nets {rb_bw_sel}]\
+           [get_nets {rb_sample_shift[0]}]\
+           [get_nets {rb_sf_cfg[0]}]\
+           [get_nets {rb_sf_cfg[1]}]\
+           [get_nets {rb_sf_cfg[2]}]\
+           [get_nets {rb_sf_cfg[3]}]\
+           [get_nets {rb_tacc_window_syms[0]}]\
+           [get_nets {rb_tacc_window_syms[1]}]\
+           [get_nets {rb_tacc_window_syms[2]}]]\
+    -to [list [get_cells {_64136_}]\
+           [get_cells {_64137_}]\
+           [get_cells {_64138_}]\
+           [get_cells {_64139_}]\
+           [get_cells {_64140_}]\
+           [get_cells {_64141_}]\
+           [get_cells {_64142_}]\
+           [get_cells {_64143_}]\
+           [get_cells {_64144_}]\
+           [get_cells {_64145_}]\
+           [get_cells {_64146_}]\
+           [get_cells {_64147_}]\
+           [get_cells {_64148_}]\
+           [get_cells {_64149_}]\
+           [get_cells {_64150_}]\
+           [get_cells {_64151_}]\
+           [get_cells {_64152_}]\
+           [get_cells {_64153_}]\
+           [get_cells {_64154_}]\
+           [get_cells {_64155_}]\
+           [get_cells {_64156_}]\
+           [get_cells {_64157_}]\
+           [get_cells {_64158_}]\
+           [get_cells {_64159_}]\
+           [get_cells {_64160_}]\
+           [get_cells {_64161_}]\
+           [get_cells {_64162_}]\
+           [get_cells {_64163_}]\
+           [get_cells {_64164_}]\
+           [get_cells {_64165_}]\
+           [get_cells {_64166_}]\
+           [get_cells {_64167_}]\
+           [get_cells {_64168_}]\
+           [get_cells {_64169_}]\
+           [get_cells {_64170_}]\
+           [get_cells {_64171_}]\
+           [get_cells {_64172_}]\
+           [get_cells {_64173_}]\
+           [get_cells {_64174_}]\
+           [get_cells {_64175_}]\
+           [get_cells {_64176_}]\
+           [get_cells {_64177_}]\
+           [get_cells {_64178_}]\
+           [get_cells {_64179_}]\
+           [get_cells {_64180_}]\
+           [get_cells {_64181_}]\
+           [get_cells {_64182_}]\
+           [get_cells {_64183_}]\
+           [get_cells {_64184_}]\
+           [get_cells {_64185_}]\
+           [get_cells {_64186_}]\
+           [get_cells {_64187_}]\
+           [get_cells {_64188_}]\
+           [get_cells {_64189_}]\
+           [get_cells {_64190_}]\
+           [get_cells {_64191_}]\
+           [get_cells {_64192_}]\
+           [get_cells {_64193_}]\
+           [get_cells {_64194_}]\
+           [get_cells {_64195_}]\
+           [get_cells {_64196_}]\
+           [get_cells {_64197_}]\
+           [get_cells {_64198_}]\
+           [get_cells {_64199_}]] 2
 set_multicycle_path -hold\
     -through [list [get_nets {rb_addr[0]}]\
            [get_nets {rb_addr[1]}]\
@@ -698,7 +705,6 @@ set_multicycle_path -hold\
            [get_nets {rb_addr[4]}]\
            [get_nets {rb_addr[5]}]\
            [get_nets {rb_addr[6]}]\
-           [get_nets {rb_addr[7]}]\
            [get_nets {rb_wdata[0]}]\
            [get_nets {rb_wdata[1]}]\
            [get_nets {rb_wdata[2]}]\
@@ -726,21 +732,21 @@ set_multicycle_path -hold\
            [get_nets {rb_tacc_window_syms[0]}]\
            [get_nets {rb_tacc_window_syms[1]}]\
            [get_nets {rb_tacc_window_syms[2]}]]\
-    -to [list [get_cells {_64018_}]\
-           [get_cells {_64019_}]\
-           [get_cells {_64020_}]\
-           [get_cells {_64021_}]\
-           [get_cells {_64022_}]\
-           [get_cells {_64023_}]\
-           [get_cells {_64024_}]\
-           [get_cells {_64025_}]\
-           [get_cells {_64026_}]\
-           [get_cells {_64027_}]\
-           [get_cells {_64028_}]\
-           [get_cells {_64029_}]\
-           [get_cells {_64030_}]\
-           [get_cells {_64031_}]\
-           [get_cells {_64032_}]] 2
+    -to [list [get_cells {_64917_}]\
+           [get_cells {_64918_}]\
+           [get_cells {_64919_}]\
+           [get_cells {_64920_}]\
+           [get_cells {_64921_}]\
+           [get_cells {_64922_}]\
+           [get_cells {_64923_}]\
+           [get_cells {_64924_}]\
+           [get_cells {_64925_}]\
+           [get_cells {_64926_}]\
+           [get_cells {_64927_}]\
+           [get_cells {_64928_}]\
+           [get_cells {_64929_}]\
+           [get_cells {_64930_}]\
+           [get_cells {_64931_}]] 2
 set_multicycle_path -hold\
     -through [list [get_nets {rb_bw_sel}]\
            [get_nets {rb_pkt_timeout_syms[0]}]\
@@ -794,69 +800,69 @@ set_multicycle_path -hold\
            [get_nets {u_pcfsm.lat_timing_ref[7]}]\
            [get_nets {u_pcfsm.lat_timing_ref[8]}]\
            [get_nets {u_pcfsm.lat_timing_ref[9]}]]\
-    -to [list [get_cells {_63974_}]\
-           [get_cells {_63975_}]\
-           [get_cells {_63976_}]\
-           [get_cells {_63977_}]\
-           [get_cells {_63978_}]\
-           [get_cells {_63979_}]\
-           [get_cells {_63980_}]\
-           [get_cells {_63981_}]\
-           [get_cells {_63982_}]\
-           [get_cells {_63983_}]\
-           [get_cells {_63984_}]\
-           [get_cells {_63985_}]\
-           [get_cells {_63986_}]\
-           [get_cells {_63987_}]\
-           [get_cells {_63988_}]\
-           [get_cells {_63989_}]\
-           [get_cells {_63990_}]\
-           [get_cells {_63991_}]\
-           [get_cells {_63992_}]\
-           [get_cells {_63993_}]\
-           [get_cells {_63994_}]\
-           [get_cells {_63995_}]\
-           [get_cells {_63996_}]\
-           [get_cells {_63998_}]\
-           [get_cells {_63999_}]\
-           [get_cells {_64000_}]\
-           [get_cells {_64001_}]\
-           [get_cells {_64002_}]\
-           [get_cells {_64003_}]\
-           [get_cells {_64004_}]\
-           [get_cells {_64005_}]\
-           [get_cells {_64006_}]\
-           [get_cells {_64007_}]\
-           [get_cells {_64008_}]\
-           [get_cells {_64009_}]\
-           [get_cells {_64010_}]\
-           [get_cells {_64011_}]\
-           [get_cells {_64012_}]\
-           [get_cells {_64013_}]\
-           [get_cells {_64014_}]\
-           [get_cells {_64015_}]\
-           [get_cells {_64016_}]\
-           [get_cells {_64017_}]\
-           [get_cells {_64033_}]\
-           [get_cells {_64034_}]\
-           [get_cells {_64035_}]\
-           [get_cells {_64036_}]\
-           [get_cells {_64037_}]\
-           [get_cells {_64038_}]\
-           [get_cells {_64039_}]\
-           [get_cells {_64040_}]\
-           [get_cells {_64041_}]\
-           [get_cells {_64042_}]\
-           [get_cells {_64043_}]\
-           [get_cells {_64044_}]\
-           [get_cells {_64045_}]\
-           [get_cells {_64046_}]\
-           [get_cells {_64047_}]\
-           [get_cells {_64048_}]\
-           [get_cells {_64049_}]\
-           [get_cells {_64050_}]\
-           [get_cells {_64051_}]\
-           [get_cells {_64052_}]] 2
+    -to [list [get_cells {_64873_}]\
+           [get_cells {_64874_}]\
+           [get_cells {_64875_}]\
+           [get_cells {_64876_}]\
+           [get_cells {_64877_}]\
+           [get_cells {_64878_}]\
+           [get_cells {_64879_}]\
+           [get_cells {_64880_}]\
+           [get_cells {_64881_}]\
+           [get_cells {_64882_}]\
+           [get_cells {_64883_}]\
+           [get_cells {_64884_}]\
+           [get_cells {_64885_}]\
+           [get_cells {_64886_}]\
+           [get_cells {_64887_}]\
+           [get_cells {_64888_}]\
+           [get_cells {_64889_}]\
+           [get_cells {_64890_}]\
+           [get_cells {_64891_}]\
+           [get_cells {_64892_}]\
+           [get_cells {_64893_}]\
+           [get_cells {_64894_}]\
+           [get_cells {_64895_}]\
+           [get_cells {_64897_}]\
+           [get_cells {_64898_}]\
+           [get_cells {_64899_}]\
+           [get_cells {_64900_}]\
+           [get_cells {_64901_}]\
+           [get_cells {_64902_}]\
+           [get_cells {_64903_}]\
+           [get_cells {_64904_}]\
+           [get_cells {_64905_}]\
+           [get_cells {_64906_}]\
+           [get_cells {_64907_}]\
+           [get_cells {_64908_}]\
+           [get_cells {_64909_}]\
+           [get_cells {_64910_}]\
+           [get_cells {_64911_}]\
+           [get_cells {_64912_}]\
+           [get_cells {_64913_}]\
+           [get_cells {_64914_}]\
+           [get_cells {_64915_}]\
+           [get_cells {_64916_}]\
+           [get_cells {_64933_}]\
+           [get_cells {_64934_}]\
+           [get_cells {_64935_}]\
+           [get_cells {_64936_}]\
+           [get_cells {_64937_}]\
+           [get_cells {_64938_}]\
+           [get_cells {_64939_}]\
+           [get_cells {_64940_}]\
+           [get_cells {_64941_}]\
+           [get_cells {_64942_}]\
+           [get_cells {_64943_}]\
+           [get_cells {_64944_}]\
+           [get_cells {_64945_}]\
+           [get_cells {_64946_}]\
+           [get_cells {_64947_}]\
+           [get_cells {_64948_}]\
+           [get_cells {_64949_}]\
+           [get_cells {_64950_}]\
+           [get_cells {_64951_}]\
+           [get_cells {_64952_}]] 2
 set_multicycle_path -hold\
     -through [list [get_nets {u_comb.a_r[0]}]\
            [get_nets {u_comb.a_r[10]}]\
@@ -3672,7 +3678,6 @@ set_multicycle_path -hold\
            [get_nets {u_sc.tdm_b_r[5]}]\
            [get_nets {u_sc.tdm_b_r[6]}]\
            [get_nets {u_sc.tdm_b_r[7]}]\
-           [get_nets {u_sc.tdm_busy}]\
            [get_nets {u_sc.tdm_mul_r[0]}]\
            [get_nets {u_sc.tdm_mul_r[10]}]\
            [get_nets {u_sc.tdm_mul_r[11]}]\
@@ -3983,148 +3988,9 @@ set_multicycle_path -hold\
            [get_nets {u_tacc.tdm_wait[0]}]\
            [get_nets {u_tacc.tdm_wait[1]}]] 2
 set_multicycle_path -setup\
-    -to [list [get_cells {_61543_}]\
-           [get_cells {_61544_}]\
-           [get_cells {_61545_}]\
-           [get_cells {_61562_}]\
-           [get_cells {_61563_}]\
-           [get_cells {_61564_}]\
-           [get_cells {_61565_}]\
-           [get_cells {_61566_}]\
-           [get_cells {_61567_}]\
-           [get_cells {_61568_}]\
-           [get_cells {_61569_}]\
-           [get_cells {_61570_}]\
-           [get_cells {_61571_}]\
-           [get_cells {_61572_}]\
-           [get_cells {_61573_}]\
-           [get_cells {_61574_}]\
-           [get_cells {_61575_}]] 2
-set_multicycle_path -setup\
-    -through [list [get_nets {rb_bw_sel}]\
-           [get_nets {rb_sample_shift[0]}]\
-           [get_nets {rb_sf_cfg[0]}]\
-           [get_nets {rb_sf_cfg[1]}]\
-           [get_nets {rb_sf_cfg[2]}]\
-           [get_nets {rb_sf_cfg[3]}]]\
-    -to [list [get_cells {_62268_}]\
-           [get_cells {_62269_}]\
-           [get_cells {_62270_}]\
-           [get_cells {_62271_}]\
-           [get_cells {_62272_}]\
-           [get_cells {_62273_}]\
-           [get_cells {_62274_}]\
-           [get_cells {_62275_}]\
-           [get_cells {_62276_}]\
-           [get_cells {_62277_}]\
-           [get_cells {_62278_}]\
-           [get_cells {_62279_}]\
-           [get_cells {_62280_}]\
-           [get_cells {_62281_}]\
-           [get_cells {_62282_}]\
-           [get_cells {_62283_}]\
-           [get_cells {_62284_}]\
-           [get_cells {_62285_}]\
-           [get_cells {_62286_}]\
-           [get_cells {_62287_}]\
-           [get_cells {_62288_}]\
-           [get_cells {_62289_}]\
-           [get_cells {_62290_}]\
-           [get_cells {_62291_}]\
-           [get_cells {_62292_}]\
-           [get_cells {_62293_}]\
-           [get_cells {_62294_}]\
-           [get_cells {_62295_}]\
-           [get_cells {_62296_}]\
-           [get_cells {_62297_}]\
-           [get_cells {_62298_}]\
-           [get_cells {_62299_}]\
-           [get_cells {_62300_}]\
-           [get_cells {_62301_}]\
-           [get_cells {_62302_}]\
-           [get_cells {_62303_}]\
-           [get_cells {_62304_}]\
-           [get_cells {_62305_}]\
-           [get_cells {_62306_}]\
-           [get_cells {_62307_}]\
-           [get_cells {_62308_}]\
-           [get_cells {_62309_}]\
-           [get_cells {_62310_}]\
-           [get_cells {_62311_}]\
-           [get_cells {_62312_}]\
-           [get_cells {_62313_}]\
-           [get_cells {_62314_}]\
-           [get_cells {_62315_}]\
-           [get_cells {_62316_}]\
-           [get_cells {_62317_}]\
-           [get_cells {_62318_}]\
-           [get_cells {_62319_}]\
-           [get_cells {_62320_}]\
-           [get_cells {_62321_}]\
-           [get_cells {_62322_}]\
-           [get_cells {_62323_}]\
-           [get_cells {_62324_}]\
-           [get_cells {_62325_}]\
-           [get_cells {_62326_}]\
-           [get_cells {_62327_}]\
-           [get_cells {_62328_}]\
-           [get_cells {_62329_}]\
-           [get_cells {_62330_}]\
-           [get_cells {_62331_}]\
-           [get_cells {_62332_}]\
-           [get_cells {_62333_}]\
-           [get_cells {_62334_}]\
-           [get_cells {_62335_}]\
-           [get_cells {_62336_}]\
-           [get_cells {_62337_}]\
-           [get_cells {_62338_}]\
-           [get_cells {_62339_}]\
-           [get_cells {_62340_}]\
-           [get_cells {_62341_}]\
-           [get_cells {_62342_}]\
-           [get_cells {_62343_}]\
-           [get_cells {_62344_}]\
-           [get_cells {_62345_}]\
-           [get_cells {_62346_}]\
-           [get_cells {_62347_}]\
-           [get_cells {_62348_}]\
-           [get_cells {_62349_}]\
-           [get_cells {_62350_}]\
-           [get_cells {_62351_}]\
-           [get_cells {_62352_}]\
-           [get_cells {_62353_}]\
-           [get_cells {_62354_}]\
-           [get_cells {_62355_}]\
-           [get_cells {_62356_}]\
-           [get_cells {_62357_}]\
-           [get_cells {_62358_}]\
-           [get_cells {_62359_}]\
-           [get_cells {_62360_}]\
-           [get_cells {_62361_}]\
-           [get_cells {_62362_}]\
-           [get_cells {_62363_}]\
-           [get_cells {_62364_}]\
-           [get_cells {_62365_}]\
-           [get_cells {_62366_}]\
-           [get_cells {_62367_}]\
-           [get_cells {_62368_}]\
-           [get_cells {_62369_}]\
-           [get_cells {_62370_}]\
-           [get_cells {_62371_}]\
-           [get_cells {_62372_}]\
-           [get_cells {_62373_}]\
-           [get_cells {_62374_}]\
-           [get_cells {_62473_}]\
-           [get_cells {_62474_}]\
-           [get_cells {_62475_}]\
-           [get_cells {_62476_}]\
-           [get_cells {_62477_}]\
-           [get_cells {_62478_}]\
-           [get_cells {_62479_}]\
-           [get_cells {_62480_}]\
-           [get_cells {_62481_}]\
-           [get_cells {_62482_}]\
-           [get_cells {_62483_}]\
+    -to [list [get_cells {_62466_}]\
+           [get_cells {_62467_}]\
+           [get_cells {_62468_}]\
            [get_cells {_62484_}]\
            [get_cells {_62485_}]\
            [get_cells {_62486_}]\
@@ -4138,180 +4004,71 @@ set_multicycle_path -setup\
            [get_cells {_62494_}]\
            [get_cells {_62495_}]\
            [get_cells {_62496_}]\
-           [get_cells {_62497_}]\
-           [get_cells {_62498_}]\
-           [get_cells {_62499_}]\
-           [get_cells {_62500_}]\
-           [get_cells {_62501_}]\
-           [get_cells {_62502_}]\
-           [get_cells {_62503_}]\
-           [get_cells {_62504_}]\
-           [get_cells {_62505_}]\
-           [get_cells {_62506_}]\
-           [get_cells {_62507_}]\
-           [get_cells {_62508_}]\
-           [get_cells {_62509_}]\
-           [get_cells {_62510_}]\
-           [get_cells {_62511_}]\
-           [get_cells {_62512_}]\
-           [get_cells {_62513_}]\
-           [get_cells {_62514_}]\
-           [get_cells {_62515_}]\
-           [get_cells {_62516_}]\
-           [get_cells {_62517_}]\
-           [get_cells {_62518_}]\
-           [get_cells {_62519_}]\
-           [get_cells {_62520_}]\
-           [get_cells {_62521_}]\
-           [get_cells {_62522_}]\
-           [get_cells {_62523_}]\
-           [get_cells {_62524_}]\
-           [get_cells {_62525_}]\
-           [get_cells {_62526_}]\
-           [get_cells {_62527_}]\
-           [get_cells {_62528_}]\
-           [get_cells {_62529_}]\
-           [get_cells {_62530_}]\
-           [get_cells {_62531_}]\
-           [get_cells {_62532_}]\
-           [get_cells {_62533_}]\
-           [get_cells {_62534_}]\
-           [get_cells {_62535_}]\
-           [get_cells {_62536_}]\
-           [get_cells {_62537_}]\
-           [get_cells {_62538_}]\
-           [get_cells {_62539_}]\
-           [get_cells {_62540_}]\
-           [get_cells {_62541_}]\
-           [get_cells {_62542_}]\
-           [get_cells {_62543_}]\
-           [get_cells {_62544_}]\
-           [get_cells {_62545_}]\
-           [get_cells {_62546_}]\
-           [get_cells {_62547_}]\
-           [get_cells {_62548_}]\
-           [get_cells {_62549_}]\
-           [get_cells {_62550_}]\
-           [get_cells {_62551_}]\
-           [get_cells {_62552_}]\
-           [get_cells {_62553_}]\
-           [get_cells {_62554_}]\
-           [get_cells {_62555_}]\
-           [get_cells {_62556_}]\
-           [get_cells {_63842_}]\
-           [get_cells {_63890_}]\
-           [get_cells {_63891_}]\
-           [get_cells {_63892_}]\
-           [get_cells {_63893_}]\
-           [get_cells {_63894_}]\
-           [get_cells {_63895_}]\
-           [get_cells {_63896_}]\
-           [get_cells {_63897_}]\
-           [get_cells {_63898_}]\
-           [get_cells {_63899_}]\
-           [get_cells {_63900_}]\
-           [get_cells {_63901_}]\
-           [get_cells {_63902_}]\
-           [get_cells {_63903_}]\
-           [get_cells {_63904_}]\
-           [get_cells {_63905_}]\
-           [get_cells {_63906_}]\
-           [get_cells {_63907_}]\
-           [get_cells {_63908_}]\
-           [get_cells {_63909_}]\
-           [get_cells {_63910_}]\
-           [get_cells {_63911_}]\
-           [get_cells {_63912_}]\
-           [get_cells {_63913_}]\
-           [get_cells {_63914_}]\
-           [get_cells {_63915_}]\
-           [get_cells {_63916_}]\
-           [get_cells {_63917_}]\
-           [get_cells {_63919_}]\
-           [get_cells {_63920_}]\
-           [get_cells {_63921_}]\
-           [get_cells {_63922_}]\
-           [get_cells {_63923_}]\
-           [get_cells {_63924_}]\
-           [get_cells {_63925_}]\
-           [get_cells {_63926_}]\
-           [get_cells {_63927_}]\
-           [get_cells {_63928_}]\
-           [get_cells {_63929_}]\
-           [get_cells {_63930_}]\
-           [get_cells {_63931_}]\
-           [get_cells {_63932_}]\
-           [get_cells {_63933_}]\
-           [get_cells {_63934_}]\
-           [get_cells {_63935_}]\
-           [get_cells {_63936_}]\
-           [get_cells {_63937_}]\
-           [get_cells {_63938_}]\
-           [get_cells {_63939_}]\
-           [get_cells {_63940_}]\
-           [get_cells {_63941_}]\
-           [get_cells {_63942_}]\
-           [get_cells {_63943_}]\
-           [get_cells {_63944_}]\
-           [get_cells {_63945_}]\
-           [get_cells {_63946_}]\
-           [get_cells {_63948_}]\
-           [get_cells {_63957_}]\
-           [get_cells {_63958_}]\
-           [get_cells {_63959_}]\
-           [get_cells {_63960_}]] 3
+           [get_cells {_62497_}]] 2
 set_multicycle_path -setup\
     -through [list [get_nets {rb_bw_sel}]\
            [get_nets {rb_sample_shift[0]}]\
-           [get_nets {rb_sc_hits_req[0]}]\
-           [get_nets {rb_sc_hits_req[1]}]\
            [get_nets {rb_sf_cfg[0]}]\
            [get_nets {rb_sf_cfg[1]}]\
            [get_nets {rb_sf_cfg[2]}]\
            [get_nets {rb_sf_cfg[3]}]]\
-    -to [list [get_cells {_62167_}]\
-           [get_cells {_62168_}]\
-           [get_cells {_62169_}]\
-           [get_cells {_62170_}]\
-           [get_cells {_62171_}]\
-           [get_cells {_62172_}]\
-           [get_cells {_62173_}]\
-           [get_cells {_62174_}]\
-           [get_cells {_62175_}]\
-           [get_cells {_62176_}]\
-           [get_cells {_62177_}]\
-           [get_cells {_62178_}]\
-           [get_cells {_62179_}]\
-           [get_cells {_62180_}]\
-           [get_cells {_62181_}]\
-           [get_cells {_62182_}]\
-           [get_cells {_62183_}]\
-           [get_cells {_62184_}]\
-           [get_cells {_62185_}]\
-           [get_cells {_62186_}]\
-           [get_cells {_62187_}]\
-           [get_cells {_62188_}]\
-           [get_cells {_62189_}]\
-           [get_cells {_62190_}]\
-           [get_cells {_62191_}]\
-           [get_cells {_62192_}]\
-           [get_cells {_62193_}]\
-           [get_cells {_62194_}]\
-           [get_cells {_62195_}]\
-           [get_cells {_62196_}]\
-           [get_cells {_62197_}]\
-           [get_cells {_62198_}]] 3
-set_multicycle_path -setup\
-    -through [list [get_nets {rb_bw_sel}]\
-           [get_nets {rb_sample_shift[0]}]\
-           [get_nets {rb_sf_cfg[0]}]\
-           [get_nets {rb_sf_cfg[1]}]\
-           [get_nets {rb_sf_cfg[2]}]\
-           [get_nets {rb_sf_cfg[3]}]\
-           [get_nets {rb_tacc_window_syms[0]}]\
-           [get_nets {rb_tacc_window_syms[1]}]\
-           [get_nets {rb_tacc_window_syms[2]}]]\
-    -to [list [get_cells {_63230_}]\
+    -to [list [get_cells {_63174_}]\
+           [get_cells {_63175_}]\
+           [get_cells {_63176_}]\
+           [get_cells {_63177_}]\
+           [get_cells {_63178_}]\
+           [get_cells {_63179_}]\
+           [get_cells {_63180_}]\
+           [get_cells {_63181_}]\
+           [get_cells {_63182_}]\
+           [get_cells {_63183_}]\
+           [get_cells {_63184_}]\
+           [get_cells {_63185_}]\
+           [get_cells {_63186_}]\
+           [get_cells {_63187_}]\
+           [get_cells {_63188_}]\
+           [get_cells {_63189_}]\
+           [get_cells {_63190_}]\
+           [get_cells {_63191_}]\
+           [get_cells {_63192_}]\
+           [get_cells {_63193_}]\
+           [get_cells {_63194_}]\
+           [get_cells {_63195_}]\
+           [get_cells {_63196_}]\
+           [get_cells {_63197_}]\
+           [get_cells {_63198_}]\
+           [get_cells {_63199_}]\
+           [get_cells {_63200_}]\
+           [get_cells {_63201_}]\
+           [get_cells {_63202_}]\
+           [get_cells {_63203_}]\
+           [get_cells {_63204_}]\
+           [get_cells {_63205_}]\
+           [get_cells {_63206_}]\
+           [get_cells {_63207_}]\
+           [get_cells {_63208_}]\
+           [get_cells {_63209_}]\
+           [get_cells {_63210_}]\
+           [get_cells {_63211_}]\
+           [get_cells {_63212_}]\
+           [get_cells {_63213_}]\
+           [get_cells {_63214_}]\
+           [get_cells {_63215_}]\
+           [get_cells {_63216_}]\
+           [get_cells {_63217_}]\
+           [get_cells {_63218_}]\
+           [get_cells {_63219_}]\
+           [get_cells {_63220_}]\
+           [get_cells {_63221_}]\
+           [get_cells {_63222_}]\
+           [get_cells {_63223_}]\
+           [get_cells {_63224_}]\
+           [get_cells {_63225_}]\
+           [get_cells {_63226_}]\
+           [get_cells {_63227_}]\
+           [get_cells {_63228_}]\
+           [get_cells {_63229_}]\
+           [get_cells {_63230_}]\
            [get_cells {_63231_}]\
            [get_cells {_63232_}]\
            [get_cells {_63233_}]\
@@ -4362,19 +4119,267 @@ set_multicycle_path -setup\
            [get_cells {_63278_}]\
            [get_cells {_63279_}]\
            [get_cells {_63280_}]\
-           [get_cells {_63281_}]\
-           [get_cells {_63282_}]\
-           [get_cells {_63283_}]\
-           [get_cells {_63284_}]\
-           [get_cells {_63285_}]\
-           [get_cells {_63286_}]\
-           [get_cells {_63287_}]\
-           [get_cells {_63288_}]\
-           [get_cells {_63289_}]\
-           [get_cells {_63290_}]\
-           [get_cells {_63291_}]\
-           [get_cells {_63292_}]\
-           [get_cells {_63293_}]] 3
+           [get_cells {_63379_}]\
+           [get_cells {_63380_}]\
+           [get_cells {_63381_}]\
+           [get_cells {_63382_}]\
+           [get_cells {_63383_}]\
+           [get_cells {_63384_}]\
+           [get_cells {_63385_}]\
+           [get_cells {_63386_}]\
+           [get_cells {_63387_}]\
+           [get_cells {_63388_}]\
+           [get_cells {_63389_}]\
+           [get_cells {_63390_}]\
+           [get_cells {_63391_}]\
+           [get_cells {_63392_}]\
+           [get_cells {_63393_}]\
+           [get_cells {_63394_}]\
+           [get_cells {_63395_}]\
+           [get_cells {_63396_}]\
+           [get_cells {_63397_}]\
+           [get_cells {_63398_}]\
+           [get_cells {_63399_}]\
+           [get_cells {_63400_}]\
+           [get_cells {_63401_}]\
+           [get_cells {_63402_}]\
+           [get_cells {_63403_}]\
+           [get_cells {_63404_}]\
+           [get_cells {_63405_}]\
+           [get_cells {_63406_}]\
+           [get_cells {_63407_}]\
+           [get_cells {_63408_}]\
+           [get_cells {_63409_}]\
+           [get_cells {_63410_}]\
+           [get_cells {_63411_}]\
+           [get_cells {_63412_}]\
+           [get_cells {_63413_}]\
+           [get_cells {_63414_}]\
+           [get_cells {_63415_}]\
+           [get_cells {_63416_}]\
+           [get_cells {_63417_}]\
+           [get_cells {_63418_}]\
+           [get_cells {_63419_}]\
+           [get_cells {_63420_}]\
+           [get_cells {_63421_}]\
+           [get_cells {_63422_}]\
+           [get_cells {_63423_}]\
+           [get_cells {_63424_}]\
+           [get_cells {_63425_}]\
+           [get_cells {_63426_}]\
+           [get_cells {_63427_}]\
+           [get_cells {_63428_}]\
+           [get_cells {_63429_}]\
+           [get_cells {_63430_}]\
+           [get_cells {_63431_}]\
+           [get_cells {_63432_}]\
+           [get_cells {_63433_}]\
+           [get_cells {_63434_}]\
+           [get_cells {_63435_}]\
+           [get_cells {_63436_}]\
+           [get_cells {_63437_}]\
+           [get_cells {_63438_}]\
+           [get_cells {_63439_}]\
+           [get_cells {_63440_}]\
+           [get_cells {_63441_}]\
+           [get_cells {_63442_}]\
+           [get_cells {_63443_}]\
+           [get_cells {_63444_}]\
+           [get_cells {_63445_}]\
+           [get_cells {_63446_}]\
+           [get_cells {_63447_}]\
+           [get_cells {_63448_}]\
+           [get_cells {_63449_}]\
+           [get_cells {_63450_}]\
+           [get_cells {_63451_}]\
+           [get_cells {_63452_}]\
+           [get_cells {_63453_}]\
+           [get_cells {_63454_}]\
+           [get_cells {_63455_}]\
+           [get_cells {_63456_}]\
+           [get_cells {_63457_}]\
+           [get_cells {_63458_}]\
+           [get_cells {_63459_}]\
+           [get_cells {_63460_}]\
+           [get_cells {_63461_}]\
+           [get_cells {_63462_}]\
+           [get_cells {_64736_}]\
+           [get_cells {_64737_}]\
+           [get_cells {_64738_}]\
+           [get_cells {_64739_}]\
+           [get_cells {_64740_}]\
+           [get_cells {_64741_}]\
+           [get_cells {_64791_}]\
+           [get_cells {_64792_}]\
+           [get_cells {_64793_}]\
+           [get_cells {_64794_}]\
+           [get_cells {_64795_}]\
+           [get_cells {_64796_}]\
+           [get_cells {_64797_}]\
+           [get_cells {_64798_}]\
+           [get_cells {_64799_}]\
+           [get_cells {_64800_}]\
+           [get_cells {_64801_}]\
+           [get_cells {_64802_}]\
+           [get_cells {_64803_}]\
+           [get_cells {_64804_}]\
+           [get_cells {_64805_}]\
+           [get_cells {_64806_}]\
+           [get_cells {_64807_}]\
+           [get_cells {_64808_}]\
+           [get_cells {_64809_}]\
+           [get_cells {_64810_}]\
+           [get_cells {_64811_}]\
+           [get_cells {_64812_}]\
+           [get_cells {_64813_}]\
+           [get_cells {_64814_}]\
+           [get_cells {_64815_}]\
+           [get_cells {_64816_}]\
+           [get_cells {_64817_}]\
+           [get_cells {_64818_}]\
+           [get_cells {_64828_}]\
+           [get_cells {_64829_}]\
+           [get_cells {_64830_}]\
+           [get_cells {_64831_}]\
+           [get_cells {_64832_}]\
+           [get_cells {_64833_}]\
+           [get_cells {_64834_}]\
+           [get_cells {_64835_}]\
+           [get_cells {_64836_}]\
+           [get_cells {_64837_}]\
+           [get_cells {_64838_}]\
+           [get_cells {_64839_}]\
+           [get_cells {_64840_}]\
+           [get_cells {_64841_}]\
+           [get_cells {_64842_}]\
+           [get_cells {_64843_}]\
+           [get_cells {_64844_}]\
+           [get_cells {_64845_}]\
+           [get_cells {_64846_}]\
+           [get_cells {_64847_}]\
+           [get_cells {_64848_}]\
+           [get_cells {_64849_}]\
+           [get_cells {_64850_}]\
+           [get_cells {_64851_}]\
+           [get_cells {_64852_}]\
+           [get_cells {_64853_}]\
+           [get_cells {_64854_}]\
+           [get_cells {_64855_}]] 3
+set_multicycle_path -setup\
+    -through [list [get_nets {rb_bw_sel}]\
+           [get_nets {rb_sample_shift[0]}]\
+           [get_nets {rb_sc_hits_req[0]}]\
+           [get_nets {rb_sc_hits_req[1]}]\
+           [get_nets {rb_sf_cfg[0]}]\
+           [get_nets {rb_sf_cfg[1]}]\
+           [get_nets {rb_sf_cfg[2]}]\
+           [get_nets {rb_sf_cfg[3]}]]\
+    -to [list [get_cells {_63073_}]\
+           [get_cells {_63074_}]\
+           [get_cells {_63075_}]\
+           [get_cells {_63076_}]\
+           [get_cells {_63077_}]\
+           [get_cells {_63078_}]\
+           [get_cells {_63079_}]\
+           [get_cells {_63080_}]\
+           [get_cells {_63081_}]\
+           [get_cells {_63082_}]\
+           [get_cells {_63083_}]\
+           [get_cells {_63084_}]\
+           [get_cells {_63085_}]\
+           [get_cells {_63086_}]\
+           [get_cells {_63087_}]\
+           [get_cells {_63088_}]\
+           [get_cells {_63089_}]\
+           [get_cells {_63090_}]\
+           [get_cells {_63091_}]\
+           [get_cells {_63092_}]\
+           [get_cells {_63093_}]\
+           [get_cells {_63094_}]\
+           [get_cells {_63095_}]\
+           [get_cells {_63096_}]\
+           [get_cells {_63097_}]\
+           [get_cells {_63098_}]\
+           [get_cells {_63099_}]\
+           [get_cells {_63100_}]\
+           [get_cells {_63101_}]\
+           [get_cells {_63102_}]\
+           [get_cells {_63103_}]\
+           [get_cells {_63104_}]] 3
+set_multicycle_path -setup\
+    -through [list [get_nets {rb_bw_sel}]\
+           [get_nets {rb_sample_shift[0]}]\
+           [get_nets {rb_sf_cfg[0]}]\
+           [get_nets {rb_sf_cfg[1]}]\
+           [get_nets {rb_sf_cfg[2]}]\
+           [get_nets {rb_sf_cfg[3]}]\
+           [get_nets {rb_tacc_window_syms[0]}]\
+           [get_nets {rb_tacc_window_syms[1]}]\
+           [get_nets {rb_tacc_window_syms[2]}]]\
+    -to [list [get_cells {_64136_}]\
+           [get_cells {_64137_}]\
+           [get_cells {_64138_}]\
+           [get_cells {_64139_}]\
+           [get_cells {_64140_}]\
+           [get_cells {_64141_}]\
+           [get_cells {_64142_}]\
+           [get_cells {_64143_}]\
+           [get_cells {_64144_}]\
+           [get_cells {_64145_}]\
+           [get_cells {_64146_}]\
+           [get_cells {_64147_}]\
+           [get_cells {_64148_}]\
+           [get_cells {_64149_}]\
+           [get_cells {_64150_}]\
+           [get_cells {_64151_}]\
+           [get_cells {_64152_}]\
+           [get_cells {_64153_}]\
+           [get_cells {_64154_}]\
+           [get_cells {_64155_}]\
+           [get_cells {_64156_}]\
+           [get_cells {_64157_}]\
+           [get_cells {_64158_}]\
+           [get_cells {_64159_}]\
+           [get_cells {_64160_}]\
+           [get_cells {_64161_}]\
+           [get_cells {_64162_}]\
+           [get_cells {_64163_}]\
+           [get_cells {_64164_}]\
+           [get_cells {_64165_}]\
+           [get_cells {_64166_}]\
+           [get_cells {_64167_}]\
+           [get_cells {_64168_}]\
+           [get_cells {_64169_}]\
+           [get_cells {_64170_}]\
+           [get_cells {_64171_}]\
+           [get_cells {_64172_}]\
+           [get_cells {_64173_}]\
+           [get_cells {_64174_}]\
+           [get_cells {_64175_}]\
+           [get_cells {_64176_}]\
+           [get_cells {_64177_}]\
+           [get_cells {_64178_}]\
+           [get_cells {_64179_}]\
+           [get_cells {_64180_}]\
+           [get_cells {_64181_}]\
+           [get_cells {_64182_}]\
+           [get_cells {_64183_}]\
+           [get_cells {_64184_}]\
+           [get_cells {_64185_}]\
+           [get_cells {_64186_}]\
+           [get_cells {_64187_}]\
+           [get_cells {_64188_}]\
+           [get_cells {_64189_}]\
+           [get_cells {_64190_}]\
+           [get_cells {_64191_}]\
+           [get_cells {_64192_}]\
+           [get_cells {_64193_}]\
+           [get_cells {_64194_}]\
+           [get_cells {_64195_}]\
+           [get_cells {_64196_}]\
+           [get_cells {_64197_}]\
+           [get_cells {_64198_}]\
+           [get_cells {_64199_}]] 3
 set_multicycle_path -setup\
     -through [list [get_nets {rb_addr[0]}]\
            [get_nets {rb_addr[1]}]\
@@ -4383,7 +4388,6 @@ set_multicycle_path -setup\
            [get_nets {rb_addr[4]}]\
            [get_nets {rb_addr[5]}]\
            [get_nets {rb_addr[6]}]\
-           [get_nets {rb_addr[7]}]\
            [get_nets {rb_wdata[0]}]\
            [get_nets {rb_wdata[1]}]\
            [get_nets {rb_wdata[2]}]\
@@ -4411,21 +4415,21 @@ set_multicycle_path -setup\
            [get_nets {rb_tacc_window_syms[0]}]\
            [get_nets {rb_tacc_window_syms[1]}]\
            [get_nets {rb_tacc_window_syms[2]}]]\
-    -to [list [get_cells {_64018_}]\
-           [get_cells {_64019_}]\
-           [get_cells {_64020_}]\
-           [get_cells {_64021_}]\
-           [get_cells {_64022_}]\
-           [get_cells {_64023_}]\
-           [get_cells {_64024_}]\
-           [get_cells {_64025_}]\
-           [get_cells {_64026_}]\
-           [get_cells {_64027_}]\
-           [get_cells {_64028_}]\
-           [get_cells {_64029_}]\
-           [get_cells {_64030_}]\
-           [get_cells {_64031_}]\
-           [get_cells {_64032_}]] 3
+    -to [list [get_cells {_64917_}]\
+           [get_cells {_64918_}]\
+           [get_cells {_64919_}]\
+           [get_cells {_64920_}]\
+           [get_cells {_64921_}]\
+           [get_cells {_64922_}]\
+           [get_cells {_64923_}]\
+           [get_cells {_64924_}]\
+           [get_cells {_64925_}]\
+           [get_cells {_64926_}]\
+           [get_cells {_64927_}]\
+           [get_cells {_64928_}]\
+           [get_cells {_64929_}]\
+           [get_cells {_64930_}]\
+           [get_cells {_64931_}]] 3
 set_multicycle_path -setup\
     -through [list [get_nets {rb_bw_sel}]\
            [get_nets {rb_pkt_timeout_syms[0]}]\
@@ -4479,69 +4483,69 @@ set_multicycle_path -setup\
            [get_nets {u_pcfsm.lat_timing_ref[7]}]\
            [get_nets {u_pcfsm.lat_timing_ref[8]}]\
            [get_nets {u_pcfsm.lat_timing_ref[9]}]]\
-    -to [list [get_cells {_63974_}]\
-           [get_cells {_63975_}]\
-           [get_cells {_63976_}]\
-           [get_cells {_63977_}]\
-           [get_cells {_63978_}]\
-           [get_cells {_63979_}]\
-           [get_cells {_63980_}]\
-           [get_cells {_63981_}]\
-           [get_cells {_63982_}]\
-           [get_cells {_63983_}]\
-           [get_cells {_63984_}]\
-           [get_cells {_63985_}]\
-           [get_cells {_63986_}]\
-           [get_cells {_63987_}]\
-           [get_cells {_63988_}]\
-           [get_cells {_63989_}]\
-           [get_cells {_63990_}]\
-           [get_cells {_63991_}]\
-           [get_cells {_63992_}]\
-           [get_cells {_63993_}]\
-           [get_cells {_63994_}]\
-           [get_cells {_63995_}]\
-           [get_cells {_63996_}]\
-           [get_cells {_63998_}]\
-           [get_cells {_63999_}]\
-           [get_cells {_64000_}]\
-           [get_cells {_64001_}]\
-           [get_cells {_64002_}]\
-           [get_cells {_64003_}]\
-           [get_cells {_64004_}]\
-           [get_cells {_64005_}]\
-           [get_cells {_64006_}]\
-           [get_cells {_64007_}]\
-           [get_cells {_64008_}]\
-           [get_cells {_64009_}]\
-           [get_cells {_64010_}]\
-           [get_cells {_64011_}]\
-           [get_cells {_64012_}]\
-           [get_cells {_64013_}]\
-           [get_cells {_64014_}]\
-           [get_cells {_64015_}]\
-           [get_cells {_64016_}]\
-           [get_cells {_64017_}]\
-           [get_cells {_64033_}]\
-           [get_cells {_64034_}]\
-           [get_cells {_64035_}]\
-           [get_cells {_64036_}]\
-           [get_cells {_64037_}]\
-           [get_cells {_64038_}]\
-           [get_cells {_64039_}]\
-           [get_cells {_64040_}]\
-           [get_cells {_64041_}]\
-           [get_cells {_64042_}]\
-           [get_cells {_64043_}]\
-           [get_cells {_64044_}]\
-           [get_cells {_64045_}]\
-           [get_cells {_64046_}]\
-           [get_cells {_64047_}]\
-           [get_cells {_64048_}]\
-           [get_cells {_64049_}]\
-           [get_cells {_64050_}]\
-           [get_cells {_64051_}]\
-           [get_cells {_64052_}]] 3
+    -to [list [get_cells {_64873_}]\
+           [get_cells {_64874_}]\
+           [get_cells {_64875_}]\
+           [get_cells {_64876_}]\
+           [get_cells {_64877_}]\
+           [get_cells {_64878_}]\
+           [get_cells {_64879_}]\
+           [get_cells {_64880_}]\
+           [get_cells {_64881_}]\
+           [get_cells {_64882_}]\
+           [get_cells {_64883_}]\
+           [get_cells {_64884_}]\
+           [get_cells {_64885_}]\
+           [get_cells {_64886_}]\
+           [get_cells {_64887_}]\
+           [get_cells {_64888_}]\
+           [get_cells {_64889_}]\
+           [get_cells {_64890_}]\
+           [get_cells {_64891_}]\
+           [get_cells {_64892_}]\
+           [get_cells {_64893_}]\
+           [get_cells {_64894_}]\
+           [get_cells {_64895_}]\
+           [get_cells {_64897_}]\
+           [get_cells {_64898_}]\
+           [get_cells {_64899_}]\
+           [get_cells {_64900_}]\
+           [get_cells {_64901_}]\
+           [get_cells {_64902_}]\
+           [get_cells {_64903_}]\
+           [get_cells {_64904_}]\
+           [get_cells {_64905_}]\
+           [get_cells {_64906_}]\
+           [get_cells {_64907_}]\
+           [get_cells {_64908_}]\
+           [get_cells {_64909_}]\
+           [get_cells {_64910_}]\
+           [get_cells {_64911_}]\
+           [get_cells {_64912_}]\
+           [get_cells {_64913_}]\
+           [get_cells {_64914_}]\
+           [get_cells {_64915_}]\
+           [get_cells {_64916_}]\
+           [get_cells {_64933_}]\
+           [get_cells {_64934_}]\
+           [get_cells {_64935_}]\
+           [get_cells {_64936_}]\
+           [get_cells {_64937_}]\
+           [get_cells {_64938_}]\
+           [get_cells {_64939_}]\
+           [get_cells {_64940_}]\
+           [get_cells {_64941_}]\
+           [get_cells {_64942_}]\
+           [get_cells {_64943_}]\
+           [get_cells {_64944_}]\
+           [get_cells {_64945_}]\
+           [get_cells {_64946_}]\
+           [get_cells {_64947_}]\
+           [get_cells {_64948_}]\
+           [get_cells {_64949_}]\
+           [get_cells {_64950_}]\
+           [get_cells {_64951_}]\
+           [get_cells {_64952_}]] 3
 set_multicycle_path -setup\
     -through [list [get_nets {u_comb.a_r[0]}]\
            [get_nets {u_comb.a_r[10]}]\
@@ -7357,7 +7361,6 @@ set_multicycle_path -setup\
            [get_nets {u_sc.tdm_b_r[5]}]\
            [get_nets {u_sc.tdm_b_r[6]}]\
            [get_nets {u_sc.tdm_b_r[7]}]\
-           [get_nets {u_sc.tdm_busy}]\
            [get_nets {u_sc.tdm_mul_r[0]}]\
            [get_nets {u_sc.tdm_mul_r[10]}]\
            [get_nets {u_sc.tdm_mul_r[11]}]\
@@ -7669,7 +7672,11 @@ set_multicycle_path -setup\
            [get_nets {u_tacc.tdm_wait[1]}]] 3
 set_false_path\
     -from [list [get_ports {HOST_CS}]\
-           [get_ports {RESETB}]]
+           [get_ports {RESETB}]\
+           [get_ports {SPI_MOSI}]\
+           [get_ports {SPI_SCK}]]
+set_false_path\
+    -to [get_ports {SPI_MISO_OUT}]
 set_false_path\
     -through [list [get_nets {u_psram.dbg_addr_cur[0]}]\
            [get_nets {u_psram.dbg_addr_cur[10]}]\

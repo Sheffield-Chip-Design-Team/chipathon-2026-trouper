@@ -23,9 +23,11 @@ evidence, don't delete) or as new ones are found.
 ### 1. Chip-wide SS-corner (32 MHz, `max_ss_125C_3v00`) closure is not on production RTL
 
 The `gf180mcu_fd_sc_mcu7t5v0` FD cells fail 32 MHz timing at the slow corner.
-The current production RTL has an SS setup WNS in the **−12 to −15 ns** band
-(best **−12.11 ns**, jobs 3403/3404; repeated 2026-07-25 runs **−14.91 ns**,
-TNS −5747 ns). The decimator's
+The current production RTL has an SS setup WNS in the **−12 to −18 ns** band
+(best **−12.11 ns**, jobs 3403/3404; 2026-07-25 runs **−14.91 ns**,
+TNS −5747 ns; **latest, and the number to quote: −17.74 ns / TNS −416.9 ns**,
+job 5279 on the A40 1675×1110 die with the debug pins — see the 2026-08-30
+update below). The decimator's
 share of that has been honestly closed (pure 3-cycle pacing + fanout fix, SS
 WNS **+8.0 ns MET**, SGE job 2149), and sc_detector/training_acc have paced
 fixes too. **Correction 2026-07-12: `ss-mcp-pacing` IS merged into `main`**
@@ -43,9 +45,53 @@ one-`sck` displacement, handover/pad safety, sustained no-skip, and replay
 ordering) is defined in `ss-corner-decimator-pacing-closure.md` under "The
 genuine residual: `u_psram` QSPI engine"; it is required before this path can
 be treated as fixed.
-The config-relaxed netlist needed to carry this fix currently **fails
+~~The config-relaxed netlist needed to carry this fix currently **fails
 detailed routing** (DRT-1231 / DRT-0073) on every floorplan tried — the
-current floorplan has no routability headroom to absorb the SDC change.
+current floorplan has no routability headroom to absorb the SDC change.~~
+**Superseded 2026-08-30:** that routing blocker was root-caused and fixed —
+diodes were stealing pin access from the `IQ_CLK` clock buffers, and
+`DIODE_PADDING: 4` clears it (item 6, item 51). Jobs 5214 and 5279 both route
+to 0 antenna / 0 DRC / clean LVS on the A40 die, so routability no longer
+gates carrying an SDC change; the remaining obstacle is the timing gap itself.
+
+**2026-08-30 update — debug-pin P&R (job 5279): SS WNS −17.74 ns / TNS −416.9 ns.**
+First full A40 P&R carrying the two-pin digital debug probes plus `ARRAY_ACQ_N`
+(`src/config/trouper_top_dbgpins.json` — since collapsed into the canonical
+`src/config/trouper_top.json`, 2026-09-01 — = the job-5214 signoff config with
+the floorplan template extended for the three pads the integrator DEF predates; the
+antenna-closure recipe — `DIODE_PADDING: 4`, `DPL_CELL_PADDING: 2`, mixed GRT/DRT
+repair, 65 % density — carried through unchanged so the two are directly
+comparable). Everything except SS setup is clean:
+
+| metric | 5214 baseline | **5279 (+ debug pins)** |
+|---|---|---|
+| SS setup WNS (`max_ss_125C_3v00`) | −16.26 ns | **−17.74 ns** |
+| SS setup TNS | −379.5 ns | **−416.9 ns** |
+| setup, `nom_tt` / `max_ff` | met | met (WNS 0 / TNS 0) |
+| hold WNS, all three corners | 0 | 0 |
+| antenna | 0 net / 0 pin | 0 net / 0 pin |
+| magic DRC / XOR / LVS | 0 / 0 / clean | 0 / 0 / clean |
+| max slew / max cap violations | — | 0 / 0 (all corners) |
+| die / utilisation | 1675×1110 / 65.0 % | 1675×1110 / 66.1 % |
+
+**The debug pins cost ≈1.5 ns of SS setup margin (−1.48 ns WNS, −37.4 ns TNS)
+for +1.1 pt utilisation, and cost nothing in DRC, LVS, antenna, hold, or DRV.**
+That is the honest price of the observability feature — small against a gap of
+this size, but it moves the wrong way and should be re-checked if the SS residual
+is ever driven close to zero. Note this is the SS figure on the **A40 1675×1110
+die**, not comparable with the −12.45 ns below (job 5122, the older 1650×1100
+`config_1650x1100_full_rect` floorplan).
+
+A companion run, **job 5276**, carried the *same* RTL (identical `VERILOG_FILES`,
+so it too has both the array-sync and the debug pads) from the `rtl-test/` config
+at **72 %** density rather than 65 %. It never completed — the flow stops at step
+54/78 (`OpenROAD.FillInsertion`) with an empty `error.log` and no `final/`, so it
+has no STA, DRC, LVS or antenna results and **must not be quoted**. Job 5279 is
+the only finished run of this feature set.
+
+**Run:** `/srv/eda/runs/timothyn-dev/lora-mimo-dbgpnr/5279/dbgpins/run`;
+log `/srv/eda/logs/timothyn-dev/job-5279.o`. **See:**
+`planning/two-pin-digital-debug-plan.md` (P&R review obligations).
 
 **2026-08-27 update — current signoff SS WNS is −12.45 ns / TNS −897 ns**
 (job 5122, `config_1650x1100_full_rect`), after the DRV closure (job 5105,
@@ -57,10 +103,26 @@ paths are the genuine voltage-bound paced-DSP floor (mostly `u_remod`
 OSR=64 MAC, needs ~4.5 V core — item 27 / item 44), the rest are
 quasi-static cones left as documented waivers. This does not close the
 item: 3.0 V SS still fails, and the honest-MCP obligation (item 43) is not
-fully met.
+fully met. **Amended 2026-08-30:** the "needs ~4.5 V core" escape in that
+sentence is no longer available — items 27 and 44 are closed as a decision:
+no split rail and no 4.5 V core. Both rails stay tied, and the only voltage
+lever left is raising **both together to ~3.5 V**, whose benefit is
+uncharacterized (the measured points are 3.0 V → −12.11 ns and 4.5 V →
++1.96 ns on the same netlist; nothing has been run at 3.5 V). This item must
+therefore close on honest RTL/SDC work plus at most a uniform ~3.5 V bump.
 
-**Blocks:** any honest chip-wide SS signoff; die-shrink work (blocked on the
-same routability issue).
+**Open action (documented, not scheduled):** characterise the uniform ~3.5 V
+point. It is the only voltage lever the closed rail decision leaves, and it has
+never been measured — the two known points are 3.0 V → −12.11 ns and 4.5 V →
++1.96 ns on the same netlist, so how much of that ~14 ns swing 3.5 V actually
+buys is unknown. The cheap form is a re-time of an existing routed netlist +
+SPEF at a 3.5 V corner (the harness used for the 2026-08-14 honest-SDC probe,
+`rtl-test/ol_trouper_top/honest_sta.tcl`), not a new P&R. Until that number
+exists, no closure plan for this item should assume voltage contributes
+anything.
+
+**Blocks:** any honest chip-wide SS signoff; die-shrink work (was blocked on
+routability — that half is retired, see the strike-through above).
 
 Re-confirmed 2026-07-05 on the current 1200×1100 signoff run
 (`RUN_2026-07-05_00-56-34`, DRC=0/LVS=0): the same as-routed netlist meets
@@ -142,26 +204,6 @@ papering over unrelated debt.
 
 (Items 2 and 3 — `sc_lock` one-shot and un-clearable `IRQ_STATUS` bits —
 were fixed and verified; see Closed.)
-
-### 51. `trouper_top` @ 1675×1110 antenna violations — CLOSED 2026-08-29 (`DIODE_PADDING: 4`)
-
-The A40 die-size rebuild had 26 antenna net / 35 pin violations (job 5158).
-**Job 5198 (`config_1675_c5_diodepad4.json`) reaches 0 net / 0 pin**, fully
-signoff-clean: DRC 0, XOR 0, LVS clear, hold 0 all corners, setup max_ss
-−13.15 ns (better than the −13.52 ns baseline), clock skew 0.312 ns,
-die 1675×1110.
-
-Antenna *repair* was never the problem — inserted diodes crowded IQ_CLK clock
-buffers and stole their routing pin access, so detailed routing died on
-`DRT-0073`/`DRT-1231`. `DIODE_PADDING` was unset, so diodes could abut a clock
-buffer; setting it to 4 fixes the interaction. The failing cell was a `clkbuf_16`
-in every early run, but downsizing the tree is **not** the fix — job 5197 then
-failed on a `clkbuf_12`, the very cell it downsized to, and cost skew
-(0.442 vs 0.312 ns). Buffer size is irrelevant; diode proximity is the cause.
-
-This also gives Open Risk #6 (recurring `DRT-1231` clkbuf pin-access failure) a
-concrete mitigation. Full record:
-`planning/antenna-closure-investigation-2026-08.md`.
 
 ### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
 
@@ -469,23 +511,41 @@ a dedicated proof.
 
 ## High
 
-### 5. ~~"Silence during PSRAM buffering" actually emits a ΣΔ-modulated DC tone~~ FIXED 2026-07-12
+### 6. DRT-1231 clkbuf CTS pin-access failure — **CLOSED 2026-09-03** (the SPI_SCK CTS exclusion survived a netlist perturbation 2.6× the one that broke it)
 
-**Both halves fixed by the continuous-delay replay implementation**
-(`planning/psram-replay-continuous-delay-redesign.md`, now IMPLEMENTED):
-`trouper_top.v` keeps `in_valid` asserted and feeds zeros during buffering
-(real modulated silence, asserted bit-exact by the updated
-`_watch_bypass`), and the `W_COMMIT` rewind-to-`buf_base` jump is replaced
-by a margin-gated delay line that never rewinds (`TRPR-RMD-009` met;
-monotonicity watched at `rd_ptr` in `cocotb/tests/test_replay_delay.py`).
-New registers `REPLAY_DELAY_SAMPLES` (0x77/0x78) + `WGT_CTRL[4]`
-`W_COMMIT_LATE`.
-
-**Found:** 2026-07-02 trouper_top RTL review. **Fixed:** 2026-07-12
-(replay-delay regression + bypass_e2e/w_missed/psram_ops/qspi_owner/
-reg-reset-sweep suites, SGE jobs 3347/3350).
-
-### 6. DRT-1231 clkbuf CTS pin-access failure is recurring, not proven robust
+> **CLOSED — the stated exit criterion was tested and did not fire.** This item
+> stayed open on one specific ground: the adopted `SPI_SCK` CTS exclusion was
+> **n=1 on netlist perturbation**. Jobs 5284 and 5286 were the same netlist
+> twice, so they could not exercise the thing that actually triggers the bug.
+> The original trigger was small — a 6-line `reg_bank.v` edit worth **144 cells**
+> (35526 → 35670) turned the clean job 5279 into the DRT-1231 failure of 5281.
+>
+> The Grouper-boundary removal then changed the netlist by **370 cells**
+> (35670 → 35300) — a perturbation **2.6× larger** than the one that originally
+> broke it. Five runs have since routed on that new netlist with the exclusion
+> in place, all clean, with **zero `SPI_SCK` DRT-1231 recurrences**:
+>
+> | Job | What it was | Result |
+> |---|---|---|
+> | 5378 | stock-PDN control | clean |
+> | 5379 | adopted PDN (width + ring) | clean signoff |
+> | 5392 | canonical config | clean signoff |
+> | 5394 | PDN pitch ×1.4 | clean signoff |
+> | 5413 | final bundle streamout | clean |
+>
+> **One failure in that set is deliberately not being hidden:** job 5393 (PDN
+> pitch ×1.2) *did* die in detailed routing — but on `DRT-0073` at
+> `clkbuf_2_1_0_IQ_CLK_regs/I`, the **IQ_CLK** tree. Different net, different
+> error code, under a deliberately hostile PDN pitch that was rejected for other
+> reasons. It is not an `SPI_SCK` recurrence and does not re-open this item; it
+> belongs to the density/routability budget recorded in `_comment_density`.
+>
+> **What remains true and must not be lost with the closure:** `SPI_SCK` is now
+> a plain routed net, so nothing in P&R optimises those paths. That makes item
+> 54 (host-SPI post-route GLS/SDF) carry more weight, not less. The `REJECTED,
+> do not retry` list in `_comment_cts_spi_sck` also stands — closing this item is
+> not licence to re-roll `CTS_CLK_BUFFERS`, `CTS_ROOT_BUFFER` or the density
+> knob. Original analysis retained below for the record.
 
 A minimal fix is confirmed clean at 1380×1100 (v15c), but the same DRT-1231
 violation (`clkbuf_*_IQ_CLK_regs/I` pin access) **returns** under the
@@ -496,6 +556,165 @@ floorplan tried since (jobs 2165–2168). Described in the source doc as
 **Blocks:** further die-shrink; the honest-MCP signoff configuration (item 1).
 **See:** `planning/area-reduction-roadmap.md` §4 (Gate 0 blocker);
 `planning/ss-corner-decimator-pacing-closure.md`.
+
+**CLOSED 2026-08-30 — root cause found and fixed; the framing above was chasing the
+wrong variable.** `DRT-1231`/`DRT-0073` on `clkbuf_*_IQ_CLK_regs/I` was never a CTS
+buffer-set, SDC, or density problem: **antenna diodes were abutting the clock buffers
+and stealing their routing pin access**, because `DIODE_PADDING` was unset (`None`).
+Setting `DIODE_PADDING: 4` clears it outright — job **5198** at 1675×1110: 0 antenna
+net / 0 pin, magic DRC 0, XOR 0, LVS clear, hold met at all corners, clock skew
+0.312 ns. Same evidence that closed item 51.
+
+This also retires the "timing-SDC-sensitive, does not generalize" reasoning: the
+investigation proved buffer *size* is irrelevant — variant C4 (job 5197) dropped
+`clkbuf_16` from `CTS_CLK_BUFFERS` and the failure simply moved to a `clkbuf_12`
+(`clkbuf_4_3_0_IQ_CLK_regs/I`). The failure follows the clock tree to whichever
+buffer the diodes box in, so every earlier CTS-side "fix" was treating a symptom.
+Note `DPL_CELL_PADDING` is *not* an alternative lever (3 causes `DPL-0036`);
+`DIODE_PADDING` applies to diode cells only and avoids that.
+
+Both of this item's stated blocks are also stale: the honest-MCP/scoped-SDC
+configuration is canonical (`pnr_32m_scoped_v25_b6.sdc`) and routes, and die-shrink
+is now gated on routing congestion (item 12) and pad allocation (item 46), not on this.
+
+**Residual (accepted, not blocking):** the fix is confirmed on the current signoff
+floorplan only. Two 2026-08 runs on *other* floorplan variants hit `DRT-1231` —
+job 4485 (1167.5², default margins) and job 5159 (density 78 at 1675×1110) — and
+neither was re-run with `DIODE_PADDING` set, so generalization across floorplans is
+untested rather than disproven.
+**Re-open if:** `DRT-1231`/`DRT-0073` recurs on a floorplan that already has
+`DIODE_PADDING: 4` — that would mean a second, distinct mechanism.
+**See:** `planning/antenna-closure-investigation-2026-08.md` §0; item 51;
+`planning/1117sq-margin-reclaim-2026-08.md` §4.
+
+**RE-OPENED the same day, by its own stated trigger (job 5281).** The closure
+above was written on **n=1** — a single clean floorplan — and the first
+perturbation broke it. Job 5281 re-ran the *byte-identical* config to job 5279
+(`resolved.json` diff is empty: same `DIODE_PADDING: 4`, `DPL_CELL_PADDING: 2`,
+65 % density, 1675×1110 die, same `CTS_CLK_BUFFERS`) and died at step 46/78:
+
+```
+[DRT-1231] Pin clkbuf_2_3__f_SPI_SCK/I does not have access point
+```
+
+**The only delta between the two runs is a two-line RTL change** — adding the
+`0x19` term to `reg_bank.v`'s `cfg_wr_rejected` condition. Detailed routing was
+already in trouble before it died (520 violations at 10–20 % completion, plus
+`GRT-0243 Unable to repair antennas on net with diodes`).
+
+Two corrections to the closure reasoning above:
+
+1. **`DIODE_PADDING: 4` is a mitigation, not a root-cause fix.** Diode crowding
+   was *a* mechanism and setting the padding did clear job 5198 — but it does not
+   make the design robust, because the underlying fragility is unchanged: the
+   `IQ_CLK` net still has a **5213-terminal fanout** (`GRT-0281`), the clock trees
+   are still routed with no slack for pin access, and whether any given buffer
+   gets boxed in remains a placement lottery that a trivial netlist change can
+   re-roll.
+2. **It is not confined to `IQ_CLK`.** Every prior instance on record named an
+   `IQ_CLK` buffer; this one is on the **`SPI_SCK`** tree. Any statement scoping
+   this failure to the IQ clock is wrong.
+
+**What this means practically:** the tapeout floorplan cannot absorb routine RTL
+edits. Any change — even one that is functionally correct and regression-clean,
+as this one is (job 5280: all 42 cocotb suites pass) — may fail P&R for reasons
+unrelated to its content. Item 1's SS-closure work implies many such edits.
+
+**2026-08-30, five probes later — root-caused to the `SPI_SCK` CTS tree, and
+there is a working fix (job 5284).** Two claims in the paragraphs above are
+wrong and are corrected here.
+
+| job | change from the 5281 recipe | result |
+|---|---|---|
+| 5279 | *(35,526-cell netlist)* | **routed clean 78/78** |
+| 5281 | 35,670-cell netlist, 65 % density | `DRT-1231` `clkbuf_2_3__f_SPI_SCK/I` |
+| 5282 | density 63 % | `DRT-1231` `clkbuf_2_1__f_SPI_SCK/I` |
+| 5283 | density 60 % | `DRT-1231` `clkbuf_2_1__f_SPI_SCK/I` |
+| 5285 | `clkbuf_4` added to `CTS_CLK_BUFFERS` | `DRT-1231`, step 46 |
+| **5284** | **`SPI_SCK` not declared a clock in the P&R SDC** | **routed clean 78/78** |
+
+**Correction 1 — it is not a placement lottery.** Densities 63 % and 60 % failed
+on the *identical* buffer, and 65 % on a sibling of the same tree. For a given
+netlist the failure is deterministic. Lowering density is not a lever at all.
+
+**Correction 2 — it is not the `IQ_CLK` fanout.** Every failure is on `SPI_SCK`;
+`IQ_CLK_regs` and its 5211 sinks route fine in all six runs. Nor is NDR the
+differentiator: `CTS_APPLY_NDR: half` is global and the DEF carries one NDR root
+net per clock (`CTS_NDR_0` `IQ_CLK`, `CTS_NDR_1` `IQ_CLK_regs`, `CTS_NDR_2`
+`SPI_SCK`).
+
+**The actual mechanism.** `SPI_SCK` is a 2 MHz clock with **51 sinks** that CTS
+expands into 5 clock nets and drives with four **`clkbuf_16`** — the widest cell
+in the set — on leaf nets of 2–7 sinks, with an NDR on the root. The pin
+detailed routing cannot reach is the `I` input of one of those buffers. Job 5285
+shows the buffer *list* is not the constraint: adding `clkbuf_4` changed nothing,
+CTS still logged `Root buffer is clkbuf_16` / `Sink buffer is clkbuf_16` and
+failed identically. It also retro-explains job 5197 (removing `clkbuf_16` moved
+the failure to a `clkbuf_12`) — CTS picks by its own slew/cap targets, so neither
+adding nor removing a size changes what it does.
+
+**The fix (job 5284): give `SPI_SCK` no CTS tree at all.** A P&R-only SDC
+(`pnr_32m_scoped_v25_b6_nospicts.sdc`) omits its `create_clock`, so TritonCTS
+reports 2 clock nets instead of 3 and `SPI_SCK` routes as an ordinary net.
+Result: **78/78, SS WNS −18.23 ns / TNS −459.8, antenna 0/0, DRC 0, XOR 0,
+LVS clean, util 66.2 %.** A 2 MHz clock does not need a balanced tree.
+
+**SPI timing is unaffected, and this was checked rather than assumed.** The
+post-P&R signoff STA reads the *signoff* SDC, which still declares `SPI_SCK`, so
+the domain is fully constrained at signoff: the `SPI_SCK` path group is present
+with worst setup slack **241.77 ns MET** (5279: 241.14) and worst hold **2.10 ns
+MET** (5279: 1.69) against a 500 ns period.
+
+**Costs, stated honestly.** SS WNS is 0.49 ns worse than 5279 (−18.23 vs
+−17.74) — but that is confounded with the +144-cell `reg_bank` netlist and
+cannot be attributed to the SDC change from one run. Two marginal max-cap
+violations appear at SS where 5279 had none (`_38228_/ZN` −0.0029 pF,
+`_38209_/ZN` −0.000018 pF against an 0.082 pF limit); both are internal gates,
+neither is on an SPI net.
+
+**ADOPTED 2026-08-31 into the canonical SDC (job 5286).** The exclusion now
+lives in `src/config/pnr_32m_scoped_v25_b6.sdc` itself rather than a variant, so
+every config under `src/config` and the 13 under `rtl-test/ol_trouper_top`
+inherit it; `rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc` was byte-identical and
+was updated in step. Job 5286 re-ran the stock `trouper_top_dbgpins.json`
+against that promoted SDC and reproduced job 5284 on every metric — SS WNS
+−18.23 ns, TNS −459.8, antenna 0/0, DRC 0, XOR 0, LVS clean, util 66.2 % — so
+the promotion is faithful to what was validated, not an approximation of it.
+The `nospicts` variant config and SDC are deleted as redundant. **Superseded
+2026-09-01:** the `_d63`, `_d60` and `_smallbuf` probe configs are now deleted
+too — they inherited the fix and no longer reproduced the failures tabulated
+above, so they had stopped being probes. The knobs they swept
+(`PL_TARGET_DENSITY_PCT` 63/60, `clkbuf_4` in `CTS_CLK_BUFFERS`) and the reason
+each was rejected are recorded in `_comment_cts_spi_sck` in
+`src/config/trouper_top.json`; recover the files with
+`git show <rev>:src/config/<file>` if the failure recurs.
+
+**Why this item stays OPEN despite a working, adopted fix.** Jobs 5284 and 5286
+are the *same netlist twice*, so the evidence is still **n=1** on the thing that
+matters — whether the fix survives a netlist change. That is precisely the
+mistake that produced the premature closure above, and it is not being repeated.
+
+**Exit criterion (unchanged):** one clean route on a *different* perturbed
+netlist. Until then, treat the floorplan as still fragile.
+
+**Live caveat.** `SPI_SCK` is now a plain routed net carrying whatever skew the
+router gives it. Signoff STA still constrains the domain and shows vast margin
+(241.77 ns setup / 2.10 ns hold against a 500 ns period, job 5284), but nothing
+in P&R optimises those paths any more — which makes item 54 (host-SPI post-route
+GLS/SDF) more load-bearing, not less.
+
+**Rejected alternative.** Making the `reg_bank` edit netlist-neutral, so the
++144 cells never appear, was considered and **rejected as too fragile**: it
+would rest on ABC continuing to share an address decoder, which no constraint
+enforces and any future edit could silently undo.
+**Runs:** 5279/5281/5282/5283/5284/5285/5286 under
+`/srv/eda/runs/timothyn-dev/lora-mimo-dbgpnr/`; configs
+`src/config/trouper_top_dbgpins{,_d63,_d60,_smallbuf}.json`, all four since
+collapsed into or deleted in favour of `src/config/trouper_top.json`
+(2026-09-01) — see `git log -- src/config/`.
+**See:** job 5281 log `/srv/eda/logs/timothyn-dev/job-5281.o`; job 5279 (clean,
+same config); the rationale block inside `pnr_32m_scoped_v25_b6.sdc`;
+`planning/antenna-closure-investigation-2026-08.md`; item 51.
 
 ### 8. AGC calibration and edge-case behavior are unverified on silicon
 
@@ -512,110 +731,13 @@ changes are deliberately prohibited mid-packet.
 **Risk:** deployment-time AGC misbehavior with no bench coverage.
 **See:** `planning/blocks/AGC.md` (Open calibration items).
 
-### 27. GF180 split-rail IO cell (core > pad) down-level-shift is uncharacterized
+### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption — **CLOSED 2026-09-01 (obsolete)**
 
-The baseline supply is **uniform 3.3 V** (core + IO). If the 32 MHz SS gap (item 1)
-cannot be closed at 3.3 V, the **contingency** is a **split-rail supply**: run the
-digital core at ~5 V nominal (4.5 V slow-corner worst-case, where SS closes — proven
-SS@`ss_125C_4v50` = **+1.40 ns**, DRC/LVS/route 0, jobs 3231/3237) while the pad ring
-signals at **3.6 V** so the 3.3 V-class external parts survive. This risk applies only
-if that contingency is taken. All three externals are
-safe at 3.6 V (APS6404L PSRAM abs max 4.0 V / SX1257 3.9 V / RPi GPIO ESD clamp ~3.9 V).
-**The single unproven link is the IO cell itself:** GF180 `bi_*` cells must down-level-
-shift core (5 V) → pad (3.6 V), but the PDK only characterizes single-voltage IO
-(`VDD = DVDD`) and ships no IO databook — the core > pad down-shift is **outside the
-characterized envelope**. If GF180 IO cannot safely do this split, the whole 5 V-core
-strategy collapses; the fallback (uniform 5 V chip + external PCB level translators) is
-hard for the **high-speed bidirectional QSPI** (PSRAM `SIO[3:0]`, up to 133 MHz, direction
-reverses mid-transaction — auto-direction translators do not cope).
+> **CLOSED — the interface no longer exists.** Grouper is not taping out, and the
+> `GRP_*` bus, the AHB-Lite `H*` endpoint and `IRQ_GROUPER` were removed from
+> `src/top/trouper_top.v`. There is no inter-project bus left to synchronise, so
+> this risk cannot materialise. Original analysis retained below for the record.
 
-**2026-08-14 — SPICE half CLOSED, structural half still open (SGE job 4347).**
-Transistor-level characterisation of `gf180mcu_fd_io__bi_24t` (the cell the shared
-padring instantiates) over 63 scenarios — both directions, 3 corners × 3 temps,
-5 rail splits — in `characterization/io_levelshift/` (`RESULTS.md`). **The
-down-shift works:** every output scenario drives PAD to exactly the pad rail
-(3.600 V at 4.5/3.6) with zero static current, at every split and corner —
-the specific failure this item feared does not occur. The up-shift also reaches
-the full core rail everywhere; its cost is *static current in the input receiver*,
-which scales with the split and binds at ff/125 °C: 19.5 µA/pad at 4.5/3.6,
-64.4 µA at 4.5/3.3, and 182 µA at 5.0/3.3 (the only failing case, against a
-100 µA/pad budget). Receiver trip point stays 0.965–1.165 V throughout, well
-inside the 0.4–2.4 V a 3.3 V driver guarantees. **Recommended split if the
-contingency is taken: 4.5 V core / 3.6 V pad** — narrowest split that still buys
-`ss_125C_4v50` closure, ~30× less crowbar than 5.0/3.3. Note the PDK's own
-`pfet_06v0` W bin does not cover `bi_24t`'s 120 µm pad devices; the deck extends
-it (documented deviation, `README.md`).
-
-**Action (bench/foundry, not PnR — SPICE now done):** the remaining unknowns are
-structural, not functional: ESD/latch-up across the split rail, power-on
-sequencing (which rail rises first, and shifter behaviour while one is at 0 V),
-and pad-ring IR drop. Confirm with foundry/databook before committing the
-voltage path. Also cross-check `bi_t` (fits the stock model bin) to
-independently rule out the extended-W deviation.
-**Blocks:** committing the split-rail 5 V-core SS-closure strategy (item 1); the die-shrink
-and honest-MCP work that the voltage path would otherwise unblock.
-**See:** `planning/area-reduction-roadmap.md` §2 (voltage analysis); `planning/Pinout.md`
-(split-rail supply note); `planning/5v-core-voltage-strategy.md`.
-**Found:** 2026-07-04 (voltage-corner + external-part datasheet review).
-
-**2026-08-19:** cell-level finding above is unaffected, but the reference padring's PDN
-config ties `VDD_CORE`/`VDD_IO` to one net by default (no secondary domain declared, no
-`brk` cells in the pad spec) — independence must still be built, it isn't already there.
-Corrects `planning/Pinout.md`'s prior "separate, independently-tunable... deliberate"
-framing. **See:** `planning/5v-core-voltage-strategy.md` §2026-08-19.
-
-**2026-08-19 (part selection for the external-translator fallback):** dual-independent-
-supply, direction-controlled translators (`VCCA` fixed 3.3 V, `VCCB` tied to `VDD_CORE`)
-are the right category — `VCCA=VCCB` is a normal operating point, so the same BOM works
-at 3.3 V/3.3 V today and 4.5–5 V/3.3 V later with no board respin. The PSRAM QPI bus needs
-an explicit-`DIR` part (e.g. `SN74AVC4T774`/`74AVC4T245`), driven by `psram_buf_ctrl.v`'s
-existing QSPI ownership signal — auto-sensing shifters (TXB/TXS0108-class) still don't
-cope with its mid-transaction direction reversal, as already noted above. **See:**
-`planning/5v-core-voltage-strategy.md` §"external level-shifter part selection".
-
-### 44. 4.5 V-core signoff is now P&R-proven but NOT a decided architecture — gate before canonicalizing
-
-2026-07-31: a full P&R targeting `ss_125C_4v50` with a 9 ns
-`PL/GRT_RESIZER_SETUP_SLACK_MARGIN` closes clean on the current 1200×1100
-signoff baseline — WNS 0.0/TNS 0 at all `STA_CORNERS`, worst slack +3.17 ns,
-DRC 0, LVS clean (job 3738; see `planning/5v-core-voltage-strategy.md`
-§2026-07-31). A bare corner swap without the margin still fails (−2.74 ns,
-job 3737). This is real signoff-quality evidence that the 4.5 V-core
-contingency (item 27) *can* close 32 MHz outright — but it does not, by
-itself, make 4.5 V the production core voltage. Do not let
-`config_current_signoff_4v50_margin.json` or its SDC become the canonical
-signoff config/SDC until all of the following are resolved:
-
-1. **IO voltage crossing** — **partially closed 2026-08-14** (job 4347, see item
-   27): the functional question is answered — `bi_24t` down-shifts correctly with
-   core above pad at every corner, and 4.5 V core / 3.6 V pad passes on levels,
-   timing and static current (19.5 µA/pad worst case). What remains is
-   structural, not functional: ESD/latch-up, power-on rail sequencing, and
-   pad-ring IR drop, none of which a single-cell sim can answer, plus the
-   still-true fact that there is no PDK IO databook. The high-speed
-   bidirectional PSRAM QSPI still rules out auto-direction external translators
-   as a fallback. Use 3.6 V for the pad ring, not 3.3 V — the wider 4.5/3.3
-   split triples the receiver crowbar current.
-2. **Power budget** — P∝V²; 4.5 V vs 3.3 V is roughly ~1.9× dynamic power,
-   not checked against any board/thermal budget.
-3. **Hold margin re-verification** — job 3738's worst hold at
-   `ff_n40C_3v60` was +0.164 ns: positive, but thin, and not yet separately
-   stress-tested with the 9 ns margin's extra setup buffering in place.
-4. **Explicit team sign-off on the rail decision** — per the 2026-07-04
-   project framing, uniform 3.3 V is the stated *aim*; the 4.5–5 V core is a
-   *contingency* only. Adopting it is a tapeout-architecture decision, not a
-   config-file change.
-
-**Action:** treat `config_current_signoff_4v50_margin.json` as a validated
-candidate only. Keep `config_current_signoff.json` /
-`pnr_32m_scoped_v25_b6.sdc` (3.0 V) canonical until 1–4 above are closed and
-someone with authority over the tapeout architecture makes the call.
-**Blocks:** nothing yet (informational gate) — but prevents item 1 from being
-quietly "closed" by a voltage change nobody explicitly approved.
-**See:** item 1, item 27, `planning/5v-core-voltage-strategy.md` §2026-07-31.
-**Found:** 2026-07-31.
-
-### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption
 
 Grouper and Trouper are two **separately hardened MPW macros** joined by
 inter-project wires (`planning/Pinout.md:93,97`), not a submodule inside
@@ -769,6 +891,1019 @@ and GF180 pad timing rather than guessing them.
 `src/config/pnr_32m_scoped_v25_b6.sdc`;
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
 **Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29.
+
+### 54. Host-SPI post-route GLS/SDF check is missing
+
+The 2 MHz SPI timing constraints and all-corner STA establish the timing
+contract, but no gate-level simulation has exercised the final routed
+`trouper_top` netlist with annotated interconnect/cell delays.  RTL simulation
+cannot expose a netlist/model integration error, reset/X propagation difference,
+or an edge-ordering error at the SCK-domain/core-domain boundary.  Conversely,
+one SDF simulation is **not** timing signoff: STA remains authoritative for
+all setup/hold paths and PVT corners.
+
+**Risk:** a routed-netlist or SDF-model issue can make a minimum-spacing host
+SPI transaction fail on silicon despite clean RTL tests and STA, particularly
+the minimum `CS_N` high interval and the first `MISO` bit after a read command.
+
+**Action / exit:** after the tapeout-candidate P&R run has clean STA/DRC/LVS,
+create a reproducible Icarus/Verilog gate-level harness using its final routed
+Verilog netlist and the matching post-route SDF.  Run the `SPI_SCK` period and
+I/O delays from the candidate signoff SDC, then pass directed cases for reset
+release, minimum-spacing write/read transactions, the minimum `CS_N` gap, and
+the first read-data bit.  Check readback and accepted writes against the RTL
+contract, accounting only for the documented gate/pad latency.  Record the
+run directory, netlist/SDF checksums, simulator version, and annotated corner;
+repeat whenever the tapeout netlist, SDF, SPI RTL, or SPI constraints change.
+
+**See:** `planning/verification-plan/spi-slave-verification-plan.md` test 18;
+Open Risk #38; `src/control/spi_slave.v`; `src/config/pnr_32m_scoped_v25_b6.sdc`.
+**Found:** 2026-08-30, post-P&R signoff review.
+
+### 40. SS wall is several stacked problems, not one — root-caused 2026-07-12 by direct netlist/STA cross-check
+
+**Root-cause pass complete.** Traced every major violator cluster in job
+3367's `max_ss_125C_3v00/max.rpt` (`RUN_2026-07-12_21-56-16`) against
+`final/nl/trouper_top.nl.v` (Q-net names of each startpoint/endpoint flop).
+The original framing of this item ("`rb_bw_sel`/`rb_sf_cfg` fanout into
+`sc_detector`") was directionally right but incomplete — the wall is
+actually five distinct, separately-caused clusters:
+
+| Startpoint (traced) | Violator count | Destination (traced) | What it is |
+|---|---|---|---|
+| `u_psram.state[0:1]` | 273 | `rpl_valid`, `u_psram.sub`, `u_psram.dbg_buf` | **the pre-existing `u_psram` QSPI decode residual item 1 has cited since before #39/#40 existed** — `u_psram` was never in `paced_nets`; the fix has always been a 1-cycle-ahead pipeline (item 1), not an MCP relaxation, and it's still not implemented |
+| `rb_bw_sel` | 200 | `u_sc.eval_step`, `u_sc.mul_start` | config reg → sc_detector's serialized eval FSM. Wildcard-miss (see below) |
+| `Zpair_i[*]/Zpair_q[*]` | 135 | (training_acc) | not previously characterized at all |
+| `ce_16m` | 64 | — | 16 MHz clock-enable, broad fanout; not previously characterized |
+| `packet_active` | 54 | `u_sc.acc_ci0` | **the single worst path, −16.01 ns — fully traced below** |
+| `timing_ref[7]` | 46 | `u_pcfsm.acq_timeout_q` | this is the write-arc dishonesty item 39 already flagged as "confirmed real, not yet fixed" — showing up in the raw violator count too |
+| `dcr_valid` | 26 | — | dc_removal; not previously characterized |
+
+**The worst path, fully traced:** `_61285_` (`.Q(packet_active)`, the
+`packet_ctrl_fsm` top-level flop) → net `packet_active` → 4 more hops,
+2 of which survive named (`packet_done_pulse`) and the rest anonymized
+(`_05436_`, `_06213_`, `_22787_`, `_23679_`, `_03962_`) → `_62498_`
+(`.D(_03962_)`, `.Q(u_sc.acc_ci0[19])`). **Confirmed root cause:** the
+`paced_nets` MCP=3 relaxation (`pnr_32m_scoped_v20.sdc:184-187`, `-through
+[get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]`) never touches
+this path — every intermediate net between the two registers is either a
+**top-level** net (`packet_active`/`packet_done_pulse` are declared in
+`trouper_top.v`, sourced from `packet_ctrl_fsm`, not `u_sc.*`-prefixed) or
+fully anonymized by synthesis. The endpoint register's own *output* net
+happens to be named `u_sc.acc_ci0[19]`, but that's downstream of the
+violating arc, not part of it — the D-pin's driving net (`_03962_`) has no
+`u_sc.` name to match. **This confirms hypothesis 1 from the original #40
+write-up** (wildcard silently not applying), not hypothesis 2 (budget too
+small) — same "-through wildcard misses a cross-boundary/optimized-away net"
+bug class as v8, v19, and the v20 `rb_sc_hits_req → timing_ref` miss (item
+39's history). The `rb_bw_sel → u_sc.eval_step/mul_start` cluster (200
+violators) is the same failure mode: `rb_bw_sel` itself is a top-level net,
+not `u_sc.*`-prefixed, so `-through u_sc.*` never matches it either.
+
+Not a new bug in the RTL sense for the `u_psram`/`rb_bw_sel`/`packet_active`
+clusters (33 violators at −22.1 ns existed in the July 5 baseline,
+`RUN_2026-07-05_00-56-34`, same 1200×1100/88% config) — but the violator
+count has grown to 1000+ at −16.01 ns (job 3367, 2026-07-12) with the same
+die/density, most plausibly from RTL added since (the PSRAM continuous-delay
+replay redesign touches `sample_shift`/`packet_active` consumption heavily).
+
+**Action:** generalize the fix pattern that already worked for item 39 (job
+3367): replace the blanket `-through <hierarchy-wildcard>` with `-to
+<get_cells -of_objects [surviving Q-nets] -filter {ref_name =~ *dff*}>`,
+scoped per real quasi-static source, for each of: `rb_bw_sel →
+u_sc.eval_step/mul_start`, `packet_active → u_sc.acc_ci0/acc_cq0` (and
+siblings). The `u_psram.state` cluster is out of scope for an SDC fix — it's
+item 1's original pipeline-fix residual. `Zpair_*`/`ce_16m`/`dcr_valid`
+clusters are uncharacterized — need their own trace pass before deciding
+MCP-relaxation vs. real RTL fix.
+
+**2026-07-13 update — jobs 3370/3371 back; CE-retimer wins this round, v23
+found an 8th cone:**
+
+(1) v23 (job 3370, SDC-only fix for `rb_sf_cfg`/`rb_bw_sel` →
+`u_sc.timing_ref`, the fifth missed cone) **made WNS worse: −17.16 ns**
+(vs job 3368's −16.60 ns), DRC=0/LVS=0 clean. Closing `timing_ref` unmasked
+a **sixth** missed cone nobody had traced before: `packet_ctrl_fsm.v:46-49`
+has its own separate `M_val` register (`M_val <= 1 << (sf+sample_shift)`),
+computed redundantly from the same `sf`/`sample_shift` operands as
+`sc_detector`'s `M_val`, recomputed unconditionally every cycle, and never
+covered by any of v21/v22/v23's scoping (`rb_sf_cfg → u_pcfsm.M_val[15]` is
+now the worst path). Same whack-a-mole pattern as every prior round — one
+more per-consumer SDC gap found only after the previous one stopped masking
+it.
+
+(2) The CE-retimer (job 3371, branch
+`worktree-ce-gated-quasi-static-retimer`, independent div-4 enable — see
+`planning/ce-gated-quasi-static-retimer-experiment.md`) **clearly wins**:
+WNS **−16.07 ns**, essentially back to the original unfixed baseline
+(−16.01 ns, job 3367), and — the important part — its worst path is `u_psram.sub[3] → ...`, the
+**already-known, already-characterized** item-1 QSPI-decode residual, not a
+newly-exposed cone. Retiming the source once absorbed the `rb_sf_cfg`/
+`rb_bw_sel`-driven violators (including the `M_val` one that just hit v23,
+since `packet_ctrl_fsm` in this branch reads the retimed `rb_sf_cfg_q`)
+without needing to individually re-scope every consumer. **Job 3371 finished
+DRC=0/LVS=0 clean** (elapsed 00:31:14) — same signoff bar as every other run
+this session; the timing result is confirmed, not provisional.
+
+**Recommendation:** adopt the CE-retimer
+approach over continued per-consumer SDC patching, and extend it to
+`rb_pkt_timeout_syms`/`rb_tacc_window_syms`/`rb_sc_hits_req` (same shape:
+quasi-static `reg_bank` source, multiple consumers, same wildcard-miss risk
+class). The `u_psram` residual remains the real, harder, separately-tracked
+problem (item 1) — a throughput-bound pipeline fix, not an MCP/retiming
+question.
+
+**2026-07-13 update — extension CONFIRMED (jobs 3387–3400): recommendation
+adopted and verified, still unmerged.** Folded `rb_sc_hits_req`,
+`rb_pkt_timeout_syms`, `rb_tacc_window_syms` into the same `ce_8m`-gated
+retimed bus and added an explicit `u_pcfsm.M_val` SDC endpoint (the cone that
+broke v23). Full 12-suite cocotb regression (jobs 3388–3399) all PASS, plus
+the SF/BW startup sweep (job 3387, 18/18 PASS) — no functional regression.
+P&R signoff (job 3400, `ol_trouper_top/runs/RUN_2026-07-13_01-57-28`):
+**DRC=0/LVS=0 clean, post-PNR SS WNS = −14.71 ns** — the best number in this
+item's entire history (better than the base retimer's −16.07 ns/job 3371,
+both SDC-only attempts −16.60/−17.16 ns, and the original unfixed baseline
+−16.01 ns/job 3367). Worst path startpoint is `psram_qe_init_done`, still the
+same already-characterized `u_psram` QSPI-decode residual (item 1) — closing
+the extra three sources did not expose a ninth cone. The whack-a-mole class
+of bug this item documents is fully absorbed by the retimer for every
+`reg_bank` quasi-static source now in scope; only `u_psram`'s throughput-bound
+pipeline fix remains.
+
+**See:** `src/frontend/sc_detector.v`; `src/config/pnr_32m_scoped_v20.sdc`
+(`paced_nets` wildcard); item 39; item 1;
+`planning/ce-gated-quasi-static-retimer-experiment.md`.
+**Found:** 2026-07-12 (v21 SDC signoff run, job 3367).
+**Root-caused:** 2026-07-12 (direct netlist + STA violator-report
+cross-check, `RUN_2026-07-12_21-56-16`).
+**Extension verified:** 2026-07-13 (jobs 3387–3400).
+
+**2026-07-18/19 addendum (mechanism found):** across the B4/B6 area-cut
+signoff runs the `packet_active → packet_done_pulse → u_psram.*` cone swings
+−3…−8 ns ↔ −22 ns for the same arcs between runs. Stage detail of the bad
+run: 45 of 60 ns in four under-driven stages (x1 cells left at fanout 25–39,
+slews 8–17 ns) — repair_design's DRC-driven upsizing is a cap-threshold knife
+edge at the repair corner, so any nearby placement perturbation flips it.
+Three consecutive runs produced three different chronic worst cones
+(`rb_sf_cfg → M_val` / `packet_active → psram` / `u_remod.s3`): single-run
+WNS at 88 % util measures the repair lottery, not the RTL delta. Fix
+direction = deterministic fanout treatment (RTL split per the
+sc_lock → timing_ref pattern, or max_transition SDC) on the chronic nets;
+`u_psram` endpoints remain item 1's pipeline. See
+`planning/b4-b6-area-cuts-2026-07.md` §4.
+
+**2026-07-26 correction:** the main deterministic fanout treatment has since
+shipped: commit `3af9619` split `packet_active` fanout and registered
+`packet_done_pulse` (merged by `b47474d`), eliminating that chronic cone in
+the B6 measurements and improving WNS from −25.5 to −15.9 ns at about +10.3 k
+µm² area churn. A pulse-only A/B variant was worse due to synthesis remapping
+sensitivity. Remaining closure work is the `u_psram` pipeline in item 1 and
+the still-uncharacterized `Zpair_*`, `ce_16m`, and `dcr_valid` cones; single
+run WNS should still be treated cautiously at this density.
+
+---
+
+### 41. Hold signoff corner pulls the wrong RCX deck; the corrected (min_ff) config fails routing at signoff density
+
+`max_ff_n40C_3v60` extracts with a `.max` RCX ruleset, so hold is checked
+against pessimistic-setup RC, not true min-RC. The working fix is an
+`RCX_RULESETS` override to add a real `min_ff_n40C_3v60` corner — renaming
+the corner instead breaks P&R (jobs 3423/3426). **New 2026-07-18:** the
+carrier config (`config_current_signoff_minff.json`) **fails GRT-0116
+congestion** at 1200×1100/88 % (job 3464) — min_ff hold buffering pushes the
+design past routability, while the plain max_ff config routes clean. The RCX
+fix is therefore currently unusable at signoff density; needs either lower
+util, a smaller hold-fix scope, or die growth.
+
+**2026-08-30 — the ruleset half is still true; the congestion half is stale evidence.**
+Signoff still extracts hold against a `.max` RCX deck, so the underlying problem is
+unchanged and this item stays open. But the "corrected config fails routing" verdict
+was measured on a floorplan that no longer exists: job 3464 ran
+`config_current_signoff_minff.json` at **1200×1100 / 88 % density**, whereas the
+adopted floorplan is now **1675×1110 / 65 %** (`config_1675_c5_diodepad4.json`,
+job 5198) — a much larger die at far lower density, with correspondingly more room
+to absorb min_ff hold buffering. The GRT-0116 argument has not been retested there;
+the C5 config still carries `max_ff_n40C_3v60`, not the `RCX_RULESETS` min_ff
+override.
+
+**Exit (one run):** apply the `RCX_RULESETS` min_ff override to the C5
+1675×1110 / 65 % config and re-run. If it routes, the congestion objection is
+retired and hold can be signed off against a real min-RC deck; if it still hits
+GRT-0116, the item is confirmed on the *current* floorplan rather than a retired one.
+
+**See:** `rtl-test/ol_trouper_top/config_current_signoff_minff.json`;
+`rtl-test/ol_trouper_top/config_1675_c5_diodepad4.json`;
+`planning/b4-b6-area-cuts-2026-07.md` §4;
+`planning/antenna-closure-investigation-2026-08.md` (C5 adoption).
+**Found:** 2026-07-15 (ruleset), 2026-07-18 (congestion, job 3464);
+congestion evidence marked stale 2026-08-30.
+
+---
+
+### 58. The in-flow KLayout DRC gate is vacuous — signoff runs out of flow instead
+
+`RUN_KLAYOUT_DRC` is `True` but `KLAYOUT_DRC_RUNSET` is unset, so
+`67-klayout-drc` exits in 11 ms with no report and no metric, and
+`69-checker-klayoutdrc` *passes* because the metric is absent rather than zero —
+true of every run in this design's history. Run standalone against job 5379's
+GDS, the PDK deck gives **62/63 tables at zero violations** (job 5384, `contact`
+included); the 63rd (`mslot`) crashed on a PDK deck bug — `layers_def.drc` never
+defines `contact`/`via1`/`via2` for that table, so it left an empty report reading
+as "0 items". With three whitelist entries added, job 5391 runs `mslot` too:
+**all 63 tables ran at zero violations** — the first genuine KLayout DRC signoff
+in this design's history — so no rule needs waiving. Note that
+`run_drc.py` prints "Klayout DRC run is clean. GDS has no DRC violations." even
+on runs that lost a table to an exception (5384, 5386) — its own verdict is not a
+signoff signal. Magic DRC, Netgen LVS, KLayout XOR and router DRC were all
+genuinely running throughout.
+
+**2026-09-03 — the shipped GDS now has a genuine pass (job 5415).** Everything
+above was measured against job 5379's GDS, which is neither the current netlist
+nor the geometry that ships: `final/gds/trouper_top.gds` is job 5413's streamout
+*plus* the A40 power bridges, so the bridges had never been DRC'd at all. Job
+5415 ran the full deck against that exact file (md5 `f0e740b4…`, asserted in the
+job log): **63/63 tables ran, 0 reports missing, 0 truncated, 0 exceptions, 0
+violations** — verified independently of the script's own verdict by counting
+`<item>` across all 63 `.lyrdb` files and confirming each carries a closing
+`</report-database>`. The bridge geometry is clean. Cost: 2 h 14 m, of which
+`contact` was 67.6 min and `metal1` 45.2 min.
+
+**Correction to the closing need stated above (2026-09-03).** `KLAYOUT_DRC_RUNSET`
+*cannot* host `klayout_drc_guarded.sh`. LibreLane's step runs the runset as
+`klayout -b -zz -r <script> -rd input=… -rd topcell=… -rd report=…` and parses a
+single `.lyrdb` into `klayout__drc_error__count`
+(`librelane/steps/klayout.py:486-540`). The GF180 deck is not that shape: it is a
+Python driver (`run_drc.py`) that fans out into 63 tables and 63 reports. A bash
+wrapper around it cannot be substituted for a `.drc` script, so the original
+sentence described something that does not exist.
+
+**What was done instead:** `RUN_KLAYOUT_DRC` is now explicitly `false` in
+`src/config/trouper_top.json`. A gate that cannot run should not report a pass;
+disabling it converts a silent false negative into an honest absence, and signoff
+moves to the out-of-flow guarded run recorded above.
+
+**This makes KLayout DRC a MANUAL gate — the standing obligation.** Nothing in
+the flow re-runs it. Any change that alters the GDS — a new P&R run, or
+re-running `tools/build_a40_pdn_bridges.py` — silently invalidates the job-5415
+result, which will still be sitting in the config and `final/README.md` looking
+current. The md5 is recorded in both places for exactly this reason: check it
+before trusting either. A changed GDS needs a full 63-table run; the `TABLES=`
+subset does **not** satisfy this and reports `PARTIAL` so it cannot be mistaken
+for one. This is the cost of turning the gate off, and it is a live risk of the
+result going stale unnoticed — which is why this item stays open.
+
+**Still open:** the untested alternative is pointing `KLAYOUT_DRC_RUNSET` at the
+PDK's monolithic `libs.tech/klayout/tech/drc/gf180mcu.drc`, which *is* the right
+shape for the step. Nobody has checked whether it honours `input`/`topcell`/
+`report`, nor whether it dodges the `mslot` bug (running whole-deck, `TABLE_NAME`
+is not `mslot`, so it plausibly does). It would also add hours to every P&R,
+which is likely disqualifying for a default gate. Signoff also still depends on a
+locally patched `layers_def.drc` until the PDK is fixed upstream — the bug makes
+`mslot` unrunnable for any gf180mcuD design, so it is worth reporting there. See
+`planning/pdn-thickening-and-core-ring-2026-09.md` §6-§7.
+
+### 60. The Grouper/AHB removal has never been functionally simulated
+
+The 2026-09-01 removal of the `GRP_*` bus, the AHB-Lite `H*` endpoint and
+`IRQ_GROUPER` from `src/top/trouper_top.v` has been proven to **synthesise,
+place and route** — jobs 5378/5379/5392/5394/5413 all built the resulting
+35300-cell netlist cleanly, and job 5415 DRC'd the shipped GDS. **None of that
+is functional verification.** Every regression job number cited across the
+verification plans (3863, 3868, 3879, 3883, 4674, 4843, 4845, 4858 …) predates
+the removal and ran against a netlist that still had the arbiter in it.
+
+**Why this is not merely bookkeeping.** The change was not confined to deleting
+unused ports; it altered the live register access path:
+
+- `rb_re` is tied to `1'b0` and `rdata`/`ready` are left unconnected, so
+  synthesis drops `reg_bank`'s `read_valid` state and its output register. Host
+  SPI reads now depend **entirely** on the combinational peek tap.
+- The arbiter collapsed to a sequencer. The one-entry SPI pending slot is no
+  longer a fallback behind a priority mux — it is the only write path.
+- The PSRAM debug byte ports (0x76 pop / 0x79 push) lost one of their two
+  sources and now rest solely on the SPI one-shot strobes.
+
+A defect in any of those is a broken control plane, which on this chip means an
+unusable part — the host cannot configure `SF_CFG`, commit weights, or service
+PSRAM. It would not show up in DRC, LVS or timing, all of which are clean.
+
+**Also unverified: the benches were edited in the same pass.** `test_spi_cdc.py`
+lost 178 lines (the two `test_grp_*_addr_change_during_miso_shift` cases),
+`cocotb/hdl/tb_trouper_cocotb.v` lost 61, `tb_array_pair.v` 39, and
+`test_dbg_write.py` lost its Grouper-sourced cases. Those edits have not been
+executed either, so a bench that no longer elaborates would currently look
+identical to one that passes — nobody has run it. Note `tb_trouper_grp_arb.v`
+was deleted outright, so the coverage it held (rows retired as VOID in the
+spi-slave and reg-bank plans) is genuinely gone rather than relocated.
+
+**Closing needs:** run the core cocotb regression against the current tree
+(`SUITE_GROUPS=core`, plus the Icarus `sim_trouper_all` target — per
+[[project_verilator_hides_use_before_declare]] the Icarus suites are the real
+Verilog-legality gate, and Verilator will not catch a use-before-declare that
+the removal may have introduced). Record the job number here. Until then the
+functional status of the current netlist is **unknown, not good**.
+
+**Found:** 2026-09-03, while assessing PR #51 for merge.
+
+## Moderate
+
+### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source
+
+Trouper can independently prove SPI/register access, PSRAM QPI service, and packet/IRQ control (`SC_FORCE_LOCK`), and an FPGA can drive its existing one-bit IQ inputs for frontend testing. However, `mrc_combiner` and `sd_remod` have no deterministic internal source: their normal inputs depend on successful upstream capture/replay. A failure in the frontend, PSRAM, or acquisition chain can therefore prevent a standalone first-silicon proof of the final combiner/re-modulator foundation blocks even though their dedicated `REMOD_A_I/Q` output pads are working.
+
+**Proposed mitigation — not approved or implemented:** one small, reset-off 500 kS/s deterministic complex source, muxed at either the re-modulator input (minimum scope) or combiner input (broader proof), enabled only under `RX_HOLD=1 && !PACKET_ACTIVE`. Required patterns are zero, bounded signed DC, and a repeating bounded I/Q tone; seeded PRBS is optional stress only. It uses no pins, but needs register allocation, assertions/cocotb coverage, top-level timing/P&R evidence, and a bench reconstruction procedure before it can be accepted. Do not add separate BIST engines to every block.
+
+**Decision gate:** implement only if the first-silicon team judges this downstream demonstration path more valuable than the added mux/control/timing risk. The existing no-new-RTL bring-up sequence remains the baseline. See `planning/foundational-block-bringup-plan.md`.
+
+### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
+
+At 1380×1100, `root_only` NDR preserved clock SI at no timing cost. Below
+1380, `CTS_APPLY_NDR:"none"` is required instead — full clock-SI loss plus
+~1 ns of additional SS penalty. Post-route clock skew/jitter/coupling-cap
+signoff against baseline is still an outstanding step regardless of the die
+size ultimately chosen.
+
+**Updated 2026-07-11:** this entry previously read "contingent — only bites
+if the die is shrunk further; not a risk at the current baseline," written
+when 1380×1100 was still the production baseline. That's no longer true:
+the current signoff config (`config_current_signoff.json`) is already at
+**1200×1100 with `CTS_APPLY_NDR:"none"` set** — the same shrink closed out
+by item #28 (fixed-pin floor). The clock-SI tradeoff has therefore already
+been taken in the live signoff, not merely a future possibility. The
+underlying technical content is unchanged; what changed is that the formal
+post-route clock skew/jitter/coupling-cap signoff step this entry calls for
+is now needed for the *actual* current config, not a hypothetical future
+one.
+**See:** `planning/area-reduction-roadmap.md` §6; `planning/die-shrink-routability-floor.md` §6–8.
+
+### 12. 1100×1100 die target is blocked by measured global-routing congestion
+
+The target is no longer speculative: at ≈974 k µm² cell area, 1100×1100 is
+93.8% effective utilisation and fails global routing (GRT-0116 at step 39)
+on every tried variant: Metal1/Metal2 pin layers and cell padding 0/1 (jobs
+3242/3243/3245). The production/signoff size is 1200×1100. Reaching 1100×1100
+requires RTL area reduction; floorplan tightening has been exhausted.
+
+**Area/cost risk, not functional.**
+**See:** `planning/area-reduction-roadmap.md` §6.
+
+### 13. Live weight bank has no shadow→active promotion; writes are now structurally rejected while valid
+
+`mrc_combiner` consumes the live `rb_w_shadow` bank; a separate `W_ACTIVE`
+bank is deliberately not implemented. The old per-burst latches did not make
+a 16-byte SPI burst atomic and were removed by B4. The actual safety mechanism
+is hardware: after `W_COMMIT` makes `W_VALID` high, writes to `0x30–0x3F` are
+blocked and sticky `WGT_CTRL[5] W_WR_REJECTED` records the attempt. Firmware
+must write the complete vector before committing it; mid-payload `W_COMMIT`
+still applies from that point onward.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 14. PSRAM replay is truncated at packet timeout
+
+In `S_REPLAY` the read pointer trails the write pointer and `packet_end` —
+a live-time timeout — kills replay immediately, dropping the packet tail
+unless `PKT_TIMEOUT_SYMS` exceeds actual packet length **plus** replay lag.
+
+**Reduced 2026-07-12 by the continuous-delay replay implementation:** the
+trailing gap is no longer unbounded-until-`W_COMMIT`; it is per-packet
+deterministic — `TACC_WINDOW_SYMS·M + REPLAY_DELAY_SAMPLES` (≈ 8 symbols +
+~6 symbols at SF7/default margin) — so firmware can budget
+`PKT_TIMEOUT_SYMS` against a known quantity. Residual: still SF-dependent
+via the training-window term, and no drain-then-exit exists; needs either
+the documented timeout-margin rule in the firmware spec or a
+replay-drain-then-exit condition.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 16. Grouper/SPI register-bus arbitration silently drops SPI writes — **CLOSED 2026-09-01 (obsolete)**
+
+> **CLOSED — the interface no longer exists.** With Grouper not taping out, the
+> `GRP_*` bus and AHB endpoint were removed from `src/top/trouper_top.v`. Host
+> SPI is the sole register master, so nothing can steer the mux away from an SPI
+> write. The one-entry pending slot survives only to stage a completed SPI write
+> onto the next `ce_16m` edge. Original analysis retained below for the record.
+
+
+`trouper_top.v:578-581`: if `GRP_RE`/`GRP_WE` is asserted during the 2-cycle
+SPI write window, the mux steers away and the SPI write vanishes — no
+stall/queue as TRPR-SPS-007/TRPR-INT-003 require. Additionally the implicit
+Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
+`GRP_READY` handshake) is undocumented.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+**Resolved:** 2026-08-04, regression job 3863. `trouper_top.v` now captures each completed SPI
+write in a one-entry pending slot and commits it after the higher-priority
+Grouper byte cycle releases. The byte-cycle contract requires release before a
+second SPI data byte completes (≥ 4 µs at 2 MHz). Because pin-level SPI has
+no WAIT response and the register bank has one combinational read port,
+TRPR-SPS-007 now explicitly rejects a read byte whose MISO snapshot overlaps
+`GRP_RE=1`; the host retries the complete read frame. Directed cases 3a/3b/4a
+in `tb_trouper_grp_arb.v` cover priority, write preservation, and read recovery.
+
+### 42. Packet-control FSM misses directed coverage for late weight commit and training timeout
+
+The current verification matrix explicitly leaves two functional cases
+uncovered: `W_COMMIT` during `PAYLOAD_ACTIVE` must enable combining only for
+the remainder of the packet, and a missing `training_done` must let `acq_cnt`
+enter bypass payload with `W_MISSED_PACKET` set. The existing miss test
+withholds `W_COMMIT` entirely, so it does not establish either behaviour.
+
+**Risk:** an untested packet-control transition can escape regression despite
+the documented implementation. **Action:** add directed cocotb cases for both
+rows, including observable combiner/bypass behaviour and sticky-status
+readback. **See:** `planning/blocks/Packet Control FSM.md` (Verification
+table); `planning/Trouper Chip Specification.md` TRPR-PCF-007/010.
+
+### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode) — MITIGATED, downgraded from High 2026-07-12
+
+**Cycle-accurate measurement 2026-07-11 (SGE jobs 3333–3335).** The weight
+kernel run on the real `picorv32.v` (slow non-`FAST_MUL` multiplier, corrected
+7-bit-map kernel with faithful MMIO ingest) costs **33,283 cyc = 2.08 ms @16 MHz**
+for the 8-iteration default on rv32im (36,458 cyc = 2.28 ms on the Grouper's
+rv32emc/RV32E core, ~+10% from 16-register spilling), SF-independent. Against
+the live-mode deadline (`4·M/500 kHz`): **SF7 (~1.02 ms) and SF8 (~2.05 ms) both
+miss on both ISAs; only SF9+ fits.** 16 iterations (~3.88/4.28 ms) needs SF9+
+(rv32im) or SF10+ (rv32emc). The 24-bit ZDIAG widening is timing-neutral
+(−30/−54 cyc).
+
+**Follow-up measurement 2026-07-12 (FPGA-emul, synthetic matrix).** The
+MicroBlaze self-trigger benchmark on the Arty board, using a deterministic
+4×4 synthetic matrix and `n_acc=1024`, reports `compute=3768 cyc` and
+`total=3792 cyc` at 100 MHz (`37.68 us` / `37.92 us`) — a firmware-path sanity
+check, not a live-mode deadline figure; it does not change the SF7/SF8 numbers
+above.
+
+**Why downgraded, not just documented:** the mitigation this entry always
+pointed to — PSRAM replay mode, which relaxes the deadline from
+`payload_start_estimate` to `packet_end_estimate − TACC_GUARD` and sidesteps
+the live-mode race entirely — is no longer a plan, it's shipped: the
+continuous-delay replay redesign is IMPLEMENTED and verified (all suites
+PASS, SGE jobs 3347/3350/3354/3355; see item 5's fix and
+`planning/psram-replay-continuous-delay-redesign.md`). With that mitigation in
+place, "live-mode firmware weight compute needs SF9+" is a **known, quantified,
+accepted architectural constraint** — not an unaddressed failure mode — for
+any deployment that runs SF7/8 with MRC gain: replay mode is mandatory there,
+same as it always was, and it now actually exists and is tested. Nothing
+silently produces stale weights: a live-mode SF7/SF8 miss still degrades
+cleanly to bypass via `W_MISSED_PACKET` (item 34, CLOSED), same fallback as
+any other missed commit.
+
+**What's still open (kept as Moderate, not fully closed):** this only covers
+the on-chip PicoRV32 path. The unconstrained-host (RPi/Grouper SPI) live-mode
+case still has unmeasured host IRQ/scheduling jitter that could itself blow
+the SF7 window on a non-RT kernel — see
+`planning/blocks/Eigenvector Weight Computation.md` §Timing — the actual
+constraint. That residual is host-latency measurement work, not a firmware or
+RTL defect.
+
+**See:** `planning/blocks/Eigenvector Weight Computation.md` (Timing
+Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
+`planning/psram-replay-continuous-delay-redesign.md`.
+
+---
+
+### 46. Trouper's pinout vs. a stricter 22-pad / 1117.5×1117.5 allocation — PIN HALF RESOLVED 2026-08-30 (allocation is 28 pads); die-size half stands
+
+**Update 2026-08-30 — the pin-budget half of this item is closed.** The A40 ACV
+allocation is confirmed at **28 pad slots**, not 22. `info.yaml` declares 26 pins — 24
+signal + `VDD_CORE` + `VSS`, every one of which occupies a slot. (Superseded later the
+same day: `DBG0_OUT`/`DBG1_OUT` took the last two, so the pinout is now **28 of 28 with
+no spare** — item 54.) Neither the `IRQ_OUT`-removal
+waiver nor NR=3 is needed to close a pin gap, because there is no pin gap. Everything below
+about pins is retained as the record of the superseded assumption; the **die-size** half
+(1117.5×1117.5 µm) is unaffected by this and is separately superseded for the A40 build,
+which defers to the integrator DEF at 1675×1110 (item 52,
+`planning/a40-padframe-integration-2026-08.md`).
+
+Original entry follows.
+
+Current pinout is 24 pads (23 signal + `VDD_CORE`; `VDD_IO` removed 2026-08-19 — it's the
+same net as `VDD_CORE`, not a second pin, see `planning/5v-core-voltage-strategy.md`
+§2026-08-19) against a possible 22-pad team allocation — a 2-pin gap, not 3. NR=3 alone now
+closes it exactly, without also needing the `IRQ_OUT` waiver. The 1117.5×1117.5 µm square die target initially looked like a hard NR=4
+dead-end (`DPL-0036` placement failure, job 4480), but that was a LibreLane floorplan
+default (`*_MARGIN_MULT`) silently costing 4% of the die, not a structural limit —
+reclaiming it (`config_1117sq_maxarea.json`) gets a **clean NR=4 physical signoff**
+(DRC=0/LVS=0, job 4484), leaving only ordinary timing closure (−4.1 ns TT) still open. A 5V
+retry on top of that fix does not help (job 4486, `DPL-0036` again, later stage). Separately,
+**NR=3** (3 antenna channels instead of 4) also closes both the pin and die-size gap with
+more headroom (jobs 4482/4483): exactly 2 pins recovered, 1117.5² routes clean at 84.7% util
+and SS WNS −11.4 ns. Cost of NR=3: ~9%+ stdcell area saved, ~1.25 dB MRC combining-gain
+loss, one diversity order given up. Preferred path is still an `IRQ_OUT`-removal pin waiver
+to keep NR=4 at the current pin count; if the die-size rule alone is enforced, the
+margin-reclaimed NR=4 config is now the first fallback (keeps 4-antenna MRC), with NR=3 as
+the deeper fallback if timing closure on the reclaimed floorplan doesn't land. **See:**
+`planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md` (full
+records), `planning/Pinout.md`.
+
+---
+
+### 47. Only 2 of 4 padframe quadrants get bonded per package — unconfirmed whether Trouper's quadrant is guaranteed included
+
+New organizer information (2026-08-19, not yet in any planning doc before this): the shared
+padframe holds up to **4 quadrant projects, but only 2 are bonded out to package pins at
+once**. All of this project's floorplan/pinout work (upper-left quadrant assignment,
+clockwise `#N`/`#W` pin ordering, the L-shape/Grouper-notch keepout work) assumes Trouper
+actually gets real package pins in whatever spin is produced. Not yet confirmed with
+organizers whether Trouper's quadrant is guaranteed to be one of the 2 bonded, or whether
+that's still an open assignment/lottery. If Trouper isn't bonded, the pinout is moot for that
+spin (though the die itself is presumably still fabricated and could be bonded in a later
+run). **Action:** confirm bonding-pair assignment with the track lead before treating any
+pin-budget work as final.
+
+### 48. Digital input pins may be shareable between quadrant projects — pin-budget lever not yet evaluated
+
+Same 2026-08-19 organizer update as item 47: "it may be possible to share digital input pins
+between projects." Not yet investigated for this design, but a real candidate exists —
+`IQ_CLK` (external clock reference, a plain digital input with no project-specific timing
+requirement that would prevent sharing) could potentially be bonded to a single shared
+package pin across multiple quadrant projects rather than each project bonding its own copy,
+recovering a pin without any RTL change. This is a materially different, and likely cheaper,
+lever than the `IRQ_OUT`-removal waiver or NR=3 fallback already tracked in item 46 for
+closing the 22-pad/1117.5² budget gap — see `planning/nr3-fallback-2026-08.md`. Needs
+organizer confirmation of exactly which pins are shareable and the mechanics (does the
+project still declare the pin in its own `info.yaml`, or is it wired externally by the
+padframe integrator) before it can be relied on.
+
+---
+
+### 53. `ARRAY_ACQ_N` open-drain emulation has not received pad-level electrical review
+
+The multi-ASIC acquisition-sync extension uses one `gf180mcu_fd_io__bi_24t`
+bidirectional pad as an active-low, shared open-drain wire: RTL ties `A=0` and
+uses `OE` to select drive-low versus high impedance while sampling `Y`.  This
+is the appropriate logical use of the available pad, but the PDK provides no
+dedicated open-drain primitive and no pad-level/silicon validation has yet
+established that the selected control polarity, reset behaviour, input
+thresholds, drive strength, leakage, or enable/disable transition are suitable
+for a multi-chip wired net.
+
+**Risk:** an incorrect interpretation of the `bi_24t` controls or an
+unreviewed board pull-up can cause contention, an excessive low-level current,
+slow/noisy rising edges, false synchronisation events, or an unintentional
+drive during reset.  The net is optional for a single-chip receiver, but it is
+required for the proposed coordinated multi-chip acquisition and should not be
+committed to the board/pad allocation on RTL inference alone.
+
+**Required review / closure evidence:**
+
+- Review the exact `gf180mcu_fd_io__bi_24t` Liberty, Verilog model, and PDK
+  documentation for `A`, `OE`, `Y`, `IE`, `CS`, `SL`, `PU`, `PD`, `PDRV0`, and
+  `PDRV1`; confirm OE polarity, high-impedance state, reset/default state, and
+  whether any keeper or implicit pull is active.
+- Simulate the actual pad model at chip-top with an external pull-up and two
+  pad instances.  Prove no device drives high, simultaneous local locks only
+  sink current, and reset/enable transitions do not create a false accepted
+  falling edge.
+- Select and document a board pull-up resistance from the pad's sink-current
+  limit, IO voltage, net capacitance, maximum trace length, and the required
+  release/rise time.  Verify VIH/VIL margins and account for all attached
+  chips' leakage.
+- Confirm package/padframe integration maps the ten logical boundary signals
+  (`OUT`, `IN`, `OE`, and seven controls) to exactly one physical bidirectional
+  pad and that this additional physical pad remains available in the final
+  allocation.
+- Run a post-integration electrical/functional test with the real pad wrapper
+  before relying on multi-chip beamforming or direction-finding experiments.
+
+**Current RTL safeguards (updated 2026-08-30):** `ARRAY_SYNC_EN` (`ARRAY_SYNC_CTRL[0]`, register `0x18`)
+resets to 0, so the pin is inert in both directions until firmware arms it; the
+internal pull-up is **enabled** on this pad alone so an unpopulated pin cannot
+float; Schmitt input is enabled; the driver only ever presents zero; a natural
+local SC lock wins over a same-cycle peer edge; and a receiver ignores peer
+events while `packet_active`.  These reduce protocol risk but are not
+substitutes for the electrical review.
+
+**No run in this project has ever checked a pad cell.** `trouper_top`
+instantiates zero `gf180mcu_fd_io__*` cells, so the macro's LVS netlist and
+layout contain none — verified on job 5279 (0 IO cells in the netlist, 0
+`gf180mcu_fd_io` hits in the LVS report). Every "DRC/LVS clean" result to date,
+including the runs that carry this pad, is a statement about the **Trouper macro
+only**. The electrical questions below are therefore entirely open, not
+partially covered. SPICE-level LVS/DRC and the specific simulations that would
+close them are planned in `planning/pad-cell-signoff-plan.md`, gated on the
+integrator confirming the padframe.
+
+**Added to the pull-up review by the internal pull-up:** the board resistor is
+now in parallel with one internal pull-up per participating chip. Size the
+external resistor against the *combined* pull-up current, and confirm the
+resulting V_OL at the 4 mA `PDRV=00` sink still meets every receiver's V_IL
+across the worst-case number of chips on the net. The internal device's
+strength is not characterised in our own data and must be read from the PDK
+before this is closed.
+
+**See:** item 52 above (the pad-slot allocation decision this depends on);
+`planning/array-acquisition-sync.md`; `src/top/trouper_top.v`
+(`array_acq_sync` and `ARRAY_ACQ_N_*` pad wiring).
+
+---
+
+**Additional points from the parallel writeup of this item (2026-08-30):**
+`ARRAY_SYNC_CTRL[0]` (`0x18`) resets to **0** and gates both directions, so an
+unpopulated pin on a single-chip board cannot start the receiver whatever the
+floating pad does — the exposure is confined to boards that use the link. On a
+shared net one internal pull-up **per participating chip** sits in parallel with
+the board resistor and must be counted in both the sizing and the V_OL budget.
+The pad configuration should also be reviewed against the GF180 IO databook gap
+already recorded in item 27. The feature is synthesis-proven only: +111 cells /
++4030 µm² (+0.41 %), zero Yosys check problems, and explicitly not timing, DRC,
+LVS, pad-ring or pull-up validated.
+
+
+### 52. A40 ACV allocation is 28 pad slots — one spent on `ARRAY_ACQ_N`, two spare; slot N15 still needs a DEF regen
+
+The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
+`VDD`, and `VSS`). The reported ACV allocation is **28** pads, leaving **three** slots
+unassigned by the current `info.yaml`, A40 DEF template, and RTL pinout. This must be
+confirmed against the current integrator `A40_ACV_pad_map.yaml` / regenerated DEF: the
+slot names, IO-cell types, bonding status, and locations are not yet recorded locally.
+
+**Decision required before finalising the A40 pin list:** retain all three as spares, or
+allocate one to the physical `sc_lock_in` trigger-synchronisation link for
+[multi-chip cascade operation](NR2-multi-ASIC-cascade.md) (the proposed shared
+acquisition/SC-lock trigger extension). If selected, update `info.yaml`,
+`planning/Pinout.md`, the top-level pad interface, the A40 template, and the integration
+and regression evidence together; do not assume a spare slot is electrically or
+package-bond available until the integrator confirms it.
+
+**Update 2026-08-30 — allocation confirmed at 28; one slot spent, two remain.** The
+28-pad ACV allocation is confirmed. `ARRAY_ACQ_N` is declared in `info.yaml` (appended
+after `VDD`, so it takes N15 and no existing pin moves) and wired in `trouper_top.v`,
+bringing `info.yaml` to 26 declared pins and leaving 2 of the 28 slots spare — both of
+which were then spent on the debug probes the same day, see item 54. This
+also closes the pin half of item 46: the 22-pad budget that
+drove the NR=3 / `IRQ_OUT`-waiver contingency was never the real allocation.
+
+**Still open on this pin** (the budget was never the hard part):
+
+- No P&R run has been built against a 26-pin DEF. Request a regenerated `A40_ACV.def`
+  from the integrator and re-run before treating N15 as committed.
+- Slot names, IO-cell types, and bonding status for N15 and the two remaining spares are
+  still not recorded locally — get the current `A40_ACV_pad_map.yaml`.
+- Pad-level electrical review of the open-drain emulation is item 53.
+
+The pad is self-contained: deleting the `info.yaml` entry, the two `io_placement` entries,
+and the `ARRAY_ACQ_N_*` ports backs it out completely.
+
+---
+
+**Superseded on the spare count (2026-08-30):** this entry was written when two
+slots were still spare. `DBG0_OUT`/`DBG1_OUT` have since taken both — the
+allocation is now exactly 28/28 with none spare. See item 57, which is the
+current statement of the pin budget; only the slot-confirmation half of this
+entry is still live.
+
+### 57. The pin allocation is now exactly full (28/28), and three of those slots are unconfirmed
+
+`info.yaml` declares **28** pins against a **28**-slot allocation: 26 signal +
+`VDD_CORE` + `VSS`. There is **no spare slot left**. The last three went to
+`ARRAY_ACQ_N` (N15) and `DBG0_OUT`/`DBG1_OUT` (N16/N17), all added 2026-08-30.
+
+**Two distinct problems, often conflated:**
+
+1. **No margin.** Any further pin need — a second supply, a strap, a bring-up
+   escape, a late interface fix — must now *displace* something already
+   allocated. Historically this project has wanted a spare pin roughly once a
+   month (`sc_lock_in`, the IRQ waiver, the NR=3 study). Zero margin at this
+   stage is a real exposure, not a bookkeeping note.
+2. **The three newest slots are not confirmed.** N15/N16/N17 exist in our
+   `info.yaml` and in a locally extended floorplan template
+   (`src/config/A40_ACV_rtlnames_dbgpins.def`, built by
+   `rtl-test/scripts/a40_append_provisional_pads.py`). The integrator has not
+   confirmed that those slots exist, are bondable, or can carry the cell types
+   we assume. Nothing in any P&R run validates that — the run only proves the
+   *design* closes with three more north-edge pads at coordinates **we chose**.
+
+**What would close it:** a regenerated `A40_ACV.def` from the integrator
+containing all 28 pads, a P&R run against that template rather than ours, and a
+decision on whether spending the final slot on a debug probe is the right use of
+the last pin.
+
+**Note on what P&R proves here.** It proves the *macro* routes and closes with
+three more boundary pins at coordinates we chose. It says nothing about the pad
+cells — Trouper instantiates none — so no amount of clean Trouper P&R can
+confirm a slot exists or is bondable. That needs the integrator, and the
+electrical half needs `planning/pad-cell-signoff-plan.md`.
+
+**If a slot is refused,** the two features are independently removable and
+documented as such: `planning/array-acquisition-sync.md` and
+`planning/two-pin-digital-debug-plan.md` each list the exact back-out steps.
+The debug probe is the cheaper thing to drop — it is bring-up-only, whereas the
+acquisition link is a functional feature.
+
+**See:** item 52 (the slot-availability decision this grew out of), item 53
+(`ARRAY_ACQ_N` pad electrics), `planning/Pinout.md` allocation status.
+
+---
+
+*(Numbered 54 on `feat/array-acq-sync`; renumbered to 57 on merge — 54, 55
+and 56 were already taken on this branch by the host-SPI GLS/SDF, startup-
+sequencing and IR-drop entries respectively.)*
+
+
+## Low
+
+### 56. Trouper standalone flow has never run a real-source IR-drop analysis
+
+`VSRC_LOC_FILES` (OpenROAD PSM's realistic-downbond-location IR-drop mode)
+is not set anywhere in Trouper's own P&R configs (`rtl-test/ol_*/config*`,
+`pdn_cfg.tcl`) — confirmed by search, 2026-08-23. Whenever Trouper's own
+flow reaches `OpenROAD.IRDropReport`, it falls back to LibreLane's default
+`LIB_VOLTAGE`/BTerm-source behavior, which treats every top-level power pin
+as an idealized current source — optimistic relative to a real chip with
+only a handful of actual bond wires. `planning/Open Risks.md` #46 and
+several other docs flag IR drop as a qualitative unknown for exactly this
+reason.
+
+**Mitigated by context, not by data of Trouper's own:** Trouper is being
+physically implemented together with Grouper on one shared die
+(`lora-mimo/integration/pd/config_landscape_2235.yaml`,
+`chip_top.v`), not packaged standalone, so the risk this entry names is
+already being answered by that combined integration's own real-source IR-drop
+analysis rather than needing a separate Trouper-only run. That analysis
+(2026-08-23, both landscape SRAM-orientation topologies, real
+via-connected vsrc downbond locations, `chip_top` job 4833/4834) came back
+at **~3-5% worst-case drop on both VDD and VSS** (VDD 3.02%/5.13%
+depending on topology, VSS 2.05%/2.84%) — a reasonable, non-alarming
+number, not pinned to 0 (which would suggest a broken analysis) or blowing
+up. See `lora-mimo/planning/grouper-trouper-landscape-floorplan-2026-08.md`
+Open Item #9 for the full derivation and the two LibreLane/OpenROAD bugs
+that had to be fixed to get a working number at all
+(`lora-mimo/integration/pd/vsrc/README.md`).
+
+**Amended 2026-09-02 (PDN work):** every IR figure produced by Trouper's own
+flow is in this optimistic mode — the PDN trials measured 0.10-0.14 %, against
+the ~3-5 % the real-source combined-die analysis reports. Absolute IR margin
+from a Trouper-only run must not be used to argue a grid change is unnecessary;
+relative comparisons between configs on the same netlist remain valid. Note also
+that this entry's "mitigated by context" argument rests on Trouper sharing a die
+with Grouper, which predates the 2026-09-01 decision that Grouper is not taping
+out — whether the mitigation survives under A40 is unresolved. See
+`planning/pdn-thickening-and-core-ring-2026-09.md` §5.
+
+Still real padframe/downbond estimates, not final pad data — this entry
+stays open until real physical downbond locations replace the geometric
+via-connected estimates currently in `vsrc/*.loc`, same caveat the
+combined-die doc itself carries.
+
+### 22. NR=2/3-chip cascade risks unsimulated
+
+Re-modulator SQNR accumulation across cascade stages, hierarchical-MRC
+suboptimality vs. true NR=4 MRC, and inter-chip reset skew (undetectable at
+runtime — no symptom besides corrupted MRC weights, mitigated only by
+matched-trace-length reset routing, unverified) are all open for the
+multi-ASIC cascade topology.
+
+**Low for the current NR=1 tapeout** — becomes High if/when an NR=2 cascade
+product ships.
+**See:** `planning/NR2-multi-ASIC-cascade.md`, `planning/cascade-beamsteering.md`.
+
+### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware equivalence verified; gating policy open
+
+Float and fixed-point SNR-weighted eigenvector paths implemented and verified
+end-to-end over SPI (jobs 3596/3598, combiner bit-exact). Firmware builds for
+rv32emc (job 3602), was cycle-measured on the real PicoRV32 (job 3608), and
+matches the fixed-point model bit-for-bit on a traced unequal-noise register
+vector (job 3612). The remaining risk is the undecided runtime gating policy.
+**See:** `planning/noise-weighted-mrc-2026-07.md`.
+
+### 24. Residual Trouper Chip Specification drift: MRC numeric representation and RMD instability wording
+
+The 2026-07-26 audit closed the clock-tree, register-map, W_ACTIVE/safe-switch,
+PCF state/mode, and stale R=128-comment discrepancies. Two wording questions
+remain: TRPR-MRC-001/006 must consistently describe the implemented
+high-byte/8-bit weight representation rather than int16 Q1.15, and RMD-003's
+instability wording must match the observed failure signatures.
+
+**Doc gap — risk is firmware/bring-up written against the spec, not the map.**
+**Found:** 2026-07-02 trouper_top RTL review.
+
+### 25. trouper_top dead logic + minor RTL hygiene — packet_ctrl_fsm portion RESOLVED 2026-07-12
+
+**Resolved (dead FSM signals):** all dead `packet_ctrl_fsm` outputs and
+inputs deleted from the RTL — `psram_packet_arm`, `psram_replay_start`,
+`payload_rd_base`, `safe_switch`, `combiner_source` (superseded by the
+continuous-delay replay redesign, commit `46e1cdf`), plus the now-unused
+inputs `iq_valid`, `psram_en`, `psram_replay_active`. `buf_freeze` was
+initially KEPT because it was regression-covered (TRPR-PCF-002/008,
+`test_w_missed_packet.py`) even though it drove nothing in `trouper_top`;
+it was **deleted 2026-07-26** once it was established to be a bit-identical
+duplicate of `packet_active` (same four assignment sites, same values — the
+formal harness had been asserting both equal `state != ST_IDLE`). PCF-002/008
+and the four regression assertions are retargeted to `packet_active`.
+
+**Resolved (`psram_abort` — the "verify that path or wire/delete" item):
+verified UNREACHABLE, branch deleted.** The mid-payload re-lock scenario
+`psram_abort` guarded (a second `sc_lock` arriving while a replay is still
+in flight, with `packet_active` never dropping so `packet_end` never fires)
+is structurally impossible in the current design: `sc_detector` holds
+`sc_lock` high until `sc_clr` (= `packet_done_pulse`, the falling edge of
+`packet_active`), both the hit-count and `SC_FORCE_LOCK` lock paths are
+gated `!sc_lock`, and the `SC_FORCE_LOCK` register write is additionally
+blocked by `PACKET_ACTIVE`. Every packet acquisition therefore passes
+through `ST_IDLE`/`packet_end` first — `psram_buf_ctrl`'s `packet_end` exit
+from `S_REPLAY` is sufficient. The entire `ST_PAYLOAD_ACTIVE` re-lock branch
+(and `psram_abort` with it) was deleted; a why-comment in
+`packet_ctrl_fsm.v` and `psram_buf_ctrl.v` records the reasoning.
+**Guard-rail for future work:** if `sc_detector` ever gains a mid-packet
+re-arm path (e.g. an NR2/3 cascade `sc_lock_in` wired without the
+`!sc_lock` gate), re-lock handling AND a replay-abort path must be
+reintroduced in both `packet_ctrl_fsm` and `psram_buf_ctrl` — see the note
+in `planning/NR2-multi-ASIC-cascade.md`.
+Verified: 7 cocotb suites + `sc_force_lock` + `tb_trouper_two_packet`
+regression after the deletions (SGE jobs 3359/3360).
+
+**Still open (non-FSM items):** `mimo_mode[1]` never writable
+(`reg_bank.v`) yet read back and forwarded; `mrc_combiner.v:126` assigns
+`26'sd0` to an 18-bit reg; `mrc_combiner` port `clk_16m` is actually driven
+at 32 MHz. The live-training `noise_trig` swallow is **closed 2026-08-29**:
+the top gates the trigger while `training_armed`, raises sticky/W1C
+`TACC_NOISE_TRIG.NOISE_TRIG_REJECTED` (0x1F[1]), and a directed cocotb test
+proves no false `NOISE_READY` occurs.
+
+**Found:** 2026-07-02 trouper_top RTL review.
+
+---
+
+### 55. Power-on / startup sequencing has no on-chip enforcement — unverified in silicon
+
+Four related gaps surfaced while checking whether the PSRAM QSPI clock could
+be run below 32 MHz:
+
+1. **No hardware tPU wait for PSRAM init.** `trouper_top.v:414` wires
+   `init_start = PSRAM_CTRL[0] & ~QSPI_OWNER` — a register-bit *level*, not a
+   firmware-pulsed strobe as `planning/blocks/PSRAM Buffer Controller.md`
+   describes ("firmware pulses `init_start` after tPU"). The APS6404L needs
+   tPU ≥ 150 µs after its own power-up before RSTEN is safe; nothing in RTL
+   times this. It is entirely a host/firmware discipline requirement (RPi
+   must wait before writing `PSRAM_CTRL[0]=1`), unverified against real
+   silicon + a real PSRAM part. `cocotb/tests/test_startup.py::
+   test_psram_init_has_no_tpu_wait` measures ~2.9 µs from `RESETB` release
+   to the first PSRAM CE# pulse when firmware issues the write immediately
+   — confirms the gap is real and quantifies it, but only host-side
+   discipline (or a real on-chip timer) prevents hitting it.
+2. **tRST margin inside QE_INIT: re-measured, not thin.** Originally
+   estimated by hand-counting FSM states as ~62.5 ns (12.5 ns margin over
+   the APS6404L's tRST ≥ 50 ns) — that hand count was wrong.
+   `cocotb/tests/test_startup.py::test_qe_init_trst_margin` measures the
+   actual RST(`0x99`)→Enter-QPI(`0x35`) CE# gap in simulation at **750 ns**
+   (700 ns margin) — comfortable. Left in as a regression test rather than
+   a live risk; downgrading this sub-item accordingly.
+3. **`rst_n` is the raw `RESETB` pin, unsynchronized, no on-chip POR or
+   deglitch** (`trouper_top.v:70`: `wire rst_n = RESETB;`). Reset-ordering
+   bugs have already hit this design once — see item 26 below (closed): SPI
+   frame flops reset only on `posedge HOST_CS`, so the very first CS-low
+   transaction after power-on parsed garbage, caught only because someone
+   specifically tested first-transaction ordering rather than the normal
+   packet-loop sweeps.
+4. **SC-detector correlator is fully idle until `del_rdy` fires.** This is
+   intentional (Gate 9 hold-off in
+   `planning/decimator-hb-migration-impact-plan.md`, min 256 samples at
+   SF7/BW250), but worst case (SF12/125 kHz, N=16384 samples ÷ 500 kS/s) is
+   **≈32.8 ms** after `qe_init_done` before the receiver can register any
+   lock. Reasonable by design, but it is a real "deaf window" on every PSRAM
+   init or SF/BW change, and no spec states an explicit worst-case
+   time-to-first-lock figure. `test_sc_correlator_idle_until_del_rdy`
+   (SF9/BW125, ~4.1 ms case) confirms `tdm_busy` never activates before
+   `del_rdy` and measures warm-up at 4.092 ms vs a 4.096 ms prediction —
+   behaves exactly as designed; worst case scales linearly to SF12/125 kHz.
+
+None of this surfaced in the existing cocotb SF/BW sweeps or
+`tb_trouper_two_packet` because those testbenches start from an
+already-initialized state or use idealized/instant power-up — they don't
+exercise power-on ordering itself.
+
+**Found:** 2026-07-05, while investigating PSRAM QSPI clocking margin.
+
+**Testbench added:** `cocotb/tests/test_startup.py` (6 tests, all PASS,
+SGE job 3257) — first-transaction-after-reset at 3 clock phases (regression
+for item 26), the tPU-race and tRST-margin characterizations above, and the
+SC hold-off check. Items 1 and 3 remain open (no on-chip fix, by design
+pending firmware/board discipline); item 2 is downgraded from risk to
+regression coverage; item 4 is confirmed working as intended.
+
+**Next steps:** first hardware bring-up on the test PCB (a few weeks out)
+will validate items 1 and 3 against a real PSRAM part and real RESETB
+behavior — sim can characterize the digital logic's assumptions but not the
+analog reset/power-rail behavior itself.
+
+---
+
+## Deferred
+
+### 9. SC Detector acquisition is single-antenna at any instant (no diversity at lock time) — DEFERRED 2026-07-06, re-scoped 2026-08-14
+
+`sc_detector.v` correlates only one antenna branch's `cur_i0/q0` / `del_i0/q0`
+at a time via `psram_buf_ctrl`'s delay line; the `Sum_j` incoherent 4-branch
+combine that `planning/DSP Flow.md` Stage 5 specifies is not implemented. If
+the currently-selected antenna is in a deep Rayleigh fade, the gateway fails
+to acquire the packet even when the other 3 antennas have strong signal —
+the array provides no diversity gain for detection, only for post-lock MRC
+combining. Confirmed both via measured-IQ playback (Rayleigh seed 7 vs 10)
+and a Monte-Carlo sweep (`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/
+branch SNR, P(lock) with the selected antenna in deep fade is 0% single-
+antenna vs 52% for the spec-intended combine). A spec-faithful fix (serial
+4-channel TDM correlator, ~+20 k µm², no clock-period cost) is designed but
+not implemented, pending an area-headroom check against the floorplan.
+
+**Mitigation added 2026-07-11:** `sc_ant_sel` (`reg_bank` `SC_ANT_SEL` 0x1B[1:0];
+was `BW_CFG` 0x0A[2:1] until 2026-08-30)
+lets firmware pick *which* single antenna feeds the correlator, instead of
+the old hardcoded antenna 0 — cheap (a byte-lane mux + address offset in
+`psram_buf_ctrl.v`, no measurable area cost), verified bit-exact
+(`cocotb/sc_ant_sel/test_sc_ant_sel.py`, SGE job 3328). This does **not**
+close the underlying risk: the correlator is still single-antenna at any
+instant, so acquisition still fails if the *currently selected* antenna is
+the one in deep fade. It only means firmware can route around a
+known-bad branch (e.g. after a noise-mode `Z_kk` energy scan) instead of
+being permanently stuck on antenna 0. Firmware-side selection policy is not
+yet designed. See `planning/Register Map.md` `0x0A`.
+
+**Related mitigation added 2026-07-12 (different failure mode):**
+`SC_FORCE_LOCK` (`reg_bank` 0x19[0], W1P) manually asserts `sc_lock`,
+bypassing the correlator's hit-count logic entirely. This does not address
+the ant0-fade diversity gap above — it is a bring-up / catastrophic
+correlator-failure escape hatch for the case where `sc_detector` itself is
+suspected non-functional (not just fed a faded antenna), so the rest of the
+chain (`packet_ctrl_fsm` → PSRAM → combiner → IRQ) can still be exercised.
+A forced lock has no verified preamble edge to anchor `timing_ref` on, so it
+is not useful for recovering a real packet, only for proving downstream
+logic is alive. Register-only for now; a physical `sc_lock_in` pin (the
+NR2/3 cascade OR-lock scheme, `planning/NR2-multi-ASIC-cascade.md`) is
+deliberately deferred — the pinout is at its 26-pad budget
+(`planning/Pinout.md`) with no spare pad to bond. See `planning/Register
+Map.md` `0x19`; regression `cocotb/sc_force_lock/test_sc_force_lock.py`
+(SGE job 3356, 2/2 PASS: forced entry into `ST_PREAMBLE_ACQ` from IDLE, and
+the `PACKET_ACTIVE` write-gate confirmed to block a second force mid-packet).
+
+**Does not block tapeout** — silicon works correctly whenever the selected
+antenna is not the faded branch; this is a robustness/diversity gap, not a
+functional bug.
+**Decision 2026-07-06:** the full 4-branch correlator deliberately DEFERRED —
+no die-area headroom for the ~+20 k µm² cost at the current floorplan.
+Revisit only if an area budget opens up (e.g. after further area cuts or a
+die-size change); until then, `sc_ant_sel` is the accepted interim
+mitigation and the diversity gap itself stays an accepted, documented
+limitation.
+**See:** `planning/sc-detector-ant0-fading-risk.md`.
+
+**Deferred state (2026-08-14):** moved out of Moderate into this section. The
+fix is designed and costed (~+20 k µm² serial 4-channel TDM correlator, no
+clock-period cost) and is *not* to be re-proposed, re-costed, or re-explored
+except when the re-open trigger below fires.
+
+**Re-open trigger:** a signed-off floorplan with ≥ 20 k µm² of spare cell area
+against the then-current die (e.g. after a further area-cut milestone, a die-size
+increase, or the 4.5 V-core decision in item 44 freeing utilisation headroom).
+Whoever hits that trigger re-files this as Moderate with the measured headroom
+number attached.
+
+**Until then, accepted as-is:** `sc_ant_sel` (0x1B[1:0]) is the shipped
+mitigation, the firmware-side branch-selection policy is the only outstanding
+work item, and the detection-diversity gap is a documented silicon limitation
+rather than an open action.
+
+---
+
+## Closed
+
+### 51. `trouper_top` @ 1675×1110 antenna violations — CLOSED 2026-08-29 (`DIODE_PADDING: 4`)
+
+The A40 die-size rebuild had 26 antenna net / 35 pin violations (job 5158).
+**Job 5198 (`config_1675_c5_diodepad4.json`) reaches 0 net / 0 pin**, fully
+signoff-clean: DRC 0, XOR 0, LVS clear, hold 0 all corners, setup max_ss
+−13.15 ns (better than the −13.52 ns baseline), clock skew 0.312 ns,
+die 1675×1110.
+
+Antenna *repair* was never the problem — inserted diodes crowded IQ_CLK clock
+buffers and stole their routing pin access, so detailed routing died on
+`DRT-0073`/`DRT-1231`. `DIODE_PADDING` was unset, so diodes could abut a clock
+buffer; setting it to 4 fixes the interaction. The failing cell was a `clkbuf_16`
+in every early run, but downsizing the tree is **not** the fix — job 5197 then
+failed on a `clkbuf_12`, the very cell it downsized to, and cost skew
+(0.442 vs 0.312 ns). Buffer size is irrelevant; diode proximity is the cause.
+
+This also gives Open Risk #6 (recurring `DRT-1231` clkbuf pin-access failure) a
+concrete mitigation. Full record:
+`planning/antenna-closure-investigation-2026-08.md`.
+
+### 5. ~~"Silence during PSRAM buffering" actually emits a ΣΔ-modulated DC tone~~ FIXED 2026-07-12
+
+**Both halves fixed by the continuous-delay replay implementation**
+(`planning/psram-replay-continuous-delay-redesign.md`, now IMPLEMENTED):
+`trouper_top.v` keeps `in_valid` asserted and feeds zeros during buffering
+(real modulated silence, asserted bit-exact by the updated
+`_watch_bypass`), and the `W_COMMIT` rewind-to-`buf_base` jump is replaced
+by a margin-gated delay line that never rewinds (`TRPR-RMD-009` met;
+monotonicity watched at `rd_ptr` in `cocotb/tests/test_replay_delay.py`).
+New registers `REPLAY_DELAY_SAMPLES` (0x77/0x78) + `WGT_CTRL[4]`
+`W_COMMIT_LATE`.
+
+**Found:** 2026-07-02 trouper_top RTL review. **Fixed:** 2026-07-12
+(replay-delay regression + bypass_e2e/w_missed/psram_ops/qspi_owner/
+reg-reset-sweep suites, SGE jobs 3347/3350).
 
 ### 39. Scoped-MCP SDC cone leaks and `timing_ref` write-arc dishonesty — CLOSED 2026-07-26 (v25_b6 canonicalized)
 
@@ -926,230 +2061,6 @@ v24 `M_val` exception and re-points the packet-control endpoints to B6's
 it. The historical B4/B6 v20 measurement therefore does not describe the
 shipping constraint set.
 
-### 40. SS wall is several stacked problems, not one — root-caused 2026-07-12 by direct netlist/STA cross-check
-
-**Root-cause pass complete.** Traced every major violator cluster in job
-3367's `max_ss_125C_3v00/max.rpt` (`RUN_2026-07-12_21-56-16`) against
-`final/nl/trouper_top.nl.v` (Q-net names of each startpoint/endpoint flop).
-The original framing of this item ("`rb_bw_sel`/`rb_sf_cfg` fanout into
-`sc_detector`") was directionally right but incomplete — the wall is
-actually five distinct, separately-caused clusters:
-
-| Startpoint (traced) | Violator count | Destination (traced) | What it is |
-|---|---|---|---|
-| `u_psram.state[0:1]` | 273 | `rpl_valid`, `u_psram.sub`, `u_psram.dbg_buf` | **the pre-existing `u_psram` QSPI decode residual item 1 has cited since before #39/#40 existed** — `u_psram` was never in `paced_nets`; the fix has always been a 1-cycle-ahead pipeline (item 1), not an MCP relaxation, and it's still not implemented |
-| `rb_bw_sel` | 200 | `u_sc.eval_step`, `u_sc.mul_start` | config reg → sc_detector's serialized eval FSM. Wildcard-miss (see below) |
-| `Zpair_i[*]/Zpair_q[*]` | 135 | (training_acc) | not previously characterized at all |
-| `ce_16m` | 64 | — | 16 MHz clock-enable, broad fanout; not previously characterized |
-| `packet_active` | 54 | `u_sc.acc_ci0` | **the single worst path, −16.01 ns — fully traced below** |
-| `timing_ref[7]` | 46 | `u_pcfsm.acq_timeout_q` | this is the write-arc dishonesty item 39 already flagged as "confirmed real, not yet fixed" — showing up in the raw violator count too |
-| `dcr_valid` | 26 | — | dc_removal; not previously characterized |
-
-**The worst path, fully traced:** `_61285_` (`.Q(packet_active)`, the
-`packet_ctrl_fsm` top-level flop) → net `packet_active` → 4 more hops,
-2 of which survive named (`packet_done_pulse`) and the rest anonymized
-(`_05436_`, `_06213_`, `_22787_`, `_23679_`, `_03962_`) → `_62498_`
-(`.D(_03962_)`, `.Q(u_sc.acc_ci0[19])`). **Confirmed root cause:** the
-`paced_nets` MCP=3 relaxation (`pnr_32m_scoped_v20.sdc:184-187`, `-through
-[get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]`) never touches
-this path — every intermediate net between the two registers is either a
-**top-level** net (`packet_active`/`packet_done_pulse` are declared in
-`trouper_top.v`, sourced from `packet_ctrl_fsm`, not `u_sc.*`-prefixed) or
-fully anonymized by synthesis. The endpoint register's own *output* net
-happens to be named `u_sc.acc_ci0[19]`, but that's downstream of the
-violating arc, not part of it — the D-pin's driving net (`_03962_`) has no
-`u_sc.` name to match. **This confirms hypothesis 1 from the original #40
-write-up** (wildcard silently not applying), not hypothesis 2 (budget too
-small) — same "-through wildcard misses a cross-boundary/optimized-away net"
-bug class as v8, v19, and the v20 `rb_sc_hits_req → timing_ref` miss (item
-39's history). The `rb_bw_sel → u_sc.eval_step/mul_start` cluster (200
-violators) is the same failure mode: `rb_bw_sel` itself is a top-level net,
-not `u_sc.*`-prefixed, so `-through u_sc.*` never matches it either.
-
-Not a new bug in the RTL sense for the `u_psram`/`rb_bw_sel`/`packet_active`
-clusters (33 violators at −22.1 ns existed in the July 5 baseline,
-`RUN_2026-07-05_00-56-34`, same 1200×1100/88% config) — but the violator
-count has grown to 1000+ at −16.01 ns (job 3367, 2026-07-12) with the same
-die/density, most plausibly from RTL added since (the PSRAM continuous-delay
-replay redesign touches `sample_shift`/`packet_active` consumption heavily).
-
-**Action:** generalize the fix pattern that already worked for item 39 (job
-3367): replace the blanket `-through <hierarchy-wildcard>` with `-to
-<get_cells -of_objects [surviving Q-nets] -filter {ref_name =~ *dff*}>`,
-scoped per real quasi-static source, for each of: `rb_bw_sel →
-u_sc.eval_step/mul_start`, `packet_active → u_sc.acc_ci0/acc_cq0` (and
-siblings). The `u_psram.state` cluster is out of scope for an SDC fix — it's
-item 1's original pipeline-fix residual. `Zpair_*`/`ce_16m`/`dcr_valid`
-clusters are uncharacterized — need their own trace pass before deciding
-MCP-relaxation vs. real RTL fix.
-
-**2026-07-13 update — jobs 3370/3371 back; CE-retimer wins this round, v23
-found an 8th cone:**
-
-(1) v23 (job 3370, SDC-only fix for `rb_sf_cfg`/`rb_bw_sel` →
-`u_sc.timing_ref`, the fifth missed cone) **made WNS worse: −17.16 ns**
-(vs job 3368's −16.60 ns), DRC=0/LVS=0 clean. Closing `timing_ref` unmasked
-a **sixth** missed cone nobody had traced before: `packet_ctrl_fsm.v:46-49`
-has its own separate `M_val` register (`M_val <= 1 << (sf+sample_shift)`),
-computed redundantly from the same `sf`/`sample_shift` operands as
-`sc_detector`'s `M_val`, recomputed unconditionally every cycle, and never
-covered by any of v21/v22/v23's scoping (`rb_sf_cfg → u_pcfsm.M_val[15]` is
-now the worst path). Same whack-a-mole pattern as every prior round — one
-more per-consumer SDC gap found only after the previous one stopped masking
-it.
-
-(2) The CE-retimer (job 3371, branch
-`worktree-ce-gated-quasi-static-retimer`, independent div-4 enable — see
-`planning/ce-gated-quasi-static-retimer-experiment.md`) **clearly wins**:
-WNS **−16.07 ns**, essentially back to the original unfixed baseline
-(−16.01 ns, job 3367), and — the important part — its worst path is `u_psram.sub[3] → ...`, the
-**already-known, already-characterized** item-1 QSPI-decode residual, not a
-newly-exposed cone. Retiming the source once absorbed the `rb_sf_cfg`/
-`rb_bw_sel`-driven violators (including the `M_val` one that just hit v23,
-since `packet_ctrl_fsm` in this branch reads the retimed `rb_sf_cfg_q`)
-without needing to individually re-scope every consumer. **Job 3371 finished
-DRC=0/LVS=0 clean** (elapsed 00:31:14) — same signoff bar as every other run
-this session; the timing result is confirmed, not provisional.
-
-**Recommendation:** adopt the CE-retimer
-approach over continued per-consumer SDC patching, and extend it to
-`rb_pkt_timeout_syms`/`rb_tacc_window_syms`/`rb_sc_hits_req` (same shape:
-quasi-static `reg_bank` source, multiple consumers, same wildcard-miss risk
-class). The `u_psram` residual remains the real, harder, separately-tracked
-problem (item 1) — a throughput-bound pipeline fix, not an MCP/retiming
-question.
-
-**2026-07-13 update — extension CONFIRMED (jobs 3387–3400): recommendation
-adopted and verified, still unmerged.** Folded `rb_sc_hits_req`,
-`rb_pkt_timeout_syms`, `rb_tacc_window_syms` into the same `ce_8m`-gated
-retimed bus and added an explicit `u_pcfsm.M_val` SDC endpoint (the cone that
-broke v23). Full 12-suite cocotb regression (jobs 3388–3399) all PASS, plus
-the SF/BW startup sweep (job 3387, 18/18 PASS) — no functional regression.
-P&R signoff (job 3400, `ol_trouper_top/runs/RUN_2026-07-13_01-57-28`):
-**DRC=0/LVS=0 clean, post-PNR SS WNS = −14.71 ns** — the best number in this
-item's entire history (better than the base retimer's −16.07 ns/job 3371,
-both SDC-only attempts −16.60/−17.16 ns, and the original unfixed baseline
-−16.01 ns/job 3367). Worst path startpoint is `psram_qe_init_done`, still the
-same already-characterized `u_psram` QSPI-decode residual (item 1) — closing
-the extra three sources did not expose a ninth cone. The whack-a-mole class
-of bug this item documents is fully absorbed by the retimer for every
-`reg_bank` quasi-static source now in scope; only `u_psram`'s throughput-bound
-pipeline fix remains.
-
-**See:** `src/frontend/sc_detector.v`; `src/config/pnr_32m_scoped_v20.sdc`
-(`paced_nets` wildcard); item 39; item 1;
-`planning/ce-gated-quasi-static-retimer-experiment.md`.
-**Found:** 2026-07-12 (v21 SDC signoff run, job 3367).
-**Root-caused:** 2026-07-12 (direct netlist + STA violator-report
-cross-check, `RUN_2026-07-12_21-56-16`).
-**Extension verified:** 2026-07-13 (jobs 3387–3400).
-
-**2026-07-18/19 addendum (mechanism found):** across the B4/B6 area-cut
-signoff runs the `packet_active → packet_done_pulse → u_psram.*` cone swings
-−3…−8 ns ↔ −22 ns for the same arcs between runs. Stage detail of the bad
-run: 45 of 60 ns in four under-driven stages (x1 cells left at fanout 25–39,
-slews 8–17 ns) — repair_design's DRC-driven upsizing is a cap-threshold knife
-edge at the repair corner, so any nearby placement perturbation flips it.
-Three consecutive runs produced three different chronic worst cones
-(`rb_sf_cfg → M_val` / `packet_active → psram` / `u_remod.s3`): single-run
-WNS at 88 % util measures the repair lottery, not the RTL delta. Fix
-direction = deterministic fanout treatment (RTL split per the
-sc_lock → timing_ref pattern, or max_transition SDC) on the chronic nets;
-`u_psram` endpoints remain item 1's pipeline. See
-`planning/b4-b6-area-cuts-2026-07.md` §4.
-
-**2026-07-26 correction:** the main deterministic fanout treatment has since
-shipped: commit `3af9619` split `packet_active` fanout and registered
-`packet_done_pulse` (merged by `b47474d`), eliminating that chronic cone in
-the B6 measurements and improving WNS from −25.5 to −15.9 ns at about +10.3 k
-µm² area churn. A pulse-only A/B variant was worse due to synthesis remapping
-sensitivity. Remaining closure work is the `u_psram` pipeline in item 1 and
-the still-uncharacterized `Zpair_*`, `ce_16m`, and `dcr_valid` cones; single
-run WNS should still be treated cautiously at this density.
-
----
-
-### 41. Hold signoff corner pulls the wrong RCX deck; the corrected (min_ff) config fails routing at signoff density
-
-`max_ff_n40C_3v60` extracts with a `.max` RCX ruleset, so hold is checked
-against pessimistic-setup RC, not true min-RC. The working fix is an
-`RCX_RULESETS` override to add a real `min_ff_n40C_3v60` corner — renaming
-the corner instead breaks P&R (jobs 3423/3426). **New 2026-07-18:** the
-carrier config (`config_current_signoff_minff.json`) **fails GRT-0116
-congestion** at 1200×1100/88 % (job 3464) — min_ff hold buffering pushes the
-design past routability, while the plain max_ff config routes clean. The RCX
-fix is therefore currently unusable at signoff density; needs either lower
-util, a smaller hold-fix scope, or die growth.
-
-**See:** `rtl-test/ol_trouper_top/config_current_signoff_minff.json`;
-`planning/b4-b6-area-cuts-2026-07.md` §4.
-**Found:** 2026-07-15 (ruleset), 2026-07-18 (congestion, job 3464).
-
----
-
-## Moderate
-
-### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
-
-At 1380×1100, `root_only` NDR preserved clock SI at no timing cost. Below
-1380, `CTS_APPLY_NDR:"none"` is required instead — full clock-SI loss plus
-~1 ns of additional SS penalty. Post-route clock skew/jitter/coupling-cap
-signoff against baseline is still an outstanding step regardless of the die
-size ultimately chosen.
-
-**Updated 2026-07-11:** this entry previously read "contingent — only bites
-if the die is shrunk further; not a risk at the current baseline," written
-when 1380×1100 was still the production baseline. That's no longer true:
-the current signoff config (`config_current_signoff.json`) is already at
-**1200×1100 with `CTS_APPLY_NDR:"none"` set** — the same shrink closed out
-by item #28 (fixed-pin floor). The clock-SI tradeoff has therefore already
-been taken in the live signoff, not merely a future possibility. The
-underlying technical content is unchanged; what changed is that the formal
-post-route clock skew/jitter/coupling-cap signoff step this entry calls for
-is now needed for the *actual* current config, not a hypothetical future
-one.
-**See:** `planning/area-reduction-roadmap.md` §6; `planning/die-shrink-routability-floor.md` §6–8.
-
-### 12. 1100×1100 die target is blocked by measured global-routing congestion
-
-The target is no longer speculative: at ≈974 k µm² cell area, 1100×1100 is
-93.8% effective utilisation and fails global routing (GRT-0116 at step 39)
-on every tried variant: Metal1/Metal2 pin layers and cell padding 0/1 (jobs
-3242/3243/3245). The production/signoff size is 1200×1100. Reaching 1100×1100
-requires RTL area reduction; floorplan tightening has been exhausted.
-
-**Area/cost risk, not functional.**
-**See:** `planning/area-reduction-roadmap.md` §6.
-
-### 13. Live weight bank has no shadow→active promotion; writes are now structurally rejected while valid
-
-`mrc_combiner` consumes the live `rb_w_shadow` bank; a separate `W_ACTIVE`
-bank is deliberately not implemented. The old per-burst latches did not make
-a 16-byte SPI burst atomic and were removed by B4. The actual safety mechanism
-is hardware: after `W_COMMIT` makes `W_VALID` high, writes to `0x30–0x3F` are
-blocked and sticky `WGT_CTRL[5] W_WR_REJECTED` records the attempt. Firmware
-must write the complete vector before committing it; mid-payload `W_COMMIT`
-still applies from that point onward.
-
-**Found:** 2026-07-02 trouper_top RTL review.
-
-### 14. PSRAM replay is truncated at packet timeout
-
-In `S_REPLAY` the read pointer trails the write pointer and `packet_end` —
-a live-time timeout — kills replay immediately, dropping the packet tail
-unless `PKT_TIMEOUT_SYMS` exceeds actual packet length **plus** replay lag.
-
-**Reduced 2026-07-12 by the continuous-delay replay implementation:** the
-trailing gap is no longer unbounded-until-`W_COMMIT`; it is per-packet
-deterministic — `TACC_WINDOW_SYMS·M + REPLAY_DELAY_SAMPLES` (≈ 8 symbols +
-~6 symbols at SF7/default margin) — so firmware can budget
-`PKT_TIMEOUT_SYMS` against a known quantity. Residual: still SF-dependent
-via the training-window term, and no drain-then-exit exists; needs either
-the documented timeout-margin rule in the firmware spec or a
-replay-drain-then-exit condition.
-
-**Found:** 2026-07-02 trouper_top RTL review.
-
 ### 15. Final SPI write lost if host raises CS too soon after last SCK edge — FIXED
 
 **FIXED 2026-07-12** (`spi_slave.v`, commit `2b6af0f`). The one-SCK pulse
@@ -1170,192 +2081,6 @@ the request will survive CS de-assertion or documenting "hold CS low ≥ 100 ns 
 the final SCK edge" as a hard host requirement (and add it to the RPi driver).
 
 **Found:** 2026-07-02 trouper_top RTL review.
-
-### 16. Grouper/SPI register-bus arbitration silently drops SPI writes
-
-`trouper_top.v:578-581`: if `GRP_RE`/`GRP_WE` is asserted during the 2-cycle
-SPI write window, the mux steers away and the SPI write vanishes — no
-stall/queue as TRPR-SPS-007/TRPR-INT-003 require. Additionally the implicit
-Grouper contract (hold `GRP_WE` ≥ 2 clocks for the CE latch; no write-side
-`GRP_READY` handshake) is undocumented.
-
-**Found:** 2026-07-02 trouper_top RTL review.
-
-**Resolved:** 2026-08-04, regression job 3863. `trouper_top.v` now captures each completed SPI
-write in a one-entry pending slot and commits it after the higher-priority
-Grouper byte cycle releases. The byte-cycle contract requires release before a
-second SPI data byte completes (≥ 4 µs at 2 MHz). Because pin-level SPI has
-no WAIT response and the register bank has one combinational read port,
-TRPR-SPS-007 now explicitly rejects a read byte whose MISO snapshot overlaps
-`GRP_RE=1`; the host retries the complete read frame. Directed cases 3a/3b/4a
-in `tb_trouper_grp_arb.v` cover priority, write preservation, and read recovery.
-
-### 42. Packet-control FSM misses directed coverage for late weight commit and training timeout
-
-The current verification matrix explicitly leaves two functional cases
-uncovered: `W_COMMIT` during `PAYLOAD_ACTIVE` must enable combining only for
-the remainder of the packet, and a missing `training_done` must let `acq_cnt`
-enter bypass payload with `W_MISSED_PACKET` set. The existing miss test
-withholds `W_COMMIT` entirely, so it does not establish either behaviour.
-
-**Risk:** an untested packet-control transition can escape regression despite
-the documented implementation. **Action:** add directed cocotb cases for both
-rows, including observable combiner/bypass behaviour and sticky-status
-readback. **See:** `planning/blocks/Packet Control FSM.md` (Verification
-table); `planning/Trouper Chip Specification.md` TRPR-PCF-007/010.
-
-### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode) — MITIGATED, downgraded from High 2026-07-12
-
-**Cycle-accurate measurement 2026-07-11 (SGE jobs 3333–3335).** The weight
-kernel run on the real `picorv32.v` (slow non-`FAST_MUL` multiplier, corrected
-7-bit-map kernel with faithful MMIO ingest) costs **33,283 cyc = 2.08 ms @16 MHz**
-for the 8-iteration default on rv32im (36,458 cyc = 2.28 ms on the Grouper's
-rv32emc/RV32E core, ~+10% from 16-register spilling), SF-independent. Against
-the live-mode deadline (`4·M/500 kHz`): **SF7 (~1.02 ms) and SF8 (~2.05 ms) both
-miss on both ISAs; only SF9+ fits.** 16 iterations (~3.88/4.28 ms) needs SF9+
-(rv32im) or SF10+ (rv32emc). The 24-bit ZDIAG widening is timing-neutral
-(−30/−54 cyc).
-
-**Follow-up measurement 2026-07-12 (FPGA-emul, synthetic matrix).** The
-MicroBlaze self-trigger benchmark on the Arty board, using a deterministic
-4×4 synthetic matrix and `n_acc=1024`, reports `compute=3768 cyc` and
-`total=3792 cyc` at 100 MHz (`37.68 us` / `37.92 us`) — a firmware-path sanity
-check, not a live-mode deadline figure; it does not change the SF7/SF8 numbers
-above.
-
-**Why downgraded, not just documented:** the mitigation this entry always
-pointed to — PSRAM replay mode, which relaxes the deadline from
-`payload_start_estimate` to `packet_end_estimate − TACC_GUARD` and sidesteps
-the live-mode race entirely — is no longer a plan, it's shipped: the
-continuous-delay replay redesign is IMPLEMENTED and verified (all suites
-PASS, SGE jobs 3347/3350/3354/3355; see item 5's fix and
-`planning/psram-replay-continuous-delay-redesign.md`). With that mitigation in
-place, "live-mode firmware weight compute needs SF9+" is a **known, quantified,
-accepted architectural constraint** — not an unaddressed failure mode — for
-any deployment that runs SF7/8 with MRC gain: replay mode is mandatory there,
-same as it always was, and it now actually exists and is tested. Nothing
-silently produces stale weights: a live-mode SF7/SF8 miss still degrades
-cleanly to bypass via `W_MISSED_PACKET` (item 34, CLOSED), same fallback as
-any other missed commit.
-
-**What's still open (kept as Moderate, not fully closed):** this only covers
-the on-chip PicoRV32 path. The unconstrained-host (RPi/Grouper SPI) live-mode
-case still has unmeasured host IRQ/scheduling jitter that could itself blow
-the SF7 window on a non-RT kernel — see
-`planning/blocks/Eigenvector Weight Computation.md` §Timing — the actual
-constraint. That residual is host-latency measurement work, not a firmware or
-RTL defect.
-
-**See:** `planning/blocks/Eigenvector Weight Computation.md` (Timing
-Budget); `planning/DSP Chain SNR Loss Budget.md` §6;
-`planning/psram-replay-continuous-delay-redesign.md`.
-
----
-
-### 46. Trouper's 24-pad / 1200×1100 pinout may not fit a stricter 22-pad / 1117.5×1117.5 allocation — NR=3 fallback validated, NR=4 also reopened via a floorplan fix
-
-Current pinout is 24 pads (23 signal + `VDD_CORE`; `VDD_IO` removed 2026-08-19 — it's the
-same net as `VDD_CORE`, not a second pin, see `planning/5v-core-voltage-strategy.md`
-§2026-08-19) against a possible 22-pad team allocation — a 2-pin gap, not 3. NR=3 alone now
-closes it exactly, without also needing the `IRQ_OUT` waiver. The 1117.5×1117.5 µm square die target initially looked like a hard NR=4
-dead-end (`DPL-0036` placement failure, job 4480), but that was a LibreLane floorplan
-default (`*_MARGIN_MULT`) silently costing 4% of the die, not a structural limit —
-reclaiming it (`config_1117sq_maxarea.json`) gets a **clean NR=4 physical signoff**
-(DRC=0/LVS=0, job 4484), leaving only ordinary timing closure (−4.1 ns TT) still open. A 5V
-retry on top of that fix does not help (job 4486, `DPL-0036` again, later stage). Separately,
-**NR=3** (3 antenna channels instead of 4) also closes both the pin and die-size gap with
-more headroom (jobs 4482/4483): exactly 2 pins recovered, 1117.5² routes clean at 84.7% util
-and SS WNS −11.4 ns. Cost of NR=3: ~9%+ stdcell area saved, ~1.25 dB MRC combining-gain
-loss, one diversity order given up. Preferred path is still an `IRQ_OUT`-removal pin waiver
-to keep NR=4 at the current pin count; if the die-size rule alone is enforced, the
-margin-reclaimed NR=4 config is now the first fallback (keeps 4-antenna MRC), with NR=3 as
-the deeper fallback if timing closure on the reclaimed floorplan doesn't land. **See:**
-`planning/1117sq-margin-reclaim-2026-08.md`, `planning/nr3-fallback-2026-08.md` (full
-records), `planning/Pinout.md`.
-
----
-
-### 47. Only 2 of 4 padframe quadrants get bonded per package — unconfirmed whether Trouper's quadrant is guaranteed included
-
-New organizer information (2026-08-19, not yet in any planning doc before this): the shared
-padframe holds up to **4 quadrant projects, but only 2 are bonded out to package pins at
-once**. All of this project's floorplan/pinout work (upper-left quadrant assignment,
-clockwise `#N`/`#W` pin ordering, the L-shape/Grouper-notch keepout work) assumes Trouper
-actually gets real package pins in whatever spin is produced. Not yet confirmed with
-organizers whether Trouper's quadrant is guaranteed to be one of the 2 bonded, or whether
-that's still an open assignment/lottery. If Trouper isn't bonded, the pinout is moot for that
-spin (though the die itself is presumably still fabricated and could be bonded in a later
-run). **Action:** confirm bonding-pair assignment with the track lead before treating any
-pin-budget work as final.
-
-### 48. Digital input pins may be shareable between quadrant projects — pin-budget lever not yet evaluated
-
-Same 2026-08-19 organizer update as item 47: "it may be possible to share digital input pins
-between projects." Not yet investigated for this design, but a real candidate exists —
-`IQ_CLK` (external clock reference, a plain digital input with no project-specific timing
-requirement that would prevent sharing) could potentially be bonded to a single shared
-package pin across multiple quadrant projects rather than each project bonding its own copy,
-recovering a pin without any RTL change. This is a materially different, and likely cheaper,
-lever than the `IRQ_OUT`-removal waiver or NR=3 fallback already tracked in item 46 for
-closing the 22-pad/1117.5² budget gap — see `planning/nr3-fallback-2026-08.md`. Needs
-organizer confirmation of exactly which pins are shareable and the mechanics (does the
-project still declare the pin in its own `info.yaml`, or is it wired externally by the
-padframe integrator) before it can be relied on.
-
----
-
-### 52. A40 ACV allocation reportedly has three unassigned pad slots — decide whether to dedicate one to trigger synchronisation
-
-The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
-`VDD`, and `VSS`). The reported ACV allocation is **28** pads, leaving **three** slots
-unassigned by the current `info.yaml`, A40 DEF template, and RTL pinout. This must be
-confirmed against the current integrator `A40_ACV_pad_map.yaml` / regenerated DEF: the
-slot names, IO-cell types, bonding status, and locations are not yet recorded locally.
-
-**Decision required before finalising the A40 pin list:** retain all three as spares, or
-allocate one to the physical `sc_lock_in` trigger-synchronisation link for
-[multi-chip cascade operation](NR2-multi-ASIC-cascade.md) (the proposed shared
-acquisition/SC-lock trigger extension). If selected, update `info.yaml`,
-`planning/Pinout.md`, the top-level pad interface, the A40 template, and the integration
-and regression evidence together; do not assume a spare slot is electrically or
-package-bond available until the integrator confirms it.
-
----
-
-## Low
-
-### 47. Trouper standalone flow has never run a real-source IR-drop analysis
-
-`VSRC_LOC_FILES` (OpenROAD PSM's realistic-downbond-location IR-drop mode)
-is not set anywhere in Trouper's own P&R configs (`rtl-test/ol_*/config*`,
-`pdn_cfg.tcl`) — confirmed by search, 2026-08-23. Whenever Trouper's own
-flow reaches `OpenROAD.IRDropReport`, it falls back to LibreLane's default
-`LIB_VOLTAGE`/BTerm-source behavior, which treats every top-level power pin
-as an idealized current source — optimistic relative to a real chip with
-only a handful of actual bond wires. `planning/Open Risks.md` #46 and
-several other docs flag IR drop as a qualitative unknown for exactly this
-reason.
-
-**Mitigated by context, not by data of Trouper's own:** Trouper is being
-physically implemented together with Grouper on one shared die
-(`lora-mimo/integration/pd/config_landscape_2235.yaml`,
-`chip_top.v`), not packaged standalone, so the risk this entry names is
-already being answered by that combined integration's own real-source IR-drop
-analysis rather than needing a separate Trouper-only run. That analysis
-(2026-08-23, both landscape SRAM-orientation topologies, real
-via-connected vsrc downbond locations, `chip_top` job 4833/4834) came back
-at **~3-5% worst-case drop on both VDD and VSS** (VDD 3.02%/5.13%
-depending on topology, VSS 2.05%/2.84%) — a reasonable, non-alarming
-number, not pinned to 0 (which would suggest a broken analysis) or blowing
-up. See `lora-mimo/planning/grouper-trouper-landscape-floorplan-2026-08.md`
-Open Item #9 for the full derivation and the two LibreLane/OpenROAD bugs
-that had to be fixed to get a working number at all
-(`lora-mimo/integration/pd/vsrc/README.md`).
-
-Still real padframe/downbond estimates, not final pad data — this entry
-stays open until real physical downbond locations replace the geometric
-via-connected estimates currently in `vsrc/*.loc`, same caveat the
-combined-die doc itself carries.
 
 ### 18. PSRAM-replay sample staleness — CLOSED 2026-08-29
 
@@ -1382,225 +2107,139 @@ parametric Q0.7 precision cases pass bit-exactly (`make sim_mrc_fw_precision`,
 2026-08-29). This restores the unit-level complement to the existing SPI
 end-to-end oracle coverage.
 
-### 22. NR=2/3-chip cascade risks unsimulated
+### 44. 4.5 V-core signoff is P&R-proven but NOT adopted — CLOSED 2026-08-30 (uniform rail, no 4.5 V core)
 
-Re-modulator SQNR accumulation across cascade stages, hierarchical-MRC
-suboptimality vs. true NR=4 MRC, and inter-chip reset skew (undetectable at
-runtime — no symptom besides corrupted MRC weights, mitigated only by
-matched-trace-length reset routing, unverified) are all open for the
-multi-ASIC cascade topology.
+2026-07-31: a full P&R targeting `ss_125C_4v50` with a 9 ns
+`PL/GRT_RESIZER_SETUP_SLACK_MARGIN` closes clean on the current 1200×1100
+signoff baseline — WNS 0.0/TNS 0 at all `STA_CORNERS`, worst slack +3.17 ns,
+DRC 0, LVS clean (job 3738; see `planning/5v-core-voltage-strategy.md`
+§2026-07-31). A bare corner swap without the margin still fails (−2.74 ns,
+job 3737). This is real signoff-quality evidence that the 4.5 V-core
+contingency (item 27) *can* close 32 MHz outright — but it does not, by
+itself, make 4.5 V the production core voltage. Do not let
+`config_current_signoff_4v50_margin.json` or its SDC become the canonical
+signoff config/SDC until all of the following are resolved:
 
-**Low for the current NR=1 tapeout** — becomes High if/when an NR=2 cascade
-product ships.
-**See:** `planning/NR2-multi-ASIC-cascade.md`, `planning/cascade-beamsteering.md`.
+1. **IO voltage crossing** — **partially closed 2026-08-14** (job 4347, see item
+   27): the functional question is answered — `bi_24t` down-shifts correctly with
+   core above pad at every corner, and 4.5 V core / 3.6 V pad passes on levels,
+   timing and static current (19.5 µA/pad worst case). What remains is
+   structural, not functional: ESD/latch-up, power-on rail sequencing, and
+   pad-ring IR drop, none of which a single-cell sim can answer, plus the
+   still-true fact that there is no PDK IO databook. The high-speed
+   bidirectional PSRAM QSPI still rules out auto-direction external translators
+   as a fallback. Use 3.6 V for the pad ring, not 3.3 V — the wider 4.5/3.3
+   split triples the receiver crowbar current.
+2. **Power budget** — P∝V²; 4.5 V vs 3.3 V is roughly ~1.9× dynamic power,
+   not checked against any board/thermal budget.
+3. **Hold margin re-verification** — job 3738's worst hold at
+   `ff_n40C_3v60` was +0.164 ns: positive, but thin, and not yet separately
+   stress-tested with the 9 ns margin's extra setup buffering in place.
+4. **Explicit team sign-off on the rail decision** — per the 2026-07-04
+   project framing, uniform 3.3 V is the stated *aim*; the 4.5–5 V core is a
+   *contingency* only. Adopting it is a tapeout-architecture decision, not a
+   config-file change.
 
-### 23. Weight Generation: noise-whitening — models + RTL flow CLOSED 2026-07-26, firmware equivalence verified; gating policy open
+**Action:** treat `config_current_signoff_4v50_margin.json` as a validated
+candidate only. Keep `config_current_signoff.json` /
+`pnr_32m_scoped_v25_b6.sdc` (3.0 V) canonical until 1–4 above are closed and
+someone with authority over the tapeout architecture makes the call.
+**Blocks:** nothing yet (informational gate) — but prevents item 1 from being
+quietly "closed" by a voltage change nobody explicitly approved.
+**See:** item 1, item 27, `planning/5v-core-voltage-strategy.md` §2026-07-31.
+**Found:** 2026-07-31.
 
-Float and fixed-point SNR-weighted eigenvector paths implemented and verified
-end-to-end over SPI (jobs 3596/3598, combiner bit-exact). Firmware builds for
-rv32emc (job 3602), was cycle-measured on the real PicoRV32 (job 3608), and
-matches the fixed-point model bit-for-bit on a traced unequal-noise register
-vector (job 3612). The remaining risk is the undecided runtime gating policy.
-**See:** `planning/noise-weighted-mrc-2026-07.md`.
+**CLOSED 2026-08-30 — the rail decision has been made: no split rail, no 4.5 V core.**
+`VDD_CORE` and `VDD_IO` stay tied to a single net (see item 27). A 4.5 V core is
+only meaningful against a lower pad rail, so with the split off the table the
+4.5 V-core path is not an option. If the SS gap needs more margin, **both rails
+are raised together to ~3.5 V** — a uniform bump, which raises none of gates 1–3
+above (no IO voltage crossing, ~1.1× rather than ~1.9× dynamic power, and no
+4.5 V-specific hold re-verification). Gate 4 is hereby answered: the team
+decision is uniform supply.
 
-### 24. Residual Trouper Chip Specification drift: MRC numeric representation and RMD instability wording
+**Consequences:** `config_current_signoff.json` / `pnr_32m_scoped_v25_b6.sdc`
+stay canonical; `config_current_signoff_4v50_margin.json` is retained as a
+historical experiment only and must not be promoted. Item 1 (SS closure) can
+no longer be closed by a 4.5 V corner swap — it must close on honest RTL/SDC
+work plus at most a uniform ~3.5 V bump.
+**Re-open if:** a split-rail supply is ever put back on the table, which would
+also re-open item 27 and every structural unknown listed there.
 
-The 2026-07-26 audit closed the clock-tree, register-map, W_ACTIVE/safe-switch,
-PCF state/mode, and stale R=128-comment discrepancies. Two wording questions
-remain: TRPR-MRC-001/006 must consistently describe the implemented
-high-byte/8-bit weight representation rather than int16 Q1.15, and RMD-003's
-instability wording must match the observed failure signatures.
+### 27. GF180 split-rail IO cell (core > pad) down-level-shift is uncharacterized — CLOSED 2026-08-30 (split-rail not taken)
 
-**Doc gap — risk is firmware/bring-up written against the spec, not the map.**
-**Found:** 2026-07-02 trouper_top RTL review.
+The baseline supply is **uniform 3.3 V** (core + IO). If the 32 MHz SS gap (item 1)
+cannot be closed at 3.3 V, the **contingency** is a **split-rail supply**: run the
+digital core at ~5 V nominal (4.5 V slow-corner worst-case, where SS closes — proven
+SS@`ss_125C_4v50` = **+1.40 ns**, DRC/LVS/route 0, jobs 3231/3237) while the pad ring
+signals at **3.6 V** so the 3.3 V-class external parts survive. This risk applies only
+if that contingency is taken. All three externals are
+safe at 3.6 V (APS6404L PSRAM abs max 4.0 V / SX1257 3.9 V / RPi GPIO ESD clamp ~3.9 V).
+**The single unproven link is the IO cell itself:** GF180 `bi_*` cells must down-level-
+shift core (5 V) → pad (3.6 V), but the PDK only characterizes single-voltage IO
+(`VDD = DVDD`) and ships no IO databook — the core > pad down-shift is **outside the
+characterized envelope**. If GF180 IO cannot safely do this split, the whole 5 V-core
+strategy collapses; the fallback (uniform 5 V chip + external PCB level translators) is
+hard for the **high-speed bidirectional QSPI** (PSRAM `SIO[3:0]`, up to 133 MHz, direction
+reverses mid-transaction — auto-direction translators do not cope).
 
-### 25. trouper_top dead logic + minor RTL hygiene — packet_ctrl_fsm portion RESOLVED 2026-07-12
+**2026-08-14 — SPICE half CLOSED, structural half still open (SGE job 4347).**
+Transistor-level characterisation of `gf180mcu_fd_io__bi_24t` (the cell the shared
+padring instantiates) over 63 scenarios — both directions, 3 corners × 3 temps,
+5 rail splits — in `characterization/io_levelshift/` (`RESULTS.md`). **The
+down-shift works:** every output scenario drives PAD to exactly the pad rail
+(3.600 V at 4.5/3.6) with zero static current, at every split and corner —
+the specific failure this item feared does not occur. The up-shift also reaches
+the full core rail everywhere; its cost is *static current in the input receiver*,
+which scales with the split and binds at ff/125 °C: 19.5 µA/pad at 4.5/3.6,
+64.4 µA at 4.5/3.3, and 182 µA at 5.0/3.3 (the only failing case, against a
+100 µA/pad budget). Receiver trip point stays 0.965–1.165 V throughout, well
+inside the 0.4–2.4 V a 3.3 V driver guarantees. **Recommended split if the
+contingency is taken: 4.5 V core / 3.6 V pad** — narrowest split that still buys
+`ss_125C_4v50` closure, ~30× less crowbar than 5.0/3.3. Note the PDK's own
+`pfet_06v0` W bin does not cover `bi_24t`'s 120 µm pad devices; the deck extends
+it (documented deviation, `README.md`).
 
-**Resolved (dead FSM signals):** all dead `packet_ctrl_fsm` outputs and
-inputs deleted from the RTL — `psram_packet_arm`, `psram_replay_start`,
-`payload_rd_base`, `safe_switch`, `combiner_source` (superseded by the
-continuous-delay replay redesign, commit `46e1cdf`), plus the now-unused
-inputs `iq_valid`, `psram_en`, `psram_replay_active`. `buf_freeze` was
-initially KEPT because it was regression-covered (TRPR-PCF-002/008,
-`test_w_missed_packet.py`) even though it drove nothing in `trouper_top`;
-it was **deleted 2026-07-26** once it was established to be a bit-identical
-duplicate of `packet_active` (same four assignment sites, same values — the
-formal harness had been asserting both equal `state != ST_IDLE`). PCF-002/008
-and the four regression assertions are retargeted to `packet_active`.
+**Action (bench/foundry, not PnR — SPICE now done):** the remaining unknowns are
+structural, not functional: ESD/latch-up across the split rail, power-on
+sequencing (which rail rises first, and shifter behaviour while one is at 0 V),
+and pad-ring IR drop. Confirm with foundry/databook before committing the
+voltage path. Also cross-check `bi_t` (fits the stock model bin) to
+independently rule out the extended-W deviation.
+**Blocks:** committing the split-rail 5 V-core SS-closure strategy (item 1); the die-shrink
+and honest-MCP work that the voltage path would otherwise unblock.
+**See:** `planning/area-reduction-roadmap.md` §2 (voltage analysis); `planning/Pinout.md`
+(split-rail supply note); `planning/5v-core-voltage-strategy.md`.
+**Found:** 2026-07-04 (voltage-corner + external-part datasheet review).
 
-**Resolved (`psram_abort` — the "verify that path or wire/delete" item):
-verified UNREACHABLE, branch deleted.** The mid-payload re-lock scenario
-`psram_abort` guarded (a second `sc_lock` arriving while a replay is still
-in flight, with `packet_active` never dropping so `packet_end` never fires)
-is structurally impossible in the current design: `sc_detector` holds
-`sc_lock` high until `sc_clr` (= `packet_done_pulse`, the falling edge of
-`packet_active`), both the hit-count and `SC_FORCE_LOCK` lock paths are
-gated `!sc_lock`, and the `SC_FORCE_LOCK` register write is additionally
-blocked by `PACKET_ACTIVE`. Every packet acquisition therefore passes
-through `ST_IDLE`/`packet_end` first — `psram_buf_ctrl`'s `packet_end` exit
-from `S_REPLAY` is sufficient. The entire `ST_PAYLOAD_ACTIVE` re-lock branch
-(and `psram_abort` with it) was deleted; a why-comment in
-`packet_ctrl_fsm.v` and `psram_buf_ctrl.v` records the reasoning.
-**Guard-rail for future work:** if `sc_detector` ever gains a mid-packet
-re-arm path (e.g. an NR2/3 cascade `sc_lock_in` wired without the
-`!sc_lock` gate), re-lock handling AND a replay-abort path must be
-reintroduced in both `packet_ctrl_fsm` and `psram_buf_ctrl` — see the note
-in `planning/NR2-multi-ASIC-cascade.md`.
-Verified: 7 cocotb suites + `sc_force_lock` + `tb_trouper_two_packet`
-regression after the deletions (SGE jobs 3359/3360).
+**2026-08-19:** cell-level finding above is unaffected, but the reference padring's PDN
+config ties `VDD_CORE`/`VDD_IO` to one net by default (no secondary domain declared, no
+`brk` cells in the pad spec) — independence must still be built, it isn't already there.
+Corrects `planning/Pinout.md`'s prior "separate, independently-tunable... deliberate"
+framing. **See:** `planning/5v-core-voltage-strategy.md` §2026-08-19.
 
-**Still open (non-FSM items):** `mimo_mode[1]` never writable
-(`reg_bank.v`) yet read back and forwarded; `mrc_combiner.v:126` assigns
-`26'sd0` to an 18-bit reg; `mrc_combiner` port `clk_16m` is actually driven
-at 32 MHz. The live-training `noise_trig` swallow is **closed 2026-08-29**:
-the top gates the trigger while `training_armed`, raises sticky/W1C
-`TACC_NOISE_TRIG.NOISE_TRIG_REJECTED` (0x1F[1]), and a directed cocotb test
-proves no false `NOISE_READY` occurs.
+**2026-08-19 (part selection for the external-translator fallback):** dual-independent-
+supply, direction-controlled translators (`VCCA` fixed 3.3 V, `VCCB` tied to `VDD_CORE`)
+are the right category — `VCCA=VCCB` is a normal operating point, so the same BOM works
+at 3.3 V/3.3 V today and 4.5–5 V/3.3 V later with no board respin. The PSRAM QPI bus needs
+an explicit-`DIR` part (e.g. `SN74AVC4T774`/`74AVC4T245`), driven by `psram_buf_ctrl.v`'s
+existing QSPI ownership signal — auto-sensing shifters (TXB/TXS0108-class) still don't
+cope with its mid-transaction direction reversal, as already noted above. **See:**
+`planning/5v-core-voltage-strategy.md` §"external level-shifter part selection".
 
-**Found:** 2026-07-02 trouper_top RTL review.
-
----
-
-### 27. Power-on / startup sequencing has no on-chip enforcement — unverified in silicon
-
-Four related gaps surfaced while checking whether the PSRAM QSPI clock could
-be run below 32 MHz:
-
-1. **No hardware tPU wait for PSRAM init.** `trouper_top.v:414` wires
-   `init_start = PSRAM_CTRL[0] & ~QSPI_OWNER` — a register-bit *level*, not a
-   firmware-pulsed strobe as `planning/blocks/PSRAM Buffer Controller.md`
-   describes ("firmware pulses `init_start` after tPU"). The APS6404L needs
-   tPU ≥ 150 µs after its own power-up before RSTEN is safe; nothing in RTL
-   times this. It is entirely a host/firmware discipline requirement (RPi
-   must wait before writing `PSRAM_CTRL[0]=1`), unverified against real
-   silicon + a real PSRAM part. `cocotb/tests/test_startup.py::
-   test_psram_init_has_no_tpu_wait` measures ~2.9 µs from `RESETB` release
-   to the first PSRAM CE# pulse when firmware issues the write immediately
-   — confirms the gap is real and quantifies it, but only host-side
-   discipline (or a real on-chip timer) prevents hitting it.
-2. **tRST margin inside QE_INIT: re-measured, not thin.** Originally
-   estimated by hand-counting FSM states as ~62.5 ns (12.5 ns margin over
-   the APS6404L's tRST ≥ 50 ns) — that hand count was wrong.
-   `cocotb/tests/test_startup.py::test_qe_init_trst_margin` measures the
-   actual RST(`0x99`)→Enter-QPI(`0x35`) CE# gap in simulation at **750 ns**
-   (700 ns margin) — comfortable. Left in as a regression test rather than
-   a live risk; downgrading this sub-item accordingly.
-3. **`rst_n` is the raw `RESETB` pin, unsynchronized, no on-chip POR or
-   deglitch** (`trouper_top.v:70`: `wire rst_n = RESETB;`). Reset-ordering
-   bugs have already hit this design once — see item 26 below (closed): SPI
-   frame flops reset only on `posedge HOST_CS`, so the very first CS-low
-   transaction after power-on parsed garbage, caught only because someone
-   specifically tested first-transaction ordering rather than the normal
-   packet-loop sweeps.
-4. **SC-detector correlator is fully idle until `del_rdy` fires.** This is
-   intentional (Gate 9 hold-off in
-   `planning/decimator-hb-migration-impact-plan.md`, min 256 samples at
-   SF7/BW250), but worst case (SF12/125 kHz, N=16384 samples ÷ 500 kS/s) is
-   **≈32.8 ms** after `qe_init_done` before the receiver can register any
-   lock. Reasonable by design, but it is a real "deaf window" on every PSRAM
-   init or SF/BW change, and no spec states an explicit worst-case
-   time-to-first-lock figure. `test_sc_correlator_idle_until_del_rdy`
-   (SF9/BW125, ~4.1 ms case) confirms `tdm_busy` never activates before
-   `del_rdy` and measures warm-up at 4.092 ms vs a 4.096 ms prediction —
-   behaves exactly as designed; worst case scales linearly to SF12/125 kHz.
-
-None of this surfaced in the existing cocotb SF/BW sweeps or
-`tb_trouper_two_packet` because those testbenches start from an
-already-initialized state or use idealized/instant power-up — they don't
-exercise power-on ordering itself.
-
-**Found:** 2026-07-05, while investigating PSRAM QSPI clocking margin.
-
-**Testbench added:** `cocotb/tests/test_startup.py` (6 tests, all PASS,
-SGE job 3257) — first-transaction-after-reset at 3 clock phases (regression
-for item 26), the tPU-race and tRST-margin characterizations above, and the
-SC hold-off check. Items 1 and 3 remain open (no on-chip fix, by design
-pending firmware/board discipline); item 2 is downgraded from risk to
-regression coverage; item 4 is confirmed working as intended.
-
-**Next steps:** first hardware bring-up on the test PCB (a few weeks out)
-will validate items 1 and 3 against a real PSRAM part and real RESETB
-behavior — sim can characterize the digital logic's assumptions but not the
-analog reset/power-rail behavior itself.
-
----
-
-## Deferred
-
-### 9. SC Detector acquisition is single-antenna at any instant (no diversity at lock time) — DEFERRED 2026-07-06, re-scoped 2026-08-14
-
-`sc_detector.v` correlates only one antenna branch's `cur_i0/q0` / `del_i0/q0`
-at a time via `psram_buf_ctrl`'s delay line; the `Sum_j` incoherent 4-branch
-combine that `planning/DSP Flow.md` Stage 5 specifies is not implemented. If
-the currently-selected antenna is in a deep Rayleigh fade, the gateway fails
-to acquire the packet even when the other 3 antennas have strong signal —
-the array provides no diversity gain for detection, only for post-lock MRC
-combining. Confirmed both via measured-IQ playback (Rayleigh seed 7 vs 10)
-and a Monte-Carlo sweep (`sim/notebooks/12_sc_detector.ipynb` §3: at 9 dB/
-branch SNR, P(lock) with the selected antenna in deep fade is 0% single-
-antenna vs 52% for the spec-intended combine). A spec-faithful fix (serial
-4-channel TDM correlator, ~+20 k µm², no clock-period cost) is designed but
-not implemented, pending an area-headroom check against the floorplan.
-
-**Mitigation added 2026-07-11:** `BW_CFG.sc_ant_sel` (`reg_bank` 0x0A[2:1])
-lets firmware pick *which* single antenna feeds the correlator, instead of
-the old hardcoded antenna 0 — cheap (a byte-lane mux + address offset in
-`psram_buf_ctrl.v`, no measurable area cost), verified bit-exact
-(`cocotb/sc_ant_sel/test_sc_ant_sel.py`, SGE job 3328). This does **not**
-close the underlying risk: the correlator is still single-antenna at any
-instant, so acquisition still fails if the *currently selected* antenna is
-the one in deep fade. It only means firmware can route around a
-known-bad branch (e.g. after a noise-mode `Z_kk` energy scan) instead of
-being permanently stuck on antenna 0. Firmware-side selection policy is not
-yet designed. See `planning/Register Map.md` `0x0A`.
-
-**Related mitigation added 2026-07-12 (different failure mode):**
-`SC_FORCE_LOCK` (`reg_bank` 0x19[0], W1P) manually asserts `sc_lock`,
-bypassing the correlator's hit-count logic entirely. This does not address
-the ant0-fade diversity gap above — it is a bring-up / catastrophic
-correlator-failure escape hatch for the case where `sc_detector` itself is
-suspected non-functional (not just fed a faded antenna), so the rest of the
-chain (`packet_ctrl_fsm` → PSRAM → combiner → IRQ) can still be exercised.
-A forced lock has no verified preamble edge to anchor `timing_ref` on, so it
-is not useful for recovering a real packet, only for proving downstream
-logic is alive. Register-only for now; a physical `sc_lock_in` pin (the
-NR2/3 cascade OR-lock scheme, `planning/NR2-multi-ASIC-cascade.md`) is
-deliberately deferred — the pinout is at its 26-pad budget
-(`planning/Pinout.md`) with no spare pad to bond. See `planning/Register
-Map.md` `0x19`; regression `cocotb/sc_force_lock/test_sc_force_lock.py`
-(SGE job 3356, 2/2 PASS: forced entry into `ST_PREAMBLE_ACQ` from IDLE, and
-the `PACKET_ACTIVE` write-gate confirmed to block a second force mid-packet).
-
-**Does not block tapeout** — silicon works correctly whenever the selected
-antenna is not the faded branch; this is a robustness/diversity gap, not a
-functional bug.
-**Decision 2026-07-06:** the full 4-branch correlator deliberately DEFERRED —
-no die-area headroom for the ~+20 k µm² cost at the current floorplan.
-Revisit only if an area budget opens up (e.g. after further area cuts or a
-die-size change); until then, `sc_ant_sel` is the accepted interim
-mitigation and the diversity gap itself stays an accepted, documented
-limitation.
-**See:** `planning/sc-detector-ant0-fading-risk.md`.
-
-**Deferred state (2026-08-14):** moved out of Moderate into this section. The
-fix is designed and costed (~+20 k µm² serial 4-channel TDM correlator, no
-clock-period cost) and is *not* to be re-proposed, re-costed, or re-explored
-except when the re-open trigger below fires.
-
-**Re-open trigger:** a signed-off floorplan with ≥ 20 k µm² of spare cell area
-against the then-current die (e.g. after a further area-cut milestone, a die-size
-increase, or the 4.5 V-core decision in item 44 freeing utilisation headroom).
-Whoever hits that trigger re-files this as Moderate with the measured headroom
-number attached.
-
-**Until then, accepted as-is:** `sc_ant_sel` (0x0A[2:1]) is the shipped
-mitigation, the firmware-side branch-selection policy is the only outstanding
-work item, and the detection-diversity gap is a documented silicon limitation
-rather than an open action.
-
----
-
-## Closed
+**CLOSED 2026-08-30 — the contingency this item guards is not being taken.**
+Design decision: `VDD_CORE` and `VDD_IO` stay **tied to a single net** (which is
+what the reference padring PDN config already does by default — see the 2026-08-19
+note above). If the SS gap needs more margin, both rails are raised **together to
+~3.5 V**; the remaining SS shortfall is small enough that a modest uniform bump is
+the lever, not a split. With no core > pad split there is no down-level-shift to
+characterize, no cross-rail ESD/latch-up or power-on-sequencing question, and no
+need for the external-translator fallback or its QSPI direction-control problem.
+The SPICE characterisation in `characterization/io_levelshift/` remains valid and
+is retained as reference should a split ever be reconsidered.
+**Re-open if:** a split-rail supply is put back on the table (e.g. the 4.5 V-core
+path of item 44 is revived), since every structural unknown listed above returns
+unanswered.
 
 ### 20. `firmware/picorv32/asic_regs.h` was stale — CLOSED 2026-07-26
 

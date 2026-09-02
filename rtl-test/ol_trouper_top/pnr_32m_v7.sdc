@@ -8,9 +8,6 @@
 #     exist on mimo_rx_top; OpenSTA was silently dropping those constraints).
 #   - PSRAM_SIO_IN_* now constrained vs PSRAM_SCK (was entirely unconstrained).
 #   - SPI_MOSI/MISO constrained vs SPI_SCK (not IQ_CLK).
-#   - GRP_* constrained vs IQ_CLK. ASSUMPTION: Grouper shares the 32 MHz
-#     carrier clock (AHB-Lite link is synchronous). If the link is async,
-#     replace with false_path + synchroniser qualification in RTL.
 #   - No set_ideal_network; SPI_SCK treated as a real clock.
 #
 # Derived from pnr_32m_v7_analysis.sdc run (sta_v7_analysis, no-MCP baseline).
@@ -43,7 +40,6 @@
 #     rb_decim_ratio (128) — drives CIC full-rate integration-stage count logic.
 #     rb_sf_cfg[*]   (250) — config reg driving sc_detector SF-counter; may be full-rate.
 #     REMOD_A_*/cic_bit* (33)— sd_remod output + CIC 1-bit pipeline; genuinely full-rate.
-#     GRP_WE [in-reg] (254)— Grouper input port; 10 ns conservative input-delay assumption.
 #
 # MCP=3 safety argument (applies to all covered nets):
 #   cic_strobe fires 1-in-128 cycles. Downstream blocks gate register updates with
@@ -74,10 +70,6 @@ set_clock_groups -asynchronous \
 set_input_delay -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_*}]
 set_input_delay -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_*}]
 
-# GRP_* — shared 32 MHz carrier clock assumed; 10 ns max is conservative.
-set_input_delay -max 10.0 -clock IQ_CLK [get_ports {GRP_ADDR_* GRP_WDATA_* GRP_WE GRP_RE}]
-set_input_delay -min 1.0  -clock IQ_CLK [get_ports {GRP_ADDR_* GRP_WDATA_* GRP_WE GRP_RE}]
-
 # ---- PSRAM QPI read data: APS6404L tCO ≤ ~6.5 ns + ~2.5 ns board/pad ----
 set_input_delay -max 9.0 -clock PSRAM_SCK [get_ports {PSRAM_SIO_IN_*}]
 set_input_delay -min 1.5 -clock PSRAM_SCK [get_ports {PSRAM_SIO_IN_*}]
@@ -92,9 +84,9 @@ set_false_path -from [get_ports HOST_CS]
 
 # ---- IQ_CLK-domain outputs ----
 set_output_delay -max 2.0 -clock IQ_CLK \
-    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA_* GRP_READY}]
+    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT}]
 set_output_delay -min 0.0 -clock IQ_CLK \
-    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA_* GRP_READY}]
+    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT}]
 
 # ---- PSRAM source-synchronous outputs: APS6404L tSP = 2 ns, tHD = 2 ns ----
 set_output_delay -max 2.0  -clock PSRAM_SCK \

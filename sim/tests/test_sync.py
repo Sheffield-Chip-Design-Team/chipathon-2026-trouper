@@ -93,7 +93,7 @@ def test_short_input():
 
 
 def test_sc_antenna_selection_matches_single_branch_rtl():
-    """BW_CFG.sc_ant_sel selects one detector branch; it is not MRC."""
+    """SC_ANT_SEL (0x1B) selects one detector branch; it is not MRC."""
     prefix_len = 23
     rx = make_rx(prefix_len=prefix_len, n_preamble=8)
     # A deep fade on branch 0 must fail with reset-default SC selection.

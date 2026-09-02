@@ -158,7 +158,6 @@ mode, `ZDIAG_k ≈ σ²_k × n_acc` with `NOISE_READY` gating out SC-contaminate
 **Method:**
 - cocotb testbench simulates RPi SPI master; write and read back every defined register
 - Reset/access sweep over the whole 7-bit map (`cocotb/reg_reset_sweep`, TRPR-REG-001)
-- Grouper-vs-SPI arbitration, Grouper priority (`tb_trouper_grp_arb.v`)
 - SPI-domain CDC scenarios: phase sweep, back-to-back frames, burst, read side effects, reset interrupt, abort, clock limit, W1P (`cocotb/spi_cdc`)
 
 > **Removed 2026-07-26 (audit item 18).** This block previously specified extended

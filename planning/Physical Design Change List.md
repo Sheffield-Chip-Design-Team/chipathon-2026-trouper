@@ -911,3 +911,23 @@ catalogue of techniques investigated during the June 2026 die-shrink sweep, incl
 - Post-GPL design repair
 - `DPL_CELL_PADDING` tradeoffs at high utilisation
 
+
+---
+
+## Power delivery network
+
+See [`planning/pdn-thickening-and-core-ring-2026-09.md`](pdn-thickening-and-core-ring-2026-09.md)
+for the 2026-09-02 PDN work: Metal4/Metal5 stripe width 1.6 → 4.0 µm plus a 5 µm
+core ring, adopted into `src/config/trouper_top.json` by job 5379 in the unchanged
+1675×1110 die. Covers:
+
+- Core-margin arithmetic — how a ring fits without growing the die, and why 5 µm
+  and not 9 µm (the 9 µm version cost 4.4 % of core area and failed detailed
+  routing, job 5367)
+- Why stripe *pitch* stays at the PDK default: `add_pdn_connect` routes the
+  Metal1 rails up to Metal4, so extra stripes punch via ladders through the
+  signal-carrying Metal2/Metal3 — halving the pitch costs 57 % of SS TNS
+- Baseline discipline — job 5286 predates the Grouper-boundary RTL removal and is
+  not a valid comparison; job 5378 is the same-netlist control
+- KLayout DRC gap and the `mslot` PDK deck bug (Open Risks #58), and
+  `rtl-test/scripts/klayout_drc_guarded.sh`

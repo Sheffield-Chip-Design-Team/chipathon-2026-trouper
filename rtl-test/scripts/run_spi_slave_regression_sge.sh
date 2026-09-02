@@ -42,7 +42,7 @@ RTL_SOURCES="
 ../src/remod/sd_remod.v
 "
 
-for bench in tb_trouper_spi tb_trouper_grp_arb; do
+for bench in tb_trouper_spi; do
     echo "=== rtl-test/tb/$bench.v ==="
     log="$WORK_ROOT/$bench.log"
     (

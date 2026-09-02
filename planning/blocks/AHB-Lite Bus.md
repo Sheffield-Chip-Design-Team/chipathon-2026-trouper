@@ -1,9 +1,16 @@
-# AHB-Lite Bus (Grouper Project)
+# AHB-Lite Bus (Grouper Project) — OBSOLETE
+
+> **OBSOLETE 2026-09-01. Grouper is not taping out.** This block lived in the
+> Grouper project and reached Trouper over the inter-project register bus. That
+> boundary (`GRP_*`, the AHB-Lite `H*` endpoint, and `IRQ_GROUPER`) has been
+> removed from `src/top/trouper_top.v`; Trouper's register bank is now reached
+> over host SPI alone. This document is retained for historical context only —
+> nothing in it describes anything that will be fabricated.
 
 Control block. See [System Architecture](../System%20Architecture.md) for context.
 
-**Owner:** TBD
-**Status:** Not started
+**Owner:** —
+**Status:** Obsolete (never built; boundary removed 2026-09-01)
 
 ---
 

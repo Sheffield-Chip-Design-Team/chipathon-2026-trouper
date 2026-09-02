@@ -1,16 +1,17 @@
 """
-test_sc_ant_sel.py -- BW_CFG.sc_ant_sel (0x0A[2:1]) regression.
+test_sc_ant_sel.py -- SC_ANT_SEL (0x1B[1:0]) regression.
 
 Open Risk #9 (planning/Open Risks.md) is that sc_detector acquires only on
 antenna 0, hardcoded, with no diversity at lock time. The full spec-faithful
 fix (a serial 4-channel TDM correlator, ~+20k um^2) is deliberately deferred
 for area (memory project_ant0_fade_deferred). This is a much cheaper partial
-mitigation: a new 2-bit register field, BW_CFG[2:1] (sc_ant_sel), lets
-firmware pick WHICH single antenna feeds the SC correlator's delay-line taps
-in psram_buf_ctrl.v, instead of the previous fixed antenna 0. It does not
-add diversity combining -- the correlator is still single-antenna at any
-instant -- it only un-hardcodes the branch choice (see planning/Register
-Map.md 0x0A).
+mitigation: a 2-bit register, SC_ANT_SEL (0x1B[1:0]), lets firmware pick
+WHICH single antenna feeds the SC correlator's delay-line taps in
+psram_buf_ctrl.v, instead of the previous fixed antenna 0. It does not add
+diversity combining -- the correlator is still single-antenna at any instant
+-- it only un-hardcodes the branch choice (see planning/Register Map.md
+0x1B).  (Was BW_CFG[2:1] until 2026-08-30; moved into the SC register group
+because it is correlator routing, not a bandwidth setting.)
 
 test_sc_ant_sel_cur_mux:
   For each of the 4 sc_ant_sel settings, captures the exact live iq sample
@@ -75,10 +76,10 @@ async def test_sc_ant_sel_cur_mux(dut):
     await _psram_init(dut)
 
     for ant in range(4):
-        await spi_write(dut, 0x0A, (ant & 0x3) << 1)
-        rb = await spi_read(dut, 0x0A)
-        assert (rb >> 1) & 0x3 == ant, \
-            f"sc_ant_sel readback {(rb >> 1) & 0x3} != {ant} (BW_CFG=0x{rb:02X})"
+        await spi_write(dut, 0x1B, ant & 0x3)
+        rb = await spi_read(dut, 0x1B)
+        assert rb & 0x3 == ant, \
+            f"sc_ant_sel readback {rb & 0x3} != {ant} (SC_ANT_SEL=0x{rb:02X})"
 
         await RisingEdge(dut.u_dut.u_psram.iq_valid)
         exp_i = int(getattr(dut.u_dut.u_psram, f"iq_i{ant}").value.signed_integer)
@@ -105,7 +106,8 @@ async def test_sc_ant_sel_del_offset(dut):
     cocotb.start_soon(sdm_driver_multi(dut))
 
     await spi_write(dut, 0x09, sf & 0x0F)          # SF_CFG (packet inactive)
-    await spi_write(dut, 0x0A, (ant & 0x3) << 1)   # sc_ant_sel=2, 250 kHz
+    await spi_write(dut, 0x0A, 0x00)               # bw_sel=0, 250 kHz
+    await spi_write(dut, 0x1B, ant & 0x3)          # sc_ant_sel=2
     await _psram_init(dut)
 
     hist_i = deque()

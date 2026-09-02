@@ -31,10 +31,9 @@
   "SYNTH_KEEP_HIERARCHY_MODULES": [
     "reg_bank",
     "sc_detector",
-    "psram_buf_ctrl",
-    "trouper_ahb8_adapter"
+    "psram_buf_ctrl"
   ],
-  "_comment_keep_hier": "Antenna closure attempt, 2026-08-29. Job 5158 (this config without the keep-hierarchy list) routes clean but leaves 26 net / 35 pin antenna violations. The violators trace to three groups that all terminate in the SAME flattened read-decode cone (_36xxx_): sc_stat[*] (7, sc_detector->reg_bank readback), psram_cur_i0/q0[*] (11, psram_buf_ctrl->sc_detector), and net75/output*/I (8, die-edge output buffers). SYNTH_HIERARCHY_MODE defaults to 'flatten', which smears that decode cone across the whole die and produces the long Metal5 arms. Keeping these four modules as hard boundaries localises the cone. This is a CONFIG-ONLY change: no source file is touched, no port/logic/state changes, and the attribute is invisible to simulation - every cocotb and formal result stays valid bit-for-bit. Cost to watch: losing cross-boundary optimisation typically adds area and can worsen the already-tight max_ss WNS (-13.52ns).",
+  "_comment_keep_hier": "Antenna closure attempt, 2026-08-29. Job 5158 (this config without the keep-hierarchy list) routes clean but leaves 26 net / 35 pin antenna violations. The violators trace to three groups that all terminate in the SAME flattened read-decode cone (_36xxx_): sc_stat[*] (7, sc_detector->reg_bank readback), psram_cur_i0/q0[*] (11, psram_buf_ctrl->sc_detector), and net75/output*/I (8, die-edge output buffers). SYNTH_HIERARCHY_MODE defaults to 'flatten', which smears that decode cone across the whole die and produces the long Metal5 arms. Keeping these modules as hard boundaries localises the cone. (The list also held trouper_ahb8_adapter until 2026-09-01, when the Grouper boundary and that module were removed.) This is a CONFIG-ONLY change: no source file is touched, no port/logic/state changes, and the attribute is invisible to simulation - every cocotb and formal result stays valid bit-for-bit. Cost to watch: losing cross-boundary optimisation typically adds area and can worsen the already-tight max_ss WNS (-13.52ns).",
   "DRT_THREADS": 10,
   "ROUTING_OPT_ITERS": 64,
   "DEFAULT_CORNER": "nom_tt_025C_3v30",

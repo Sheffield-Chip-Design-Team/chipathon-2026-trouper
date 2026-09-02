@@ -260,8 +260,9 @@ async def test_release_waits_for_settled_config(dut):
     cocotb.start_soon(mon.run())
 
     # Back-to-back SPI writes are inherently far apart (one frame is ~51 clocks
-    # at 32 MHz), so this is the realistic host cadence; the adversarial
-    # same-cycle Grouper case is design-doc §8 test 4.
+    # at 32 MHz), so this is the realistic host cadence -- and since the Grouper
+    # bus was removed (2026-09-01) it is also the only cadence: the adversarial
+    # same-cycle Grouper case in design-doc §8 test 4 can no longer occur.
     await _write_config(dut)
     await release_rx_hold(dut)
     await ClockCycles(dut.IQ_CLK, 20)
