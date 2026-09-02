@@ -13,7 +13,9 @@ DRC/LVS results below apply to the base job-5413 streamout, not to the added
 bridge geometry. That geometry was checked two ways: layer-by-layer continuity
 across all 12 paths before promotion, and — since 2026-09-03 — a full KLayout
 DRC run against this exact file (job 5415: 63/63 tables, 0 violations; see
-Open Risks #58). Note the Magic DRC and LVS numbers in the table below still
+Open Risks #58). That run is a **manual** gate and applies only to the GDS with
+md5 `f0e740b4930a9ac2c6534949f9bd3e99` — if this file is regenerated, the claim
+lapses until a fresh full run is done. Note the Magic DRC and LVS numbers in the table below still
 describe the base streamout only.
 
 The bridges are inserted by `tools/build_a40_pdn_bridges.py` (KLayout batch

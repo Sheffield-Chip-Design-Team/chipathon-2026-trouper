@@ -14,10 +14,12 @@
 #   <gds> must be readable inside the container (/foss/designs/... -- note that
 #   /srv/eda/runs is NOT mounted there; stage the GDS into the design tree).
 #   TABLES="contact metal1"  runs ONLY those tables (run_drc.py --table, which is
-#   repeatable). Use it to re-run tables a previous run lost without repeating
-#   the 60+ that already completed -- a full run is ~45 min, and `contact` and
-#   `metal1` alone are most of it. A subset run is reported as PARTIAL and is
-#   NOT a signoff on its own: the guard can only vouch for the tables it ran.
+#   repeatable). Use it to recover tables a previous run lost, against the SAME
+#   GDS, without repeating the 60+ that already completed -- a full run measured
+#   2h14m (job 5415), of which `contact` was 67.6 min and `metal1` 45.2 min.
+#   A subset run is reported as PARTIAL and is NOT a signoff on its own: the
+#   guard can only vouch for the tables it ran. A CHANGED GDS invalidates every
+#   table, so it needs a full run -- never a subset.
 # Exits non-zero if any table failed to run, or if any real violation is found.
 #   10 = run incomplete (a table did not run; any violation count is meaningless)
 #   11 = the tables that ran had real violations

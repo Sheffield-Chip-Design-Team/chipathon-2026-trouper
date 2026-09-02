@@ -1108,6 +1108,16 @@ sentence described something that does not exist.
 disabling it converts a silent false negative into an honest absence, and signoff
 moves to the out-of-flow guarded run recorded above.
 
+**This makes KLayout DRC a MANUAL gate — the standing obligation.** Nothing in
+the flow re-runs it. Any change that alters the GDS — a new P&R run, or
+re-running `tools/build_a40_pdn_bridges.py` — silently invalidates the job-5415
+result, which will still be sitting in the config and `final/README.md` looking
+current. The md5 is recorded in both places for exactly this reason: check it
+before trusting either. A changed GDS needs a full 63-table run; the `TABLES=`
+subset does **not** satisfy this and reports `PARTIAL` so it cannot be mistaken
+for one. This is the cost of turning the gate off, and it is a live risk of the
+result going stale unnoticed — which is why this item stays open.
+
 **Still open:** the untested alternative is pointing `KLAYOUT_DRC_RUNSET` at the
 PDK's monolithic `libs.tech/klayout/tech/drc/gf180mcu.drc`, which *is* the right
 shape for the step. Nobody has checked whether it honours `input`/`topcell`/
