@@ -32,9 +32,10 @@ Scenario -> test function map:
     6. Aborted-frame tests                   -> test_aborted_frame
     7. Clock-limit sweep                     -> test_clock_limit_sweep
     8. W1P exactly-once sweep                -> test_w1p_exactly_once
-    9. Grouper address-change contention (top-level half of row #11)
-                                             -> test_grp_re_addr_change_during_miso_shift
-                                                test_grp_we_addr_change_during_miso_shift
+    9. (retired 2026-09-01) Grouper address-change contention -- the shared
+       read-peek port had a single master again once the Grouper bus was
+       removed, so rb_raddr is unconditionally spi_reg_rd_addr and the
+       contention this row covered can no longer occur.
    10. rb_we/rb_addr/rb_wdata CE-gated settle property (Open Risks.md #43,
        `regbank_write` MCP group)            -> test_regbank_write_bus_ce_gated
 
@@ -630,161 +631,14 @@ async def test_w1p_exactly_once(dut):
 
 
 # ---------------------------------------------------------------------------
-# 9. Grouper address-change contention -- top-level half of row #11
-# (planning/verification-plan/spi-slave-verification-plan.md).
-#
-# trouper_top wires a single shared combinational read-peek port into
-# reg_bank: rb_raddr = grp_active ? GRP_ADDR : spi_reg_rd_addr, where
-# grp_active = GRP_WE | GRP_RE (see the "Register bus arbiter" comment block
-# in src/top/trouper_top.v). So *either* a Grouper read or a Grouper write
-# pulse redirects the address the SPI slave's asynchronous peek_rdata tracks
-# -- exactly the "or otherwise causes peek_rdata to change" case the plan
-# names. spi_slave.v's MISO shifter only samples reg_rdata once, at the
-# falling edge that loads a new byte (spi_bit_cnt == 0); every other bit of
-# that byte shifts out of the internal miso_shreg register, which the
-# Grouper redirection cannot touch. A Grouper access landing strictly after
-# a byte's load instant therefore cannot tear that byte, no matter what
-# address it retargets the shared peek port to. (The load-instant collision
-# itself -- a Grouper access overlapping the falling edge that loads the
-# byte -- is a different, already-resolved case: row #10 / test 4 in
-# tb_trouper_grp_arb.v documents that as a rejected read the host retries,
-# which is not what this row is about.)
-# ---------------------------------------------------------------------------
-
-GRP_ADDR_B = 0x30   # W shadow byte 0: plain RW, no side effects, distinct
-                    # from SAFE_ADDR (0x0B) so the SPI-in-flight byte and the
-                    # Grouper-touched byte are never the same register.
-
-
-async def _grp_pulse_re(dut, addr, hold_cycles=4):
-    """Fire-and-forget Grouper read pulse: redirects the shared peek port to
-    `addr` for hold_cycles clk_32m cycles, mirroring grp_read_pulse in
-    tb_trouper_grp_arb.v."""
-    await RisingEdge(dut.IQ_CLK)
-    dut.GRP_ADDR.value = addr
-    dut.GRP_RE.value = 1
-    for _ in range(hold_cycles):
-        await RisingEdge(dut.IQ_CLK)
-    dut.GRP_RE.value = 0
-
-
-async def _grp_pulse_we(dut, addr, data, hold_cycles=4):
-    """Fire-and-forget Grouper write pulse: like grp_write in
-    tb_trouper_grp_arb.v, held long enough (>= 2 ce_16m periods) to be
-    CE-captured by reg_bank, and -- because grp_active also gates the shared
-    read-peek mux -- it redirects rb_raddr to `addr` for the same window."""
-    await RisingEdge(dut.IQ_CLK)
-    dut.GRP_ADDR.value = addr
-    dut.GRP_WDATA.value = data
-    dut.GRP_WE.value = 1
-    for _ in range(hold_cycles):
-        await RisingEdge(dut.IQ_CLK)
-    dut.GRP_WE.value = 0
-
-
-@cocotb.test()
-async def test_grp_re_addr_change_during_miso_shift(dut):
-    """A Grouper read pulse targeting a different address, injected at every
-    bit position from the load instant (bit 8) through the last shifted bit
-    (bit 16) of an in-flight SPI read data byte, must never corrupt that
-    byte -- and the SPI-requested address must still read correctly on the
-    very next, independent transaction."""
-    tag = "grp_re_addr_change_during_miso_shift"
-    await _bringup(dut)
-
-    V_A = 0x5A
-    await spi_write(dut, SAFE_ADDR, V_A)
-
-    half_ns = 50.0  # 10 MHz
-    for inject_bit_idx in range(8, 17):
-        state = {"fired": False}
-
-        def hook(dut_, bit_idx, _target=inject_bit_idx, _state=state):
-            if bit_idx == _target and not _state["fired"]:
-                cocotb.start_soon(_grp_pulse_re(dut_, GRP_ADDR_B))
-                _state["fired"] = True
-
-        rx, bits = await spi_frame(dut, [0x80 | SAFE_ADDR, 0xFF], half_ns,
-                                    cs_lead_ns=half_ns, cs_trail_ns=half_ns,
-                                    mid_bit_hook=hook)
-        assert bits == 16, f"{tag}: inject@{inject_bit_idx} frame truncated ({bits} bits)"
-        assert state["fired"], f"{tag}: inject@{inject_bit_idx} GRP pulse never launched"
-        assert rx[1] == V_A, (
-            f"{tag}: inject@bit {inject_bit_idx}: MISO byte torn by a concurrent "
-            f"Grouper read -- got 0x{rx[1]:02X}, expected the byte-start snapshot "
-            f"0x{V_A:02X}")
-
-        await _settle(dut, 16)  # let the GRP_RE pulse fully release
-        got = await spi_read(dut, SAFE_ADDR)
-        assert got == V_A, (
-            f"{tag}: inject@bit {inject_bit_idx}: next independent SPI read of "
-            f"the requested address did not recover -- got 0x{got:02X}, expected "
-            f"0x{V_A:02X}")
-
-
-@cocotb.test()
-async def test_grp_we_addr_change_during_miso_shift(dut):
-    """Same as test_grp_re_addr_change_during_miso_shift, but the contending
-    Grouper access is a WRITE to a different address. grp_active (= GRP_WE |
-    GRP_RE) redirects the shared read-peek port exactly the same way a
-    Grouper read does, so the in-flight SPI byte must be equally protected.
-    Additionally checks that the Grouper write itself lands: the next
-    independent SPI read of the *Grouper-touched* address must observe the
-    new value, proving the address change is correctly reflected once the
-    contention clears (not silently dropped by the arbiter)."""
-    tag = "grp_we_addr_change_during_miso_shift"
-    await _bringup(dut)
-
-    V_A = 0xA5
-    await spi_write(dut, SAFE_ADDR, V_A)
-    await spi_write(dut, GRP_ADDR_B, 0x00)  # known starting value
-
-    half_ns = 50.0  # 10 MHz
-    for inject_bit_idx in range(8, 17):
-        V_B = 0x10 + inject_bit_idx  # distinct per iteration
-        state = {"fired": False}
-
-        def hook(dut_, bit_idx, _target=inject_bit_idx, _state=state, _vb=V_B):
-            if bit_idx == _target and not _state["fired"]:
-                cocotb.start_soon(_grp_pulse_we(dut_, GRP_ADDR_B, _vb))
-                _state["fired"] = True
-
-        rx, bits = await spi_frame(dut, [0x80 | SAFE_ADDR, 0xFF], half_ns,
-                                    cs_lead_ns=half_ns, cs_trail_ns=half_ns,
-                                    mid_bit_hook=hook)
-        assert bits == 16, f"{tag}: inject@{inject_bit_idx} frame truncated ({bits} bits)"
-        assert state["fired"], f"{tag}: inject@{inject_bit_idx} GRP pulse never launched"
-        assert rx[1] == V_A, (
-            f"{tag}: inject@bit {inject_bit_idx}: MISO byte torn by a concurrent "
-            f"Grouper write -- got 0x{rx[1]:02X}, expected the byte-start snapshot "
-            f"0x{V_A:02X}")
-
-        await _settle(dut, 16)  # let the GRP_WE pulse fully release and CE-capture
-
-        # The SPI-requested address is untouched by the Grouper write.
-        got_a = await spi_read(dut, SAFE_ADDR)
-        assert got_a == V_A, (
-            f"{tag}: inject@bit {inject_bit_idx}: SPI-requested address corrupted "
-            f"by an unrelated Grouper write -- got 0x{got_a:02X}, expected 0x{V_A:02X}")
-
-        # The Grouper-touched address must reflect its new value on the next
-        # independent SPI read -- the address change is not silently lost.
-        got_b = await spi_read(dut, GRP_ADDR_B)
-        assert got_b == V_B, (
-            f"{tag}: inject@bit {inject_bit_idx}: Grouper write to 0x{GRP_ADDR_B:02X} "
-            f"not reflected on next independent SPI read -- got 0x{got_b:02X}, "
-            f"expected 0x{V_B:02X}")
-
-
-# ---------------------------------------------------------------------------
 # 10. rb_we/rb_addr/rb_wdata CE-gated settle property
 # (Open Risks.md #43, `regbank_write` MCP group: src/config/
 #  pnr_32m_scoped_v25_b6.sdc:342-344, MCP=2 setup / MCP=1 hold, scope =
 #  {rb_we, rb_addr[*], rb_wdata[*]}.)
 #
 # trouper_top.v ~667-701 assigns rb_addr/rb_wdata/rb_we ONLY inside
-# `if (ce_16m)` of the single always @(posedge clk) block that stages both
-# the SPI and Grouper write sources; every other cycle the block takes no
+# `if (ce_16m)` of the single always @(posedge clk) block that stages the SPI
+# write source; every other cycle the block takes no
 # branch that touches those regs, so they structurally cannot change value
 # except on a clock edge that samples ce_16m==1 going in. That is exactly
 # the "receiver cannot consume the relaxed value before the claimed 2-cycle
@@ -821,8 +675,13 @@ async def _rb_write_bus_ce_monitor(dut, violations):
 @cocotb.test()
 async def test_regbank_write_bus_ce_gated(dut):
     """Structural CE-gating proof for the `regbank_write` MCP group across
-    reset, back-to-back SPI writes, and a Grouper write interleaved with an
-    SPI write -- the two sources that both feed rb_we/rb_addr/rb_wdata."""
+    reset and back-to-back SPI writes.
+
+    Until 2026-09-01 this also interleaved a Grouper write, because GRP/AHB
+    and SPI both staged into rb_we/rb_addr/rb_wdata.  With the Grouper bus
+    removed SPI is the only source feeding those regs, so that stimulus was
+    dropped -- the monitor below is unchanged and still proves the property
+    for every remaining writer."""
     tag = "regbank_write_bus_ce_gated"
     await _bringup(dut)
 
@@ -844,16 +703,5 @@ async def test_regbank_write_bus_ce_gated(dut):
         await spi_frame(dut, [SAFE_ADDR & 0x7F, i & 0xFF], half_ns,
                          cs_lead_ns=half_ns, cs_trail_ns=half_ns)
     await _settle(dut, 16)
-
-    # -- Grouper write interleaved with an in-flight SPI write (both sources
-    #    stage into the same rb_addr/rb_wdata/rb_we regs).
-    for inject_bit_idx in (4, 8, 12):
-        def hook(dut_, bit_idx, _target=inject_bit_idx):
-            if bit_idx == _target:
-                cocotb.start_soon(_grp_pulse_we(dut_, GRP_ADDR_B, 0x33))
-        await spi_frame(dut, [SAFE_ADDR & 0x7F, 0x66], half_ns,
-                         cs_lead_ns=half_ns, cs_trail_ns=half_ns,
-                         mid_bit_hook=hook)
-        await _settle(dut, 16)
 
     assert not violations, f"{tag}: {len(violations)} violation(s):\n" + "\n".join(violations)

@@ -20,8 +20,11 @@
 //
 // Control plane:
 //   Host RPi → SPI slave (HOST_CS/SCK/MOSI/MISO pads) → reg_bank byte interface
-//   Grouper  → GRP_ADDR/WDATA/WE/RE/RDATA/READY inter-chip bus → reg_bank (priority)
-//   IRQ: irq_out (sticky) → IRQ_OUT dedicated pad + IRQ_GROUPER inter-chip
+//   IRQ: irq_out (sticky) → IRQ_OUT dedicated pad
+//
+//   The Grouper inter-project bus (GRP_* byte bus, AHB-Lite H* endpoint and
+//   IRQ_GROUPER) was removed on 2026-09-01: Grouper is not taping out, so the
+//   whole boundary was dead silicon.  SPI is now the sole register master.
 
 `ifndef TROUPER_TOP_V
 `define TROUPER_TOP_V
@@ -69,54 +72,8 @@ module trouper_top (
     input  wire        SPI_MOSI,
     output wire        SPI_MISO_OUT,
 
-    // ---- Grouper inter-project register bus (priority over SPI) ----
-    input  wire        GRP_ADDR_0,
-    input  wire        GRP_ADDR_1,
-    input  wire        GRP_ADDR_2,
-    input  wire        GRP_ADDR_3,
-    input  wire        GRP_ADDR_4,
-    input  wire        GRP_ADDR_5,
-    input  wire        GRP_ADDR_6,
-    input  wire        GRP_ADDR_7,
-    input  wire        GRP_WDATA_0,
-    input  wire        GRP_WDATA_1,
-    input  wire        GRP_WDATA_2,
-    input  wire        GRP_WDATA_3,
-    input  wire        GRP_WDATA_4,
-    input  wire        GRP_WDATA_5,
-    input  wire        GRP_WDATA_6,
-    input  wire        GRP_WDATA_7,
-    input  wire        GRP_WE,
-    input  wire        GRP_RE,
-    output wire        GRP_RDATA_0,
-    output wire        GRP_RDATA_1,
-    output wire        GRP_RDATA_2,
-    output wire        GRP_RDATA_3,
-    output wire        GRP_RDATA_4,
-    output wire        GRP_RDATA_5,
-    output wire        GRP_RDATA_6,
-    output wire        GRP_RDATA_7,
-    output wire        GRP_READY,
-
-    // ---- Grouper dev external-peripheral AHB endpoint (8-bit) ----
-    // This is the real Grouper origin/dev boundary.  It is kept alongside the
-    // legacy GRP_* placeholder during the migration so existing SPI/GRP
-    // regressions remain usable; integration must drive the AHB port only.
-    input  wire [7:0]  HADDR,
-    input  wire [2:0]  HBURST,
-    input  wire        HMASTLOCK,
-    input  wire [3:0]  HPROT,
-    input  wire [2:0]  HSIZE,
-    input  wire [1:0]  HTRANS,
-    input  wire [7:0]  HWDATA,
-    input  wire        HWRITE,
-    output wire [7:0]  HRDATA,
-    output wire        HREADY,
-    output wire        HRESP,
-
     // ---- Interrupt outputs ----
     output wire        IRQ_OUT_OUT,       // → dedicated IRQ pad; sticky, level-high
-    output wire        IRQ_GROUPER,   // → Grouper inter-project IRQ line; same signal as IRQ_OUT
 
     // ---- Array acquisition synchronisation (external pull-up required) ----
     // Two-pin digital debug probes (planning/two-pin-digital-debug-plan.md).
@@ -285,18 +242,11 @@ module trouper_top (
     wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
                                PSRAM_SIO_1_IN, PSRAM_SIO_0_IN};
     wire [3:0] PSRAM_SIO_OE;
-    wire [7:0] GRP_ADDR = {GRP_ADDR_7, GRP_ADDR_6, GRP_ADDR_5, GRP_ADDR_4,
-                           GRP_ADDR_3, GRP_ADDR_2, GRP_ADDR_1, GRP_ADDR_0};
-    wire [7:0] GRP_WDATA = {GRP_WDATA_7, GRP_WDATA_6, GRP_WDATA_5, GRP_WDATA_4,
-                            GRP_WDATA_3, GRP_WDATA_2, GRP_WDATA_1, GRP_WDATA_0};
-    wire [7:0] GRP_RDATA;
 
     assign {PSRAM_SIO_3_OUT, PSRAM_SIO_2_OUT,
             PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = PSRAM_SIO_OUT;
     assign {PSRAM_SIO_3_OE, PSRAM_SIO_2_OE,
             PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = PSRAM_SIO_OE;
-    assign {GRP_RDATA_7, GRP_RDATA_6, GRP_RDATA_5, GRP_RDATA_4,
-            GRP_RDATA_3, GRP_RDATA_2, GRP_RDATA_1, GRP_RDATA_0} = GRP_RDATA;
 
     // ==== A40 padframe pad-control tie-offs (see module header + Pinout.md) ===
     assign IQ_CLK_PU = 1'b0;
@@ -480,9 +430,9 @@ module trouper_top (
     wire [7:0]  psram_dbg_data_w;
     wire        psram_replay_active_w;
     // PSRAM debug byte ports (0x76 read-pop / 0x79 write-push): driven
-    // directly by either register master, bypassing the CE/arbiter.  Both
-    // masters can hold a request for several clk edges (in particular the
-    // AHB-to-GRP bridge), hence each side effect is explicitly edge-detected.
+    // directly by the SPI master, bypassing the CE dispatch path.  The SPI
+    // slave holds its request for several clk edges, so each side effect is
+    // explicitly edge-detected.
     wire [7:0]  psram_dbg_wdata_w;
     wire        psram_dbg_wdata_push_w;
     wire        psram_dbg_data_pop_w;
@@ -1055,57 +1005,27 @@ module trouper_top (
     );
 
     // =========================================================================
-    // Register bus arbiter: Grouper (GRP_*) has priority over SPI slave.
+    // Register bus sequencer.  SPI is the sole register master since the
+    // Grouper boundary was removed (2026-09-01), so there is nothing left to
+    // arbitrate against.
     //
     // A completed SPI write is a short clk-domain event and cannot be stalled
     // back at the serial pins.  Capture it in a one-entry pending slot until
-    // the in-progress Grouper byte cycle releases the register bank.  The
-    // Grouper byte-cycle contract requires that it release before a second SPI
-    // data byte completes (>= 4 us at 2 MHz), so this slot cannot overflow.
+    // the next CE edge can dispatch it into the register bank.
     // =========================================================================
-    // The AHB endpoint turns one transfer into one held byte request.  Its
-    // completion is deliberately tied to the CE-domain dispatch below, not
-    // merely to observing HWRITE in the address phase.
-    wire [7:0] ahb_addr, ahb_wdata;
-    wire       ahb_we, ahb_re, ahb_dispatch;
-    wire [7:0] ahb_rdata = cfg_rdata_w;
-    wire       ahb_rready = cfg_ready_w;
-    trouper_ahb8_adapter u_ahb8 (
-        .clk(clk), .rst_n(rst_n), .HADDR(HADDR), .HBURST(HBURST),
-        .HMASTLOCK(HMASTLOCK), .HPROT(HPROT), .HSIZE(HSIZE),
-        .HTRANS(HTRANS), .HWDATA(HWDATA), .HWRITE(HWRITE),
-        .HRDATA(HRDATA), .HREADY(HREADY), .HRESP(HRESP),
-        .csr_addr(ahb_addr), .csr_wdata(ahb_wdata), .csr_we(ahb_we),
-        .csr_re(ahb_re), .csr_dispatch(ahb_dispatch),
-        .csr_rdata(ahb_rdata), .csr_rready(ahb_rready)
-    );
-
-    wire grp_active = GRP_WE | GRP_RE | ahb_we | ahb_re;
-
     reg        spi_reg_we_d;
-    reg        grp_we_d;
-    reg        grp_re_d;
     reg        spi_wr_pending;
     reg [7:0]  spi_wr_pending_addr;
     reg [7:0]  spi_wr_pending_data;
     wire       spi_wr_new = spi_reg_we & ~spi_reg_we_d;
 
-    // PSRAM debug-write byte port (0x79): a single push per completed SPI or
-    // Grouper write.  The SPI slave holds 0x79 for a burst; the AHB-to-GRP
-    // bridge holds GRP_WE for six clk edges, so both sources need one-shot
-    // strobes rather than their level-qualified write enables.
-    wire grp_dbg_wdata_push = GRP_WE && !grp_we_d && (GRP_ADDR == 8'h79);
-    assign psram_dbg_wdata_w      = grp_dbg_wdata_push ? GRP_WDATA : spi_reg_wdata;
-    assign psram_dbg_wdata_push_w = grp_dbg_wdata_push ||
-                                    (spi_wr_new && (spi_reg_wr_addr == 8'h79));
+    // PSRAM debug-write byte port (0x79): a single push per completed SPI
+    // write.  The SPI slave holds 0x79 for a burst, so this needs the one-shot
+    // strobe rather than the level-qualified write enable.
+    assign psram_dbg_wdata_w      = spi_reg_wdata;
+    assign psram_dbg_wdata_push_w = spi_wr_new && (spi_reg_wr_addr == 8'h79);
 
-    // Likewise, a Grouper read held by the bridge must consume exactly one
-    // 0x76 byte, not one byte per held GRP_RE cycle.  Pop on release, rather
-    // than assertion: reg_bank captures the current byte while GRP_RE is
-    // held, and the bridge returns that captured value before this advances
-    // the debug window.
-    assign psram_dbg_data_pop_w = (spi_reg_re && (spi_reg_re_addr == 8'h76)) ||
-                                  (!GRP_RE && grp_re_d && (GRP_ADDR == 8'h76));
+    assign psram_dbg_data_pop_w = spi_reg_re && (spi_reg_re_addr == 8'h76);
 
     // CE-latched WRITE bus: addr/wdata/we are sampled TOGETHER on a CE edge and
     // captured by the CE-gated reg_bank on the next CE edge, so the whole write
@@ -1115,16 +1035,12 @@ module trouper_top (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             spi_reg_we_d       <= 1'b0;
-            grp_we_d           <= 1'b0;
-            grp_re_d           <= 1'b0;
             spi_wr_pending     <= 1'b0;
             spi_wr_pending_addr <= 8'd0;
             spi_wr_pending_data <= 8'd0;
             rb_addr <= 8'd0; rb_wdata <= 8'd0; rb_we <= 1'b0;
         end else begin
             spi_reg_we_d <= spi_reg_we;
-            grp_we_d     <= GRP_WE;
-            grp_re_d     <= GRP_RE;
 
             if (spi_wr_new) begin
                 spi_wr_pending      <= 1'b1;
@@ -1133,15 +1049,7 @@ module trouper_top (
             end
 
             if (ce_16m) begin
-                if (ahb_we) begin
-                    rb_addr  <= ahb_addr;
-                    rb_wdata <= ahb_wdata;
-                    rb_we    <= 1'b1;
-                end else if (GRP_WE | GRP_RE) begin
-                    rb_addr  <= GRP_ADDR;
-                    rb_wdata <= GRP_WDATA;
-                    rb_we    <= GRP_WE;
-                end else if (spi_wr_pending) begin
+                if (spi_wr_pending) begin
                     rb_addr       <= spi_wr_pending_addr;
                     rb_wdata      <= spi_wr_pending_data;
                     rb_we         <= 1'b1;
@@ -1162,25 +1070,20 @@ module trouper_top (
     // READ address is COMBINATIONAL (separate port) so the peek read has no CE
     // latency — reads always see the current address.  The host holds rd_addr
     // stable for the whole transaction, so the peek decode is quasi-static.
-    // There is only one combinational read port: a concurrent Grouper read
-    // takes priority and makes that SPI read byte invalid; the SPI host retries
-    // the complete read frame after GRP_RE deasserts.
-    wire [7:0] rb_raddr = ahb_re ? ahb_addr :
-                          (GRP_WE | GRP_RE) ? GRP_ADDR : spi_reg_rd_addr;
-    wire       rb_re    = ahb_re | GRP_RE;
+    // SPI is the only reader, so there is no contention for this single port.
+    wire [7:0] rb_raddr = spi_reg_rd_addr;
 
-    // A write is accepted only on the CE edge that dispatches it into the
-    // register-bank path.  Reads acknowledge through reg_bank.ready.
-    assign ahb_dispatch = ce_16m & ahb_we;
+    // reg_bank's registered read path (re/rdata/ready) existed only to give the
+    // Grouper bus a wait-stated read.  SPI reads through the combinational
+    // peek tap, so `re` is tied off and rdata/ready are left unconnected —
+    // synthesis drops the read_valid state and its output register.
+    wire       rb_re    = 1'b0;
 
-    assign GRP_RDATA = cfg_rdata_w;
-    assign GRP_READY = cfg_ready_w;
     assign spi_reg_rdata = rb_peek_rdata_w;
 
     // ---- Register Bank ----
     wire rb_irq_out_sticky;
-    assign IRQ_OUT_OUT     = rb_irq_out_sticky;
-    assign IRQ_GROUPER = rb_irq_out_sticky;
+    assign IRQ_OUT_OUT = rb_irq_out_sticky;
 
     reg_bank u_rb (
         .clk        (clk),
@@ -1454,62 +1357,6 @@ module debug_probe_mux (
 
     assign dbg0 = en ? d0 : 1'b0;
     assign dbg1 = en ? d1 : 1'b0;
-endmodule
-
-// Grouper origin/dev external-peripheral endpoint.  HSEL/HREADYIN are
-// deliberately absent: Grouper's interconnect owns them internally.  This
-// module is synchronous to IQ_CLK; an asynchronous deployment must terminate
-// AHB in the Grouper-side CDC bridge described in the integration plan.
-module trouper_ahb8_adapter (
-    input wire clk, input wire rst_n,
-    input wire [7:0] HADDR, input wire [2:0] HBURST,
-    input wire HMASTLOCK, input wire [3:0] HPROT, input wire [2:0] HSIZE,
-    input wire [1:0] HTRANS, input wire [7:0] HWDATA, input wire HWRITE,
-    output reg [7:0] HRDATA, output wire HREADY, output wire HRESP,
-    output wire [7:0] csr_addr, output wire [7:0] csr_wdata,
-    output wire csr_we, output wire csr_re, input wire csr_dispatch,
-    input wire [7:0] csr_rdata, input wire csr_rready
-);
-    localparam IDLE=2'd0, WRITE=2'd1, READ=2'd2, ERROR=2'd3;
-    reg [1:0] state;
-    reg [7:0] addr_q;
-    reg write_dispatched, error_wait;
-    wire request = HTRANS[1];
-    wire bad_req = (HSIZE != 3'b000) || HADDR[7];
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            state <= IDLE; addr_q <= 8'd0; HRDATA <= 8'd0;
-            write_dispatched <= 1'b0; error_wait <= 1'b0;
-        end else begin
-            case (state)
-                IDLE: if (request) begin
-                    addr_q <= HADDR;
-                    if (bad_req) begin state <= ERROR; error_wait <= 1'b0; end
-                    else if (HWRITE) begin state <= WRITE; write_dispatched <= 1'b0; end
-                    else state <= READ;
-                end
-                WRITE: if (csr_dispatch) begin
-                    write_dispatched <= 1'b1;
-                    state <= IDLE;
-                end
-                READ: if (csr_rready) begin
-                    HRDATA <= csr_rdata;
-                    state <= IDLE;
-                end
-                ERROR: if (error_wait) state <= IDLE; else error_wait <= 1'b1;
-            endcase
-        end
-    end
-    assign csr_addr = addr_q;
-    assign csr_wdata = HWDATA;
-    assign csr_we = (state == WRITE) & ~write_dispatched;
-    assign csr_re = (state == READ);
-    assign HREADY = (state == IDLE) ||
-                    ((state == WRITE) && csr_dispatch) ||
-                    ((state == READ) && csr_rready) ||
-                    ((state == ERROR) && error_wait);
-    assign HRESP = (state == ERROR);
 endmodule
 
 // Kept in this compilation unit so existing standalone top-level test targets

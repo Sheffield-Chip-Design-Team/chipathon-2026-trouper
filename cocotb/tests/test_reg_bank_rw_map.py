@@ -21,7 +21,8 @@ included here only to confirm each gate is wired), W-shadow lock
 precedence beyond one set/clear pass (rows #9/#10 -- row #9 is already
 closed by cocotb/w_shadow_lock), cycle-exact W1P port timing across every
 harness (row #11), CE/read-protocol boundary timing (rows #12/#16/#17),
-IRQ set/clear precedence (rows #13-#15), and the Grouper bus (row #18).
+IRQ set/clear precedence (rows #13-#15).  Row #18 (the Grouper bus) was
+retired on 2026-09-01 when that boundary was removed from trouper_top.
 
 Harness note on clk_en: this direct-DUT harness holds reg_bank.v's
 ``clk_en`` input asserted on every cycle instead of toggling it at the real
