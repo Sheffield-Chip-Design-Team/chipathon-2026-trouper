@@ -348,8 +348,8 @@ to the A40 generator convention `<pad>_<terminal>` — `PSRAM_SIO_{n}_OUT/_IN/_O
 `REMOD_A_{I,Q}_OUT`, `PSRAM_SCK_OUT`, `PSRAM_CE_N_OUT`, `SPI_MISO_OUT`,
 `IRQ_OUT_OUT` — so the integrator's `A40_ACV.def` matches `trouper_top` verbatim
 (no name mapping on hook-up). Testbenches still use the old names and are being
-updated separately. Grouper `GRP_*` / AHB `H*` / `IRQ_GROUPER` are die-internal
-(south abutment edge), not pads.
+updated separately. Grouper `GRP_*` / AHB `H*` / `IRQ_GROUPER` were die-internal
+(south abutment edge), never pads, and were removed entirely on 2026-09-01.
 
 ---
 
@@ -436,12 +436,16 @@ where minimising delay and jitter matters more than hysteresis.
 
 ## Inter-Project Interconnect (No ASIC Pads)
 
-The following signals connect Trouper to the Grouper project on the same MPW. They are internal interconnects and do not consume Trouper package pads.
+**None as of 2026-09-01.** Trouper has no inter-project interconnect: Grouper is
+not taping out, so the `GRP_*` byte bus, the AHB-Lite `H*` endpoint and
+`IRQ_GROUPER` were all removed from `src/top/trouper_top.v`. Every remaining
+top-level port is a package pad (or a pad-control tie-off). Host SPI is the sole
+register master, and `IRQ_OUT` is the only interrupt output.
 
-| Interface | Signals | Description |
-|---|---|---|
-| Grouper register bus (AHB-Lite slave) | target: `HSEL/HADDR/HTRANS/HWRITE/HSIZE/HWDATA/HRDATA/HREADYOUT/HRESP`; current placeholder: `GRP_ADDR[7:0]`, `GRP_WDATA[7:0]`, `GRP_WE`, `GRP_RE`, `GRP_RDATA[7:0]`, `GRP_READY` | Grouper (AHB-Lite master) accesses Trouper's reg_bank as an AHB-Lite slave peripheral via a small adapter. **Inter-project MPW wires only — not bonded to any package pad.** Current RTL still exposes the simplified `GRP_*` byte bus pending the adapter (see Trouper Chip Specification §5.2). |
-| Interrupt | `IRQ_GROUPER` | Internal interrupt line from Trouper to Grouper (mirrors the dedicated `IRQ_OUT` pad) |
+Historically this section listed the Grouper register bus (`GRP_ADDR/WDATA/WE/
+RE/RDATA/READY`, with an AHB-Lite slave as the eventual target) and the
+`IRQ_GROUPER` line, all as die-internal MPW wires consuming no pads. See
+`planning/Trouper Chip Specification.md` §5 for the retained requirement IDs.
 
 ---
 

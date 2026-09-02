@@ -15,7 +15,7 @@ Key features:
 - byte-wide register read/write access to Trouper's register bank.
 - firmware load path into the local unified CPU SRAM (typically managed by Grouper's PicoRV32 but physically accessible for MPW-level bring-up).
 
-> **Dual Control Model:** Trouper can be managed either via this SPI Slave (external host) or via the AHB-Lite Bus (internal Grouper master). Register access is arbitrated between these two masters, with Grouper usually having priority during normal operation.
+> **Single Control Model (2026-09-01).** This SPI slave is the **only** register master. The second path — the Grouper `GRP_*` bus / AHB-Lite endpoint — was removed from `trouper_top.v` because Grouper is not taping out, so no arbitration or priority rule exists any more.
 
 ---
 
@@ -131,15 +131,15 @@ Bytes 5...(5+N-1): host sends dummy bytes; MISO returns CPU SRAM bytes, starting
 
 ## Implementation notes
 
-**Parallel Control Paths.** This SPI slave is a dedicated physical interface on the MPW, allowing host control of Trouper even if the Grouper project is inactive or held in reset.
+**Sole Control Path.** This SPI slave is a dedicated physical interface and the
+only way to reach the register bank.
 
-**Arbitration.** Grouper has priority. A completed SPI write that overlaps one
-Grouper byte cycle is retained in a one-entry pending slot and committed after
-the Grouper request releases. The Grouper cycle must release before a second SPI
-data byte completes (at least 4 µs at the 2 MHz limit). Pin-level SPI has no
-WAIT response and the current register bank has one combinational read port, so
-an SPI read byte overlapping `GRP_RE=1` is invalid; the host retries the complete
-read frame after the Grouper request releases.
+**Arbitration — none (2026-09-01).** There is no second master: the Grouper bus
+and AHB endpoint were removed from `trouper_top.v`. The one-entry pending slot
+survives, but only to stage a completed SPI write onto the next `ce_16m` edge;
+it can no longer be blocked by another master. The read-retry rule for an SPI
+read byte overlapping `GRP_RE=1` is void — nothing can steal the combinational
+read port.
 
 **Clock domain crossing.** SPI clock (up to 2 MHz) and the 32 MHz system clock are asynchronous. Run the SPI shifter and frame parser in the SPI clock domain, then cross completed register operations and firmware-load bytes into the core domain with a small handshake or async FIFO.
 
@@ -165,4 +165,4 @@ tri-state behavior is required.
 
 - [Register Map](../Register%20Map.md) — authoritative register set
 - [PicoRV32 Integration](PicoRV32%20Integration.md) — firmware load target
-- [AHB-Lite Bus](AHB-Lite%20Bus.md) — parallel control path from Grouper
+- [AHB-Lite Bus](AHB-Lite%20Bus.md) — *obsolete*: former parallel control path from Grouper, removed 2026-09-01

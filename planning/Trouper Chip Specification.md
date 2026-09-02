@@ -85,9 +85,9 @@ The former CLK_16M generated-clock scheme (registered divide-by-2 net) and the f
 The active `trouper_top` hard macro contains the full Trouper signal chain and control-plane peripherals:
 
 - **Included:** DSP chain (decimators, SC detector, training_acc, mrc_combiner, sd_remod), PSRAM buffer controller, packet_ctrl_fsm, reg_bank, SPI slave (host RPi interface), sticky interrupt aggregation (irq_status in reg_bank)
-- **Not included:** PicoRV32 / Grouper CPU — weight computation is performed by Grouper firmware via the inter-project `GRP_*` register bus
-- Control boundary: SPI pads (`HOST_CS`, `SPI_SCK`, `SPI_MOSI`, `SPI_MISO`) for host access; `GRP_ADDR/WDATA/WE/RE/RDATA/READY` inter-chip bus for Grouper access (priority over SPI)
-- Two interrupt outputs: `IRQ_OUT` → dedicated package pad; `IRQ_GROUPER` → inter-project line to Grouper. Both are driven by the same sticky `irq_status` OR from reg_bank.
+- **Not included:** PicoRV32 / Grouper CPU — weight computation is performed by host firmware over SPI
+- Control boundary: SPI pads (`HOST_CS`, `SPI_SCK`, `SPI_MOSI`, `SPI_MISO`) only. The `GRP_*` inter-chip bus was removed on 2026-09-01 (Grouper is not taping out); host SPI is the sole register master.
+- One interrupt output: `IRQ_OUT` → dedicated package pad, driven by the sticky `irq_status` OR from reg_bank. (`IRQ_GROUPER` was removed with the rest of the Grouper boundary.)
 - `mimo_rx_top` remains only as a legacy compatibility wrapper for older flows and is not the canonical hardened macro
 
 Recent area-reduction work removed two stale hardware paths from the active RTL:
@@ -417,7 +417,7 @@ Host (Raspberry Pi) configuration and debug interface. The register map is const
 | TRPR-SPS-004 | C | P | Maximum SPI clock rate SHALL be **2 MHz**. This is the supported board-interface rate; higher rates are out of scope unless separately constrained and signed off at the SPI pads. | A |
 | TRPR-SPS-005 | C | HW | `HOST_CS`, `SPI_SCK`, and `SPI_MOSI` are asynchronous to the 32 MHz core clock. A 2-FF synchroniser SHALL be applied to `HOST_CS` and `SPI_SCK` edges, or the SPI slave FSM SHALL run in the SPI clock domain with an AHB-Lite handshake. | I |
 | TRPR-SPS-006 | H | F | `CHIP_ID` (0x00) SHALL return 0xA7 on any SPI read, confirming interface health on first bring-up. | T |
-| TRPR-SPS-007 | H | F | The SPI slave SHALL arbitrate with Grouper register-bus accesses. Priority: Grouper path > SPI Slave (host). A completed SPI **write** that overlaps one in-progress Grouper byte cycle SHALL be retained in a one-entry pending slot and committed exactly once after `GRP_WE/GRP_RE` deassert; the Grouper byte cycle SHALL release before a second SPI data byte completes (≥ 4 µs at 2 MHz). The serial SPI interface has no WAIT response and the register bank has one combinational read port, so an SPI **read** byte whose MISO snapshot overlaps `GRP_RE=1` is rejected/undefined and host software SHALL retry the complete read frame after `GRP_RE` deasserts. (Resolved 2026-07-31: replaces the unrealizable blanket requirement that all pin-level SPI traffic be stalled.) | T |
+| TRPR-SPS-007 | H | F | **VOID 2026-09-01 (Grouper not taping out) — there is no second master left to arbitrate against; the one-entry pending slot is retained only to stage an SPI write onto the next `ce_16m` edge.** Was: The SPI slave SHALL arbitrate with Grouper register-bus accesses. Priority: Grouper path > SPI Slave (host). A completed SPI **write** that overlaps one in-progress Grouper byte cycle SHALL be retained in a one-entry pending slot and committed exactly once after `GRP_WE/GRP_RE` deassert; the Grouper byte cycle SHALL release before a second SPI data byte completes (≥ 4 µs at 2 MHz). The serial SPI interface has no WAIT response and the register bank has one combinational read port, so an SPI **read** byte whose MISO snapshot overlaps `GRP_RE=1` is rejected/undefined and host software SHALL retry the complete read frame after `GRP_RE` deasserts. (Resolved 2026-07-31: replaces the unrealizable blanket requirement that all pin-level SPI traffic be stalled.) | T |
 | TRPR-SPS-008 | M | F | `SPI_MISO` is a dedicated Trouper-to-host output in the selected pinout. The SPI slave SHALL drive `SPI_MISO=0` whenever `HOST_CS` is de-asserted; no MISO output-enable or shared-bus tri-state behavior is required. (Resolved 2026-07-31 from the stale shared-bus requirement.) | T |
 | TRPR-SPS-009 | C | F | **Read-data timing:** the slave SHALL latch the register address on the final (8th) rising `SPI_SCK` edge of the command byte, so that read data is valid on `SPI_MISO` for every bit of the immediately following data byte. A 2-byte read transaction (command + data) SHALL return the addressed register's value in the data byte. | T |
 | TRPR-SPS-010 | H | F | **Burst access:** if `HOST_CS` remains asserted after the first data byte, each additional data byte SHALL access the next consecutive register address (auto-increment, wrapping modulo 128). Exception: `PSRAM_DBG_DATA` (`0x76`) SHALL NOT auto-increment — repeated data bytes re-access the same port. | T |
@@ -443,7 +443,7 @@ Custom hand-written register bank (no generator exists or is planned — TRPR-RE
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-REG-001 | C | F | The register bank SHALL implement all 8-bit registers defined in `planning/Register Map.md`, maintaining defined reset values and R/W permissions. | T |
-| TRPR-REG-002 | C | I | The register bank SHALL be accessible from both the host SPI slave bridge and the inter-project Grouper master over a **byte-wide request/acknowledge bus** — `GRP_ADDR[7:0]`, `GRP_WDATA[7:0]`, `GRP_WE`, `GRP_RE`, `GRP_RDATA[7:0]`, `GRP_READY` (`trouper_top.v:69+`), Grouper taking priority over SPI. It is **not** an AHB-Lite slave: there is no `H*` signal in the RTL. Any AHB-Lite attachment is an adapter on the Grouper side (§5, TRPR-INT-001). (Corrected 2026-07-26: this row specified an 8-bit AHB-Lite slave, a third interface appearing nowhere else.) | T |
+| TRPR-REG-002 | C | I | **VOID 2026-09-01 (Grouper not taping out).** Was: the register bank SHALL be accessible from both the host SPI slave bridge and the inter-project Grouper master over a byte-wide request/acknowledge bus (`GRP_*`), Grouper taking priority over SPI. The `GRP_*` bus, the AHB endpoint and `IRQ_GROUPER` were removed from `trouper_top.v`; **the register bank is now reachable from the host SPI slave alone, with no arbitration.** | — |
 | TRPR-REG-003 | C | F | Multi-byte registers (e.g., Z_kl int32, W int16) SHALL be big-endian: MSB at the lower address. | I |
 | TRPR-REG-004 | H | F | Reads from undefined or reserved addresses SHALL return 0x00. Writes to reserved addresses SHALL be silently ignored. | T |
 | TRPR-REG-005 | H | F | The register bank is custom hand-written RTL (`reg_bank.v`); `planning/Register Map.md` is the single source of truth and every register-map change SHALL update RTL and map together, verified by register-level tests (no generator tool exists or is planned). | I |
@@ -461,7 +461,7 @@ Interrupt aggregation is implemented **inside `reg_bank.v`**, not as a standalon
 |---|---|---|---|---|
 | TRPR-IRQ-001 | C | F | reg_bank SHALL aggregate the following events into sticky `IRQ_STATUS` bits (0x02): `CORR_LOCK` [0], `TRAINING_DONE` [1], `W_MISSED_PACKET` [2], `PACKET_DONE` [3], `NOISE_READY` [4]. | T |
 | TRPR-IRQ-002 | C | F | Each sticky bit SHALL be cleared by writing the corresponding bit to `IRQ_CLEAR` (0x03). | T |
-| TRPR-IRQ-003 | C | F | When any `IRQ_STATUS` bit is set, Trouper SHALL assert both `IRQ_OUT` and `IRQ_GROUPER`. `IRQ_OUT` routes to a dedicated package pad. `IRQ_GROUPER` is an inter-project wire to Grouper. Both are driven by the same `\|irq_status` signal from reg_bank. | T |
+| TRPR-IRQ-003 | C | F | When any `IRQ_STATUS` bit is set, Trouper SHALL assert `IRQ_OUT`, which routes to a dedicated package pad, driven by the `\|irq_status` signal from reg_bank. (Amended 2026-09-01: the companion `IRQ_GROUPER` inter-project wire was removed with the rest of the Grouper boundary.) | T |
 | TRPR-IRQ-004 | H | F | Both IRQ outputs SHALL remain asserted until all `IRQ_STATUS` bits are cleared (level-high, not a pulse). | T |
 | TRPR-IRQ-005 | — | — | **DELETED.** JTAG removed; the IRQ pad is dedicated (no pad muxing), so the former `JTAG_EN`/`TCK` mode-switch and PSRAM-pad-sharing caveats no longer apply. | I |
 | TRPR-IRQ-006 | C | F | Each `IRQ_STATUS` bit SHALL be set on the rising edge of its source event, not by a held level, so a bit cleared via `IRQ_CLEAR` is not immediately re-asserted while the source condition persists (required for TRPR-IRQ-002 on the level-driven `CORR_LOCK`/`TRAINING_DONE` sources). | T |
@@ -543,14 +543,18 @@ cannot change how the receiver behaves.
 
 ---
 
-## 5. Control-Plane Integration (Grouper byte bus + Host SPI) — TRPR-INT
+## 5. Control-Plane Integration (Host SPI) — TRPR-INT
 
-> **Interface status (2026-07-26).** Trouper's implemented inter-project interface is the
-> **`GRP_*` byte-wide register bus**, not AHB-Lite — see TRPR-REG-002 and §1. The
-> signal-level AHB3-Lite contract below describes the **adapter still to be built on the
-> Grouper side** (TRPR-INT-001); it is a target for that wrapper, not a description of
-> Trouper's pins. Read it that way. Previously §1, §5 and TRPR-REG-002 each asserted a
-> different control interface (no AHB / 32-bit AHB3-Lite / 8-bit AHB-Lite).
+> **REMOVED 2026-09-01 — Grouper is not taping out.** The entire inter-project
+> control plane described in this section (the `GRP_*` byte bus, the AHB-Lite /
+> AHB3-Lite endpoint and its `H*` signals, and `IRQ_GROUPER`) has been deleted
+> from `src/top/trouper_top.v`. **Host SPI is now the sole register master.**
+> This section is retained because its TRPR-INT requirement IDs are referenced
+> from `Traceability.md`; read every Grouper-facing statement below as
+> historical. Rows that no longer apply are marked **VOID** individually.
+> The surviving obligations are TRPR-INT-004/010/012 (Trouper operates fully
+> from host SPI alone, and bypasses when no `W_COMMIT` arrives) — which are now
+> unconditional rather than fallback behaviour.
 
 Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the same MPW. The control plane lives inside Grouper (PicoRV32 hardened macro); Trouper presents its register bank to Grouper over the `GRP_*` byte bus, which a Grouper-side adapter may in turn expose as an AHB-Lite peripheral.
 
@@ -595,22 +599,24 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | output | `HREADYOUT` | 1 | Slave completion output. It is high for a completed zero-wait-state transfer and may be held low only to insert a wait state. |
 | output | `HRESP` | 1 | `1'b0` for `OKAY`; `1'b1` for an unsupported transfer, including a non-byte `HSIZE`. |
 
+> **VOID 2026-09-01 — historical.** The AHB3-Lite slave contract in §5.2/§5.2.1 above was never the shipped boundary and is now moot: Grouper is not taping out and both the placeholder `GRP_*` bus and the 8-bit AHB endpoint were deleted from `trouper_top.v`. Original text follows.
+>
 > **Control-plane interface (implementation note).** Trouper presents its register bank to Grouper as an **AHB3-Lite slave peripheral**. A small adapter converts the AHB3-Lite slave protocol to the internal reg_bank byte interface (`addr/wdata/we/re/rdata/ready`), which the host SPI slave shares via arbitration (Grouper priority). A transfer is accepted only when `HSEL` is high, `HTRANS[1]` is high, and the preceding data phase is permitted by `HREADYIN`; a write or read side effect occurs exactly once when that transfer completes. **All AHB3-Lite slave signals are inter-project MPW connections to the Grouper master and are never routed to package pads** — they consume none of the 28 pads. *Current RTL status:* the `trouper_top` boundary still exposes the simplified `GRP_*` byte bus as a placeholder; swapping it for the AHB3-Lite slave adapter is pending (TRPR-INT-001).
 
 ### 5.3 Integration Requirements
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-INT-001 | C | I | Trouper SHALL contain an internal control fabric linking the inter-project AHB-Lite slave endpoint, the SPI slave bridge, and the register/peripheral fabric. | I |
-| TRPR-INT-002 | C | F | Trouper's internal AHB-Lite path SHALL provide access to the complete register bank (0x00–0x7F, 7-bit map) with the same semantics as SPI slave access. | T |
-| TRPR-INT-003 | C | F | An arbiter/bridge SHALL mediate between the SPI slave bridge and the Grouper AHB-Lite master path. The Grouper path SHALL have priority over host SPI. Overlapping completed SPI writes SHALL use the pending-slot behavior in TRPR-SPS-007; overlapping SPI reads SHALL use its defined reject-and-retry behavior. | T |
+| TRPR-INT-001 | C | I | **VOID 2026-09-01 (Grouper not taping out) — the internal control fabric linking an AHB-Lite endpoint, the SPI bridge and reg_bank no longer exists in the RTL.** Was: Trouper SHALL contain an internal control fabric linking the inter-project AHB-Lite slave endpoint, the SPI slave bridge, and the register/peripheral fabric. | I |
+| TRPR-INT-002 | C | F | **VOID 2026-09-01 (Grouper not taping out) — AHB-Lite access to the complete register map no longer exists in the RTL.** Was: Trouper's internal AHB-Lite path SHALL provide access to the complete register bank (0x00–0x7F, 7-bit map) with the same semantics as SPI slave access. | T |
+| TRPR-INT-003 | C | F | **VOID 2026-09-01 (Grouper not taping out) — the SPI-vs-Grouper arbiter and its priority rule no longer exists in the RTL.** Was: An arbiter/bridge SHALL mediate between the SPI slave bridge and the Grouper AHB-Lite master path. The Grouper path SHALL have priority over host SPI. Overlapping completed SPI writes SHALL use the pending-slot behavior in TRPR-SPS-007; overlapping SPI reads SHALL use its defined reject-and-retry behavior. | T |
 | TRPR-INT-004 | C | F | When the Grouper control path is idle, unavailable, or held in reset, Trouper SHALL continue operating normally through the host SPI path with no bus contention or undriven control inputs. | T |
-| TRPR-INT-005 | H | I | The internal `IRQ` line SHALL be asserted whenever any unmasked `IRQ_STATUS` bit is set, providing Grouper with an interrupt to trigger firmware service such as weight computation. | T |
-| TRPR-INT-006 | H | I | The whole digital core runs on the single 32 MHz clock; control-plane peripherals (`reg_bank`) are clock-enable-gated to an effective 16 MHz update rate (`clk_en`, honest MCP=2 — no separate `CLK_16M` net or generated clock exists). No metastability synchronisers are required anywhere in the core; the Grouper register bus and SPI-slave handshakes are CE-aligned by construction. | I |
+| TRPR-INT-005 | H | I | **VOID 2026-09-01 (Grouper not taping out) — the internal IRQ line to Grouper no longer exists in the RTL.** Was: The internal `IRQ` line SHALL be asserted whenever any unmasked `IRQ_STATUS` bit is set, providing Grouper with an interrupt to trigger firmware service such as weight computation. | T |
+| TRPR-INT-006 | H | I | The whole digital core runs on the single 32 MHz clock; control-plane peripherals (`reg_bank`) are clock-enable-gated to an effective 16 MHz update rate (`clk_en`, honest MCP=2 — no separate `CLK_16M` net or generated clock exists). No metastability synchronisers are required anywhere in the core; the SPI-slave handshakes are CE-aligned by construction. (Amended 2026-09-01: the Grouper register bus was removed.) | I |
 | TRPR-INT-007 | H | F | Grouper firmware and host SPI SHALL use the same Trouper register map as defined in `planning/Register Map.md`. No separate Trouper-only firmware register space exists. | I |
 | TRPR-INT-008 | M | F | AHB-Lite HSIZE SHALL be BYTE (8-bit) only for this integration. Firmware SHALL NOT issue halfword or word AHB transactions to the Trouper peripheral fabric. | T |
 | TRPR-INT-009 | M | F | The weight commit flow SHALL be: firmware computes W from Z_kl → writes the complete W register bank (0x30–0x3F) → writes `WGT_CTRL.W_COMMIT` (0x1E[0]) → Trouper FSM asserts `W_VALID`; the combiner consumes the live write-locked bank (TRPR-MRC-004). | T |
-| TRPR-INT-013 | C | I | The Trouper AHB endpoint SHALL exactly implement the signal directions and widths of the `slave` modport in Grouper's `ahb3lite_intf` with `ADDR_WIDTH=32` and `DATA_WIDTH=32`, as specified in §5.2.1. | I |
+| TRPR-INT-013 | C | I | **VOID 2026-09-01 (Grouper not taping out) — conformance to Grouper's ahb3lite_intf slave modport no longer exists in the RTL.** Was: The Trouper AHB endpoint SHALL exactly implement the signal directions and widths of the `slave` modport in Grouper's `ahb3lite_intf` with `ADDR_WIDTH=32` and `DATA_WIDTH=32`, as specified in §5.2.1. | I |
 | TRPR-INT-014 | C | F | The endpoint SHALL recognise a request only when `HSEL=1` and `HTRANS[1]=1`. It SHALL use `HREADYIN` to qualify data-phase progress and SHALL perform each register read side effect or write exactly once per completed transfer. | T |
 | TRPR-INT-015 | H | F | `HBURST`, `HMASTLOCK`, and `HPROT` SHALL not affect register-map semantics. `HSIZE!=3'b000` SHALL complete with `HRESP=1'b1` and SHALL have no register side effect. | T |
 
@@ -653,7 +659,7 @@ Trouper is a MIMO RX ASIC connected to a companion **Grouper** project on the sa
 | TRPR-VER-001 | C | F | Each DSP block SHALL have a cocotb testbench comparing RTL output to the Python reference model in `sim/models/` with the same stimulus. | T |
 | TRPR-VER-002 | C | F | A full-chain bit-exactness test SHALL be run: real ΣΔ input → decimator → DC removal → SC detector → training accumulator → combiner → re-modulator, comparing RTL output to Python reference. Error-signal SNR SHALL reflect only LSB quantisation and no correlated clipping artifacts. | T |
 | TRPR-VER-003 | H | F | The FPGA emulation platform (Arty A7-100T) SHALL be used as the primary pre-silicon validation environment for the full DSP chain. | T |
-| TRPR-VER-004 | H | F | The internal AHB-Lite control path SHALL be testable in simulation with a BFM (Bus Functional Model) acting as the Grouper-side master. | T |
+| TRPR-VER-004 | H | F | **VOID 2026-09-01 (Grouper not taping out) — an AHB-Lite BFM standing in for the Grouper master no longer exists in the RTL.** Was: The internal AHB-Lite control path SHALL be testable in simulation with a BFM (Bus Functional Model) acting as the Grouper-side master. | T |
 | TRPR-VER-005 | H | F | Grouper-inactive mode (no firmware activity, no W_COMMIT) SHALL be verified: the combiner SHALL produce valid bypass output without FSM deadlock. | T |
 | TRPR-VER-006 | M | F | Over-the-air validation with a single Heltec V3 transmitter SHALL demonstrate MRC diversity gain: PER with all four branches active (Mode 0, MRC weights committed) SHALL be ≤ 1% at an attenuation level where single-antenna bypass (Mode 1) yields PER ≥ 10%. Test SHALL be performed at SF7 and SF12, BW=250 kHz. | T |
 

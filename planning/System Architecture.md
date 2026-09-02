@@ -36,6 +36,12 @@ SX1257_4 ──►
 
 The system consists of two separate hardened projects on the same MPW: **Trouper** (radio datapath macro) and **Grouper** (system-control macro).
 
+> **Update 2026-09-01: Grouper is not taping out.** Trouper's inter-project
+> boundary to it — the `GRP_*` register bus, the AHB-Lite `H*` endpoint and
+> `IRQ_GROUPER` — has been removed from `src/top/trouper_top.v`. Trouper now
+> tapes out as a fully standalone macro whose only control path is the host SPI
+> slave. Grouper-facing statements in the rest of this document are historical.
+
 - **Grouper Project:** Contains the hardened **PicoRV32 RV32IM** controller macro and any broader system-bus fabric.
 - **Trouper Project:** Contains only the radio datapath, local register bank, PSRAM replay path, and status/IRQ handoff signals required by the future top-level integration. Host SPI and Grouper bus adaptation are outside the standalone Trouper macro boundary.
 
@@ -199,8 +205,6 @@ decimated IQ capture + replay buffer"]
 | PSRAM QSPI | Trouper `psram_buf_ctrl` or a future firmware-managed external-memory mode | APS6404L (ext.) | replay buffer or firmware-managed off-chip RAM | 32 MHz QPI |
 | Host SPI | RPi SPI0 CS1 | Trouper SPI slave | Dedicated host register access and debug | 2 MHz |
 | SX1302 SPI | RPi SPI0 CS0 | SX1302 | SX1302 HAL (packets, config) | 10 MHz |
-| AHB-Lite | Grouper (Bus Master) | Trouper (Slave) + Other Peripherals | MPW System Bus | 32 MHz |
-| IRQ | Trouper (ASIC) | Grouper (PicoRV32) | Packet ready, error | Interrupt |
 
 ### SX1257 → ASIC (RX, per antenna)
 
@@ -252,9 +256,11 @@ The following SX1257 pins require a PCB-level decision; none connect to ASIC pad
 | `SPI_MISO` | ASIC → RPi | Status register readback |
 | `IRQ_OUT` | ASIC → RPi | Interrupt: packet ready, preamble lock (dedicated pad) |
 
-### Grouper-Inactive / Host-Assisted Operation
+### Host-Assisted Operation (the only mode)
 
-Trouper remains usable when the Grouper firmware path is inactive. In that mode:
+**Since 2026-09-01 this is not a degraded mode but the whole design:** Grouper is
+not taping out, and the `GRP_*` bus, AHB-Lite endpoint and `IRQ_GROUPER` were
+removed from `trouper_top.v`. Host SPI is the sole control path.
 
 - the RX datapath still runs: decimation, DC removal, SC detection, training accumulation, combining, and ΣΔ re-modulation remain active
 - no weight commits occur unless an external host writes `W_SHADOW` and pulses `W_COMMIT` over the host SPI path

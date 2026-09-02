@@ -28,7 +28,6 @@ any specific timing/behavior claim here for a real bring-up session.
 | SX1302 LoRa baseband | 1 | 1-bit ΣΔ IQ out (`REMOD_A_I/Q`) | Produces the MRC-combined (or bypass) re-modulated stream; Trouper never talks to SX1302 over SPI |
 | APS6404L PSRAM | 1 | QPI (`PSRAM_SCK`/`PSRAM_CE_N`/`PSRAM_SIO[3:0]`) | Owns and sequences the PSRAM protocol itself (`psram_buf_ctrl`) — firmware only flips `PSRAM_CTRL.PSRAM_EN` and polls `INIT_DONE`, it never speaks QPI directly |
 | Host RPi | 1 | Dedicated SPI slave (`HOST_CS`/`SPI_SCK`/`SPI_MOSI`/`SPI_MISO`), `IRQ_OUT` | Primary bring-up and register-access path; this guide's SPI recipes assume the host is the RPi |
-| Grouper (PicoRV32 macro) | 1 | `GRP_*` byte bus (inter-project MPW wires, no package pads) | Priority register access over SPI; **not required** for bring-up — Trouper works standalone with the RPi driving SPI (see [System Architecture](../planning/System%20Architecture.md) "Grouper-Inactive / Host-Assisted Operation") |
 | PCB clock buffer | 1 | `IQ_CLK` (to Trouper) + `XTB` ×4 (to each SX1257) | Single 32 MHz TCXO reference fanned out to Trouper and all 4 SX1257s — **not** optional or per-device; all clocks must trace to the same buffer output for the CDC-free clock architecture to hold |
 
 Full pad-by-pad list, direction, and electrical notes: [Pinout](../planning/Pinout.md).
@@ -98,15 +97,16 @@ Byte 1 (data):    write value, or 0xFF dummy on read (MISO drives the real value
   Open Risks #20) or `Trouper Chip Specification.md`'s register-address
   prose (drifted in places, Open Risks #24).
 
-### 4.2 Grouper bus
+### 4.2 Grouper bus — REMOVED
 
-Only relevant if Grouper firmware is driving register access instead of the
-RPi. Same register map, priority arbitration over SPI (a `GRP_WE`/`GRP_RE`
-overlapping an SPI write window silently drops the SPI write — Open Risks
-#16). **Before relying on this path**, confirm with the Grouper team whether
-their bus clock is provably phase-aligned to Trouper's `IQ_CLK` — there is
-no CDC synchronizer on this bus today (Open Risks #29). For RPi-only
-bring-up, ignore this bus entirely and tie `GRP_WE`/`GRP_RE` low.
+**Gone as of 2026-09-01: Grouper is not taping out.** The `GRP_*` byte bus, the
+AHB-Lite `H*` endpoint and `IRQ_GROUPER` were deleted from
+`src/top/trouper_top.v`. Host SPI (§4.1) is the only register path, and there is
+nothing to tie off or arbitrate against.
+
+This also closes two bring-up hazards outright rather than mitigating them: the
+Grouper-overlaps-SPI dropped-write case (Open Risks #16) and the un-synchronised
+inter-project bus clock (Open Risks #29) can no longer occur.
 
 ### 4.3 PSRAM QPI
 
@@ -175,7 +175,6 @@ file for current status before treating any of these as settled.
 | No on-chip PSRAM tPU wait / no POR | Random first-boot corruption or PSRAM init failure if `RESETB`/power sequencing isn't disciplined by the host | Open Risks #27 (startup items 1, 3) |
 | SC correlator is single-antenna (`sc_ant_sel`, default 0) | Never acquiring lock even with good SNR on antennas 1-3, if antenna 0 is dead/disconnected on the bench | Open Risks #9 |
 | "Silence" during PSRAM buffering is actually a DC tone | SX1302 sees an unexpected tone instead of silence between preamble lock and `W_COMMIT` | Open Risks #5 |
-| Grouper bus has no CDC | Only relevant once Grouper firmware is in the loop — confirm clock relationship before trusting register writes over `GRP_*` | Open Risks #29 |
 | Final SPI write lost if `HOST_CS` rises too soon after the last `SCK` edge | An occasional silently-dropped last byte of a burst write | Open Risks #15 |
 
 ---

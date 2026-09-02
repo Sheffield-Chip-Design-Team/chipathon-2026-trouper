@@ -56,8 +56,9 @@ gates carrying an SDC change; the remaining obstacle is the timing gap itself.
 
 **2026-08-30 update — debug-pin P&R (job 5279): SS WNS −17.74 ns / TNS −416.9 ns.**
 First full A40 P&R carrying the two-pin digital debug probes plus `ARRAY_ACQ_N`
-(`src/config/trouper_top_dbgpins.json` = the job-5214 signoff config with the
-floorplan template extended for the three pads the integrator DEF predates; the
+(`src/config/trouper_top_dbgpins.json` — since collapsed into the canonical
+`src/config/trouper_top.json`, 2026-09-01 — = the job-5214 signoff config with
+the floorplan template extended for the three pads the integrator DEF predates; the
 antenna-closure recipe — `DIODE_PADDING: 4`, `DPL_CELL_PADDING: 2`, mixed GRT/DRT
 repair, 65 % density — carried through unchanged so the two are directly
 comparable). Everything except SS setup is clean:
@@ -639,15 +640,20 @@ neither is on an SPI net.
 
 **ADOPTED 2026-08-31 into the canonical SDC (job 5286).** The exclusion now
 lives in `src/config/pnr_32m_scoped_v25_b6.sdc` itself rather than a variant, so
-all 8 configs under `src/config` and 13 under `rtl-test/ol_trouper_top` inherit
-it; `rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc` was byte-identical and
+every config under `src/config` and the 13 under `rtl-test/ol_trouper_top`
+inherit it; `rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc` was byte-identical and
 was updated in step. Job 5286 re-ran the stock `trouper_top_dbgpins.json`
 against that promoted SDC and reproduced job 5284 on every metric — SS WNS
 −18.23 ns, TNS −459.8, antenna 0/0, DRC 0, XOR 0, LVS clean, util 66.2 % — so
 the promotion is faithful to what was validated, not an approximation of it.
-The `nospicts` variant config and SDC are deleted as redundant. The `_d63`,
-`_d60` and `_smallbuf` probe configs are kept but annotated: they now inherit
-the fix and no longer reproduce the failures tabulated above.
+The `nospicts` variant config and SDC are deleted as redundant. **Superseded
+2026-09-01:** the `_d63`, `_d60` and `_smallbuf` probe configs are now deleted
+too — they inherited the fix and no longer reproduced the failures tabulated
+above, so they had stopped being probes. The knobs they swept
+(`PL_TARGET_DENSITY_PCT` 63/60, `clkbuf_4` in `CTS_CLK_BUFFERS`) and the reason
+each was rejected are recorded in `_comment_cts_spi_sck` in
+`src/config/trouper_top.json`; recover the files with
+`git show <rev>:src/config/<file>` if the failure recurs.
 
 **Why this item stays OPEN despite a working, adopted fix.** Jobs 5284 and 5286
 are the *same netlist twice*, so the evidence is still **n=1** on the thing that
@@ -669,7 +675,9 @@ would rest on ABC continuing to share an address decoder, which no constraint
 enforces and any future edit could silently undo.
 **Runs:** 5279/5281/5282/5283/5284/5285/5286 under
 `/srv/eda/runs/timothyn-dev/lora-mimo-dbgpnr/`; configs
-`src/config/trouper_top_dbgpins{,_d63,_d60,_smallbuf}.json`.
+`src/config/trouper_top_dbgpins{,_d63,_d60,_smallbuf}.json`, all four since
+collapsed into or deleted in favour of `src/config/trouper_top.json`
+(2026-09-01) — see `git log -- src/config/`.
 **See:** job 5281 log `/srv/eda/logs/timothyn-dev/job-5281.o`; job 5279 (clean,
 same config); the rationale block inside `pnr_32m_scoped_v25_b6.sdc`;
 `planning/antenna-closure-investigation-2026-08.md`; item 51.
@@ -689,7 +697,13 @@ changes are deliberately prohibited mid-packet.
 **Risk:** deployment-time AGC misbehavior with no bench coverage.
 **See:** `planning/blocks/AGC.md` (Open calibration items).
 
-### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption
+### 29. Grouper/AHB-Lite bus has no CDC — relies on an implicit same-clock assumption — **CLOSED 2026-09-01 (obsolete)**
+
+> **CLOSED — the interface no longer exists.** Grouper is not taping out, and the
+> `GRP_*` bus, the AHB-Lite `H*` endpoint and `IRQ_GROUPER` were removed from
+> `src/top/trouper_top.v`. There is no inter-project bus left to synchronise, so
+> this risk cannot materialise. Original analysis retained below for the record.
+
 
 Grouper and Trouper are two **separately hardened MPW macros** joined by
 inter-project wires (`planning/Pinout.md:93,97`), not a submodule inside
@@ -1052,7 +1066,39 @@ congestion evidence marked stale 2026-08-30.
 
 ---
 
+### 58. KLayout DRC has never run on any Trouper P&R — the signoff gate is vacuous
+
+`RUN_KLAYOUT_DRC` is `True` but `KLAYOUT_DRC_RUNSET` is unset, so
+`67-klayout-drc` exits in 11 ms with no report and no metric, and
+`69-checker-klayoutdrc` *passes* because the metric is absent rather than zero —
+true of every run in this design's history. Run standalone against job 5379's
+GDS, the PDK deck gives **62/63 tables at zero violations** (job 5384, `contact`
+included); the 63rd (`mslot`) crashed on a PDK deck bug — `layers_def.drc` never
+defines `contact`/`via1`/`via2` for that table, so it left an empty report reading
+as "0 items". With three whitelist entries added, job 5391 runs `mslot` too:
+**all 63 tables ran at zero violations** — the first genuine KLayout DRC signoff
+in this design's history — so no rule needs waiving. Note that
+`run_drc.py` prints "Klayout DRC run is clean. GDS has no DRC violations." even
+on runs that lost a table to an exception (5384, 5386) — its own verdict is not a
+signoff signal. Magic DRC, Netgen LVS, KLayout XOR and router DRC were all
+genuinely running throughout.
+
+**Closing needs:** `KLAYOUT_DRC_RUNSET` wired into the config *behind*
+`rtl-test/scripts/klayout_drc_guarded.sh` (which fails the run when a table does
+not complete, rather than trusting a zero), and acceptance that signoff depends on
+a locally patched `layers_def.drc` until the PDK is fixed upstream — the bug makes
+`mslot` unrunnable for any gf180mcuD design, so it is worth reporting there. See
+`planning/pdn-thickening-and-core-ring-2026-09.md` §6-§7.
+
 ## Moderate
+
+### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source
+
+Trouper can independently prove SPI/register access, PSRAM QPI service, and packet/IRQ control (`SC_FORCE_LOCK`), and an FPGA can drive its existing one-bit IQ inputs for frontend testing. However, `mrc_combiner` and `sd_remod` have no deterministic internal source: their normal inputs depend on successful upstream capture/replay. A failure in the frontend, PSRAM, or acquisition chain can therefore prevent a standalone first-silicon proof of the final combiner/re-modulator foundation blocks even though their dedicated `REMOD_A_I/Q` output pads are working.
+
+**Proposed mitigation — not approved or implemented:** one small, reset-off 500 kS/s deterministic complex source, muxed at either the re-modulator input (minimum scope) or combiner input (broader proof), enabled only under `RX_HOLD=1 && !PACKET_ACTIVE`. Required patterns are zero, bounded signed DC, and a repeating bounded I/Q tone; seeded PRBS is optional stress only. It uses no pins, but needs register allocation, assertions/cocotb coverage, top-level timing/P&R evidence, and a bench reconstruction procedure before it can be accepted. Do not add separate BIST engines to every block.
+
+**Decision gate:** implement only if the first-silicon team judges this downstream demonstration path more valuable than the added mux/control/timing risk. The existing no-new-RTL bring-up sequence remains the baseline. See `planning/foundational-block-bringup-plan.md`.
 
 ### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
 
@@ -1115,7 +1161,14 @@ replay-drain-then-exit condition.
 
 **Found:** 2026-07-02 trouper_top RTL review.
 
-### 16. Grouper/SPI register-bus arbitration silently drops SPI writes
+### 16. Grouper/SPI register-bus arbitration silently drops SPI writes — **CLOSED 2026-09-01 (obsolete)**
+
+> **CLOSED — the interface no longer exists.** With Grouper not taping out, the
+> `GRP_*` bus and AHB endpoint were removed from `src/top/trouper_top.v`. Host
+> SPI is the sole register master, so nothing can steer the mux away from an SPI
+> write. The one-entry pending slot survives only to stage a completed SPI write
+> onto the next `ce_16m` edge. Original analysis retained below for the record.
+
 
 `trouper_top.v:578-581`: if `GRP_RE`/`GRP_WE` is asserted during the 2-cycle
 SPI write window, the mux steers away and the SPI write vanishes — no
@@ -1464,6 +1517,16 @@ up. See `lora-mimo/planning/grouper-trouper-landscape-floorplan-2026-08.md`
 Open Item #9 for the full derivation and the two LibreLane/OpenROAD bugs
 that had to be fixed to get a working number at all
 (`lora-mimo/integration/pd/vsrc/README.md`).
+
+**Amended 2026-09-02 (PDN work):** every IR figure produced by Trouper's own
+flow is in this optimistic mode — the PDN trials measured 0.10-0.14 %, against
+the ~3-5 % the real-source combined-die analysis reports. Absolute IR margin
+from a Trouper-only run must not be used to argue a grid change is unnecessary;
+relative comparisons between configs on the same netlist remain valid. Note also
+that this entry's "mitigated by context" argument rests on Trouper sharing a die
+with Grouper, which predates the 2026-09-01 decision that Grouper is not taping
+out — whether the mitigation survives under A40 is unresolved. See
+`planning/pdn-thickening-and-core-ring-2026-09.md` §5.
 
 Still real padframe/downbond estimates, not final pad data — this entry
 stays open until real physical downbond locations replace the geometric

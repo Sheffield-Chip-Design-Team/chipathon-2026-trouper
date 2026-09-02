@@ -1,8 +1,14 @@
 # Register Map
 
-Internal registers accessible through two primary control paths:
-1.  **Trouper Host SPI Slave:** Dedicated interface for external host access (RPi SPI0 CS1).
-2.  **Grouper Register Bus (`GRP_*`):** Inter-project bus for Grouper firmware access (priority over SPI).
+Internal registers are accessible through a single control path:
+
+1.  **Trouper Host SPI Slave:** the sole register master — external host access (RPi SPI0 CS1).
+
+The second path, the **Grouper Register Bus (`GRP_*`)**, was removed on
+2026-09-01 along with the AHB-Lite endpoint and `IRQ_GROUPER`: Grouper is not
+taping out. Nothing in the map below changes — the same 7-bit space with the
+same semantics is now reached over SPI only, with no arbitration or priority
+rule.
 
 This file is the authoritative register-map source for the non-FFT LoRa-MIMO architecture. All addresses below are final for the current planning set. There are no legacy aliases or compatibility mappings.
 
