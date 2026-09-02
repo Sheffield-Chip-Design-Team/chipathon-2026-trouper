@@ -511,7 +511,41 @@ a dedicated proof.
 
 ## High
 
-### 6. DRT-1231 clkbuf CTS pin-access failure — RE-OPENED 2026-08-30 (job 5281); `DIODE_PADDING: 4` is a mitigation, not a fix
+### 6. DRT-1231 clkbuf CTS pin-access failure — **CLOSED 2026-09-03** (the SPI_SCK CTS exclusion survived a netlist perturbation 2.6× the one that broke it)
+
+> **CLOSED — the stated exit criterion was tested and did not fire.** This item
+> stayed open on one specific ground: the adopted `SPI_SCK` CTS exclusion was
+> **n=1 on netlist perturbation**. Jobs 5284 and 5286 were the same netlist
+> twice, so they could not exercise the thing that actually triggers the bug.
+> The original trigger was small — a 6-line `reg_bank.v` edit worth **144 cells**
+> (35526 → 35670) turned the clean job 5279 into the DRT-1231 failure of 5281.
+>
+> The Grouper-boundary removal then changed the netlist by **370 cells**
+> (35670 → 35300) — a perturbation **2.6× larger** than the one that originally
+> broke it. Five runs have since routed on that new netlist with the exclusion
+> in place, all clean, with **zero `SPI_SCK` DRT-1231 recurrences**:
+>
+> | Job | What it was | Result |
+> |---|---|---|
+> | 5378 | stock-PDN control | clean |
+> | 5379 | adopted PDN (width + ring) | clean signoff |
+> | 5392 | canonical config | clean signoff |
+> | 5394 | PDN pitch ×1.4 | clean signoff |
+> | 5413 | final bundle streamout | clean |
+>
+> **One failure in that set is deliberately not being hidden:** job 5393 (PDN
+> pitch ×1.2) *did* die in detailed routing — but on `DRT-0073` at
+> `clkbuf_2_1_0_IQ_CLK_regs/I`, the **IQ_CLK** tree. Different net, different
+> error code, under a deliberately hostile PDN pitch that was rejected for other
+> reasons. It is not an `SPI_SCK` recurrence and does not re-open this item; it
+> belongs to the density/routability budget recorded in `_comment_density`.
+>
+> **What remains true and must not be lost with the closure:** `SPI_SCK` is now
+> a plain routed net, so nothing in P&R optimises those paths. That makes item
+> 54 (host-SPI post-route GLS/SDF) carry more weight, not less. The `REJECTED,
+> do not retry` list in `_comment_cts_spi_sck` also stands — closing this item is
+> not licence to re-roll `CTS_CLK_BUFFERS`, `CTS_ROOT_BUFFER` or the density
+> knob. Original analysis retained below for the record.
 
 A minimal fix is confirmed clean at 1380×1100 (v15c), but the same DRT-1231
 violation (`clkbuf_*_IQ_CLK_regs/I` pin access) **returns** under the
@@ -1127,6 +1161,49 @@ which is likely disqualifying for a default gate. Signoff also still depends on 
 locally patched `layers_def.drc` until the PDK is fixed upstream — the bug makes
 `mslot` unrunnable for any gf180mcuD design, so it is worth reporting there. See
 `planning/pdn-thickening-and-core-ring-2026-09.md` §6-§7.
+
+### 60. The Grouper/AHB removal has never been functionally simulated
+
+The 2026-09-01 removal of the `GRP_*` bus, the AHB-Lite `H*` endpoint and
+`IRQ_GROUPER` from `src/top/trouper_top.v` has been proven to **synthesise,
+place and route** — jobs 5378/5379/5392/5394/5413 all built the resulting
+35300-cell netlist cleanly, and job 5415 DRC'd the shipped GDS. **None of that
+is functional verification.** Every regression job number cited across the
+verification plans (3863, 3868, 3879, 3883, 4674, 4843, 4845, 4858 …) predates
+the removal and ran against a netlist that still had the arbiter in it.
+
+**Why this is not merely bookkeeping.** The change was not confined to deleting
+unused ports; it altered the live register access path:
+
+- `rb_re` is tied to `1'b0` and `rdata`/`ready` are left unconnected, so
+  synthesis drops `reg_bank`'s `read_valid` state and its output register. Host
+  SPI reads now depend **entirely** on the combinational peek tap.
+- The arbiter collapsed to a sequencer. The one-entry SPI pending slot is no
+  longer a fallback behind a priority mux — it is the only write path.
+- The PSRAM debug byte ports (0x76 pop / 0x79 push) lost one of their two
+  sources and now rest solely on the SPI one-shot strobes.
+
+A defect in any of those is a broken control plane, which on this chip means an
+unusable part — the host cannot configure `SF_CFG`, commit weights, or service
+PSRAM. It would not show up in DRC, LVS or timing, all of which are clean.
+
+**Also unverified: the benches were edited in the same pass.** `test_spi_cdc.py`
+lost 178 lines (the two `test_grp_*_addr_change_during_miso_shift` cases),
+`cocotb/hdl/tb_trouper_cocotb.v` lost 61, `tb_array_pair.v` 39, and
+`test_dbg_write.py` lost its Grouper-sourced cases. Those edits have not been
+executed either, so a bench that no longer elaborates would currently look
+identical to one that passes — nobody has run it. Note `tb_trouper_grp_arb.v`
+was deleted outright, so the coverage it held (rows retired as VOID in the
+spi-slave and reg-bank plans) is genuinely gone rather than relocated.
+
+**Closing needs:** run the core cocotb regression against the current tree
+(`SUITE_GROUPS=core`, plus the Icarus `sim_trouper_all` target — per
+[[project_verilator_hides_use_before_declare]] the Icarus suites are the real
+Verilog-legality gate, and Verilator will not catch a use-before-declare that
+the removal may have introduced). Record the job number here. Until then the
+functional status of the current netlist is **unknown, not good**.
+
+**Found:** 2026-09-03, while assessing PR #51 for merge.
 
 ## Moderate
 
