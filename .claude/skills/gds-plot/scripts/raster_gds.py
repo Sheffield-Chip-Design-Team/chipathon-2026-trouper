@@ -64,20 +64,27 @@ for (l, d), (r, g, b, a), name in LAYERS:
         print("%s: 0 polygons, skip" % name)
         continue
     cr.set_source_rgba(r, g, b, a)
+    # Even-odd fill so a polygon's holes stay holes.  Ring-shaped geometry
+    # (padring power rings, guard rings) is a donut: drawing only the hull
+    # fills the hole solid and floods everything beneath it.
+    cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
     drawn = 0
     for poly in region.each():
-        pts = list(poly.each_point_hull())
-        if len(pts) < 3:
-            continue
-        first = True
-        for p in pts:
-            x_px, y_px = to_px(p.x, p.y)
-            if first:
-                cr.move_to(x_px, y_px)
-                first = False
-            else:
-                cr.line_to(x_px, y_px)
-        cr.close_path()
+        contours = [list(poly.each_point_hull())]
+        for h in range(poly.holes()):
+            contours.append(list(poly.each_point_hole(h)))
+        for pts in contours:
+            if len(pts) < 3:
+                continue
+            first = True
+            for p in pts:
+                x_px, y_px = to_px(p.x, p.y)
+                if first:
+                    cr.move_to(x_px, y_px)
+                    first = False
+                else:
+                    cr.line_to(x_px, y_px)
+            cr.close_path()
         drawn += 1
     cr.fill()
     print("%s: %d polygons drawn (%.1fs elapsed)" % (name, drawn, time.time() - t0))
