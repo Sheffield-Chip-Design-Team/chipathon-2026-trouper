@@ -187,16 +187,6 @@ iverilog -g2005 -o /tmp/tb_trouper_spi.vvp \
   ../src/control/spi_slave.v ../src/control/reg_bank.v \
   ../src/remod/sd_remod.v
 vvp /tmp/tb_trouper_spi.vvp
-
-iverilog -g2005 -o /tmp/tb_trouper_grp_arb.vvp \
-  tb/tb_trouper_grp_arb.v \
-  ../src/top/trouper_top.v ../src/decimator/sd_decimator_poly.v \
-  ../src/frontend/dc_removal.v ../src/frontend/sc_detector.v \
-  ../src/combiner/training_acc.v ../src/combiner/mrc_combiner.v \
-  ../src/control/packet_ctrl_fsm.v ../src/control/psram_buf_ctrl.v \
-  ../src/control/spi_slave.v ../src/control/reg_bank.v \
-  ../src/remod/sd_remod.v
-vvp /tmp/tb_trouper_grp_arb.vvp
 ```
 
 The `cocotb/reg_bank` suite above is the standalone direct-DUT harness (rows

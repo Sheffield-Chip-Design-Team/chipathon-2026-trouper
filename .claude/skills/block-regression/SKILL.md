@@ -40,8 +40,8 @@ compares every sampled register with a Python reference model. Consequences:
 |---|---|---|---|
 | `control/psram_buf_ctrl.v` | `replay_delay`, `replay_data`, `psram_ops`, `qspi_owner`, `sc_ant_sel`, `noise_trig`, `reg_reset_sweep`, `trouper_top`, `bypass_e2e` | `trouper_capture` with a measured `.npy`; `formal/psram_buf_ctrl.sby` | `planning/verification-plan/psram-buf-ctrl-verification-plan.md` |
 | `control/packet_ctrl_fsm.v` | `packet_ctrl_fsm`, `w_missed`, `bypass_e2e`, `sc_force_lock`, `trouper_top` | `formal/packet_ctrl_fsm.sby`; `rtl-test/tb/tb_pcfsm_b6_equiv.v`; measured-capture `test_weight_gen_spi_flow.py` and `test_capture_two_packet.py` when available | `planning/verification-plan/packet-ctrl-fsm-verification-plan.md` |
-| `control/spi_slave.v` | `spi_cdc`, `psram_ops` | legacy `rtl-test/tb/tb_trouper_spi.v` and `tb_trouper_grp_arb.v`; standalone/formal targets are planned but do not exist yet | `planning/verification-plan/spi-slave-verification-plan.md` |
-| `control/reg_bank.v` | `reg_reset_sweep`, `w_shadow_lock`, `sc_force_lock`, `noise_trig`, `psram_ops`, `w_missed`, `bypass_e2e`, `spi_cdc` | legacy `rtl-test/tb/tb_trouper_spi.v` and `tb_trouper_grp_arb.v`; standalone/formal targets are planned but do not exist yet | `planning/verification-plan/reg-bank-verification-plan.md` |
+| `control/spi_slave.v` | `spi_cdc`, `psram_ops` | legacy `rtl-test/tb/tb_trouper_spi.v` (`tb_trouper_grp_arb.v` deleted 2026-09-01 with the Grouper boundary); standalone/formal targets are planned but do not exist yet | `planning/verification-plan/spi-slave-verification-plan.md` |
+| `control/reg_bank.v` | `reg_reset_sweep`, `w_shadow_lock`, `sc_force_lock`, `noise_trig`, `psram_ops`, `w_missed`, `bypass_e2e`, `spi_cdc` | legacy `rtl-test/tb/tb_trouper_spi.v` (`tb_trouper_grp_arb.v` deleted 2026-09-01 with the Grouper boundary); standalone/formal targets are planned but do not exist yet | `planning/verification-plan/reg-bank-verification-plan.md` |
 
 These four blocks are onboarded. For packet-control, SPI-slave, and register-bank
 regressions, run the extra targets exactly as specified in the linked plan's §3; the

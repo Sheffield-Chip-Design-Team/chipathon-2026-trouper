@@ -5,10 +5,9 @@
 // spi_mosi/spi_miso ports, and the PSRAM model cosim still elaborates and
 // runs cleanly.
 //
-// This does not re-test spi_slave/reg_bank/GRP-arbiter correctness in depth —
-// that's covered directly against trouper_top.v in
-// rtl-test/tb/tb_trouper_spi.v and rtl-test/tb/tb_trouper_grp_arb.v. This test
-// only proves the FPGA wrapper's pass-through wiring is correct.
+// This does not re-test spi_slave/reg_bank correctness in depth — that's
+// covered directly against trouper_top.v in rtl-test/tb/tb_trouper_spi.v.
+// This test only proves the FPGA wrapper's pass-through wiring is correct.
 
 `timescale 1ns/1ps
 `default_nettype none
