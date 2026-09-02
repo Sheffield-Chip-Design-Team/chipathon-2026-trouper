@@ -15,12 +15,12 @@ the DEF names now match trouper_top verbatim - no rename step needed):
      coordinates are never copied; the LibreLane PDN builds its own VDD/VSS
      ring regardless (jobs 5150 == 5153). To honour them, set
      FP_TEMPLATE_COPY_POWER_PINS: true and reconcile pdn_cfg.tcl.
-  2. Append the die-internal Grouper interface (GRP_* + AHB H* + IRQ_GROUPER,
-     68 pins) on the south edge at synthetic coordinates. These are NOT part of
-     the integrator flow (no pads, absent from info.yaml, never in A40_ACV.def) -
-     they are placed only to satisfy FP_DEF_TEMPLATE's "every top-level port must
-     be placed" rule. Their real placement is the Trouper<->Grouper abutment,
-     agreed between those two projects.
+  2. (Removed 2026-09-01.) This step used to append the die-internal Grouper
+     interface (GRP_* + AHB H* + IRQ_GROUPER, 68 pins) on the south edge at
+     synthetic coordinates, purely to satisfy FP_DEF_TEMPLATE's "every
+     top-level port must be placed" rule. Grouper is not taping out and those
+     ports no longer exist on trouper_top, so nothing is appended: the output
+     is now the integrator template's own pin set, unmodified.
 
 DEF units are 200 dbu/um; die is 335000 x 222000 dbu = 1675 x 1110 um.
 
@@ -60,34 +60,9 @@ for ent in entries:
                       lambda m: m.group(1) + new, ln) for ln in ent]
     kept.append(ent)
 
-DIEW = 335000
-grp = ([f"GRP_ADDR_{i}" for i in range(8)] + [f"GRP_WDATA_{i}" for i in range(8)] +
-       [f"GRP_RDATA_{i}" for i in range(8)] + ["GRP_WE", "GRP_RE", "GRP_READY", "IRQ_GROUPER"])
-ahb = []
-for b, w in [("HADDR", 8), ("HWDATA", 8), ("HRDATA", 8), ("HBURST", 3),
-             ("HPROT", 4), ("HSIZE", 3), ("HTRANS", 2)]:
-    ahb += [f"{b}[{i}]" for i in range(w)]
-ahb += ["HMASTLOCK", "HWRITE", "HREADY", "HRESP"]
-extra = grp + ahb
-
-inp = set(grp[:16] + ["GRP_WE", "GRP_RE"] +
-          [f"HADDR[{i}]" for i in range(8)] + [f"HWDATA[{i}]" for i in range(8)] +
-          [f"HBURST[{i}]" for i in range(3)] + [f"HPROT[{i}]" for i in range(4)] +
-          [f"HSIZE[{i}]" for i in range(3)] + [f"HTRANS[{i}]" for i in range(2)] +
-          ["HMASTLOCK", "HWRITE"])
-
-south = []
-step = DIEW // (len(extra) + 1)
-for k, nm in enumerate(extra):
-    x = step * (k + 1)
-    d = "INPUT" if nm in inp else "OUTPUT"
-    south.append([f"- {nm} + NET {nm} + DIRECTION {d} + USE SIGNAL",
-                  f"  + LAYER Metal2 ( {x} 0 ) ( {x + 200} 200 )",
-                  f"  + FIXED ( 0 0 ) N ;"])
-
-allpins = kept + south
+allpins = kept
 newbody = [f"PINS {len(allpins)} ;"]
 for ent in allpins:
     newbody += ent
 open(OUT, "w").write("\n".join(pre + newbody + post))
-print(f"{OUT}: renames {len(ren)} (RTL matches), kept VDD/VSS, +{len(south)} south -> {len(allpins)} pins")
+print(f"{OUT}: renames {len(ren)} (RTL matches), kept VDD/VSS -> {len(allpins)} pins")

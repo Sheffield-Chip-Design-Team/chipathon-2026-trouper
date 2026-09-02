@@ -8,10 +8,6 @@
 #     previously unconstrained entirely.
 #   - SPI_MOSI/SPI_MISO are constrained against SPI_SCK (their real clock), not
 #     IQ_CLK.  SPI_SCK is no longer an ideal network.
-#   - GRP_* bus constrained vs IQ_CLK.  ASSUMPTION: Grouper and Trouper share
-#     the carrier 32 MHz clock (AHB-Lite is synchronous).  Revisit with the
-#     Grouper team; if the link is async, replace with false paths + qualifier
-#     synchronisers in RTL.
 #
 # *** ANALYSIS BASELINE: deliberately NO multicycle paths. ***
 # The previous blanket "set_multicycle_path 3 -from IQ_CLK -to IQ_CLK" waived
@@ -36,8 +32,6 @@ set_clock_groups -asynchronous \
 # ---- IQ_CLK-domain inputs ----
 set_input_delay -max 2.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_*}]
 set_input_delay -min 1.0 -clock IQ_CLK [get_ports {IQ_DATA_I_* IQ_DATA_Q_*}]
-set_input_delay -max 10.0 -clock IQ_CLK [get_ports {GRP_ADDR_* GRP_WDATA_* GRP_WE GRP_RE}]
-set_input_delay -min 1.0  -clock IQ_CLK [get_ports {GRP_ADDR_* GRP_WDATA_* GRP_WE GRP_RE}]
 
 # ---- PSRAM QPI read data: APS6404L drives tCO ≤ ~6.5 ns after PSRAM_SCK rising,
 #      plus ~2.5 ns pads/board round trip ----
@@ -55,9 +49,9 @@ set_false_path -from [get_ports HOST_CS]
 
 # ---- IQ_CLK-domain outputs ----
 set_output_delay -max 2.0 -clock IQ_CLK \
-    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA_* GRP_READY}]
+    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT}]
 set_output_delay -min 0.0 -clock IQ_CLK \
-    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT IRQ_GROUPER GRP_RDATA_* GRP_READY}]
+    [get_ports {REMOD_A_I REMOD_A_Q IRQ_OUT}]
 
 # ---- PSRAM source-synchronous outputs: APS6404L tSP = 2 ns, tHD = 2 ns ----
 set_output_delay -max 2.0  -clock PSRAM_SCK \

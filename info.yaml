@@ -24,7 +24,7 @@ project:
 # allocation with no spare slot remaining.
 # VDD_IO removed 2026-08-19: the reference padring ties VDD_CORE/VDD_IO
 # to one net by default (no independent IO rail is actually built), so
-# there is one supply pin (VDD), not two. VSS added <TODO: date> — the
+# there is one supply pin (VDD), not two. VSS added 2026-08-23 — the
 # padring now requires a per-project VSS pin (previously GND/VSS was
 # shared die-wide and not a per-project pin) — see planning/Pinout.md.)
 #
@@ -44,11 +44,13 @@ project:
 # (planning/a40-padframe-integration-2026-08.md, VDD/VSS decision 2026-08-29).
 # The ACV allocation is 28 slots (confirmed 2026-08-30). ARRAY_ACQ_N takes
 # N15 and DBG0_OUT/DBG1_OUT take N16/N17, which fills the allocation
-# exactly -- there is no spare slot left for a late addition. Still outstanding before this pin is committed:
-# a regenerated A40_ACV.def and a P&R run against the 26-pin list, plus the
+# exactly -- there is no spare slot left for a late addition. Still
+# outstanding before these three pins are committed: a regenerated
+# A40_ACV.def and a P&R run against the full 28-pin list, plus the
 # pad-level electrical review. See Open Risks #52 and #53.
-# The Grouper bus (GRP_*, AHB H*, IRQ_GROUPER) is die-internal, not pads,
-# so it is intentionally absent here. See
+# The Grouper bus (GRP_*, AHB H*, IRQ_GROUPER) was die-internal rather than
+# pads, so it was always absent here; it was removed from trouper_top.v
+# entirely on 2026-09-01 because Grouper is not taping out. See
 # planning/a40-padframe-integration-2026-08.md before reordering.
 # ======================================================
 pins:
