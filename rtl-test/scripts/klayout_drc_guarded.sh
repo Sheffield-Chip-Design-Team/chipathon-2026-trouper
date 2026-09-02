@@ -13,10 +13,15 @@
 # Usage: klayout_drc_guarded.sh <gds> <topcell> [variant]
 #   <gds> must be readable inside the container (/foss/designs/... -- note that
 #   /srv/eda/runs is NOT mounted there; stage the GDS into the design tree).
+#   TABLES="contact metal1"  runs ONLY those tables (run_drc.py --table, which is
+#   repeatable). Use it to re-run tables a previous run lost without repeating
+#   the 60+ that already completed -- a full run is ~45 min, and `contact` and
+#   `metal1` alone are most of it. A subset run is reported as PARTIAL and is
+#   NOT a signoff on its own: the guard can only vouch for the tables it ran.
 # Exits non-zero if any table failed to run, or if any real violation is found.
 #   10 = run incomplete (a table did not run; any violation count is meaningless)
-#   11 = all tables ran, real violations found
-#    0 = all tables ran, zero violations
+#   11 = the tables that ran had real violations
+#    0 = every requested table ran, zero violations (PARTIAL unless TABLES unset)
 # The codes are 10/11 rather than 2/3 because low codes collide with the shell's
 # own failure exits and cannot be told apart from a guard verdict. Job 5386
 # exited 2 from `error reading input file: Stale file handle` -- bash lost the
@@ -36,6 +41,15 @@ TOPCELL=${2:?usage: klayout_drc_guarded.sh <gds> <topcell> [variant]}
 VARIANT=${3:-D}          # gf180mcuD = metal_top 11K, mim_option B, 5LM
 MP=${MP:-4}              # concurrent tables; each holds the full layout in flat mode
 THR=${THR:-4}            # threads per table. MP*THR should not exceed the core count.
+TABLES=${TABLES:-}       # optional space-separated subset; empty = the whole deck
+
+# Build the repeatable --table arguments. Held in an array, not a string, so a
+# name can never word-split into two flags.
+TABLE_ARGS=()
+for t in $TABLES; do TABLE_ARGS+=("--table=$t"); done
+if [ ${#TABLE_ARGS[@]} -gt 0 ]; then
+  echo "== PARTIAL run: ${#TABLE_ARGS[@]} table(s) only: $TABLES =="
+fi
 
 PDK_DRC=/foss/pdks/gf180mcuD/libs.tech/klayout/tech/drc
 OUT=${RUN_DIR:-/foss/runs}/klayout_drc
@@ -90,7 +104,7 @@ PYEOF
 echo "== running KLayout DRC: variant=$VARIANT mp=$MP thr=$THR =="
 cd "$OUT"
 python3 "$DECK/run_drc.py" --path="$GDS" --variant="$VARIANT" --topcell="$TOPCELL" \
-        --run_dir="$OUT" --mp="$MP" --thr="$THR"
+        --run_dir="$OUT" --mp="$MP" --thr="$THR" ${TABLE_ARGS[@]+"${TABLE_ARGS[@]}"}
 DRC_RC=$?
 echo "run_drc.py exit=$DRC_RC"
 
@@ -148,6 +162,7 @@ done
 
 echo
 echo "== summary =="
+echo "  scope           : ${TABLES:-FULL DECK}"
 echo "  tables expected : $tables"
 echo "  reports missing : $missing"
 echo "  reports truncated: $truncated"
@@ -159,4 +174,12 @@ if [ "$fail" != "0" ]; then
   exit 10
 fi
 if [ "$viol" != "0" ]; then echo "RESULT: FAIL ($viol DRC violations)"; exit 11; fi
-echo "RESULT: PASS (all $tables tables ran, 0 violations)"
+if [ -n "$TABLES" ]; then
+  # A subset run proves nothing about the tables it did not run. Say so in the
+  # verdict itself: this line gets pasted into risk docs and commit messages,
+  # and "PASS" on its own would read as a signoff it cannot support.
+  echo "RESULT: PARTIAL PASS ($tables of 63 tables ran: $TABLES; 0 violations)"
+  echo "        NOT a signoff -- the remaining tables were not run here."
+else
+  echo "RESULT: PASS (all $tables tables ran, 0 violations)"
+fi
