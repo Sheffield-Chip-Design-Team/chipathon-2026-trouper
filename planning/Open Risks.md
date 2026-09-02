@@ -1066,7 +1066,7 @@ congestion evidence marked stale 2026-08-30.
 
 ---
 
-### 58. KLayout DRC has never run on any Trouper P&R — the signoff gate is vacuous
+### 58. The in-flow KLayout DRC gate is vacuous — signoff runs out of flow instead
 
 `RUN_KLAYOUT_DRC` is `True` but `KLAYOUT_DRC_RUNSET` is unset, so
 `67-klayout-drc` exits in 11 ms with no report and no metric, and
@@ -1083,10 +1083,38 @@ on runs that lost a table to an exception (5384, 5386) — its own verdict is no
 signoff signal. Magic DRC, Netgen LVS, KLayout XOR and router DRC were all
 genuinely running throughout.
 
-**Closing needs:** `KLAYOUT_DRC_RUNSET` wired into the config *behind*
-`rtl-test/scripts/klayout_drc_guarded.sh` (which fails the run when a table does
-not complete, rather than trusting a zero), and acceptance that signoff depends on
-a locally patched `layers_def.drc` until the PDK is fixed upstream — the bug makes
+**2026-09-03 — the shipped GDS now has a genuine pass (job 5415).** Everything
+above was measured against job 5379's GDS, which is neither the current netlist
+nor the geometry that ships: `final/gds/trouper_top.gds` is job 5413's streamout
+*plus* the A40 power bridges, so the bridges had never been DRC'd at all. Job
+5415 ran the full deck against that exact file (md5 `f0e740b4…`, asserted in the
+job log): **63/63 tables ran, 0 reports missing, 0 truncated, 0 exceptions, 0
+violations** — verified independently of the script's own verdict by counting
+`<item>` across all 63 `.lyrdb` files and confirming each carries a closing
+`</report-database>`. The bridge geometry is clean. Cost: 2 h 14 m, of which
+`contact` was 67.6 min and `metal1` 45.2 min.
+
+**Correction to the closing need stated above (2026-09-03).** `KLAYOUT_DRC_RUNSET`
+*cannot* host `klayout_drc_guarded.sh`. LibreLane's step runs the runset as
+`klayout -b -zz -r <script> -rd input=… -rd topcell=… -rd report=…` and parses a
+single `.lyrdb` into `klayout__drc_error__count`
+(`librelane/steps/klayout.py:486-540`). The GF180 deck is not that shape: it is a
+Python driver (`run_drc.py`) that fans out into 63 tables and 63 reports. A bash
+wrapper around it cannot be substituted for a `.drc` script, so the original
+sentence described something that does not exist.
+
+**What was done instead:** `RUN_KLAYOUT_DRC` is now explicitly `false` in
+`src/config/trouper_top.json`. A gate that cannot run should not report a pass;
+disabling it converts a silent false negative into an honest absence, and signoff
+moves to the out-of-flow guarded run recorded above.
+
+**Still open:** the untested alternative is pointing `KLAYOUT_DRC_RUNSET` at the
+PDK's monolithic `libs.tech/klayout/tech/drc/gf180mcu.drc`, which *is* the right
+shape for the step. Nobody has checked whether it honours `input`/`topcell`/
+`report`, nor whether it dodges the `mslot` bug (running whole-deck, `TABLE_NAME`
+is not `mslot`, so it plausibly does). It would also add hours to every P&R,
+which is likely disqualifying for a default gate. Signoff also still depends on a
+locally patched `layers_def.drc` until the PDK is fixed upstream — the bug makes
 `mslot` unrunnable for any gf180mcuD design, so it is worth reporting there. See
 `planning/pdn-thickening-and-core-ring-2026-09.md` §6-§7.
 

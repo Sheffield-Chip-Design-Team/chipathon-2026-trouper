@@ -129,8 +129,9 @@ The ×1.2 point was deliberately **not** re-run: it lies between two points that
 both show no gain, so no decision hinges on it. A re-run would only test whether
 that DRT-0073 was re-rollable — a question about the clock tree, not the PDN.
 
-Caveats on the above: n=1 per arm, and KLayout DRC is vacuous in both 5392 and
-5394 (see §7), so "DRC clean" rests on Magic alone. Trial configs
+Caveats on the above: n=1 per arm, and the in-flow KLayout DRC is vacuous in
+both 5392 and 5394 (see §7), so for those two runs "DRC clean" rests on Magic
+alone. The shipped GDS has since been covered out of flow by job 5415. Trial configs
 `trouper_top_pdn_pitch120.json` / `_pitch140.json` and their run scripts were
 deleted as superseded; recover them from git history if the arms need repeating.
 
@@ -220,7 +221,12 @@ exceptions      : 0      violations      : 0
 RESULT: PASS (all 63 tables ran, 0 violations)
 ```
 
-**This is the first genuine KLayout DRC signoff in the design's history.** The
+**This was the first genuine KLayout DRC signoff in the design's history — but
+not of the shipped geometry.** It ran against 5379's GDS, which is neither the
+current netlist nor what ships; `final/gds/trouper_top.gds` is 5413's streamout
+*plus* the A40 power bridges. Job **5415** closed that gap on 2026-09-03,
+running the full deck against the shipped file itself: 63/63 tables, 0
+violations, 2 h 14 m (`contact` 67.6 min, `metal1` 45.2 min). The
 `mslot` report is a real one — 1 976 B, all nine rule categories
 (`MSLOT.0`–`MSLOT.9`) declared — against the 441 B header-only stub the crashed
 runs left behind. That distinction is the whole point: both report "0 items".
@@ -370,3 +376,4 @@ layout in flat mode (measured 2.0 GB RSS).
 | 5392 | **canonical** — ring + `CONNECT_TO_PADS`, default pitch | clean signoff; the valid baseline for §3.1 |
 | 5393 | pitch ×1.2 (184.32 / 183.82) | **FAILED DRT-0073** on `clkbuf_2_1_0_IQ_CLK_regs/I` |
 | 5394 | pitch ×1.4 (215.04 / 214.45) | clean signoff; **TNS −388.3, no gain — §3.1** |
+| 5415 | guarded DRC on the **shipped** bridged GDS | **PASS — 63/63 ran, 0 violations**; the bridges are clean |

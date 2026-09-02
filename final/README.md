@@ -9,8 +9,12 @@ it is the job-5413 GDS with the reviewed A40 power bridges inserted. It keeps
 the macro's native 0.001 µm database unit and adds six VDD and six VSS bridge
 stacks between the A40 M2 landings and its M5/M4 PDN rings. The other views
 and reports are the unmodified job-5413 flow outputs. Consequently, the flow
-DRC/LVS results below apply to the base job-5413 streamout; the added bridge
-geometry was separately checked for all 12 paths before promotion.
+DRC/LVS results below apply to the base job-5413 streamout, not to the added
+bridge geometry. That geometry was checked two ways: layer-by-layer continuity
+across all 12 paths before promotion, and — since 2026-09-03 — a full KLayout
+DRC run against this exact file (job 5415: 63/63 tables, 0 violations; see
+Open Risks #58). Note the Magic DRC and LVS numbers in the table below still
+describe the base streamout only.
 
 The bridges are inserted by `tools/build_a40_pdn_bridges.py` (KLayout batch
 script; see its docstring for the invocation), which only adds geometry and so
