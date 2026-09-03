@@ -1543,6 +1543,73 @@ range.
 **Found:** 2026-09-03 full `src/` RTL review; arithmetic bound, now reproduced by
 `cocotb/tacc_acc_overflow/`.
 
+### 69. PSRAM QPI output pads launch on the same edge as the forwarded clock, and are unconstrained at signoff
+
+`psram_buf_ctrl.v` drives `ce_n` / `sio_out` / `sio_oe` / `sck_en` from the
+`always @(posedge clk_32m)` block (line 287) while `sck` is a bare
+combinational gate of the core clock (`assign sck = sck_en & clk_32m`, line
+282). Write data and CE# transitions are launched by the *same* edge the
+PSRAM samples on — nominal setup/hold at the APS6404L is ~0 ns, met only by
+accidental pad/board skew. The datasheet wants 2 ns data setup/hold, 3 ns CE#
+hold, tCSP ≥ 2.5 ns (`resources/APS6404L_3SQR.pdf` p.23).
+
+STA does not see it: `pnr_32m_scoped_v25_b6_signoff.sdc` has no PSRAM pad
+constraints — no `create_generated_clock` on the SCK pad, no SCK-relative
+`set_output_delay`. `PSRAM_SIO_*` / `PSRAM_CE_N` / `PSRAM_SCK` fall through
+the generic `set_output_delay -max 2.0 -clock IQ_CLK $core_output_ports`,
+an IQ_CLK→IQ_CLK model, not a source-synchronous one. Simulation misses it
+too: `cocotb/hdl/psram_model.v` ignores `sck` and runs off `clk_32m`,
+counting cycles from the CE# fall (header lines 14-18).
+
+**Risk:** a replay-buffer QPI write / CE# path that passes top-level timing
+and every existing sim can still fail data- or CE#-hold on silicon. Bounded
+by degrade-to-bypass (#14) — a margin/functional risk, not a bringup blocker.
+
+**Action:** move `ce_n` / `sio_out` to SCK **falling** edges, preload the
+first command symbol before enabling SCK, terminate CE# in the SCK low
+phase; add a pin-level PSRAM model driven by the real `sck`; add
+`create_generated_clock` on the SCK pad plus SCK-relative `set_output_delay`
+(SIO/CE#) and `set_input_delay` (read data) with PCB flight-time.
+
+**See:** `src/control/psram_buf_ctrl.v:282,287`;
+`src/config/pnr_32m_scoped_v25_b6_signoff.sdc`; `cocotb/hdl/psram_model.v`;
+Open Risks #14, #38 (same class, Host SPI port).
+**Found:** 2026-09-03 interface-timing review (applies equally to
+`pinout/dbg1-shared-irq-pad-27` — the interface files are byte-identical).
+
+### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
+
+`sd_decimator_poly.v` samples the raw `iq_in_i/q` 1-bit streams directly in
+its `always @(posedge clk_32m)` block (line 265). The signoff SDC assumes
+launch on the same rising `IQ_CLK` edge with a placeholder
+`set_input_delay -max 2.0 / -min 1.0 -clock IQ_CLK` on the IQ ports
+(`pnr_32m_scoped_v25_b6_signoff.sdc:481-482`). If the SX1257 presents I/Q
+valid around the *falling* edge (transition at the rising edge, tDATA ≥
+25 ns per `resources/DS_SX1257_V1.2.pdf` p.14/25 — needs confirmation),
+posedge capture lands in the transition window and the SDC numbers are wrong.
+
+The clock topology is also contradictory: `planning/Pinout.md` maps SX1257
+pin 10 `CLK_OUT` → `IQ_CLK`, while `planning/System Architecture.md` says
+`IQ_CLK` comes from the central TCXO / PCB fanout buffer. Different phase
+contracts, no authoritative one recorded — so the launch↔capture
+relationship the SDC should model is undefined.
+
+**Risk:** the IQ inputs are the receiver's front door; a wrong capture edge
+or uncharacterized phase relationship corrupts every branch. Passes STA
+because the input delay is a guess.
+
+**Action:** pin one authoritative clock topology in Pinout.md / System
+Architecture.md; confirm the SX1257 RX data-valid edge and tDATA from the
+datasheet; if data is valid at the falling edge, add falling-edge input
+capture flops feeding the existing rising-edge decimator and constrain the
+half-cycle path; replace the placeholder `set_input_delay` with
+datasheet + PCB-derived values.
+
+**See:** `src/decimator/sd_decimator_poly.v:265`;
+`src/config/pnr_32m_scoped_v25_b6_signoff.sdc:481`; `planning/Pinout.md`;
+`planning/System Architecture.md`; Open Risk #38.
+**Found:** 2026-09-03 interface-timing review.
+
 ## Moderate
 
 ### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source
