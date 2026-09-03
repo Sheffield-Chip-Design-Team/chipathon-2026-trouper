@@ -129,12 +129,55 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
 3. SS WNS is voltage-bound regardless (`project_vdd_closes_ss_timing`); the A40
    re-pin adds no SS cost when built from the template.
 
+## 27-pin DEF regenerated — 2026-09-03
+
+The integrator padframe tooling is now vendored and the template is generated
+locally, not hand-patched:
+
+- **Submodule** `ip/chipathon-2026-padring-system` = `d-m-bailey/padring_chipathon2026`
+  @ `agent/project-padframe-makefile` — carries `chipathon2026-system/Makefile.padframe`
+  and the `project-def-A40` target (the padring C++ tool + the Python
+  integration layer that expands `info.yaml` onto the reserved slot arc).
+- **`rtl-test/scripts/regen_a40_def.sh`** runs
+  `make -f chipathon2026-system/Makefile.padframe project-def-A40` inside
+  `hpretl/iic-osic-tools:chipathon26`, feeding `info.yaml` + `lvs_config.json`
+  + `final/gds/trouper_top.gds`. It applies `ip/patches/padring-system-cstdint-gcc13.patch`
+  (a two-line `<cstdint>` fix — the 2019 padring sources do not build under
+  GCC 13) before the build and reverts it after.
+- The tool measures `trouper_top.gds`'s `0/0` outline (1675 × 1110 µm) and
+  selects the smallest fitting block variant — **ACV** — then wraps the 27
+  pads around the W/N arc. Output: **159 pin entries**
+  (`rtl-test/ol_trouper_top/A40_ACV_rtlnames.def`, copied to `src/config/`),
+  = the 139 job-5150-validated entries **unchanged**, plus 10 control terminals
+  each for `ARRAY_ACQ_N` (N15) and `DBG0` (N16) at **real generator
+  coordinates**. This retires the synthetic-coordinate stopgap
+  (`A40_ACV_rtlnames_dbgpins.def` + `a40_append_provisional_pads.py`, both
+  removed / deprecated).
+- New vs the old template: a `BLOCKAGES` section with the ACV Metal2 corner
+  routing keepout (`( 322000 221600 ) ( 335000 222000 )` local) — the padring
+  crosses that corner on Metal2. Trouper's floorplan already obstructs a die
+  corner via `pdn_cfg.tcl` (`project_lshape_corner_not_actually_empty`);
+  reconcile the two before the P&R re-run.
+- **`info.yaml` fix:** pad was named `DBG0_OUT`; every other bidirectional pad
+  uses the bare functional base and lets the generator append the terminal
+  suffix. `DBG0_OUT` produced `DBG0_OUT_OUT` / `DBG0_OUT_OE` …, which do not
+  match `trouper_top.v` (`DBG0_OUT`, `DBG0_OE`, …). Renamed the pad to `DBG0`.
+- `a40_def_to_rtlnames.py` is now a **pure pass-through** — RTL port names match
+  the generator's `<pad>_<terminal>` convention verbatim, `ren = {}`.
+- Raw generator artifacts (`A40_ACV_interface.yaml`, `A40_ACV_pad_map.yaml`,
+  `A40_ACV_padring.v`, `A40_selected_variants.json`) are under
+  `rtl-test/ol_trouper_top/a40_integrator/`.
+
+**Still owed:** integrator confirmation of slots N15/N16, and a P&R run against
+this regenerated 27-pin template (Open Risks #52/#53). No run has been built
+against it yet.
+
 ## Open / next
 
 - **`info.yaml` order** — the 25-pin order is P&R-validated (all runs above);
-  the appended `ARRAY_ACQ_N` (N15) is **not** — no run has been built against a
-  26-pin DEF. Confirm the slot with the integrator, then request a regenerated
-  `A40_ACV.def` and re-run before treating the pin as committed.
+  the appended `ARRAY_ACQ_N` (N15) + `DBG0` (N16) are **not** — no run has been
+  built against the regenerated 27-pin DEF. Confirm the slots with the
+  integrator and re-run before treating the pins as committed.
 - **Die size — DECIDED 2026-08-28: defer to the integrator DEF (1675×1110).**
   The template defines the slot the shared padring actually reserves for
   Trouper; 1650×1100 was only Trouper's own internal target. Job 5150 already
@@ -173,6 +216,10 @@ IRQ_GROUPER; **E** empty — the A40 assignment.
 - `rtl-test/ol_trouper_top/config_a40_repin.json` — hand-cfg re-pin (jobs 5146/5147)
 - `rtl-test/ol_trouper_top/io_placement_a40.cfg` — full 205-pin edge/order cfg
 - `rtl-test/ol_trouper_top/config_a40_fpdef.json` — `FP_DEF_TEMPLATE` dry-run (5150)
-- `rtl-test/ol_trouper_top/A40_ACV_rtlnames.def` — reconciled template
+- `rtl-test/ol_trouper_top/A40_ACV_rtlnames.def` — the FP_DEF_TEMPLATE (27-pin, regenerated 2026-09-03)
+- `rtl-test/ol_trouper_top/a40_integrator/` — raw generator artifacts (provenance)
+- `rtl-test/scripts/regen_a40_def.sh` — regenerates the two files above
+- `ip/chipathon-2026-padring-system/` — the integrator padframe tooling (submodule)
+- `ip/patches/padring-system-cstdint-gcc13.patch` — GCC 13 build fix for the padring tool
 - `rtl-test/scripts/a40_def_to_rtlnames.py` — the transform
 - `planning/Pinout.md` → "A40 pad-control tie-offs" — tie value table

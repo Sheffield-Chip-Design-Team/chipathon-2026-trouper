@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Append provisional boundary pins for pads the integrator template predates.
+"""SUPERSEDED 2026-09-03 by rtl-test/scripts/regen_a40_def.sh.
+
+The integrator padframe tooling (ip/chipathon-2026-padring-system) now
+generates the full 27-pin A40_ACV.def directly, with real coordinates for
+ARRAY_ACQ_N (N15) and DBG0 (N16) -- there is nothing left to append. Kept only
+as the record of how the synthetic-coordinate stopgap worked.
+
+Append provisional boundary pins for pads the integrator template predates.
 
 FP_DEF_TEMPLATE matching is strict: every top-level port must exist in the
 template DEF, or OpenROAD fails with "must exist in template".  Trouper has

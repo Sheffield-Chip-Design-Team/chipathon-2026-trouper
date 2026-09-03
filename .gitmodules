@@ -18,3 +18,7 @@
 	path = ip/chipathon-2026-gf180mcu-padring
 	url = https://github.com/Mauricio-xx/chipathon-2026-gf180mcu-padring
 	branch = main
+[submodule "ip/chipathon-2026-padring-system"]
+	path = ip/chipathon-2026-padring-system
+	url = https://github.com/d-m-bailey/padring_chipathon2026
+	branch = agent/project-padframe-makefile
