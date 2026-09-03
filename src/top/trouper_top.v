@@ -406,15 +406,14 @@ module trouper_top (
     wire rst_n = RESETB;
 
     // ---- SX1257 IQ input capture (Open Risk #70) ---------------------------
-    // The SX1257 presents its 1-bit ΣΔ I/Q streams valid around the FALLING
-    // edge of the shared clock (DS_SX1257 §5.1 RX digital interface: the data
-    // transition region is at the rising edge; tDATA hold ≥ 25 ns past the
-    // falling edge).  Capturing them on `negedge clk` samples mid data-eye and
-    // gives the rising-edge datapath a full half cycle (~15.6 ns @ 32 MHz) of
-    // settle before it consumes the value — the previous code fed the raw pads
-    // straight into a `posedge clk` block, sampling in the transition window.
-    // Feeds BOTH the decimator and the debug probe so nothing downstream sees
-    // an un-recaptured pad value.
+    // The SX1257 presents its 1-bit ΣΔ I/Q streams with a data-valid
+    // (setup-and-hold) window of ~25 ns centred on the FALLING edge of the
+    // shared clock (DS_SX1257 §3.7.4 RX digital interface).  Capturing them on
+    // `negedge clk` samples mid data-eye and gives the rising-edge datapath a
+    // full half cycle (~15.6 ns @ 32 MHz) of settle before it consumes the
+    // value — the previous code fed the raw pads straight into a `posedge clk`
+    // block, sampling near the transition.  Feeds BOTH the decimator and the
+    // debug probe so nothing downstream sees an un-recaptured pad value.
     always @(negedge clk or negedge rst_n) begin
         if (!rst_n) begin
             IQ_DATA_I <= 4'd0;

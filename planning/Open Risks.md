@@ -1592,15 +1592,19 @@ CE#/SIO on `posedge clk_32m` and the negedge republish lands in the same
 posedge window. `psram_model.v` gains an `sck` port + a simulation-only
 guardrail (`sio_out`/`ce_n`/`sio_oe` must not change while `sck` is high) —
 wired through `PSRAM_SCK_OUT` in `tb_trouper_cocotb.v` / `tb_array_pair.v`.
-Signoff SDC (v29 divergence): `PSRAM_SCK` generated clock off `IQ_CLK`,
-`set_output_delay ±2.0` (APS6404L setup/hold) on CE#/SIO vs `PSRAM_SCK`,
-`set_input_delay 2.0/8.0` on read data, and those pads excluded from the
-generic core-output rule. The P&R SDC is left unchanged (the generated
-clock stays out of it until a routed run clears the SCK-path clock-tree /
-DRT-0073 question — same caution as the v28 `tacc_accumulate` split).
-**Stays OPEN** pending SGE regression (job 5502) + an A40 `trouper_top`
-signoff P&R run confirming no timing/DRC regression and the new PSRAM
-source-sync group is MET.
+Signoff SDC (v29 divergence): `PSRAM_SCK` generated clock off `IQ_CLK`;
+SIO outputs `-max 2.0 / -min -2.0` (APS6404L SIO setup 2.0 / hold 2.0),
+`PSRAM_CE_N_OUT` separately `-max 2.5 / -min -3.0` (CE# setup 2.5 / hold
+3.0); read data `-clock_fall -max 5.5 / -min 2.0` (the PSRAM launches read
+data 2.0–5.5 ns after the falling SCK edge and the controller samples on
+the next rising edge — a falling→rising half-cycle path); those pads
+excluded from the generic core-output rule. All zero pad/PCB-flight
+baselines — add pad + measured trace delay before tapeout. The P&R SDC is
+left unchanged (the generated clock stays out of it until a routed run
+clears the SCK-path clock-tree / DRT-0073 question — same caution as the
+v28 `tacc_accumulate` split). **Stays OPEN** pending SGE regression
+(job 5503) + an A40 `trouper_top` signoff P&R run confirming no timing/DRC
+regression and the new PSRAM source-sync group is MET.
 
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 
@@ -1608,10 +1612,11 @@ source-sync group is MET.
 its `always @(posedge clk_32m)` block (line 265). The signoff SDC assumes
 launch on the same rising `IQ_CLK` edge with a placeholder
 `set_input_delay -max 2.0 / -min 1.0 -clock IQ_CLK` on the IQ ports
-(`pnr_32m_scoped_v25_b6_signoff.sdc:481-482`). If the SX1257 presents I/Q
-valid around the *falling* edge (transition at the rising edge, tDATA ≥
-25 ns per `resources/DS_SX1257_V1.2.pdf` p.14/25 — needs confirmation),
-posedge capture lands in the transition window and the SDC numbers are wrong.
+(`pnr_32m_scoped_v25_b6_signoff.sdc:481-482`). The SX1257 in fact presents
+its I/Q data with a ~25 ns valid (setup-and-hold) window centred on the
+*falling* clock edge (DS_SX1257 §3.7.4), so `posedge` capture lands near
+the data transition and the SDC numbers do not model the real half-cycle
+path.
 
 The clock topology is also contradictory: `planning/Pinout.md` maps SX1257
 pin 10 `CLK_OUT` → `IQ_CLK`, while `planning/System Architecture.md` says

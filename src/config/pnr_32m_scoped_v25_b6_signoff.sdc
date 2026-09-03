@@ -491,18 +491,27 @@ set_output_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
 # only.
 create_generated_clock -name PSRAM_SCK -source [get_ports IQ_CLK] \
     -divide_by 1 [get_ports PSRAM_SCK_OUT]
-set psram_out_ports [get_ports {PSRAM_CE_N_OUT PSRAM_SIO_0_OUT PSRAM_SIO_1_OUT \
-                                PSRAM_SIO_2_OUT PSRAM_SIO_3_OUT}]
-# APS6404L data setup 2 ns / hold 2 ns (datasheet p.23).  Zero PCB-flight
-# baseline -- add measured trace delay before tapeout.
-set_output_delay -max 2.0  -clock PSRAM_SCK $psram_out_ports
-set_output_delay -min -2.0 -clock PSRAM_SCK $psram_out_ports
-# Read data: the PSRAM launches on its SCK edge; psram_buf_ctrl samples sio_in
-# on the core rising edge.  6 dummy cycles precede the first data nibble.
+# SIO data and CE# have DIFFERENT setup/hold at the PSRAM (datasheet p.23):
+#   SIO : setup 2.0 ns / hold 2.0 ns   -> -max 2.0  / -min -2.0
+#   CE# : setup 2.5 ns / hold 3.0 ns   -> -max 2.5  / -min -3.0
+# All are zero-PCB-flight / zero pad-delay baselines -- these ports are still
+# on the core side of the A40 pad interface, so add pad + measured trace delay
+# before tapeout.
+set psram_sio_out_ports [get_ports {PSRAM_SIO_0_OUT PSRAM_SIO_1_OUT \
+                                    PSRAM_SIO_2_OUT PSRAM_SIO_3_OUT}]
+set_output_delay -max 2.0  -clock PSRAM_SCK $psram_sio_out_ports
+set_output_delay -min -2.0 -clock PSRAM_SCK $psram_sio_out_ports
+set_output_delay -max 2.5  -clock PSRAM_SCK [get_ports PSRAM_CE_N_OUT]
+set_output_delay -min -3.0 -clock PSRAM_SCK [get_ports PSRAM_CE_N_OUT]
+# Read data: the APS6404L launches read data 2.0-5.5 ns after the FALLING SCK
+# edge; psram_buf_ctrl samples sio_in on the following core RISING edge, so
+# this is a falling->rising half-cycle path -- reference it to -clock_fall or
+# STA models a full cycle.  6 dummy cycles precede the first data nibble.
+# Zero pad/PCB baseline -- add flight time before tapeout.
 set psram_in_ports [get_ports {PSRAM_SIO_0_IN PSRAM_SIO_1_IN \
                                PSRAM_SIO_2_IN PSRAM_SIO_3_IN}]
-set_input_delay -max 8.0 -clock PSRAM_SCK $psram_in_ports
-set_input_delay -min 2.0 -clock PSRAM_SCK $psram_in_ports
+set_input_delay -clock_fall -max 5.5 -clock PSRAM_SCK $psram_in_ports
+set_input_delay -clock_fall -min 2.0 -clock PSRAM_SCK $psram_in_ports
 
 # IQ vectors are reassembled inside trouper_top; the physical top-level ports
 # are scalar per antenna.  Constrain the actual pad ports, not the internal
