@@ -48,18 +48,19 @@ dbg_amask_wrap host_only_e2e pad_tieoffs io_cell_controls irq_pins \
 dc_removal comb_remod_transfer remod_backoff tacc_window_clamp \
 mcp_cfg_hold_settle mcp_decimator_settle mcp_iq_samp_cnt_settle \
 mcp_mrc_settle mcp_pcfsm_settle mcp_psram_bshift_settle mcp_sc_settle \
-mcp_tacc_settle"
+mcp_tacc_settle \
+w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow"
 
 SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
 
-# Directed confirmation benches for open RTL risks (planning/Open Risks.md
-# #61/#62/#63/#64/#65/#66/#67). Each asserts the INTENDED contract and is
-# EXPECTED TO FAIL until its risk is fixed -- so they are their own group and
-# are NOT part of `core`/`all`. Run them with SUITE_GROUPS=xfail (or an explicit
-# SUITES=...). A "FAILED" line for one of these is the confirmation, not a
-# regression; the per-suite run.log names the asserting testcase.
-SUITES_XFAIL="sc_acc_overflow tacc_acc_overflow pkt_timeout_states w_valid_split \
-bypass_backoff noise_window_edge dbg_qpi_busy"
+# Directed benches for open RTL risks (planning/Open Risks.md). Each asserts the
+# INTENDED contract; while the risk is open the asserting testcase FAILS (that
+# failure IS the confirmation), so these live outside `core`/`all` -- run with
+# SUITE_GROUPS=xfail. When a fix lands and its bench goes green, move that suite
+# into SUITES_CORE (done for #62/#63/#65/#66 on branch rtl/open-risk-fixes).
+# Still open: #61 (sc_acc_overflow), #64 (pkt_timeout_states, doc-only),
+# #67 (dbg_qpi_busy, doc-only).
+SUITES_XFAIL="sc_acc_overflow pkt_timeout_states dbg_qpi_busy"
 
 # Per-suite extra make arguments. trouper_capture is the only suite whose
 # in-test defaults do not land on a packet burst -- the window below was

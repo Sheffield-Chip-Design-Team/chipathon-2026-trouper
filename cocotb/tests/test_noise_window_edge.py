@@ -18,10 +18,13 @@ Cases (contamination one cycle before / on / one cycle after training_done):
                                             noise_window_sc_seen latches -> rejected
   test_lock_on_completion_edge_rejected  -- PASS: sc_lock coincident with
                                             training_done -> the !sc_lock term rejects
-  test_nonlocking_hit_on_completion_edge -- EXPECTED FAIL: sc_hit_dbg (no sc_lock)
-                                            coincident with training_done -> the NBA
-                                            reads noise_window_sc_seen == 0 and
-                                            sigma2_valid asserts for a contaminated window
+  test_nonlocking_hit_on_completion_edge -- regresses the #66 fix:
+                                            sc_hit_dbg (no sc_lock) coincident with
+                                            training_done is now in the completion
+                                            predicate, so sigma2_valid stays low.
+                                            PASS once the fix is in (both the RTL
+                                            in trouper_top.v and this file's
+                                            verbatim-copy wrapper).
   test_hit_after_completion_ignored      -- PASS: hit one cycle after the window
                                             closed does not matter
 """
@@ -132,9 +135,11 @@ async def test_lock_on_completion_edge_rejected(dut):
 
 @cocotb.test()
 async def test_nonlocking_hit_on_completion_edge(dut):
-    """EXPECTED FAIL: a non-locking sc_hit_dbg on the exact training_done edge.
-    noise_window_sc_seen is still 0 when the NBA for sigma2_valid_r is
-    evaluated, so NOISE_READY is asserted for a contaminated window."""
+    """A non-locking sc_hit_dbg on the exact training_done edge. Pre-#66-fix,
+    noise_window_sc_seen was still 0 when the NBA for sigma2_valid_r evaluated,
+    so NOISE_READY asserted for a contaminated window. The fix folds the
+    current-cycle SC activity into the completion predicate, so sigma2_valid
+    now stays low here."""
     cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
     await _reset(dut)
     await _open_window(dut)

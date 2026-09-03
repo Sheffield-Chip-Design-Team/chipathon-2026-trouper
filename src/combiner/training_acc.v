@@ -193,8 +193,38 @@ module training_acc (
         endcase
     end
 
+    // Saturating accumulate (Open Risk #63). The Z accumulators are 32-bit and
+    // the per-sample terms are small (|zi_add|,|zq_add| < 2^16, zd_add < 2^17),
+    // but a legal TACC_WINDOW_SYMS=15 window at high SF and near-full-scale
+    // input can drive the running sum past the signed-int32 / unsigned-int32
+    // range. Wrapping there sign-inverts Z and corrupts the firmware weight
+    // computation; clamping degrades gracefully instead (bounded, monotonic Z).
+    function signed [31:0] sadd32;
+        input signed [31:0] a;
+        input signed [31:0] b;
+        reg   signed [32:0] s;
+        begin
+            s = {a[31], a} + {b[31], b};      // 33-bit exact
+            case (s[32:31])
+                2'b01:   sadd32 = 32'sh7FFFFFFF;   // positive overflow -> clamp
+                2'b10:   sadd32 = 32'sh80000000;   // negative overflow -> clamp
+                default: sadd32 = s[31:0];         // 2'b00 / 2'b11 -> in range
+            endcase
+        end
+    endfunction
+
+    function [31:0] uadd32;
+        input [31:0] a;
+        input [31:0] b;
+        reg   [32:0] s;
+        begin
+            s = {1'b0, a} + {1'b0, b};
+            uadd32 = s[32] ? 32'hFFFFFFFF : s[31:0];   // carry-out -> clamp
+        end
+    endfunction
+
     // Forward-combine final Zdiag_3 value at the last accumulation step
-    wire [31:0] zdiag3_final = Zdiag_3 + zd_add;
+    wire [31:0] zdiag3_final = uadd32(Zdiag_3, zd_add);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -308,24 +338,24 @@ module training_acc (
                 if (acc_pair <= 4'd5) begin
                     // --- Cross-pair accumulation ---
                     if (acc_sub == 2'd0) begin
-                        // sub=0: Z_i = I_a×I_b + Q_a×Q_b
+                        // sub=0: Z_i = I_a×I_b + Q_a×Q_b  (saturating, Open Risk #63)
                         case (acc_pair)
-                            4'd0: Zpair_i0 <= zpair_ia_r + zi_add;
-                            4'd1: Zpair_i1 <= zpair_ia_r + zi_add;
-                            4'd2: Zpair_i2 <= zpair_ia_r + zi_add;
-                            4'd3: Zpair_i3 <= zpair_ia_r + zi_add;
-                            4'd4: Zpair_i4 <= zpair_ia_r + zi_add;
-                            default: Zpair_i5 <= zpair_ia_r + zi_add;
+                            4'd0: Zpair_i0 <= sadd32(zpair_ia_r, zi_add);
+                            4'd1: Zpair_i1 <= sadd32(zpair_ia_r, zi_add);
+                            4'd2: Zpair_i2 <= sadd32(zpair_ia_r, zi_add);
+                            4'd3: Zpair_i3 <= sadd32(zpair_ia_r, zi_add);
+                            4'd4: Zpair_i4 <= sadd32(zpair_ia_r, zi_add);
+                            default: Zpair_i5 <= sadd32(zpair_ia_r, zi_add);
                         endcase
                     end else begin
-                        // sub=1: Z_q = Q_a×I_b − I_a×Q_b (pair_a sign convention)
+                        // sub=1: Z_q = Q_a×I_b − I_a×Q_b  (saturating, Open Risk #63)
                         case (acc_pair)
-                            4'd0: Zpair_q0 <= zpair_qa_r + zq_add;
-                            4'd1: Zpair_q1 <= zpair_qa_r + zq_add;
-                            4'd2: Zpair_q2 <= zpair_qa_r + zq_add;
-                            4'd3: Zpair_q3 <= zpair_qa_r + zq_add;
-                            4'd4: Zpair_q4 <= zpair_qa_r + zq_add;
-                            default: Zpair_q5 <= zpair_qa_r + zq_add;
+                            4'd0: Zpair_q0 <= sadd32(zpair_qa_r, zq_add);
+                            4'd1: Zpair_q1 <= sadd32(zpair_qa_r, zq_add);
+                            4'd2: Zpair_q2 <= sadd32(zpair_qa_r, zq_add);
+                            4'd3: Zpair_q3 <= sadd32(zpair_qa_r, zq_add);
+                            4'd4: Zpair_q4 <= sadd32(zpair_qa_r, zq_add);
+                            default: Zpair_q5 <= sadd32(zpair_qa_r, zq_add);
                         endcase
                     end
                 end else begin
@@ -339,11 +369,11 @@ module training_acc (
                             armed        <= 1'b0;
                         end
                     end else begin
-                        case (acc_diag_k)
-                            2'd0: Zdiag_0 <= Zdiag_0 + zd_add;
-                            2'd1: Zdiag_1 <= Zdiag_1 + zd_add;
-                            2'd2: Zdiag_2 <= Zdiag_2 + zd_add;
-                            default: Zdiag_3 <= Zdiag_3 + zd_add;
+                        case (acc_diag_k)   // saturating, Open Risk #63
+                            2'd0: Zdiag_0 <= uadd32(Zdiag_0, zd_add);
+                            2'd1: Zdiag_1 <= uadd32(Zdiag_1, zd_add);
+                            2'd2: Zdiag_2 <= uadd32(Zdiag_2, zd_add);
+                            default: Zdiag_3 <= uadd32(Zdiag_3, zd_add);
                         endcase
                     end
                 end

@@ -1296,6 +1296,17 @@ reaches `ST_PAYLOAD_ACTIVE` with `use_mrc_r` = 0 (combiner in bypass) and
 **no `W_MISSED_PACKET`** (the stale FSM copy suppresses it). Neither
 "combine with the committed vector" nor "declare it missed" happens.
 
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`).** `packet_ctrl_fsm.v`'s
+internal `W_valid` reg is promoted to a module output; `trouper_top.v` deletes
+its own `W_valid` reconstruction and sources the one authoritative level from
+the FSM, feeding the combiner, the reg_bank live-weight write-lock, and the
+readback/debug paths. An IDLE-committed vector now legitimately applies to the
+next packet (combined, no false miss). Verified: `cocotb/w_valid_split/` PASS
+(SGE job 5477); `packet_ctrl_fsm` formal PASS by k-induction (job 5479); full
+`core` cocotb regression 41/42 incl. `w_missed`, `w_shadow_lock`,
+`mcp_pcfsm_settle`, `trouper_top` (job 5476 — the one failure is the unrelated
+stale `reg_bank` reserved-address test, fixed in the same branch).
+
 **Found:** 2026-09-03 full `src/` RTL review; cycle-by-cycle static trace, now
 reproduced by `cocotb/w_valid_split/`.
 
@@ -1327,6 +1338,21 @@ int8 full scale (127,127):
 - `test_zdiag_overflows_within_legal_window` — `Zdiag_0` wraps
   **4 294 959 152 → 24 114 at sample 133 145**.
 Both match the predicted `2^31 / 32258` and `2^32 / 32258` bounds.
+
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`) — saturating accumulate, not
+a window clamp.** The overflow is only reachable at ~7–10× the −3 dBFS AGC
+design point (measured nominal: `Zpair` ≈1470/sample, `Zdiag` ≈1730/sample →
+~6×/~10× margin at `TACC_WINDOW_SYMS=15`), and the AGC is already hard-bounded
+to ≤ 90 counts for `sd_remod` stability. Rather than constrain a legal input,
+`training_acc.v` gains `sadd32`/`uadd32` saturating helpers applied to all 16 Z
+accumulate sites (6 complex `Zpair` + 4 `Zdiag`, plus `zdiag3_final`): a
+would-be wrap now clamps at `INT32_MAX/MIN` / `UINT32_MAX`, so the firmware
+weight computation degrades gracefully (bounded, monotonic Z) instead of
+reading a sign-inverted value. No readback / register-map / firmware change.
+Verified: `cocotb/tacc_acc_overflow/` PASS — `Zpair_i0` clamps at `INT32_MAX`,
+`Zdiag_0` stays monotonic (job 5477); `mcp_tacc_settle`, `tacc_window_clamp`,
+`noise_trig` unaffected at nominal levels (job 5476, bit-exact preserved when
+no saturation triggers).
 
 **Found:** 2026-09-03 full `src/` RTL review; arithmetic bound, now reproduced by
 `cocotb/tacc_acc_overflow/`.
@@ -1807,6 +1833,14 @@ re-modulator's `< -3 dBFS` stability contract.
 and compares `remod_in` against `comb_y`: **0 / 50 pairings matched;
 all 50 were `comb_y >> 1`**. The reset-default bypass path loses ~6 dB.
 
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`).** `mrc_combiner.v` exports a
+burst-aligned `use_mrc` flag (`= W_valid && !mode`, sampled at the state-0 burst
+start). `trouper_top.v` applies `REMOD_BACKOFF_SHIFT` only when `comb_use_mrc`
+is set; Mode-1 / no-`W_valid` bypass forwards `comb_y` unshifted. Verified:
+`cocotb/bypass_backoff/` PASS — `remod_in == comb_y` in bypass at reset
+defaults (job 5477); `bypass_e2e`, `bypass_antenna`, `remod_backoff`,
+`comb_remod_transfer`, `mcp_mrc_settle` all PASS (job 5476).
+
 **Found:** 2026-09-03 full `src/` RTL review; reproduced by `cocotb/bypass_backoff/`.
 
 ### 66. A same-cycle SC hit can falsely qualify a noise window as clean
@@ -1835,6 +1869,15 @@ all **PASS**; `test_nonlocking_hit_on_completion_edge` **FAILS** —
 `sigma2_valid` asserts for a window a non-locking `sc_hit_dbg` contaminated on
 the completion edge. A follow-up end-to-end version (driving real SPI) would
 also close the reachability argument.
+
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`).** `trouper_top.v`'s
+qualification predicate is now
+`sigma2_valid_r <= ~(noise_window_sc_seen || sc_hit_dbg || sc_lock)` — the
+current-cycle SC activity is folded in, so a non-locking hit on the completion
+edge is no longer missed by the stale read of `noise_window_sc_seen`. The
+`cocotb/noise_window_edge/noise_window_qual.v` verbatim-copy wrapper was updated
+in step. Verified: `cocotb/noise_window_edge/` 5/5 PASS (job 5477);
+`noise_trig` PASS (job 5476).
 
 **Found:** 2026-09-03 full `src/` RTL review; NBA precedence trace, reproduced by
 `cocotb/noise_window_edge/`.

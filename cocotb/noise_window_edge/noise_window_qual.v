@@ -48,7 +48,10 @@ module noise_window_qual (
             end
 
             if (noise_window_active && training_done) begin
-                sigma2_valid_r       <= ~noise_window_sc_seen && !sc_lock;
+                // Open Risk #66 FIX (mirrors src/top/trouper_top.v): include the
+                // current-cycle SC activity so a hit landing on the completion
+                // edge is not missed by the stale-read of noise_window_sc_seen.
+                sigma2_valid_r       <= ~(noise_window_sc_seen || sc_hit_dbg || sc_lock);
                 noise_window_active  <= 1'b0;
                 noise_window_sc_seen <= 1'b0;
             end

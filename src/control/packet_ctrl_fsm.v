@@ -20,6 +20,12 @@ module packet_ctrl_fsm (
     input  wire [7:0]  pkt_timeout_syms,
     input  wire [3:0]  tacc_window_syms,
     output reg         W_valid_set,
+    // Authoritative "weights valid for the current/next packet" level
+    // (Open Risk #62). Set when a committed vector is consumed (in IDLE,
+    // ST_W_PENDING, or ST_PAYLOAD_ACTIVE); cleared at reset and at the
+    // ST_PAYLOAD_ACTIVE packet-timeout return to IDLE. trouper_top consumes
+    // this directly instead of rebuilding a second copy from W_valid_set.
+    output reg         W_valid,
     output reg         W_missed_packet,
     // Sticky per-packet mirror of W_missed_packet for register readback
     // (PACKET_STATUS[7] / WGT_CTRL[3]): W_missed_packet is a 1-cycle pulse
@@ -121,7 +127,8 @@ module packet_ctrl_fsm (
 
     // W commit pending (can arrive in any state, deferred to IDLE or applied in PAYLOAD)
     reg W_commit_pending;
-    reg W_valid;           // W has been applied for current packet
+    // W_valid is now a module output (Open Risk #62) -- declared in the port
+    // list; the assignment logic below is unchanged.
 
     // Noise-estimation quiet gating removed.
     reg sc_lock_prev;

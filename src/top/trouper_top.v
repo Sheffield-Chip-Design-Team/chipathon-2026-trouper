@@ -714,7 +714,12 @@ module trouper_top (
             end
 
             if (noise_window_active && training_done) begin
-                sigma2_valid_r       <= ~noise_window_sc_seen && !sc_lock;
+                // Include the current-cycle SC activity: sc_hit_dbg / sc_lock
+                // set noise_window_sc_seen with a non-blocking assignment above,
+                // so a hit landing on the completion edge would otherwise be
+                // missed by the stale-read of noise_window_sc_seen here
+                // (Open Risk #66).
+                sigma2_valid_r       <= ~(noise_window_sc_seen || sc_hit_dbg || sc_lock);
                 noise_window_active  <= 1'b0;
                 noise_window_sc_seen <= 1'b0;
             end
@@ -752,12 +757,14 @@ module trouper_top (
         .peer_lock_pulse (array_peer_lock_pulse)
     );
 
-    // W_valid register: set by W_valid_set pulse, cleared at FSM IDLE entry
-    reg  W_valid;
-    always @(posedge clk or negedge rst_n)
-        if (!rst_n)           W_valid <= 1'b0;
-        else if (W_valid_set) W_valid <= 1'b1;
-        else if (!packet_active) W_valid <= 1'b0;
+    // W_valid: single authoritative copy, exported from packet_ctrl_fsm
+    // (Open Risk #62). The old top-level reconstruction from the W_valid_set
+    // pulse cleared on every !packet_active, so a commit consumed in IDLE left
+    // the FSM copy high and this copy low -- the next packet then combined in
+    // bypass with no W_MISSED_PACKET. The FSM level is now the only copy: it is
+    // consumed by the combiner, the reg_bank live-weight write-lock, and the
+    // debug/readback paths.
+    wire W_valid;
 
     // W_pending: training complete but W not yet committed this packet
     reg  w_pending;
@@ -782,6 +789,7 @@ module trouper_top (
         .pkt_timeout_syms (rb_pkt_timeout_syms),
         .tacc_window_syms (rb_tacc_window_syms),
         .W_valid_set     (W_valid_set),
+        .W_valid         (W_valid),
         .W_missed_packet (W_missed_packet),
         .W_missed_q      (W_missed_q),
         .packet_phase      (packet_phase),
@@ -880,6 +888,7 @@ module trouper_top (
     // =========================================================================
     wire signed [7:0] comb_y_i, comb_y_q;
     wire              comb_y_valid;
+    wire              comb_use_mrc;   // burst-aligned MRC(1)/bypass(0), Open Risk #65
 
     // bypass_ant: lowest set bit of active_antenna_en. Fixed 2026-07-05 (Open
     // Risks #4): the original mux tested en[1]/en[2]/en[3] and fell back to
@@ -908,7 +917,8 @@ module trouper_top (
         .post_gain_shift(rb_comb_post_gain_shift),
         .y_i    (comb_y_i),
         .y_q    (comb_y_q),
-        .y_valid(comb_y_valid)
+        .y_valid(comb_y_valid),
+        .use_mrc(comb_use_mrc)
     );
 
     // =========================================================================
@@ -919,8 +929,17 @@ module trouper_top (
     // During REPLAY: combiner processes PSRAM replay IQ → normal remod path.
     // =========================================================================
     wire psram_silence = psram_buf_active && !psram_replay_active_w;
-    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 : ($signed(comb_y_i) >>> rb_remod_backoff_shift);
-    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 : ($signed(comb_y_q) >>> rb_remod_backoff_shift);
+    // REMOD_BACKOFF_SHIFT is an MRC-path safety margin only: the combiner output
+    // can exceed the sd_remod < -3 dBFS stability limit. Mode-1 / no-W_valid
+    // bypass just forwards one antenna's int8 sample, which is always in range,
+    // so the shift must NOT attenuate it (Open Risk #65 / TRPR-PCF-011 /
+    // TRPR-RMD-008). comb_use_mrc is burst-aligned with comb_y_i/q.
+    wire signed [7:0] remod_bo_i = comb_use_mrc ? ($signed(comb_y_i) >>> rb_remod_backoff_shift)
+                                               : comb_y_i;
+    wire signed [7:0] remod_bo_q = comb_use_mrc ? ($signed(comb_y_q) >>> rb_remod_backoff_shift)
+                                               : comb_y_q;
+    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 : remod_bo_i;
+    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 : remod_bo_q;
     sd_remod u_remod (
         .clk_32m  (clk),
         .rst_n    (rst_n),
