@@ -553,7 +553,7 @@ the cancelled completion, real packet trains and the FSM reaches the payload
 phase) + `noise_window_edge::test_noise_abort_drops_window`.
 
 **Follow-up review round 2 (2026-09-03) — three more holes on the same path,
-all fixed on the branch, still OPEN pending regression:**
+all fixed on the branch (regression + A40 P&R now complete, see below):**
 
 1. **P1 — the pre-empt did not flush `training_acc`'s pipeline.** The abort
    cleared `armed`/`noise_mode_r` only; a final noise sample already latched in
@@ -611,6 +611,11 @@ PASS except `noise_window_edge` 9/10 on a stale test expectation
 (`test_retrigger_during_drain_not_lost` latched a legitimate pre-retrigger
 verdict); test fixed (monitor-latch reset) and re-verified `noise_window_edge`
 10/10 in SGE job 5498.
+
+A40 P&R regression check — SGE job 5499 (`src/config/trouper_top.json`, rebased
+onto `pinout/dbg1-shared-irq-pad-27`): signoff-clean (DRC 0, LVS 0, XOR 0,
+antenna 0/0, hold MET), SS setup WNS −10.77 ns / TNS −370.4, no regression vs
+reference runs 5379/5378. Full P&R write-up in #66.
 
 ### 6. DRT-1231 clkbuf CTS pin-access failure — **CLOSED 2026-09-03** (the SPI_SCK CTS exclusion survived a netlist perturbation 2.6× the one that broke it)
 
@@ -1387,8 +1392,12 @@ behavioural model and never modelled the fixed-point snapshot, so no model
 change. Verified: `cocotb/sc_acc_overflow/` 5/5 PASS (was 1/5), `mcp_sc_settle`,
 `trouper_top` SF7–SF12 × BW sweep, `sc_ant_sel`, `sc_dbg` PASS — full `core` +
 `capture` regression SGE job 5496 (`sc_acc_overflow` now in the `core` group);
-SS timing re-check on `ol_trouper_top` pending (A40 P&R after the rebase onto
-`pinout/dbg1-shared-irq-pad-27`, target job 5379).
+SS timing re-check on `ol_trouper_top` — **A40 P&R SGE job 5499**
+(`src/config/trouper_top.json`, rebased onto `pinout/dbg1-shared-irq-pad-27`):
+signoff-clean (DRC 0, LVS 0, XOR 0, antenna 0/0), SS setup WNS −10.77 ns /
+TNS −370.4, between reference runs 5379 (−10.13) / 5378 (−11.17); TNS beats
+5379's −383.5. No signoff regression from the 32-bit accumulator widening.
+See #66 for the full P&R write-up.
 
 **Found:** 2026-09-03 full `src/` RTL review; static analysis, reproduced by
 `cocotb/sc_acc_overflow/`; fixed same day.
@@ -1994,7 +2003,26 @@ defaults (job 5477); `bypass_e2e`, `bypass_antenna`, `remod_backoff`,
 
 **Found:** 2026-09-03 full `src/` RTL review; reproduced by `cocotb/bypass_backoff/`.
 
-### 66. A same-cycle SC hit can falsely qualify a noise window as clean
+### 66. A same-cycle SC hit can falsely qualify a noise window as clean — CLOSED 2026-09-03 (fixed-drain + eval-boundary verdict; regression + A40 P&R clean)
+
+> **CLOSED 2026-09-03.** Fixed on `rtl/open-risk-fixes` (commits `a844409` /
+> `8a30d2d`): 72-clock fixed drain + `noise_eval_seen` eval-boundary gate +
+> per-window `win_epoch` + single priority ladder (see body and **#68**).
+> Directed bench `cocotb/noise_window_edge/` 10/10 (SGE job 5498); combined
+> `core` + `capture` regression 50 suites all PASS (SGE job 5496). A40
+> `ol_trouper_top` P&R regression after the rebase onto
+> `pinout/dbg1-shared-irq-pad-27` — **SGE job 5499**, `src/config/trouper_top.json`:
+> signoff-clean (Magic DRC 0, LVS 0, XOR 0, antenna 0/0, hold MET), SS setup
+> WNS −10.77 ns / TNS −370.4 — inside the reference spread (job 5379 −10.13 /
+> job 5378 −11.17; TNS beats 5379's −383.5). No signoff regression from the
+> #61/#63/#66/#68 RTL. SS 32 MHz setup remains the pre-existing open voltage
+> problem (#44 lineage), untouched by this change. Residual max-slew/max-cap
+> counts rose vs the pre-RTL 27-pin run (job 5469 7/1 nom_tt → 17/7) — added
+> flops/logic in the sc_detector-decode / training_acc DRV-waiver cones;
+> tracked with the existing DRV waiver, not a #66 blocker. The drvp1 65→50
+> GRT-margin variant (job 5500) did **not** reproduce its unmerged reference
+> (job 5491) on the merged netlist — SS TNS −1020.9 — so `trouper_top.json`
+> stays at 65/65.
 
 In `trouper_top.v:704-723`, a contaminating `sc_hit_dbg` sets
 `noise_window_sc_seen` and `training_done` qualifies `sigma2_valid_r` in the
@@ -2082,9 +2110,15 @@ retrigger race, eval-boundary drain) and their tests.
 **Combined `core` + `capture` regression covering #66 + #68 + the three
 follow-ups: SGE job 5496** — 50 suites, all PASS bar a stale
 `noise_window_edge` test expectation, fixed and re-verified 10/10 in SGE job
-5498. **Stays OPEN** pending the A40 `ol_trouper_top` P&R regression check
-(`src/config/trouper_top.json`, regression target job 5379) after the rebase
-onto `pinout/dbg1-shared-irq-pad-27`.
+5498.
+
+**A40 P&R regression check — SGE job 5499** (`src/config/trouper_top.json`,
+rebased onto `pinout/dbg1-shared-irq-pad-27`): SS setup WNS −10.77 ns /
+TNS −370.4, Magic DRC 0, LVS 0, XOR 0, antenna 0/0, hold MET. WNS sits
+between reference runs 5379 (−10.13) and 5378 (−11.17); TNS improves on
+5379's −383.5. No signoff regression. drvp1 65→50 GRT-margin variant
+(job 5500) regressed SS TNS to −1020.9 on the merged netlist (unmerged ref
+job 5491 did not carry over) → `trouper_top.json` stays 65/65. **CLOSED.**
 
 **Found:** 2026-09-03 full `src/` RTL review; NBA precedence trace, reproduced by
 `cocotb/noise_window_edge/`.
