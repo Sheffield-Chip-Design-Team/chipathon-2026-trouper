@@ -298,11 +298,13 @@ section immediately below.
 
 The A40 (ACV) workshop padring has no output-only cell, so every functional
 output sits on a bidirectional pad whose control pins (`_OE/_IE/_CS/_SL/
-_PU/_PD/_PDRV0/_PDRV1`) are driven from `trouper_top.v` — 104 pad-control
-outputs: 96 constant tie-offs, 4 dynamic `PSRAM_SIO_n_IE`, and the 4
-pre-existing functional `PSRAM_SIO_n_OE`. Until 2026-08-29 **no simulation
-read any of them**: an inverted `_IE`, a swapped `_PU`/`_PD` or a wrong
-`_PDRV` code would pass every existing suite and surface only in silicon.
+_PU/_PD/_PDRV0/_PDRV1`) are driven from `trouper_top.v`. Until 2026-08-29 **no
+simulation read any of them**: an inverted `_IE`, a swapped `_PU`/`_PD` or a
+wrong `_PDRV` code would pass every existing suite and surface only in silicon.
+(2026-09-03: `DBG1` merged onto the `IRQ_OUT` pad removed its 8 constant
+pad-control outputs; `IRQ_OUT_SL` changed slow→fast. The `test_pad_tieoffs.py`
+`EXPECTED` table stays at 96 entries — `DBG0`/`DBG1` were never in it — with the
+`IRQ_OUT` SL value updated.)
 
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
@@ -449,19 +451,26 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 
 ## Two-Pin Digital Debug — TRPR-DBG
 
+**Reshaped 2026-09-03:** integrator budget corrected to 27 pads, so `DBG1` was
+merged onto the `IRQ_OUT` pad. Split selector: `DBG_CTRL0` (`0x04`) → dedicated
+`DBG0_OUT`; `DBG_CTRL1` (`0x06`, reclaimed) → shared `IRQ_OUT`/`DBG1` pad, which
+carries the sticky interrupt unless `DBG_CTRL1.EN=1`. `IRQ_OUT_SL` → fast.
+Sim re-verified on the reshaped RTL by **SGE job 5456** (`cocotb/dbg_probe`
+12/12, `cocotb/pad_tieoffs` 2/2); macro P&R by **SGE job 5457** (27-pin).
+
 | ID | Requirement (short) | Verif | Test(s) | Status |
 |---|---|---|---|---|
-| TRPR-DBG-001 | Pads drive 0 in reset and while `EN=0` | T | `test_dbg_probe.test_reset_and_disabled_drive_low` (job 5275) | ✅ |
-| TRPR-DBG-002 | Reserved encodings stored verbatim, drive 0 | T | `test_dbg_probe.test_reserved_encodings_drive_zero` | ✅ |
-| TRPR-DBG-003 | `DBG_CTRL` idle-only; rejection sets `CFG_WR_REJECTED` | T | `test_dbg_probe.test_config_is_idle_only_and_sticky_records_rejection` | ✅ |
-| TRPR-DBG-004 | Probe cannot alter any functional output or state | T | `test_dbg_probe.test_probe_does_not_perturb_the_receiver` (4000 cycles of `REMOD_A_I/Q` + `IRQ_OUT` bit-identical, probe off vs on, identical SPI traffic); `test_every_group_is_harmless_while_selected` (all 32 group/SEL) | ✅ |
-| TRPR-DBG-005 | Raw RX registered, never a combinational pad-to-pad path | T | `test_dbg_probe.test_raw_rx_probe_follows_iq_pads` (one-cycle latency, all 4 branches) | ✅ |
-| TRPR-DBG-006 | Pad tie-offs: `OE=1`, `IE=0`, CMOS, fast slew, 8 mA | T | `test_dbg_probe.test_pad_tieoffs` | ✅ |
-| TRPR-DBG-007 | Area cost measured against an identical build | A | Yosys hierarchical synth, jobs 5277 (baseline `53eb221`) / 5278 (`3342b87`) | ✅ **+4,454 µm², +0.470%** |
-| TRPR-DBG-008 | Mux group/SEL sources are bit-accurate | T | `test_dbg_probe.test_packet_group_tracks_fsm` (cross-checked against `PACKET_STATUS`, not against the probe itself); `test_dbg_status_mirrors_the_pads` | ⚠️ Partial — packet, raw-RX and DBG_STATUS groups covered; decimated-IQ, SC, PSRAM, combiner and IRQ groups are structurally identical muxing but not individually asserted. |
-| TRPR-DBG-009 | Macro P&R closes with the two boundary pins; no new antenna/DRC/LVS | A | SGE job 5279: antenna 0/0, route DRC 0, Magic DRC 0, LVS match, PDN 0 | ✅ **Macro scope only** — Trouper instantiates no IO cells, so this covers no pad cell |
-| TRPR-DBG-012 | Debug outputs meet the 2 ns `IQ_CLK` output delay with no exception | A | Job 5279 SS: `DBG0_OUT` −4.440 ns, `DBG1_OUT` −6.060 ns — the only two `reg-out` violators in the design; both meet at TT and FF | ❌ **Violated at SS.** Decision owed: justified exception, or fix. See the plan's "Timing result". |
-| TRPR-DBG-013 | Raw-RX flops must not worsen the IQ-input-to-decimator paths | A | Job 5279 SS violator list: zero `IQ_DATA` paths | ✅ Concern did not materialise |
+| TRPR-DBG-001 | `DBG0` drives 0 in reset/`EN=0`; shared pad reverts to IRQ | T | `test_dbg_probe.test_reset_and_disabled_drive_low`, `test_shared_pad_reverts_to_irq` (job 5456) | ✅ |
+| TRPR-DBG-002 | Reserved encodings stored verbatim, drive 0 (both selectors) | T | `test_dbg_probe.test_reserved_encodings_drive_zero` (job 5456) | ✅ |
+| TRPR-DBG-003 | `DBG_CTRL0`/`DBG_CTRL1` idle-only; rejection sets `CFG_WR_REJECTED` | T | `test_dbg_probe.test_config_is_idle_only_and_sticky_records_rejection` (job 5456) | ✅ |
+| TRPR-DBG-004 | Probe cannot alter any functional output or state | T | `test_dbg_probe.test_probe_does_not_perturb_the_receiver` (DBG0 sweep, `REMOD_A_I/Q` + `IRQ_OUT` + `PACKET_STATUS` bit-identical); `test_shared_pad_changes_only_irq` (DBG_CTRL1 armed → only `IRQ_OUT` may differ); `test_every_group_is_harmless_while_selected` (job 5456) | ✅ |
+| TRPR-DBG-005 | Raw RX registered, never a combinational pad-to-pad path | T | `test_dbg_probe.test_raw_rx_probe_follows_iq_pads` (one-cycle latency, all 4 branches; job 5456) | ✅ |
+| TRPR-DBG-006 | Pad tie-offs: `DBG0` `OE=1`/`IE=0`/CMOS/fast/8 mA; `IRQ_OUT_SL=0` | T | `test_dbg_probe.test_pad_tieoffs`, `test_pad_tieoffs.py` (`IRQ_OUT` SL row); `sim/tests/test_pad_tieoff_ports.py` 4/4 (job 5456 + local) | ✅ |
+| TRPR-DBG-007 | Area cost measured against an identical build | A | Yosys hierarchical synth, jobs 5277/5278 (pre-reshape: +4,454 µm² / +0.470%) | ⟳ re-measure — adds `dbg_ctrl1` + a second mux decode, drops 8 `DBG1` pad-control tie-offs |
+| TRPR-DBG-008 | Mux group/SEL sources are bit-accurate; selectors independent | T | `test_dbg_probe.test_packet_group_tracks_fsm`, `test_dbg_status_mirrors_the_pads`, `test_selectors_are_independent` (job 5456) | ⚠️ Partial — packet/raw-RX/DBG_STATUS/independence asserted; decimated-IQ, SC, PSRAM, combiner, IRQ groups structurally identical but not individually checked. |
+| TRPR-DBG-009 | Macro P&R closes with the boundary pins; no new antenna/DRC/LVS | A | **SGE job 5457** (27-pin, canonical `src/config/trouper_top.json`, gaming-pc, 22:55) | ✅ **Magic DRC 0, route DRC 0, LVS 0, XOR 0, antenna 0, hold WNS +0.117 ns.** Macro scope only — no pad cells present. |
+| TRPR-DBG-012 | Debug outputs meet the 2 ns `IQ_CLK` output delay with no exception | A | Job 5457 SS: `DBG0_OUT` −6.16 ns, `IRQ_OUT_OUT` −4.82 ns — still the only two `reg-out` violators; both meet at TT and FF | ❌ **Violated at SS.** The `DBG1` violator moved to `IRQ_OUT_OUT` as predicted, at fast slew, and is *smaller* than the pre-reshape `DBG1_OUT` −6.06 ns. Worst path overall is an internal IQ_CLK `reg-reg` (−10.88 ns), unrelated. SS 3.0 V is voltage-bound (closes at 4.5 V). Decision still owed: documented exception or fix. |
+| TRPR-DBG-013 | Raw-RX flops must not worsen the IQ-input-to-decimator paths | A | Job 5457 SS violator list: zero `IQ_DATA*` paths | ✅ Concern did not materialise (re-confirmed on the 27-pin run) |
 | TRPR-DBG-010 | Pad-cell electrical check: clean 32 MHz pattern at the intended probe load | A | — | ❌ Gated on the integrator padframe — `planning/pad-cell-signoff-plan.md` §3d |
 | TRPR-DBG-011 | Chip-level LVS/DRC across the pad boundary, with the pad cells present | A | — | ❌ Gated — `planning/pad-cell-signoff-plan.md` §1, §2 |
 

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Full A40 P&R of trouper_top, including ARRAY_ACQ_N + DBG0_OUT/DBG1_OUT.
+# Full A40 P&R of trouper_top, including ARRAY_ACQ_N + DBG0_OUT.  (DBG1 shares
+# the IRQ_OUT pad as of 2026-09-03 -- 27 pads, not 28.)
 #
 # Uses the canonical src/config/trouper_top.json, last validated by job 5379
 # (0 antenna / 0 DRC / 0 XOR / 0 LVS; SS WNS -10.13 ns, TNS -383.5, worst IR drop

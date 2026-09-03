@@ -421,9 +421,9 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         0x01: ('RO', 0xFF),  # CHIP_REV fixed 0x01
         0x02: ('RO', 0xFF),  # IRQ_STATUS (RO sticky)
         0x03: ('WO', 0x00),  # IRQ_CLEAR (WO, reads as 0)
-        0x04: ('RW', 0xFF),  # DBG_CTRL: [7] EN, [6:4] GROUP, [3:2] ANT, [1:0] SEL
+        0x04: ('RW', 0xFF),  # DBG_CTRL0: [7] EN, [6:4] GROUP, [3:2] ANT, [1:0] SEL
         0x05: ('RO', 0x03),  # DBG_STATUS: [1:0] pad values; [7:2] reserved
-        0x06: ('reserved', 0x00),
+        0x06: ('RW', 0xFF),  # DBG_CTRL1: shared IRQ_OUT/DBG1 pad selector, same layout
         0x07: ('reserved', 0x00),
         # RX / Modem Configuration
         0x08: ('RW', 0xF1),  # MIMO_CTRL: [7:4]=ANTENNA_EN, [0]=MODE; [3:1] reserved

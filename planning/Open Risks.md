@@ -1555,11 +1555,25 @@ allocation is now exactly 28/28 with none spare. See item 57, which is the
 current statement of the pin budget; only the slot-confirmation half of this
 entry is still live.
 
-### 57. The pin allocation is now exactly full (28/28), and three of those slots are unconfirmed
+### 57. The pin allocation is now exactly full (27/27), and two of those slots are unconfirmed
 
-`info.yaml` declares **28** pins against a **28**-slot allocation: 26 signal +
-`VDD_CORE` + `VSS`. There is **no spare slot left**. The last three went to
-`ARRAY_ACQ_N` (N15) and `DBG0_OUT`/`DBG1_OUT` (N16/N17), all added 2026-08-30.
+**Update 2026-09-03 — the budget is 27, not 28.** Integrator feedback corrected
+the ACV allocation to **27 pads**. Rather than drop a debug channel, `DBG1` was
+merged onto the `IRQ_OUT` pad via a split-selector mux (`DBG_CTRL0` → `DBG0_OUT`,
+`DBG_CTRL1` (`0x06`) → the shared `IRQ_OUT`/`DBG1` pad, which carries the sticky
+interrupt unless `DBG_CTRL1.EN=1`). `IRQ_OUT_SL` moved slow→fast so the shared
+pad can carry 32 MHz raw-RX debug; the board damps the RPi IRQ net with a series
+resistor. Consequences now live: while `DBG_CTRL1` is armed the host has no
+hardware interrupt line and must poll `IRQ_STATUS` (`0x02`); and `IRQ_OUT` can
+no longer serve as an always-on analyser trigger. See
+`planning/two-pin-digital-debug-plan.md` (status header) and `planning/Pinout.md`.
+The rest of this entry still applies with "28→27", "three newest→two newest",
+"N15/N16/N17→N15/N16".
+
+`info.yaml` declares **27** pins against a **27**-slot allocation: 25 signal +
+`VDD_CORE` + `VSS`. There is **no spare slot left**. The last two went to
+`ARRAY_ACQ_N` (N15) and `DBG0_OUT` (N16); `DBG1` rides the already-allocated
+`IRQ_OUT` pad.
 
 **Two distinct problems, often conflated:**
 
@@ -1577,9 +1591,19 @@ entry is still live.
    *design* closes with three more north-edge pads at coordinates **we chose**.
 
 **What would close it:** a regenerated `A40_ACV.def` from the integrator
-containing all 28 pads, a P&R run against that template rather than ours, and a
-decision on whether spending the final slot on a debug probe is the right use of
-the last pin.
+containing all 27 pads, a P&R run against that template rather than ours, and a
+decision on whether spending the final dedicated slot on `DBG0_OUT` is the right
+use of the last pin.
+
+**P&R against our 27-pin template: done (job 5457, 2026-09-03).** Canonical
+`src/config/trouper_top.json` + the regenerated 159-pin `dbgpins.def`. Magic DRC
+0, route DRC 0, LVS 0, XOR 0, antenna 0, hold WNS +0.117 ns. SS setup WNS
+−10.88 ns (baseline job 5379 −10.13; −0.75 ns is n=1 repair-lottery noise). The
+old `DBG1_OUT` SS output violator moved to `IRQ_OUT_OUT` (−4.82 ns, *smaller*
+than the pre-reshape −6.06); `DBG0_OUT` −6.16 ns; these two remain the only
+`reg-out` violators. Still integrator-side: a real `A40_ACV.def` with these 27
+slots, and the `DBG0_OUT`/`IRQ_OUT_OUT` SS output-delay exception decision
+(TRPR-DBG-012).
 
 **Note on what P&R proves here.** It proves the *macro* routes and closes with
 three more boundary pins at coordinates we chose. It says nothing about the pad
