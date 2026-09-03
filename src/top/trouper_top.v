@@ -233,10 +233,12 @@ module trouper_top (
 );
 
     // Reassemble scalar physical pins into the vectors used inside the design.
-    // IQ_DATA_*_raw are the raw pad values; IQ_DATA_I/Q below are the
-    // negedge-recaptured, datapath-facing versions (Open Risk #70).
+    // IQ_DATA_*_raw are the raw pad values; IQ_DATA_*_neg are the negedge
+    // (data-eye) samples; IQ_DATA_I/Q are the posedge-retimed, datapath-facing
+    // versions (Open Risk #70).
     wire [3:0] IQ_DATA_I_raw = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
     wire [3:0] IQ_DATA_Q_raw = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
+    reg  [3:0] IQ_DATA_I_neg, IQ_DATA_Q_neg;
     reg  [3:0] IQ_DATA_I, IQ_DATA_Q;
     wire [3:0] PSRAM_SIO_OUT;
     wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
@@ -408,19 +410,32 @@ module trouper_top (
     // ---- SX1257 IQ input capture (Open Risk #70) ---------------------------
     // The SX1257 presents its 1-bit ΣΔ I/Q streams with a data-valid
     // (setup-and-hold) window of ~25 ns centred on the FALLING edge of the
-    // shared clock (DS_SX1257 §3.7.4 RX digital interface).  Capturing them on
-    // `negedge clk` samples mid data-eye and gives the rising-edge datapath a
-    // full half cycle (~15.6 ns @ 32 MHz) of settle before it consumes the
-    // value — the previous code fed the raw pads straight into a `posedge clk`
-    // block, sampling near the transition.  Feeds BOTH the decimator and the
-    // debug probe so nothing downstream sees an un-recaptured pad value.
+    // shared clock (DS_SX1257 §3.7.4 RX digital interface).  Two-stage capture:
+    //   *_neg       — sampled on `negedge clk`, i.e. in the middle of the eye.
+    //   IQ_DATA_I/Q — retimed onto `posedge clk` before the datapath sees them.
+    // The negedge→posedge hop (`*_neg` → `IQ_DATA_*`) carries no logic, so it
+    // clears the unavoidable half-cycle path with ~15 ns of slack, and every
+    // real datapath path (CIC integrators, comb, HB) runs on the full 31.25 ns
+    // period again.  A single negedge stage feeding the datapath directly put
+    // the CIC 14-bit add on a half-cycle path and lost SS timing (73
+    // violations, job 5504).  Cost: +1 clk latency (31 ns) — negligible at the
+    // 500 kS/s output rate.  Feeds BOTH the decimator and the debug probe.
     always @(negedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            IQ_DATA_I_neg <= 4'd0;
+            IQ_DATA_Q_neg <= 4'd0;
+        end else begin
+            IQ_DATA_I_neg <= IQ_DATA_I_raw;
+            IQ_DATA_Q_neg <= IQ_DATA_Q_raw;
+        end
+    end
+    always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             IQ_DATA_I <= 4'd0;
             IQ_DATA_Q <= 4'd0;
         end else begin
-            IQ_DATA_I <= IQ_DATA_I_raw;
-            IQ_DATA_Q <= IQ_DATA_Q_raw;
+            IQ_DATA_I <= IQ_DATA_I_neg;
+            IQ_DATA_Q <= IQ_DATA_Q_neg;
         end
     end
 

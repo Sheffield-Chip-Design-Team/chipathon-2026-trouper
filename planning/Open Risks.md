@@ -1616,22 +1616,28 @@ did not perturb routing. DRV *improved*: SS max-slew 39→18, max-cap 11→7;
 nom_tt 17/7→3/3. Instance count 126174→126903 (+729: the 18 added negedge
 FFs + their repair).
 
-**SS setup regressed: WNS −10.77→−14.20 ns, TNS −370→−1389.** Worst path is
-`psram_buf_ctrl.buf_active` FF → ~11 levels of `_1`-strength gates (6–10 ns
-slews, an unrepaired cone) → `DBG0_OUT`; 2nd-worst same start → `IRQ_OUT`
-(the shared DBG1 pad). This debug-output cone was already 2nd-worst in job
-5499 (`buf_active`→`IRQ_OUT` −10.44); the 18 negedge FFs perturbed CTS +
-placement and the repair pass left it starved this run. **Not a new tapeout
-blocker** — SS 32 MHz already fails by −10.8 (the voltage problem, #1/#40),
-and the incremental hit is on debug-observability pads (`DBG0_OUT`,
-`IRQ_OUT`/`DBG1`) that already have an open SS output-delay-exception
-decision (see #57 / the `DBG0_OUT`/`IRQ_OUT_OUT` note under #1). **Follow-up
-before this is fully clean:** re-run the P&R once to separate repair-lottery
-swing from a structural change; if −14 reproduces, add `DBG0_OUT` +
-`IRQ_OUT_OUT` to an SS `set_output_delay` exception and re-check.
+**SS setup regressed: WNS −10.77→−14.20 ns, TNS −370→−1389.** Three
+contributors, separated by a same-corner path audit:
+- **~−350 ns TNS / 73 endpoints — the #70 single-negedge IQ capture** put
+  the CIC 14-bit add on a half-cycle (15.6 ns) path (worst −8.5). nom_tt /
+  max_ff MET. **Fixed 2026-09-04 by the #70 two-stage (negedge sample →
+  posedge retime) revision** — CIC back on the full period; re-run pending.
+- **~−210 ns / 18 endpoints — a `psram_buf_ctrl` internal register-load
+  cluster** (`_68948_` fanout, −11.8) — re-synth/repair-lottery swing from
+  adding the negedge output block (cell renumbering confirms full re-synth).
+- **WNS −14.20 — `buf_active` FF → ~11 `_1`-strength gates → `DBG0_OUT` /
+  `IRQ_OUT`** (shared DBG1 pad). Already 2nd-worst in job 5499
+  (`buf_active`→`IRQ_OUT` −10.44); an unrepaired debug-output cone, lottery.
+**Not a new tapeout blocker** — SS 32 MHz already fails by −10.8 (the
+voltage problem, #1/#40); the residual after the #70 retime is a
+psram-internal + debug-pad lottery swing (`DBG0_OUT` / `IRQ_OUT` already
+have an open SS output-delay-exception decision, see #57 / #1).
 
-**Stays OPEN** on the SS-regression follow-up above; the interface fix
-itself (RTL + guardrail + SDC v29) is regression- and DRC/LVS/antenna-clean.
+**Stays OPEN** pending the re-run P&R with the #70 retime (expect the 73
+CIC violations gone); if the psram/debug residual persists, settle it with
+a second run or the `DBG0_OUT`/`IRQ_OUT_OUT` SS output-delay exception. The
+interface fix itself (RTL + guardrail + SDC v29) is regression- and
+DRC/LVS/antenna-clean.
 
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 
@@ -1668,14 +1674,20 @@ datasheet + PCB-derived values.
 **Found:** 2026-09-03 interface-timing review.
 
 **Capture-edge fix landed 2026-09-03 (datasheet confirmed: SX1257 I/Q valid
-around the falling clock edge).** `trouper_top.v` now recaptures the eight
-IQ pad bits in an `always @(negedge clk)` stage (`IQ_DATA_I/Q` are the
-recaptured regs; `IQ_DATA_*_raw` the raw pads) and feeds both the decimator
-and the debug probe from it — the rising-edge datapath gets a full half
-cycle (~15.6 ns) of settle instead of sampling mid-transition. Both SDCs:
-IQ `set_input_delay` re-commented for the negedge capture and set to
-`-max 6.0 / -min 0.0 -clock IQ_CLK` (baseline for SX1257 clock-to-data +
-PCB flight; still to be replaced with datasheet + measured values).
+around the falling clock edge), revised to a two-stage capture 2026-09-04.**
+`trouper_top.v` samples the eight IQ pad bits on `negedge clk` (`*_neg`, mid
+data-eye) and **retimes onto `posedge clk`** (`IQ_DATA_I/Q`) before the
+decimator and debug probe use them. The negedge→posedge hop carries no
+logic; every real datapath path (CIC integrators, comb, HB) runs on the
+full 31.25 ns period. **Why the retime:** the first cut fed the negedge
+regs straight into the datapath, putting the CIC 14-bit add on a half-cycle
+(15.6 ns) path — job 5504 showed **73 SS setup violations** off those 8 FFs
+(worst −8.5 ns, ~−350 ns TNS), nom_tt/max_ff still MET. Cost of the retime:
++1 clk latency (31 ns) — negligible at the 500 kS/s output rate. Both SDCs:
+IQ `set_input_delay -max 6.0 / -min 0.0 -clock IQ_CLK` is the pad→negedge-FF
+half-period input path (checked vs the falling edge ~15.6 ns later; ~9 ns
+slack); baseline for SX1257 clock-to-data + PCB flight, still to be replaced
+with datasheet + measured values.
 **Clock source — leaning SX1257_1 CLK_OUT direct (2026-09-03).** Board
 owner's current plan is to drive `IQ_CLK` straight from SX1257_1 pin 10
 `CLK_OUT` (simplest — matches `Pinout.md`, no extra PCB fanout buffer);
