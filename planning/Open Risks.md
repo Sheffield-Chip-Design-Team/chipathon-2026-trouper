@@ -1602,9 +1602,13 @@ excluded from the generic core-output rule. All zero pad/PCB-flight
 baselines — add pad + measured trace delay before tapeout. The P&R SDC is
 left unchanged (the generated clock stays out of it until a routed run
 clears the SCK-path clock-tree / DRT-0073 question — same caution as the
-v28 `tacc_accumulate` split). **Stays OPEN** pending SGE regression
-(job 5503) + an A40 `trouper_top` signoff P&R run confirming no timing/DRC
-regression and the new PSRAM source-sync group is MET.
+v28 `tacc_accumulate` split). SGE regression **job 5503 CLEAN** — all 50
+core+capture suites PASS (`psram_ops`, `qspi_owner`, `replay_data`,
+`replay_delay`, `capture_two_packet`, `weight_gen_spi_flow`,
+`trouper_capture`, `trouper_top` 18/18); the `psram_model` SCK guardrail
+never fired (CE#/SIO only move while SCK is low). **Stays OPEN** pending the
+A40 `trouper_top` signoff P&R run (job 5504) confirming no timing/DRC
+regression and that the new PSRAM source-sync group is MET.
 
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 
@@ -1662,9 +1666,10 @@ clock and `IQ_CLK` has to be re-characterised and the capture edge /
 `set_input_delay` re-checked.
 
 **Stays OPEN** pending: (1) the PCB-test decision above + the
-`System Architecture.md` / `Pinout.md` reconciliation; (2) SGE regression
-(job 5503) + an A40 P&R run confirming no datapath regression from the
-added negedge stage.
+`System Architecture.md` / `Pinout.md` reconciliation; (2) A40 P&R run
+(job 5504) confirming no datapath regression from the added negedge stage —
+SGE regression **job 5503 CLEAN** (50/50 core+capture, `trouper_top` 18/18,
+`dc_removal` / `trouper_capture` / `capture_two_packet` all PASS).
 
 ## Moderate
 
