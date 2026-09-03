@@ -112,16 +112,8 @@ pins:
   - name: VDD
     io_type: power
 
-  # Multi-ASIC acquisition-sync wire (planning/array-acquisition-sync.md).
-  # bi_t, not bi_24t: the core drives PDRV[1:0]=00 (4 mA), which is ample to
-  # sink a board pull-up and keeps the falling edge slow on a shared net.
   - name: ARRAY_ACQ_N
     io_type: bidirectional
-
-  # Two-pin digital debug probes (planning/two-pin-digital-debug-plan.md).
-  # Output-only in function, but bi_t like every other output on the A40
-  # padframe, which has no output-only cell. These two take the allocation to
-  # 28 of 28 -- FULL, no spare slot remains.
   - name: DBG0_OUT
     io_type: bidirectional
   - name: DBG1_OUT
