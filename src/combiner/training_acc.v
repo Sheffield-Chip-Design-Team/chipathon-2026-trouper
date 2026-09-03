@@ -60,7 +60,13 @@ module training_acc (
     output reg  signed [31:0] Zpair_i5, Zpair_q5,   // Z_23
     // Z_kk autocorrelation (real, for noise estimation)
     output reg  [31:0] Zdiag_0, Zdiag_1, Zdiag_2, Zdiag_3,
-    output reg         training_done,
+    output reg         training_done,      // asserts for EITHER mode's completion
+    output reg         training_done_pkt,  // asserts ONLY for a packet-mode window
+                                           // (the packet FSM / w_pending path must
+                                           //  never see a noise-window completion)
+    output reg         noise_abort,        // 1-cycle: an armed noise window was
+                                           // cancelled because sc_lock acquired a
+                                           // real packet mid-measurement
     output reg  [17:0] n_acc,  // up to 131072 samples (SF12+shift=2 = 2^(12+2+3))
     output wire        training_armed
 );
@@ -72,8 +78,26 @@ module training_acc (
     assign training_armed = armed;
     reg        noise_mode_r;    // 1 = firmware-triggered noise measurement in progress
     reg        noise_trig_r;    // previous-cycle noise_trig for edge detect
+    reg        sc_lock_r;       // previous-cycle sc_lock for edge detect
+
+    // Open Risk #68 (pipeline-flush): per-window epoch for the accumulate
+    // pipeline. The noise-abort only clears `armed`/`noise_mode_r`; a final
+    // noise sample already latched into the TDM/accumulate pipeline can still
+    // reach the completion block afterwards and wrongly assert training_done /
+    // training_done_pkt. A global valid *level* does not work -- a real packet
+    // re-arms on the next cycle (sc_lock still high) and would re-validate the
+    // stale work before it drains (~57 cycles). Instead every pipeline item
+    // carries the epoch it was launched under (tdm_epoch -> acc_epoch); the
+    // completion / accumulate only fire when acc_epoch matches the CURRENT
+    // win_epoch. win_epoch bumps on every arm AND on the abort, so a stale
+    // item's epoch can never coincide with the live one (2 bits: at most one
+    // window's worth of items in flight, drained long before a 3rd bump).
+    reg  [1:0]  win_epoch;      // current window epoch
+    reg  [1:0]  tdm_epoch;      // epoch of the sample currently in the TDM burst
+    reg  [1:0]  acc_epoch;      // epoch of the item currently in the accumulate stage
 
     wire noise_trig_rise = noise_trig && !noise_trig_r;
+    wire sc_lock_rise    = sc_lock   && !sc_lock_r;
     // Clamp window to >= 8 symbols (same rule reg_bank applies to 0x27 writes).
     // In live mode acc_start = timing_ref, which lies up to (sc_hits_req+1) <= 4
     // symbols in the past at arm time; a window <= that latency puts acc_end
@@ -232,7 +256,13 @@ module training_acc (
             armed         <= 1'b0;
             noise_mode_r  <= 1'b0;
             noise_trig_r  <= 1'b0;
+            sc_lock_r     <= 1'b0;
             training_done <= 1'b0;
+            training_done_pkt <= 1'b0;
+            noise_abort   <= 1'b0;
+            win_epoch     <= 2'd0;
+            tdm_epoch     <= 2'd0;
+            acc_epoch     <= 2'd0;
             n_acc         <= 18'd0;
             acc_start     <= 32'd0;
             acc_end       <= 32'd0;
@@ -256,8 +286,10 @@ module training_acc (
             if (iq_valid)
                 sample_count <= sample_count + 32'd1;
 
-            // Noise-trig edge detect register
+            // Edge-detect registers
             noise_trig_r <= noise_trig;
+            sc_lock_r    <= sc_lock;
+            noise_abort  <= 1'b0;   // 1-cycle pulse
 
             // Disarm when sc_lock deasserts (suppressed in noise mode)
             if (!sc_lock && !noise_mode_r) begin
@@ -267,13 +299,28 @@ module training_acc (
                 tdm_sub    <= 2'd0;
             end
 
+            // A real packet acquired (sc_lock rising) while a firmware noise
+            // measurement is in flight: cancel the noise window. `armed` clears
+            // here, so the (sc_lock && !armed) arm clause below re-arms a proper
+            // PACKET-mode window on the next edge with acc_start = timing_ref.
+            // The cancelled noise window asserts neither training_done nor
+            // training_done_pkt, so the packet FSM never sees a noise completion
+            // aliased as packet-training completion.
+            if (armed && noise_mode_r && sc_lock_rise) begin
+                armed         <= 1'b0;
+                noise_mode_r  <= 1'b0;
+                noise_abort   <= 1'b1;
+                win_epoch     <= win_epoch + 2'd1;   // retire the aborted window's epoch
+            end
             // Arm on sc_lock rising edge (normal) or noise_trig rising edge (noise mode).
             // Zero output registers here — they serve as both working accumulators and
             // final outputs during the training window.
-            if ((sc_lock && !armed) || (noise_trig_rise && !armed)) begin
+            else if ((sc_lock && !armed) || (noise_trig_rise && !armed)) begin
                 armed         <= 1'b1;
                 noise_mode_r  <= ~sc_lock;
+                win_epoch     <= win_epoch + 2'd1;   // fresh window epoch
                 training_done <= 1'b0;
+                training_done_pkt <= 1'b0;
                 acc_start     <= sc_lock ? timing_ref : sample_count;
                 acc_end       <= sc_lock ? timing_ref + ({28'd0, tacc_window_eff} << (sf + sample_shift)) - 32'd1
                                          : sample_count + ({28'd0, tacc_window_eff} << (sf + sample_shift)) - 32'd1;
@@ -308,6 +355,7 @@ module training_acc (
                 tdm_pair   <= 4'd0;
                 tdm_sub    <= 2'd0;
                 tdm_active <= 1'b1;
+                tdm_epoch  <= win_epoch;   // Open Risk #68: tag this item's window
             end else if (active_cycle && tdm_active) begin
                 if (tdm_pair >= 4'd6) begin
                     // Diagonal pairs: 1 sub-step (dual-mult does I²+Q² at once)
@@ -330,11 +378,17 @@ module training_acc (
                 acc_pair   <= tdm_pair;
                 acc_sub    <= tdm_sub;
                 acc_active <= tdm_active;
+                acc_epoch  <= tdm_epoch;   // Open Risk #68: carry the window tag
             end
 
             // Accumulate directly into output registers when products are ready
             // (dual-mult: both products available each step → no p_latch interleave).
-            if (acc_active && active_cycle) begin
+            // Open Risk #68 (pipeline-flush): only accumulate / complete for an
+            // item whose window epoch still matches. A noise sample left in the
+            // pipe by an aborted window carries the retired epoch and is
+            // silently dropped, even after a packet re-arm has bumped the epoch
+            // again — no false training_done/_pkt, no stale Z writes.
+            if (acc_active && active_cycle && (acc_epoch == win_epoch)) begin
                 if (acc_pair <= 4'd5) begin
                     // --- Cross-pair accumulation ---
                     if (acc_sub == 2'd0) begin
@@ -364,6 +418,12 @@ module training_acc (
                         // Last diagonal, last sample: write final value and signal done
                         Zdiag_3 <= zdiag3_final;
                         training_done <= 1'b1;
+                        // Packet-mode completion only: this is the pulse the
+                        // packet FSM / w_pending consume. A noise-window
+                        // completion asserts training_done (for the reg_bank
+                        // status bit / IRQ, per TRPR-TAC-007) but NOT this.
+                        if (!noise_mode_r)
+                            training_done_pkt <= 1'b1;
                         if (noise_mode_r) begin
                             noise_mode_r <= 1'b0;
                             armed        <= 1'b0;

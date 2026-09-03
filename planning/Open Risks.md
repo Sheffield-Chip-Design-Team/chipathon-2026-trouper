@@ -511,6 +511,107 @@ a dedicated proof.
 
 ## High
 
+### 68. A firmware noise-window completion is aliased as packet-training completion
+
+`packet_ctrl_fsm` leaves `ST_IDLE` on any `sc_lock` rising edge
+(`packet_ctrl_fsm.v:199`) with no check on `training_armed` / noise mode.
+`training_acc` refuses to convert an in-flight window because `armed` is already
+set (`training_acc.v:273`) and its disarm is suppressed in noise mode (`:263`),
+so a firmware noise measurement armed while idle keeps running even after a real
+packet is acquired. Its mode-untagged `training_done` then:
+- sets `w_pending` (`trouper_top.v` w_pending block), and
+- advances the packet FSM out of `ST_PREAMBLE_ACQ` into `ST_W_PENDING`
+  (`packet_ctrl_fsm.v:242`).
+
+Firmware therefore reads the noise (or noise + partial-preamble) Z accumulators
+as if they were this packet's training correlations, and the packet's real
+training window cannot even start until the long noise window drains — that
+packet is guaranteed `W_MISSED` and the FSM can stay mis-phased for the next.
+`test_noise_trig.py` only checked that `NOISE_READY` stays clear, so it missed
+the state-machine corruption. `psram_buf_ctrl` was already immune (its
+`buf_base_valid` gate explicitly excludes noise-mode `training_done`).
+
+**Found:** 2026-09-03, P1 review finding while checking the #66 fix.
+
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`) — mode-tagged completion +
+noise-window pre-empt.** `training_acc.v` gains:
+- `training_done_pkt` — asserts **only** for a packet-mode window's completion;
+  `training_done` still asserts for either mode (reg_bank `TRAINING_STATUS` bit
+  / IRQ, per TRPR-TAC-007).
+- `noise_abort` — 1-cycle pulse when `sc_lock` rises while a noise window is
+  armed: the window is cancelled (`armed`/`noise_mode_r` clear), so the next
+  edge re-arms a proper packet-mode window at `acc_start = timing_ref`.
+
+`trouper_top.v` routes `training_done_pkt` (not `training_done`) to `w_pending`
+and `u_pcfsm`; the #66 noise-qualification block drops its window on
+`noise_abort` (no verdict — firmware's `NOISE_READY` wait times out and it
+retries once the packet clears). Verified: new
+`cocotb/tests/test_noise_trig.py::test_noise_window_preempted_by_real_packet`
+(noise armed idle → CW packet locks → asserts `noise_abort` pulses,
+`noise_window_active` drops, `NOISE_READY` never fires, `w_pending` not set by
+the cancelled completion, real packet trains and the FSM reaches the payload
+phase) + `noise_window_edge::test_noise_abort_drops_window`.
+
+**Follow-up review round 2 (2026-09-03) — three more holes on the same path,
+all fixed on the branch, still OPEN pending regression:**
+
+1. **P1 — the pre-empt did not flush `training_acc`'s pipeline.** The abort
+   cleared `armed`/`noise_mode_r` only; a final noise sample already latched in
+   the TDM/accumulate pipeline could reach the completion block after
+   `noise_mode_r` went low and assert `training_done_pkt` — a false packet
+   completion (reviewer's boundary sim reproduced it). A first attempt with a
+   global `acc_win_valid` *level* was **still broken** (round-3 review): a real
+   packet re-arms on the very next cycle and re-raises the level long before the
+   ~57-cycle stale pipeline drains. **Fix (round 3): per-window epoch.** A 2-bit
+   `win_epoch` bumps on **every** arm and on the abort; each pipeline item
+   carries the epoch it launched under (`tdm_epoch` → `acc_epoch`); the
+   accumulate / completion block only fires when `acc_epoch == win_epoch`. A
+   stale item from an aborted window carries the retired epoch and is dropped
+   regardless of pipeline depth or how fast the re-arm follows.
+
+2. **P1 — a noise retrigger on the drain-release cycle was silently lost.** The
+   #66 block had two independent `if` chains; a fresh `noise_trig_accept` set
+   `noise_window_active<=1` while the old window's verdict path set it `<=0` the
+   same cycle (later assignment won). **Fix:** collapsed to one priority ladder
+   — `noise_trig_accept` (fresh clean window) → `noise_abort` → active-window
+   (sc_seen latch + drain + verdict). An accepted trigger always wins.
+   New `test_retrigger_during_drain_not_lost` (retrigger swept onto the exact
+   verdict-render cycle).
+
+3. **P2 — the fixed drain could not cover un-evaluated SC symbol history, and a
+   stale in-flight eval could not be told apart from a fresh one.**
+   `sc_pipe_active` only marks activity *currently* in flight; an SC evaluation
+   launches only at a symbol boundary, so a packet starting late in the noise
+   window sat un-evaluated with `sc_pipe_active` low until the next boundary —
+   thousands of clocks past the fixed drain. A first attempt (require any
+   `sc_eval_done_pulse` after drain start) was **insufficient** (round-3
+   review): an evaluation already in flight at `training_done` was fed the
+   *previous* symbol yet its completion satisfied the requirement. **Fix
+   (round 3):** `sc_detector` exports **both** `sc_eval_done_pulse`
+   (`= metric_valid_pulse`) and `sc_eval_start_pulse` (`= metric_start_pulse`,
+   1-cycle at eval launch). During the drain, `noise_eval_armed` latches only on
+   a *start* pulse after the drain began, and `noise_eval_seen` only on a
+   *done* pulse while armed — i.e. an evaluation that both started and finished
+   inside the drain. Worst-case `NOISE_READY` latency +~1 symbol period.
+
+4. **P1 — the eval requirement deadlocked a clean measurement when the SC
+   datapath is disabled** (`test_noise_trig.py` Phase A: PSRAM off ⇒ no delayed
+   samples ⇒ `sc_detector` never evaluates). **Fix:** track `noise_sc_was_active`
+   (sticky: `sc_pipe_active` high anytime this window). The eval requirement
+   (item 3) applies only when the SC detector actually ran; SC dark ⇒ no
+   contamination possible ⇒ verdict on the fixed drain alone.
+
+Tests: `test_noise_window_edge.py` reworked — 10 cases incl. detector-dark vs
+detector-live clean paths, `test_verdict_waits_for_eval`,
+`test_stale_inflight_eval_does_not_release`, `test_late_hit_after_drain_rejected`,
+`test_retrigger_during_drain_not_lost`.
+
+Verification: full `core` + `capture` regression, SGE job 5496 — 50 suites, all
+PASS except `noise_window_edge` 9/10 on a stale test expectation
+(`test_retrigger_during_drain_not_lost` latched a legitimate pre-retrigger
+verdict); test fixed (monitor-latch reset) and re-verified `noise_window_edge`
+10/10 in SGE job 5498.
+
 ### 6. DRT-1231 clkbuf CTS pin-access failure — **CLOSED 2026-09-03** (the SPI_SCK CTS exclusion survived a netlist perturbation 2.6× the one that broke it)
 
 > **CLOSED — the stated exit criterion was tested and did not fire.** This item
@@ -1260,8 +1361,37 @@ sub-findings:
 - `test_sf10_accumulator_true_wrap` — M=2048, amp=90: raw 24-bit `acc_E0cur`
   wraps past 2^24, never reaches the true +33 177 600.
 
-**Found:** 2026-09-03 full `src/` RTL review; static analysis, now reproduced by
-`cocotb/sc_acc_overflow/`.
+**2026-09-03 — AFE scaling measured (`sim/models` decimator + LoRa preamble,
+scratch `afe_scale2.py`).** The decimator is ~unity gain: at the −3 dBFS AGC
+ceiling the `sc_detector` int8 input peaks at ~90 counts. `acc_E0cur` per
+symbol vs 2^23: SF7–SF11 safe at every AGC setting (SF11 ~4× margin at the
+ceiling); **SF12 overflows** — SF12/BW250 sign-flips at ~51-count signal and
+hard-overflows above ~70; SF12/BW125 is borderline at the minimum useful
+signal and overflows above it. So the fix is required for SF12 support.
+
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`) — option A (widen +
+M-dependent snapshot shift).** `src/frontend/sc_detector.v`:
+- `acc_ci0/acc_cq0/acc_E0cur/acc_E0del` and `sym_ci0/sym_cq0` widened
+  24 → **32-bit signed** (one-symbol abs max ≈ 2^29, ~4× headroom; never wraps).
+- Snapshot changed from the fixed non-arithmetic `acc[22:10]` slice to
+  `sat13(acc >>> (sf + sample_shift + 2))` — **arithmetic** (sign-preserving),
+  **M-scaled** so the 13-bit `eval_*` operand stays ~constant magnitude at every
+  SF, and **saturating** at 13-bit for overdriven symbols (same graceful-
+  degradation policy as #63). `K=2` keeps SF7/BW250 at the historical `>>10`.
+- `sc_thr` is **unchanged and remains a single value for every SF/BW** — the
+  threshold comparison is a k²/k² ratio, invariant under the shift.
+- `acc_E0del` is forward-combined at the symbol boundary so the snapshot
+  includes the final sample (was dropped by the step-7 same-edge NBA).
+Blast radius was just `sc_detector.v` — `sim/models/sync.py` is a float
+behavioural model and never modelled the fixed-point snapshot, so no model
+change. Verified: `cocotb/sc_acc_overflow/` 5/5 PASS (was 1/5), `mcp_sc_settle`,
+`trouper_top` SF7–SF12 × BW sweep, `sc_ant_sel`, `sc_dbg` PASS — full `core` +
+`capture` regression SGE job 5496 (`sc_acc_overflow` now in the `core` group);
+SS timing re-check on `ol_trouper_top` pending (A40 P&R after the rebase onto
+`pinout/dbg1-shared-irq-pad-27`, target job 5379).
+
+**Found:** 2026-09-03 full `src/` RTL review; static analysis, reproduced by
+`cocotb/sc_acc_overflow/`; fixed same day.
 
 ### 62. IDLE `W_COMMIT` splits controller and top-level `W_valid` state
 
@@ -1314,14 +1444,21 @@ reproduced by `cocotb/w_valid_split/`.
 
 `TACC_WINDOW_SYMS` exposes 8..15 symbols and `M` reaches 16384, so the legal
 maximum is 245760 accumulated samples (`training_acc.v:248-249`).  The six
-complex cross-pair outputs are signed 32-bit accumulators (`:55-60`).  Two
-identical branches at the documented legal component limit `I=Q=90` add 16200
-per sample to the real cross-pair, producing 3,981,312,000 at the maximum
-window — well above signed-int32 maximum, so the result wraps negative and can
-corrupt firmware MRC/eigenvector weights.  At unconstrained int8 full scale the
-unsigned 32-bit diagonals can overflow as well.  The headroom note in the chip
-specification analyses only the reset-default eight-symbol window and does not
-cover the register's legal maximum.
+complex cross-pair outputs are signed 32-bit accumulators (`:55-60`).
+
+TRPR-MRC-009 bounds the per-branch *complex-envelope* amplitude
+`sqrt(I^2+Q^2) <= 90` (−3 dBFS), not I and Q independently.  At that contract
+point two equal-power phase-aligned branches add up to `90 x 90 = 8100` per
+sample to a real cross-pair component, reaching ≈ 1.99e9 over the 245760-sample
+window — only ≈ 8 % below the signed-int32 rail (2^31 ≈ 2.15e9).  Any AGC
+excursion above −3 dBFS then wraps the accumulator negative and corrupts the
+firmware MRC/eigenvector weights.  (Driving I and Q *each* to 90, i.e. envelope
+≈ 127 / 0 dBFS — 3 dB hotter than the contract — gives 16200/sample ≈ 3.98e9
+and wraps well inside the window; int8 full scale I=Q=127 wraps by sample
+≈ 66 500, per the bench below.)  The unsigned 32-bit diagonals keep ≈ 2.16×
+margin at the contract point and overflow only under sustained overdrive.  The
+headroom note in the chip specification analysed only the reset-default
+eight-symbol window and did not cover the register's legal maximum.
 
 **Required fix/evidence:** either widen the Z accumulators/readback contract or
 clamp `TACC_WINDOW_SYMS` to a value proven safe under an explicit component
@@ -1340,19 +1477,33 @@ int8 full scale (127,127):
 Both match the predicted `2^31 / 32258` and `2^32 / 32258` bounds.
 
 **FIXED 2026-09-03 (branch `rtl/open-risk-fixes`) — saturating accumulate, not
-a window clamp.** The overflow is only reachable at ~7–10× the −3 dBFS AGC
-design point (measured nominal: `Zpair` ≈1470/sample, `Zdiag` ≈1730/sample →
-~6×/~10× margin at `TACC_WINDOW_SYMS=15`), and the AGC is already hard-bounded
-to ≤ 90 counts for `sd_remod` stability. Rather than constrain a legal input,
-`training_acc.v` gains `sadd32`/`uadd32` saturating helpers applied to all 16 Z
-accumulate sites (6 complex `Zpair` + 4 `Zdiag`, plus `zdiag3_final`): a
-would-be wrap now clamps at `INT32_MAX/MIN` / `UINT32_MAX`, so the firmware
-weight computation degrades gracefully (bounded, monotonic Z) instead of
-reading a sign-inverted value. No readback / register-map / firmware change.
+a window clamp.** At the TRPR-MRC-009 contract (per-branch envelope
+`sqrt(I^2+Q^2) <= 90`, −3 dBFS) the full 15-symbol SF12/125 kHz window
+(`n_acc = 245 760`) drives both `Zdiag` and each `Zpair` component to
+≈ 1.99e9: `Zdiag` keeps ≈ 2.16× margin to `2^32`, but a **`Zpair` component
+sits at ≈ 93 % of the signed `2^31` rail** — any AGC excursion above −3 dBFS
+tips it over. (The measured-nominal `Zpair` ≈ 1470/sample / `Zdiag`
+≈ 1730/sample cited earlier corresponds to an envelope ≈ 38 counts, ~12 dB
+below the contract ceiling — not a safe-margin indication.) Overdrive (I=Q at
+int8 full scale) wraps `Zpair` by sample ≈ 66 500. Rather than constrain a
+legal input, `training_acc.v` gains `sadd32`/`uadd32` saturating helpers
+applied to all 16 Z accumulate sites (6 complex `Zpair` + 4 `Zdiag`, plus
+`zdiag3_final`): a would-be wrap now clamps at `INT32_MAX/MIN` / `UINT32_MAX`.
+`Zdiag` (sum of squares) is monotone so a rail reading is a true "≥ 2^32";
+`Zpair` is signed so a rail reading means only that a partial sum hit the
+limit. The firmware weight computation degrades gracefully (bounded Z) instead
+of reading a sign-inverted value. No readback / register-map / firmware change.
 Verified: `cocotb/tacc_acc_overflow/` PASS — `Zpair_i0` clamps at `INT32_MAX`,
 `Zdiag_0` stays monotonic (job 5477); `mcp_tacc_settle`, `tacc_window_clamp`,
 `noise_trig` unaffected at nominal levels (job 5476, bit-exact preserved when
 no saturation triggers).
+
+**Spec updated (P2 review finding):** `Trouper Chip Specification.md` §4.5 —
+the obsolete "Zdiag headroom note" ("8-symbol window … accepted; documented
+rather than widened") is replaced by a normative "Z accumulator saturation"
+paragraph stating the signed `Zpair` / unsigned `Zdiag` clamp values and
+correcting the headroom arithmetic for the 8..15-symbol `TACC_WINDOW_SYMS`
+range.
 
 **Found:** 2026-09-03 full `src/` RTL review; arithmetic bound, now reproduced by
 `cocotb/tacc_acc_overflow/`.
@@ -1870,14 +2021,70 @@ all **PASS**; `test_nonlocking_hit_on_completion_edge` **FAILS** —
 the completion edge. A follow-up end-to-end version (driving real SPI) would
 also close the reachability argument.
 
-**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`).** `trouper_top.v`'s
-qualification predicate is now
-`sigma2_valid_r <= ~(noise_window_sc_seen || sc_hit_dbg || sc_lock)` — the
-current-cycle SC activity is folded in, so a non-locking hit on the completion
-edge is no longer missed by the stale read of `noise_window_sc_seen`. The
-`cocotb/noise_window_edge/noise_window_qual.v` verbatim-copy wrapper was updated
-in step. Verified: `cocotb/noise_window_edge/` 5/5 PASS (job 5477);
-`noise_trig` PASS (job 5476).
+**First fix attempt (`~(noise_window_sc_seen || sc_hit_dbg || sc_lock)`) was
+INSUFFICIENT — P1 review finding.** `sc_hit_dbg`/`sc_lock` are *registered*
+`sc_detector` outputs, and the serial metric engine is ~57 cycles deep, so a
+non-locking hit whose evaluation overlapped the window can register its
+`sc_hit_dbg` pulse a variable number of edges *after* `training_done`. Peeking
+at `sc_hit_dbg` on the `training_done` edge catches only the exact-alignment
+case (hit registers on that edge or the one before); a hit at
+`training_done + 1` or later still qualified and closed the window before
+`noise_window_sc_seen` could latch it. The verbatim-copy wrapper missed this
+because it drove `sc_hit_dbg` as a settled input rather than modelling the
+detector's registered pulse.
+
+**Second fix attempt (drain-gated verdict, release on `!sc_pipe_active` alone)
+was STILL INSUFFICIENT — P1 review finding.** `sc_detector.v` exports
+`sc_pipe_active = tdm_busy | eval_busy | metric_valid_pulse | sc_hit_dbg`; on
+`training_done` the gate enters a DRAIN phase (`noise_window_draining`,
+`noise_window_active` held high so the `sc_hit_dbg`/`sc_lock` sampler keeps
+running) and renders the verdict once `sc_pipe_active` falls. But the release
+fired on the *first* cycle `sc_pipe_active` read low after `training_done`,
+which can be the very next edge if the pipeline is momentarily idle at the
+boundary — an `sc_lock` (or non-locking hit) that becomes visible two or more
+edges later then slipped through. `test_lock_at_or_after_boundary` offset +2
+FAILED (3/4), `test_hit_offset_sweep` was at risk for the same reason.
+
+**FIXED 2026-09-03 (branch `rtl/open-risk-fixes`) — fixed grace window + drain.**
+The DRAIN phase now also holds for a fixed `NOISE_DRAIN_MIN = 72` clocks
+(7-bit down-counter loaded on `training_done`); the verdict
+`sigma2_valid_r <= ~(noise_window_sc_seen || sc_lock)` is rendered only once
+**both** `noise_drain_cnt == 0` **and** `!sc_pipe_active`. 72 is the SC serial
+metric-engine depth (~57 cycles, `serial_mul13` × 4 products + handshake) plus
+TDM-burst slack, rounded up — it bounds the latest edge at which an evaluation
+that was already in flight at `training_done` can register `sc_hit_dbg`/
+`sc_lock`. `noise_window_sc_seen` OR-accumulates hit/lock for the whole drain,
+so any contamination inside the grace window latches. NOISE_READY latency grows
+by ~72 clk ≈ 2.3 µs (irrelevant for the AGC noise-EMA use). Cost: one 7-bit reg
++ comparator. Still safe-biased: a stray hit *after* the window merely
+suppresses this measurement (firmware retries) — it can never let a
+contaminated window through. The wrapper MODELS the registered `sc_detector`
+outputs (test drives `hit_ev` + `pipe_busy`, wrapper produces `sc_hit_dbg`/
+`sc_pipe_active` with the real 1-cycle latency); `test_hit_offset_sweep` walks
+the contaminating hit across offsets −2…+8 and `test_lock_at_or_after_boundary`
+across 0/+1/+2, asserting rejection at every one. Verified: `cocotb/
+noise_window_edge/` 4/4 PASS + full `core` 47/47 clean (SGE job 5485);
+`capture` group (real captured IQ + weight-gen SPI e2e) clean at job 5486.
+
+**Follow-up review (2026-09-03) — the fixed-drain verdict had a further hole
+(P2), fixed together with the #68 follow-ups:** an SC evaluation launches only
+at a symbol boundary, so `!sc_pipe_active` after the 72-clock drain did **not**
+prove the symbol that was accumulating at `training_done` had been scored — a
+packet starting late in the noise window stayed invisible past the drain.
+`sc_detector` now exports `sc_eval_done_pulse` (`= metric_valid_pulse`) and the
+verdict additionally requires `noise_eval_seen` (≥ 1 full metric evaluation
+completed since the drain began). The two-`if`-chain structure of the block was
+also collapsed to a single priority ladder so a noise retrigger accepted on the
+drain-release cycle can no longer be lost to the old window's verdict. See
+**#68** for the full write-up of the three follow-up fixes (pipeline-flush,
+retrigger race, eval-boundary drain) and their tests.
+
+**Combined `core` + `capture` regression covering #66 + #68 + the three
+follow-ups: SGE job 5496** — 50 suites, all PASS bar a stale
+`noise_window_edge` test expectation, fixed and re-verified 10/10 in SGE job
+5498. **Stays OPEN** pending the A40 `ol_trouper_top` P&R regression check
+(`src/config/trouper_top.json`, regression target job 5379) after the rebase
+onto `pinout/dbg1-shared-irq-pad-27`.
 
 **Found:** 2026-09-03 full `src/` RTL review; NBA precedence trace, reproduced by
 `cocotb/noise_window_edge/`.

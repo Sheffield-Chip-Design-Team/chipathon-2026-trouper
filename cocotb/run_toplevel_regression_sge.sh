@@ -49,7 +49,7 @@ dc_removal comb_remod_transfer remod_backoff tacc_window_clamp \
 mcp_cfg_hold_settle mcp_decimator_settle mcp_iq_samp_cnt_settle \
 mcp_mrc_settle mcp_pcfsm_settle mcp_psram_bshift_settle mcp_sc_settle \
 mcp_tacc_settle \
-w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow"
+w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow sc_acc_overflow"
 
 SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
 
@@ -57,10 +57,10 @@ SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
 # INTENDED contract; while the risk is open the asserting testcase FAILS (that
 # failure IS the confirmation), so these live outside `core`/`all` -- run with
 # SUITE_GROUPS=xfail. When a fix lands and its bench goes green, move that suite
-# into SUITES_CORE (done for #62/#63/#65/#66 on branch rtl/open-risk-fixes).
-# Still open: #61 (sc_acc_overflow), #64 (pkt_timeout_states, doc-only),
-# #67 (dbg_qpi_busy, doc-only).
-SUITES_XFAIL="sc_acc_overflow pkt_timeout_states dbg_qpi_busy"
+# into SUITES_CORE (done for #61/#62/#63/#65/#66 on branch rtl/open-risk-fixes).
+# Still open: #64 (pkt_timeout_states) and #67 (dbg_qpi_busy) -- both spec/doc
+# changes, no RTL fix, so their benches stay here as expected-fail markers.
+SUITES_XFAIL="pkt_timeout_states dbg_qpi_busy"
 
 # Per-suite extra make arguments. trouper_capture is the only suite whose
 # in-test defaults do not land on a packet burst -- the window below was

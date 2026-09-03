@@ -183,21 +183,28 @@ async def test_w_missed_on_wpend_timeout(dut):
 
 
 async def _force_no_training_done(dut):
-    """Continuously pin u_tacc.training_done low (row #7).
+    """Continuously pin u_tacc.training_done AND training_done_pkt low (row #7).
 
-    training_acc.v declares `output reg training_done`, written only inside
-    its own sequential always block (set once at window completion, cleared
-    at reset/re-arm) -- NOT a continuously-recomputed combinational copy of
-    some other register (that would need the psram_en-style "force the real
-    state-holding element" workaround from test_psram_status_overflow_bit_
-    wiring/test_psram_en_glitch.py). A single poke would still be silently
-    overwritten the instant the real accumulator completes, so this re-pokes
-    it to 0 every clock, for as long as the coroutine runs, to guarantee the
-    FSM can never observe a training_done edge -- the only way out of
-    ST_PREAMBLE_ACQ is then the acq_cnt==0 timeout branch under test."""
+    training_acc.v declares `output reg training_done` / `output reg
+    training_done_pkt`, written only inside its own sequential always block
+    (set once at window completion, cleared at reset/re-arm) -- NOT a
+    continuously-recomputed combinational copy of some other register (that
+    would need the psram_en-style "force the real state-holding element"
+    workaround from test_psram_status_overflow_bit_wiring/test_psram_en_
+    glitch.py). A single poke would still be silently overwritten the instant
+    the real accumulator completes, so this re-pokes both to 0 every clock,
+    for as long as the coroutine runs.
+
+    Both must be held: since Open Risk #68 the packet FSM / w_pending consume
+    the packet-mode-only `training_done_pkt`, while the TRAINING_DONE IRQ /
+    PACKET_STATUS bit still track raw `training_done` -- and this test asserts
+    on both (no W_PENDING transition, IRQ[1] stays clear). Holding both low
+    guarantees the only exit from ST_PREAMBLE_ACQ is the acq_cnt==0 timeout
+    branch under test."""
     while True:
         await RisingEdge(dut.IQ_CLK)
         dut.u_dut.u_tacc.training_done.value = 0
+        dut.u_dut.u_tacc.training_done_pkt.value = 0
 
 
 @cocotb.test()

@@ -561,6 +561,9 @@ module trouper_top (
     wire [31:0] timing_ref;
     wire [15:0] sc_stat;
     wire        sc_hit_dbg;    // 1-cycle pulse: noise-window contamination latch
+    wire        sc_pipe_active; // Open Risk #66: SC eval pipeline in flight
+    wire        sc_eval_done_pulse; // Open Risk #66 P2: 1-cycle, an SC metric evaluation completed
+    wire        sc_eval_start_pulse; // Open Risk #66 P2: 1-cycle, an SC metric evaluation launched
     wire        sc_hit_hold;   // held per-symbol mirror: SC_DBG_FLAGS[0] readback
     wire [1:0]  sc_hit_cnt_dbg;
     wire [31:0] sc_first_hit_dbg, sc_lock_snap_dbg;
@@ -594,6 +597,9 @@ module trouper_top (
         .c_i0 (), .c_q0 (),
         .sc_stat              (sc_stat),
         .sc_tdm_busy_dbg      (sc_tdm_busy_dbg),
+        .sc_pipe_active       (sc_pipe_active),
+        .sc_eval_done_pulse   (sc_eval_done_pulse),
+        .sc_eval_start_pulse  (sc_eval_start_pulse),
         .sc_hit_dbg           (sc_hit_dbg),
         .sc_hit_hold          (sc_hit_hold),
         .sc_hit_count_dbg     (sc_hit_cnt_dbg),
@@ -619,7 +625,9 @@ module trouper_top (
     wire signed [31:0] Zpair_q [0:5];
     // Z_kk diagonal autocorrelation → reg_bank noise estimation
     wire [31:0]        Zdiag [0:3];
-    wire               training_done;
+    wire               training_done;      // either-mode completion (reg_bank status / IRQ, #66 block)
+    wire               training_done_pkt;  // packet-mode completion only (packet FSM + w_pending)
+    wire               noise_abort;        // armed noise window cancelled by a real sc_lock
     wire [17:0]        n_acc;
     wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
@@ -679,7 +687,9 @@ module trouper_top (
         .Zpair_i5 (Zpair_i[5]), .Zpair_q5 (Zpair_q[5]),
         .Zdiag_0  (Zdiag[0]),   .Zdiag_1  (Zdiag[1]),
         .Zdiag_2  (Zdiag[2]),   .Zdiag_3  (Zdiag[3]),
-        .training_done   (training_done),
+        .training_done     (training_done),
+        .training_done_pkt (training_done_pkt),
+        .noise_abort       (noise_abort),
         .n_acc           (n_acc),
         .training_armed  (training_armed)
     );
@@ -693,35 +703,125 @@ module trouper_top (
     wire        sigma2_valid;
     reg         noise_window_active;
     reg         noise_window_sc_seen;
+    reg         noise_window_draining;   // training_done seen; waiting for the SC
+                                         // eval pipeline to drain before the verdict
+    reg  [6:0]  noise_drain_cnt;         // fixed minimum drain, covers SC metric latency
+    reg         noise_sc_was_active;     // Open Risk #66 (P2): sc_pipe_active seen at any
+                                         // point this window -> the SC detector is live
+    reg         noise_eval_armed;        // Open Risk #66 (P2): an SC evaluation has LAUNCHED
+                                         // since the drain began
+    reg         noise_eval_seen;         // Open Risk #66 (P2): that launched-in-drain
+                                         // evaluation has now completed
     reg         sigma2_valid_r;
+
+    // SC serial metric engine is ~57 cycles deep; hold the drain phase at least
+    // this long so an evaluation that was already in flight at training_done has
+    // definitely resolved (asserted sc_hit_dbg / sc_lock, or not) before we look.
+    // sc_pipe_active can read low for a cycle right after training_done while the
+    // contaminating evaluation is still mid-pipe -- the fixed count closes that
+    // race; the !sc_pipe_active term then only extends the wait if needed.
+    localparam [6:0] NOISE_DRAIN_MIN = 7'd72;
 
     // Firmware-triggered noise measurements reuse training_acc noise mode.
     // Accept the resulting Zdiag window only if no SC activity appeared while
     // the measurement was in flight.
+    //
+    // Open Risk #66: sc_hit_dbg / sc_lock are REGISTERED sc_detector outputs.
+    // A non-locking hit whose evaluation overlapped the window can register its
+    // sc_hit_dbg pulse a variable number of edges AFTER training_done (the
+    // serial metric engine is ~57 cycles deep), so simply peeking at sc_hit_dbg
+    // on the training_done edge misses it. Instead, on training_done enter a
+    // drain phase -- keep noise_window_active high so the sc_hit_dbg/sc_lock
+    // sampler below keeps running -- and hold the verdict until ALL of:
+    //   (1) a fixed NOISE_DRAIN_MIN count has elapsed (>= metric-engine depth);
+    //   (2) sc_pipe_active is low (no TDM burst / evaluation in flight);
+    //   (3) IF the SC detector is live this window (noise_sc_was_active): an SC
+    //       evaluation that was *launched after* the drain began has completed
+    //       (noise_eval_armed -> noise_eval_seen). An evaluation only launches
+    //       at a symbol boundary, so (2) alone does not prove the symbol that
+    //       was accumulating at training_done has been judged; and one already
+    //       in flight at training_done was fed the *previous* symbol, so it
+    //       must not count (Open Risk #66 P2). If the SC detector never ran this
+    //       window (PSRAM / SC-delay path disabled -> no evaluations at all),
+    //       there is no contamination to wait for and (3) is skipped so
+    //       NOISE_READY cannot deadlock.
+    // Worst-case NOISE_READY latency grows by ~1 symbol period, irrelevant for
+    // the AGC noise-EMA use. Safe-biased: a stray hit AFTER the window merely
+    // suppresses this measurement (firmware retries); it can never let a
+    // contaminated window through.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            noise_window_active  <= 1'b0;
-            noise_window_sc_seen <= 1'b0;
-            sigma2_valid_r       <= 1'b0;
+            noise_window_active   <= 1'b0;
+            noise_window_sc_seen  <= 1'b0;
+            noise_window_draining <= 1'b0;
+            noise_drain_cnt       <= 7'd0;
+            noise_sc_was_active   <= 1'b0;
+            noise_eval_armed      <= 1'b0;
+            noise_eval_seen       <= 1'b0;
+            sigma2_valid_r        <= 1'b0;
         end else begin
-            sigma2_valid_r <= 1'b0;
+            sigma2_valid_r    <= 1'b0;
 
+            // Open Risk #66/#68: ONE priority ladder. The previous two-chain
+            // form let a fresh trigger accepted on the drain-release edge race
+            // the old window's verdict (verdict won -> new window silently
+            // lost). A fresh trigger now unconditionally wins and starts a
+            // clean window, pre-empting any in-progress drain/verdict; the
+            // abandoned measurement is fine (firmware asked for a new one).
             if (noise_trig_accept) begin
-                noise_window_active  <= 1'b1;
-                noise_window_sc_seen <= 1'b0;
-            end else if (noise_window_active && (sc_hit_dbg || sc_lock)) begin
-                noise_window_sc_seen <= 1'b1;
-            end
+                noise_window_active   <= 1'b1;
+                noise_window_sc_seen  <= 1'b0;
+                noise_window_draining <= 1'b0;
+                noise_drain_cnt       <= 7'd0;
+                noise_sc_was_active   <= 1'b0;
+                noise_eval_armed      <= 1'b0;
+                noise_eval_seen       <= 1'b0;
+            end else if (noise_window_active && noise_abort) begin
+                // A real packet pre-empted this firmware noise measurement
+                // (training_acc cancelled the window). Drop it with no verdict:
+                // firmware's NOISE_READY wait times out and it retries once the
+                // packet clears.
+                noise_window_active   <= 1'b0;
+                noise_window_sc_seen  <= 1'b0;
+                noise_window_draining <= 1'b0;
+                noise_drain_cnt       <= 7'd0;
+                noise_sc_was_active   <= 1'b0;
+                noise_eval_armed      <= 1'b0;
+                noise_eval_seen       <= 1'b0;
+            end else if (noise_window_active) begin
+                if (sc_hit_dbg || sc_lock)
+                    noise_window_sc_seen <= 1'b1;
+                if (sc_pipe_active)
+                    noise_sc_was_active <= 1'b1;   // SC detector is live this window
 
-            if (noise_window_active && training_done) begin
-                // Include the current-cycle SC activity: sc_hit_dbg / sc_lock
-                // set noise_window_sc_seen with a non-blocking assignment above,
-                // so a hit landing on the completion edge would otherwise be
-                // missed by the stale-read of noise_window_sc_seen here
-                // (Open Risk #66).
-                sigma2_valid_r       <= ~(noise_window_sc_seen || sc_hit_dbg || sc_lock);
-                noise_window_active  <= 1'b0;
-                noise_window_sc_seen <= 1'b0;
+                if (!noise_window_draining) begin
+                    if (training_done) begin
+                        noise_window_draining <= 1'b1;      // start draining
+                        noise_drain_cnt       <= NOISE_DRAIN_MIN;
+                        noise_eval_armed      <= 1'b0;
+                        noise_eval_seen       <= 1'b0;
+                    end
+                end else begin
+                    if (noise_drain_cnt != 7'd0)
+                        noise_drain_cnt <= noise_drain_cnt - 7'd1;
+                    // Open Risk #66 (P2): only an evaluation that LAUNCHED after
+                    // the drain began covers the symbol holding the noise-window
+                    // tail. Arm on its start pulse, latch seen on its completion.
+                    if (sc_eval_start_pulse)
+                        noise_eval_armed <= 1'b1;
+                    if (sc_eval_done_pulse && noise_eval_armed)
+                        noise_eval_seen <= 1'b1;
+                    if (noise_drain_cnt == 7'd0 && !sc_pipe_active &&
+                            (!noise_sc_was_active || noise_eval_seen)) begin
+                        sigma2_valid_r        <= ~(noise_window_sc_seen || sc_lock);
+                        noise_window_active   <= 1'b0;
+                        noise_window_sc_seen  <= 1'b0;
+                        noise_window_draining <= 1'b0;
+                        noise_sc_was_active   <= 1'b0;
+                        noise_eval_armed      <= 1'b0;
+                        noise_eval_seen       <= 1'b0;
+                    end
+                end
             end
         end
     end
@@ -766,11 +866,13 @@ module trouper_top (
     // debug/readback paths.
     wire W_valid;
 
-    // W_pending: training complete but W not yet committed this packet
+    // W_pending: training complete but W not yet committed this packet.
+    // Gated on training_done_pkt (packet-mode only) so a firmware noise-window
+    // completion can never raise w_pending / advance the packet FSM.
     reg  w_pending;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n)             w_pending <= 1'b0;
-        else if (training_done) w_pending <= 1'b1;
+        if (!rst_n)                 w_pending <= 1'b0;
+        else if (training_done_pkt) w_pending <= 1'b1;
         else if (W_commit_hw || !packet_active) w_pending <= 1'b0;
 
     packet_ctrl_fsm u_pcfsm (
@@ -782,7 +884,7 @@ module trouper_top (
         .sample_shift    (rb_sample_shift),
         .sc_lock         (sc_lock),
         .timing_ref      (timing_ref),
-        .training_done   (training_done),
+        .training_done   (training_done_pkt),
         .W_commit        (W_commit_hw),
         .mode_shadow     (rb_mimo_mode),
         .antenna_en_shadow (rb_antenna_en),

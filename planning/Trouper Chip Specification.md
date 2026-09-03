@@ -192,7 +192,45 @@ The standalone `frontend_buf_ctrl.v` block and its on-chip SRAM delay line are d
 
 Computes all-pairs cross-correlations Z_kl and diagonal autocorrelations Z_kk over the training window.
 
-> **Zdiag headroom note:** the 32-bit Z_kk accumulator reaches exactly 2^32 (1-count overflow) only at the pathological corner — SF12/125 kHz, 8-symbol window (n_acc = 131072), both I and Q railed at −128 for the whole window. Under the TRPR-MRC-009 AGC contract (≤ 90 counts) worst case is ≈ 2.1e9, ≥ 2× margin. Accepted; documented rather than widened.
+> **Z accumulator saturation (normative, Open Risk #63):** the Z accumulators
+> are 32-bit and **saturate** rather than wrap. Each of the 6 off-diagonal
+> `Zpair` components (signed int32, real and imaginary separately) SHALL clamp
+> at `32'h7FFF_FFFF` on positive overflow and `32'h8000_0000` on negative
+> overflow; each of the 4 diagonal `Zdiag` accumulators (unsigned int32) SHALL
+> clamp at `32'hFFFF_FFFF`. The clamp is implemented as saturating add helpers
+> (`sadd32` / `uadd32` in `training_acc.v`) applied at every accumulate site: a
+> would-be overflow is replaced by the rail value, never a wrapped (sign- or
+> magnitude-inverted) small value. `Zdiag` is a sum of squares and is therefore
+> monotonically non-decreasing, so a `Zdiag` reading at the rail is a true
+> "≥ 2^32" indication. `Zpair` is signed and a later opposite-sign contribution
+> can move it back off a rail; a `Zpair` reading at the rail therefore means
+> only "at least one partial sum reached the limit during this window", not that
+> the final magnitude is maximal.
+>
+> **Headroom (corrected).** The AGC contract TRPR-MRC-009 bounds the *per-branch
+> complex-envelope magnitude* `sqrt(I^2 + Q^2) <= 90` counts (the −3 dBFS point,
+> 0.707 × 127) — it does **not** bound I and Q independently. The largest legal
+> training window is `TACC_WINDOW_SYMS = 15` at SF12 / 125 kHz, i.e.
+> `M = 1 << (12 + 2) = 16384`, `n_acc_max = 15 × 16384 = 245 760` samples. Per
+> sample: `|raw_k|^2 <= 90^2 = 8100`, and for two equal-power fully phase-aligned
+> branches a `Zpair` component contribution `<= 90 × 90 = 8100`. Over the full
+> window:
+>
+> | Accumulator | Worst-case at AGC ceiling | Rail | Margin |
+> |---|---|---|---|
+> | `Zdiag` (unsigned) | ≈ 8100 × 245 760 ≈ 1.99e9 | 2^32 ≈ 4.29e9 | ≈ 2.16× |
+> | `Zpair` component (signed) | ≈ 8100 × 245 760 ≈ 1.99e9 | 2^31 ≈ 2.15e9 | ≈ 1.08× |
+>
+> So at the AGC ceiling with correlated equal-power branches and the maximum
+> window, a `Zpair` component sits at ≈ 93 % of the signed rail — the saturation
+> is genuinely load-bearing near the operating point for `Zpair` (any AGC
+> excursion above −3 dBFS, or branch power imbalance that raises one envelope
+> while the product still grows, tips it over). `Zdiag` keeps > 2× margin and
+> overflows only under real overdrive. Firmware reads Z_kl / Z_kk top-24-bits
+> [31:8] (TRPR-TAC-004/005); a `Zdiag` value at the rail indicates sustained
+> overdrive, a `Zpair` component at the rail indicates the correlation product
+> reached full scale during the window and the eigenvector/row-sum weight for
+> that pair should be treated as a lower bound.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
