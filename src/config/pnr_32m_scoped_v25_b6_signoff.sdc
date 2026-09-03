@@ -1,12 +1,19 @@
 # pnr_32m_scoped_v25_b6_signoff.sdc
 # ============================================================================
-# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus ONE
-# extra exception group -- `tacc_accumulate` (v28, 2026-08-27, marked below).
+# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus two
+# marked signoff-only additions:
+#   v28 (2026-08-27) -- the `tacc_accumulate` exception group.
+#   v29 (2026-09-03) -- PSRAM QPI source-synchronous output timing (Open Risk
+#        #69): a PSRAM_SCK generated clock + CE#/SIO output delays + read-data
+#        input delays, and exclusion of those pads from the generic core-output
+#        rule.
 # It is used as SIGNOFF_SDC_FILE only; PNR_SDC_FILE stays the plain
 # pnr_32m_scoped_v25_b6.sdc so the placed/routed netlist is bit-for-bit the
 # job-5105 flow (adding tacc_accumulate to the P&R SDC strands the IQ_CLK root
-# clkbuf with no routing access point -- DRT-0073, job 5112).
-# Keep everything except the marked v28 block identical to the P&R SDC.
+# clkbuf with no routing access point -- DRT-0073, job 5112; the PSRAM
+# generated clock is kept out of the P&R SDC for the same class of reason
+# until a routed run clears it).
+# Keep everything except the marked v28 / v29 blocks identical to the P&R SDC.
 # ============================================================================
 #
 # pnr_32m_scoped_v25_b6.sdc
@@ -473,21 +480,57 @@ set_input_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MOSI]
 set_output_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
 set_output_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
 
+# --- PSRAM QPI source-synchronous output timing (Open Risk #69) --------------
+# SIGNOFF-ONLY divergence #2 (v29).  psram_buf_ctrl forwards a gated copy of
+# IQ_CLK on PSRAM_SCK_OUT and launches CE#/SIO on the FALLING core-clock edge
+# (the negedge output stage), so a real APS6404L samples the bus on the SCK
+# rising edge with ~half a core period of setup.  The plain P&R SDC still
+# constrains these pads to IQ_CLK (generic core-output rule) -- migrating this
+# generated clock into the P&R SDC needs its own routed run to rule out a
+# clock-tree / DRT-0073 perturbation on the SCK path, so it is checked here
+# only.
+create_generated_clock -name PSRAM_SCK -source [get_ports IQ_CLK] \
+    -divide_by 1 [get_ports PSRAM_SCK_OUT]
+set psram_out_ports [get_ports {PSRAM_CE_N_OUT PSRAM_SIO_0_OUT PSRAM_SIO_1_OUT \
+                                PSRAM_SIO_2_OUT PSRAM_SIO_3_OUT}]
+# APS6404L data setup 2 ns / hold 2 ns (datasheet p.23).  Zero PCB-flight
+# baseline -- add measured trace delay before tapeout.
+set_output_delay -max 2.0  -clock PSRAM_SCK $psram_out_ports
+set_output_delay -min -2.0 -clock PSRAM_SCK $psram_out_ports
+# Read data: the PSRAM launches on its SCK edge; psram_buf_ctrl samples sio_in
+# on the core rising edge.  6 dummy cycles precede the first data nibble.
+set psram_in_ports [get_ports {PSRAM_SIO_0_IN PSRAM_SIO_1_IN \
+                               PSRAM_SIO_2_IN PSRAM_SIO_3_IN}]
+set_input_delay -max 8.0 -clock PSRAM_SCK $psram_in_ports
+set_input_delay -min 2.0 -clock PSRAM_SCK $psram_in_ports
+
 # IQ vectors are reassembled inside trouper_top; the physical top-level ports
 # are scalar per antenna.  Constrain the actual pad ports, not the internal
 # IQ_DATA_I/Q vector nets (which get_ports cannot see).
+#
+# Open Risk #70: the SX1257 presents its 1-bit I/Q streams valid around the
+# FALLING edge of the shared clock, so trouper_top recaptures these pads on
+# `negedge IQ_CLK` before the datapath consumes them (~half a period of
+# setup).  Data launches on the SX1257's rising IQ_CLK edge; -max 6.0 is a
+# baseline covering SX1257 clock-to-data + PCB flight -- replace with the
+# datasheet tCK-to-data and measured flight time before tapeout.
 set iq_input_ports [get_ports {IQ_DATA_I_0 IQ_DATA_I_1 IQ_DATA_I_2 IQ_DATA_I_3 \
                                IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3}]
-set_input_delay  -max 2.0 -clock IQ_CLK $iq_input_ports
-set_input_delay  -min 1.0 -clock IQ_CLK $iq_input_ports
+set_input_delay  -max 6.0 -clock IQ_CLK $iq_input_ports
+set_input_delay  -min 0.0 -clock IQ_CLK $iq_input_ports
 # SPI_MISO_OUT is constrained to SPI_SCK above, so it must be excluded here.
 # OpenSTA has no remove_from_collection (Synopsys-only; it errors out with
 # "invalid command name" and kills pre-PNR STA -- probed on the chipathon26
 # image, job 5211).  OpenSTA collections are plain Tcl lists and get_full_name
 # works on a port, so filter by name instead.
+# PSRAM_SCK_OUT (a generated-clock source) and the PSRAM CE#/SIO outputs are
+# constrained to PSRAM_SCK above (Open Risk #69) -- also excluded here.
+set psram_sync_outs {PSRAM_SCK_OUT PSRAM_CE_N_OUT PSRAM_SIO_0_OUT \
+                     PSRAM_SIO_1_OUT PSRAM_SIO_2_OUT PSRAM_SIO_3_OUT}
 set core_output_ports {}
 foreach p [all_outputs] {
-    if {[get_full_name $p] ne "SPI_MISO_OUT"} {
+    if {[get_full_name $p] ne "SPI_MISO_OUT"
+        && [lsearch -exact $psram_sync_outs [get_full_name $p]] < 0} {
         lappend core_output_ports $p
     }
 }

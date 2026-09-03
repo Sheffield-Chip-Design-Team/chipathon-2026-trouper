@@ -233,8 +233,11 @@ module trouper_top (
 );
 
     // Reassemble scalar physical pins into the vectors used inside the design.
-    wire [3:0] IQ_DATA_I = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
-    wire [3:0] IQ_DATA_Q = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
+    // IQ_DATA_*_raw are the raw pad values; IQ_DATA_I/Q below are the
+    // negedge-recaptured, datapath-facing versions (Open Risk #70).
+    wire [3:0] IQ_DATA_I_raw = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
+    wire [3:0] IQ_DATA_Q_raw = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
+    reg  [3:0] IQ_DATA_I, IQ_DATA_Q;
     wire [3:0] PSRAM_SIO_OUT;
     wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
                                PSRAM_SIO_1_IN, PSRAM_SIO_0_IN};
@@ -401,6 +404,26 @@ module trouper_top (
     // =========================================================================
     wire clk   = IQ_CLK;
     wire rst_n = RESETB;
+
+    // ---- SX1257 IQ input capture (Open Risk #70) ---------------------------
+    // The SX1257 presents its 1-bit ΣΔ I/Q streams valid around the FALLING
+    // edge of the shared clock (DS_SX1257 §5.1 RX digital interface: the data
+    // transition region is at the rising edge; tDATA hold ≥ 25 ns past the
+    // falling edge).  Capturing them on `negedge clk` samples mid data-eye and
+    // gives the rising-edge datapath a full half cycle (~15.6 ns @ 32 MHz) of
+    // settle before it consumes the value — the previous code fed the raw pads
+    // straight into a `posedge clk` block, sampling in the transition window.
+    // Feeds BOTH the decimator and the debug probe so nothing downstream sees
+    // an un-recaptured pad value.
+    always @(negedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            IQ_DATA_I <= 4'd0;
+            IQ_DATA_Q <= 4'd0;
+        end else begin
+            IQ_DATA_I <= IQ_DATA_I_raw;
+            IQ_DATA_Q <= IQ_DATA_Q_raw;
+        end
+    end
 
     // ---- 16 MHz clock-enable (control-plane functional domain) --------------
     // Single 32 MHz clock; CE-gated FFs update every OTHER cycle, so their

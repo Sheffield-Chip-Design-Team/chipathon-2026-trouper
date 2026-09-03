@@ -407,10 +407,17 @@ set_false_path -to   [get_ports SPI_MISO_OUT]
 # IQ vectors are reassembled inside trouper_top; the physical top-level ports
 # are scalar per antenna.  Constrain the actual pad ports, not the internal
 # IQ_DATA_I/Q vector nets (which get_ports cannot see).
+#
+# Open Risk #70: the SX1257 presents its 1-bit I/Q streams valid around the
+# FALLING edge of the shared clock, so trouper_top recaptures these pads on
+# `negedge IQ_CLK` before the datapath consumes them (~half a period of
+# setup).  Data launches on the SX1257's rising IQ_CLK edge; -max 6.0 is a
+# baseline covering SX1257 clock-to-data + PCB flight -- replace with the
+# datasheet tCK-to-data and measured flight time before tapeout.
 set iq_input_ports [get_ports {IQ_DATA_I_0 IQ_DATA_I_1 IQ_DATA_I_2 IQ_DATA_I_3 \
                                IQ_DATA_Q_0 IQ_DATA_Q_1 IQ_DATA_Q_2 IQ_DATA_Q_3}]
-set_input_delay  -max 2.0 -clock IQ_CLK $iq_input_ports
-set_input_delay  -min 1.0 -clock IQ_CLK $iq_input_ports
+set_input_delay  -max 6.0 -clock IQ_CLK $iq_input_ports
+set_input_delay  -min 0.0 -clock IQ_CLK $iq_input_ports
 # SPI_MISO_OUT is constrained to SPI_SCK above, so it must be excluded here.
 # OpenSTA has no remove_from_collection (Synopsys-only; it errors out with
 # "invalid command name" and kills pre-PNR STA -- probed on the chipathon26

@@ -36,7 +36,8 @@ module psram_model #(
     input  wire        ce_n,        // from psram_buf_ctrl
     input  wire [3:0]  sio_out,     // controller → model (valid when sio_oe=1)
     input  wire [3:0]  sio_oe,      // 1 = controller driving, 0 = model drives
-    output reg  [3:0]  sio_in       // model → controller (read data)
+    output reg  [3:0]  sio_in,      // model → controller (read data)
+    input  wire        sck          // real gated PSRAM clock (Open Risk #69 guardrail only)
 );
     // Nibble-addressed memory: every QPI access moves exactly one 4-bit nibble,
     // so a single full-word read/write per cycle keeps this a clean, inferable
@@ -121,6 +122,19 @@ module psram_model #(
             end
         end
     end
+
+    // ---- Open Risk #69 guardrail -------------------------------------------
+    // The data path above is posedge-clk_32m and is unaffected by the launch
+    // edge, so it cannot catch a regression to same-edge (posedge) SIO/CE#
+    // launch.  This check uses the REAL gated SCK: the controller must move
+    // CE#, SIO data and OE only while SCK is low, so a real PSRAM samples a
+    // stable bus on the SCK rising edge.  Simulation-only.
+`ifndef SYNTHESIS
+    always @(sio_out or ce_n or sio_oe) begin
+        if (rst_n === 1'b1 && $time > 0 && sck === 1'b1)
+            $error("psram_model: PSRAM pad changed while SCK high @ %0t (same-edge launch regression?)", $time);
+    end
+`endif
 
 endmodule
 `default_nettype wire

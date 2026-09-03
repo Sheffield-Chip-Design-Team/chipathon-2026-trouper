@@ -1577,6 +1577,31 @@ Open Risks #14, #38 (same class, Host SPI port).
 **Found:** 2026-09-03 interface-timing review (applies equally to
 `pinout/dbg1-shared-irq-pad-27` — the interface files are byte-identical).
 
+**Fix landed 2026-09-03 (RTL + guardrail + signoff SDC):**
+`psram_buf_ctrl.v` — the FSM keeps computing the intended pad state on
+`posedge clk_32m` into `ce_n_pre` / `sio_out_pre` / `sio_oe_pre` /
+`sck_en_pre`; a new `always @(negedge clk_32m)` output-launch stage
+republishes them (and the SCK gate-enable) on the FALLING edge, so CE#, SIO
+data and SCK all change in the SCK-low phase and the PSRAM samples on the
+next rising SCK edge with ~half a core period (~15.6 ns) of setup. First
+command nibble is published on the same negedge as `sck_en` (half-cycle
+preload). No glitch/runt — `sck_en` only changes while `clk_32m=0`. Formal
+harness fed the `*_pre` (posedge-domain) signals, so its cycle-accurate
+properties are unchanged. cocotb is bit-identical: `psram_model.v` samples
+CE#/SIO on `posedge clk_32m` and the negedge republish lands in the same
+posedge window. `psram_model.v` gains an `sck` port + a simulation-only
+guardrail (`sio_out`/`ce_n`/`sio_oe` must not change while `sck` is high) —
+wired through `PSRAM_SCK_OUT` in `tb_trouper_cocotb.v` / `tb_array_pair.v`.
+Signoff SDC (v29 divergence): `PSRAM_SCK` generated clock off `IQ_CLK`,
+`set_output_delay ±2.0` (APS6404L setup/hold) on CE#/SIO vs `PSRAM_SCK`,
+`set_input_delay 2.0/8.0` on read data, and those pads excluded from the
+generic core-output rule. The P&R SDC is left unchanged (the generated
+clock stays out of it until a routed run clears the SCK-path clock-tree /
+DRT-0073 question — same caution as the v28 `tacc_accumulate` split).
+**Stays OPEN** pending SGE regression (job 5502) + an A40 `trouper_top`
+signoff P&R run confirming no timing/DRC regression and the new PSRAM
+source-sync group is MET.
+
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 
 `sd_decimator_poly.v` samples the raw `iq_in_i/q` 1-bit streams directly in
@@ -1609,6 +1634,21 @@ datasheet + PCB-derived values.
 `src/config/pnr_32m_scoped_v25_b6_signoff.sdc:481`; `planning/Pinout.md`;
 `planning/System Architecture.md`; Open Risk #38.
 **Found:** 2026-09-03 interface-timing review.
+
+**Capture-edge fix landed 2026-09-03 (datasheet confirmed: SX1257 I/Q valid
+around the falling clock edge).** `trouper_top.v` now recaptures the eight
+IQ pad bits in an `always @(negedge clk)` stage (`IQ_DATA_I/Q` are the
+recaptured regs; `IQ_DATA_*_raw` the raw pads) and feeds both the decimator
+and the debug probe from it — the rising-edge datapath gets a full half
+cycle (~15.6 ns) of settle instead of sampling mid-transition. Both SDCs:
+IQ `set_input_delay` re-commented for the negedge capture and set to
+`-max 6.0 / -min 0.0 -clock IQ_CLK` (baseline for SX1257 clock-to-data +
+PCB flight; still to be replaced with datasheet + measured values).
+**Stays OPEN** on two counts: (1) the clock-topology contradiction between
+`Pinout.md` (SX1257 pin-10 CLK_OUT → IQ_CLK) and `System Architecture.md`
+(central TCXO / PCB buffer) still needs the board owner to pick one
+authoritative path; (2) SGE regression (job 5502) + an A40 P&R run to
+confirm no datapath regression from the added negedge stage.
 
 ## Moderate
 
