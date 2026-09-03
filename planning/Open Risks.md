@@ -2450,19 +2450,39 @@ None of this surfaced in the existing cocotb SF/BW sweeps or
 already-initialized state or use idealized/instant power-up — they don't
 exercise power-on ordering itself.
 
-**Found:** 2026-07-05, while investigating PSRAM QSPI clocking margin.
+**5. PSRAM power-up SIO-low / CE#-high state is a board obligation the ASIC
+cannot meet alone** (added 2026-09-04, interface review). During the
+APS6404L's first 150 µs the datasheet requires SCK low, CE# high tracking
+VDD, SIO[3:0] low, no commands, then a software reset. Under ASIC reset the
+PSRAM pads are Hi-Z with internal pulls disabled (`trouper_top.v` ties
+`PSRAM_SIO_*` / `PSRAM_SCK_*` / `PSRAM_CE_N_*` `_PU`=`_PD`=`0` — see the
+`planning/Pinout.md` pad-tie-off table), so the ASIC does not hold the bus
+in the required state. The board must provide: weak pull-downs on
+`PSRAM_SCK` and `PSRAM_SIO[3:0]`; a pull-up on `PSRAM_CE_N` to the PSRAM
+supply; a low-ESR 1 µF cap close to PSRAM VDD; firmware `PSRAM_EN` held off
+≥ 150 µs after PSRAM power is valid (this is item 1's firmware wait, now
+also an electrical requirement); total PSRAM-net loading within the
+datasheet's 15 pF characterisation limit. Not checkable in RTL/sim — verify
+on the test-PCB schematic and at bring-up. See #69 (PSRAM interface
+timing).
+
+**Found:** 2026-07-05, while investigating PSRAM QSPI clocking margin
+(item 5 added 2026-09-04).
 
 **Testbench added:** `cocotb/tests/test_startup.py` (6 tests, all PASS,
 SGE job 3257) — first-transaction-after-reset at 3 clock phases (regression
 for item 26), the tPU-race and tRST-margin characterizations above, and the
 SC hold-off check. Items 1 and 3 remain open (no on-chip fix, by design
 pending firmware/board discipline); item 2 is downgraded from risk to
-regression coverage; item 4 is confirmed working as intended.
+regression coverage; item 4 is confirmed working as intended; item 5 is
+board-only (no sim hook possible).
 
 **Next steps:** first hardware bring-up on the test PCB (a few weeks out)
-will validate items 1 and 3 against a real PSRAM part and real RESETB
+will validate items 1, 3 and 5 against a real PSRAM part and real RESETB
 behavior — sim can characterize the digital logic's assumptions but not the
-analog reset/power-rail behavior itself.
+analog reset/power-rail behavior itself. Item 5 also needs a test-PCB
+schematic review (PSRAM pull-downs / CE# pull-up / decoupling / net load)
+before fab.
 
 ### 67. Debug probe's `qpi_busy` source is permanently asserted after PSRAM init
 
