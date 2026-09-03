@@ -1649,11 +1649,22 @@ cycle (~15.6 ns) of settle instead of sampling mid-transition. Both SDCs:
 IQ `set_input_delay` re-commented for the negedge capture and set to
 `-max 6.0 / -min 0.0 -clock IQ_CLK` (baseline for SX1257 clock-to-data +
 PCB flight; still to be replaced with datasheet + measured values).
-**Stays OPEN** on two counts: (1) the clock-topology contradiction between
-`Pinout.md` (SX1257 pin-10 CLK_OUT → IQ_CLK) and `System Architecture.md`
-(central TCXO / PCB buffer) still needs the board owner to pick one
-authoritative path; (2) SGE regression (job 5502) + an A40 P&R run to
-confirm no datapath regression from the added negedge stage.
+**Clock source — leaning SX1257_1 CLK_OUT direct (2026-09-03).** Board
+owner's current plan is to drive `IQ_CLK` straight from SX1257_1 pin 10
+`CLK_OUT` (simplest — matches `Pinout.md`, no extra PCB fanout buffer);
+`System Architecture.md`'s "central TCXO / PCB buffer" wording is the one
+to correct once confirmed. The **FPGA AFE PCB bring-up test (week of
+2026-09-08)** decides it. This is also what makes the negedge-capture fix
+above correct: it assumes the SX1257's data-launch clock *is* `IQ_CLK`
+(same net, only matched PCB flight between them). If the PCB test forces a
+separate fanout buffer, the extra buffer skew between the SX1257 launch
+clock and `IQ_CLK` has to be re-characterised and the capture edge /
+`set_input_delay` re-checked.
+
+**Stays OPEN** pending: (1) the PCB-test decision above + the
+`System Architecture.md` / `Pinout.md` reconciliation; (2) SGE regression
+(job 5503) + an A40 P&R run confirming no datapath regression from the
+added negedge stage.
 
 ## Moderate
 
