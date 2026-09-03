@@ -1606,9 +1606,32 @@ v28 `tacc_accumulate` split). SGE regression **job 5503 CLEAN** — all 50
 core+capture suites PASS (`psram_ops`, `qspi_owner`, `replay_data`,
 `replay_delay`, `capture_two_packet`, `weight_gen_spi_flow`,
 `trouper_capture`, `trouper_top` 18/18); the `psram_model` SCK guardrail
-never fired (CE#/SIO only move while SCK is low). **Stays OPEN** pending the
-A40 `trouper_top` signoff P&R run (job 5504) confirming no timing/DRC
-regression and that the new PSRAM source-sync group is MET.
+never fired (CE#/SIO only move while SCK is low).
+
+**A40 P&R — SGE job 5504** (`src/config/trouper_top.json`, current `src/`
++ both SDCs, distinct run dir). **Physically signoff-clean:** Magic DRC 0,
+LVS 0, XOR 0, antenna 0/0, route DRC 0, hold MET all corners (SS hold WS
++1.71). **No DRT-0073** — the signoff-SDC v29 `PSRAM_SCK` generated clock
+did not perturb routing. DRV *improved*: SS max-slew 39→18, max-cap 11→7;
+nom_tt 17/7→3/3. Instance count 126174→126903 (+729: the 18 added negedge
+FFs + their repair).
+
+**SS setup regressed: WNS −10.77→−14.20 ns, TNS −370→−1389.** Worst path is
+`psram_buf_ctrl.buf_active` FF → ~11 levels of `_1`-strength gates (6–10 ns
+slews, an unrepaired cone) → `DBG0_OUT`; 2nd-worst same start → `IRQ_OUT`
+(the shared DBG1 pad). This debug-output cone was already 2nd-worst in job
+5499 (`buf_active`→`IRQ_OUT` −10.44); the 18 negedge FFs perturbed CTS +
+placement and the repair pass left it starved this run. **Not a new tapeout
+blocker** — SS 32 MHz already fails by −10.8 (the voltage problem, #1/#40),
+and the incremental hit is on debug-observability pads (`DBG0_OUT`,
+`IRQ_OUT`/`DBG1`) that already have an open SS output-delay-exception
+decision (see #57 / the `DBG0_OUT`/`IRQ_OUT_OUT` note under #1). **Follow-up
+before this is fully clean:** re-run the P&R once to separate repair-lottery
+swing from a structural change; if −14 reproduces, add `DBG0_OUT` +
+`IRQ_OUT_OUT` to an SS `set_output_delay` exception and re-check.
+
+**Stays OPEN** on the SS-regression follow-up above; the interface fix
+itself (RTL + guardrail + SDC v29) is regression- and DRC/LVS/antenna-clean.
 
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 
@@ -1665,11 +1688,16 @@ separate fanout buffer, the extra buffer skew between the SX1257 launch
 clock and `IQ_CLK` has to be re-characterised and the capture edge /
 `set_input_delay` re-checked.
 
-**Stays OPEN** pending: (1) the PCB-test decision above + the
-`System Architecture.md` / `Pinout.md` reconciliation; (2) A40 P&R run
-(job 5504) confirming no datapath regression from the added negedge stage —
 SGE regression **job 5503 CLEAN** (50/50 core+capture, `trouper_top` 18/18,
-`dc_removal` / `trouper_capture` / `capture_two_packet` all PASS).
+`dc_removal` / `trouper_capture` / `capture_two_packet` all PASS). A40 P&R
+**job 5504** signoff-clean on DRC/LVS/XOR/antenna/hold; the negedge IQ
+stage adds no datapath functional regression. SS setup WNS regressed
+−10.77→−14.20 — full analysis under #69 (a `buf_active`→debug-pad cone, not
+the IQ path; SS is #1/#40).
+
+**Stays OPEN** pending: (1) the PCB-test decision above + the
+`System Architecture.md` / `Pinout.md` reconciliation; (2) the shared
+SS-regression follow-up tracked under #69.
 
 ## Moderate
 
