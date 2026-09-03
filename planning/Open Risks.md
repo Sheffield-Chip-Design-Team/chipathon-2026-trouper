@@ -1203,7 +1203,133 @@ Verilog-legality gate, and Verilator will not catch a use-before-declare that
 the removal may have introduced). Record the job number here. Until then the
 functional status of the current netlist is **unknown, not good**.
 
+**2026-09-03 — core cocotb regression run (SGE job 5471, Verilator): 41 / 42
+suites PASS.** Every Grouper-removal-sensitive suite is green —
+`trouper_top`, `spi_slave`, `spi_cdc`, `w_missed`, `w_shadow_lock`,
+`host_only_e2e`, `dbg_write`, `dbg_write_collision`, `dbg_amask_wrap`,
+`psram_ops`, `qspi_owner`, plus the peek-tap read path exercised throughout.
+The one failure is **`reg_bank` / `test_reserved_addresses_zero_and_ignored`**:
+`0x06` is asserted reserved but is now the live `DBG_CTRL1` register added by
+the `pinout/dbg1-shared-irq-pad-27` work — a stale reserved-address list, not a
+Grouper-removal regression (tracked as a follow-up: update the reserved set in
+`cocotb/tests/test_reg_bank_rw_map.py`). **Still owed:** the Icarus
+`sim_trouper_all` Verilog-legality pass.
+
 **Found:** 2026-09-03, while assessing PR #51 for merge.
+
+### 61. SC-detector full-symbol accumulators overflow and the delayed-energy snapshot drops the boundary sample
+
+`src/frontend/sc_detector.v:141-160` supports `M = 128..16384` but keeps
+`acc_ci0`/`acc_cq0`/`acc_E0cur`/`acc_E0del` as signed 24-bit values.  A
+full-scale complex sample contributes up to 32768 energy counts, exhausting
+that signed range in 256 samples; even under the documented 90-count AGC
+operating point, the higher-SF full-symbol windows overflow.  The subsequent
+signed snapshot `acc_*[22:10]` (`:379-381`) discards the real sign bit `[23]`,
+so a positive accumulator above `2^22-1` is interpreted as negative before
+the 24-bit accumulator itself wraps.  This can suppress or corrupt every
+Schmidl-Cox hit at otherwise legal SF/BW/amplitude combinations and contradicts
+TRPR-SCD-001/003's full-`M` contract.  The 24-bit headroom comment at the top of
+the module still assumes the deleted 128-sample correlator.
+
+There is a separate last-sample error in the same block: at TDM step 7,
+`acc_E0del` is incremented and snapshotted with nonblocking assignments on the
+same edge (`:365-396`).  `eval_E0del` therefore receives the old accumulator,
+without the completed symbol's final delayed-energy contribution, after which
+the working accumulator is cleared.  Correlation and current-energy terms are
+updated at earlier TDM steps and do not share this particular omission.
+
+**Required fix/evidence:** re-derive the accumulator, snapshot, serial-multiply,
+and metric widths as one numeric pipeline for `M=16384`; include signed-range
+proofs and directed boundary tests at the highest legal amplitude.  Snapshot
+the final delayed-energy sum, not the pre-update register.  Re-run the full SF/BW
+SC detector and measured-capture regressions after the width change.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/sc_acc_overflow/`
+(unit-level, TOPLEVEL = `sc_detector`; SGE job 5474).** `test_baseline_sf7_no_overflow`
+PASSES (M=256, no overflow, `sc_lock` fires). Failing cases, all four
+sub-findings:
+- `test_sf9_energy_snapshot_sign_flip` — M=1024, cur==del==(90,90): `acc_E0cur`
+  dips to **−8 385 616** mid-symbol (true running sum +16 588 800) and the
+  `eval_E0cur` snapshot reads **−184**.
+- `test_sf9_amp64_lock_never_fires` — M=1024, amp=64: `acc_E0cur` peaks at
+  exactly **2^23**, `eval_E0cur` snapshot = 0, **`sc_lock` never asserts** for a
+  clean strong preamble.
+- `test_e0del_drops_boundary_sample` — M=64, cur==del every sample:
+  `eval_E0cur`=21 vs `eval_E0del`=**20** (step-7 same-edge NBA drops the last
+  sample).
+- `test_sf10_accumulator_true_wrap` — M=2048, amp=90: raw 24-bit `acc_E0cur`
+  wraps past 2^24, never reaches the true +33 177 600.
+
+**Found:** 2026-09-03 full `src/` RTL review; static analysis, now reproduced by
+`cocotb/sc_acc_overflow/`.
+
+### 62. IDLE `W_COMMIT` splits controller and top-level `W_valid` state
+
+`packet_ctrl_fsm.v:122-184` deliberately accepts a commit in any state and
+retains its own sticky internal `W_valid`.  `trouper_top.v:758-763` separately
+reconstructs another `W_valid` from the one-cycle `W_valid_set` pulse, then
+clears that copy whenever `packet_active=0`.  A commit consumed sufficiently
+before the next packet therefore makes the top-level copy high for only one
+idle cycle and leaves the FSM copy high.  On the next packet the FSM believes
+weights are valid and can suppress `W_MISSED_PACKET`, while the combiner still
+sees top-level `W_valid=0` and remains in bypass.  The same top-level copy drives
+`reg_bank`'s live-weight write lock, so shadow writes can also be accepted while
+the FSM believes the committed vector is valid.  This weakens the safety claim
+in item 13.
+
+The existing “commit before packet / in IDLE” test is standalone at the
+`packet_ctrl_fsm` boundary and therefore checks only the internal copy; it
+cannot observe the split introduced by `trouper_top`.
+
+**Required fix/evidence:** make one register authoritative (preferably export
+the FSM's `W_valid` level) and use it for the combiner, register readback, and
+write lock.  Add a top-level regression that commits in IDLE, waits several
+idle cycles, starts a packet, and checks combiner selection, miss status, and
+weight-write rejection through packet end.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/w_valid_split/`
+(top-level, TOPLEVEL = `tb_trouper_cocotb`; SGE job 5472).**
+`test_idle_commit_then_unrefreshed_packet` commits a weight vector in
+`ST_IDLE`, idles several symbols, then locks a packet with no fresh commit.
+Result: **`u_pcfsm.W_valid` = 1 while `trouper_top.W_valid` = 0** — the packet
+reaches `ST_PAYLOAD_ACTIVE` with `use_mrc_r` = 0 (combiner in bypass) and
+**no `W_MISSED_PACKET`** (the stale FSM copy suppresses it). Neither
+"combine with the committed vector" nor "declare it missed" happens.
+
+**Found:** 2026-09-03 full `src/` RTL review; cycle-by-cycle static trace, now
+reproduced by `cocotb/w_valid_split/`.
+
+### 63. `training_acc` signed cross-pairs overflow at a legal 15-symbol window
+
+`TACC_WINDOW_SYMS` exposes 8..15 symbols and `M` reaches 16384, so the legal
+maximum is 245760 accumulated samples (`training_acc.v:248-249`).  The six
+complex cross-pair outputs are signed 32-bit accumulators (`:55-60`).  Two
+identical branches at the documented legal component limit `I=Q=90` add 16200
+per sample to the real cross-pair, producing 3,981,312,000 at the maximum
+window — well above signed-int32 maximum, so the result wraps negative and can
+corrupt firmware MRC/eigenvector weights.  At unconstrained int8 full scale the
+unsigned 32-bit diagonals can overflow as well.  The headroom note in the chip
+specification analyses only the reset-default eight-symbol window and does not
+cover the register's legal maximum.
+
+**Required fix/evidence:** either widen the Z accumulators/readback contract or
+clamp `TACC_WINDOW_SYMS` to a value proven safe under an explicit component
+amplitude bound.  Add maximum-window constant/correlated-vector tests plus a
+noise-mode full-window stress test; document both signed cross-pair and unsigned
+diagonal bounds in the chip specification.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/tacc_acc_overflow/`
+(unit-level, TOPLEVEL = `training_acc`, noise mode; SGE job 5472).**
+`TACC_WINDOW_SYMS`=15, SF12/BW125 (M=16384), branches 0 and 1 held at
+int8 full scale (127,127):
+- `test_zpair_i_overflows_within_legal_window` — `Zpair_i0` wraps to
+  **−2 147 455 462 at sample 66 573** (of the 245 760-sample legal window).
+- `test_zdiag_overflows_within_legal_window` — `Zdiag_0` wraps
+  **4 294 959 152 → 24 114 at sample 133 145**.
+Both match the predicted `2^31 / 32258` and `2^32 / 32258` bounds.
+
+**Found:** 2026-09-03 full `src/` RTL review; arithmetic bound, now reproduced by
+`cocotb/tacc_acc_overflow/`.
 
 ## Moderate
 
@@ -1626,6 +1752,93 @@ acquisition link is a functional feature.
 and 56 were already taken on this branch by the host-SPI GLS/SDF, startup-
 sequencing and IR-drop entries respectively.)*
 
+### 64. Packet timeout is ignored until `PAYLOAD_ACTIVE`
+
+`packet_ctrl_fsm.v:164-170` decrements `pkt_cnt` throughout
+`PREAMBLE_ACQ`, `W_PENDING`, and `PAYLOAD_ACTIVE`, but the zero test exists
+only in `PAYLOAD_ACTIVE` (`:290-297`).  If `PKT_TIMEOUT_SYMS` is shorter than
+the acquisition or weight-pending deadline, the counter reaches zero without
+forcing IDLE and `packet_active` can remain asserted past the configured packet
+deadline, contrary to TRPR-PCF-007.  With `TACC_WINDOW_SYMS=8` the acquisition
+and weight deadlines are approximately 10M and 13M respectively, so a
+10-symbol timeout exposes the case when training or commit is late.  This is
+distinct from item 14, which concerns truncating an already-running delayed
+PSRAM replay at timeout.
+
+The packet-control verification plan already marks the short-packet-deadline
+case as a spec/RTL issue, but it was not present in this project-wide register.
+**Decision/fix:** either give packet timeout priority in every active state and
+add early-expiry tests, or explicitly redefine the register/specification as a
+payload-only timeout and document the resulting upper bound.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/pkt_timeout_states/`
+(unit-level, TOPLEVEL = `packet_ctrl_fsm`; SGE job 5474).** SF7/`M`=256,
+`tacc_window_syms`=8, `pkt_timeout_syms`=4 (`pkt_span`=1024):
+- `test_payload_timeout_forces_idle` (control) PASSES — the mechanism works in
+  `ST_PAYLOAD_ACTIVE`.
+- `test_preamble_acq_timeout_is_ignored` — `packet_active` stays asserted for
+  **2562 ticks** (to the acquisition deadline ≈2560) instead of ≈1024.
+- `test_wpending_timeout_is_ignored` — **3330 ticks** (to the weight-pending
+  deadline ≈3328).
+
+**Found:** confirmed 2026-09-03 during the full `src/` RTL review; previously
+noted in `planning/verification-plan/packet-ctrl-fsm-verification-plan.md` row 14;
+now reproduced by `cocotb/pkt_timeout_states/`.
+
+### 65. Remodulator backoff attenuates bypass despite the direct-stream contract
+
+`trouper_top.v:924-926` applies `REMOD_BACKOFF_SHIFT` after the combiner for
+all modes.  The reset value is one (`reg_bank.v:219`), so Mode 1 and the
+no-`W_valid` fallback lose one bit (approximately 6 dB) instead of delivering
+the selected antenna's int8 sample directly as TRPR-PCF-011/TRPR-RMD-008 and
+the MRC/remod block documents require.  The current bypass end-to-end check
+masks the mismatch by programming the shift to zero before comparing the remod
+input with `comb_y`.
+
+**Decision/fix:** either gate the shift to active MRC only and add a reset-default
+bypass regression, or explicitly change the specification and link-budget
+policy so bypass attenuation is intentional.  Any change must retain the
+re-modulator's `< -3 dBFS` stability contract.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/bypass_backoff/`
+(top-level, TOPLEVEL = `tb_trouper_cocotb`; SGE job 5472).**
+`test_bypass_keeps_reset_backoff_and_attenuates` locks in Mode 1, restores
+`COMB_CFG` to its **reset value** (`0x10`, backoff shift 1), waits for replay,
+and compares `remod_in` against `comb_y`: **0 / 50 pairings matched;
+all 50 were `comb_y >> 1`**. The reset-default bypass path loses ~6 dB.
+
+**Found:** 2026-09-03 full `src/` RTL review; reproduced by `cocotb/bypass_backoff/`.
+
+### 66. A same-cycle SC hit can falsely qualify a noise window as clean
+
+In `trouper_top.v:704-723`, a contaminating `sc_hit_dbg` sets
+`noise_window_sc_seen` and `training_done` qualifies `sigma2_valid_r` in the
+same sequential block.  If both arrive together without `sc_lock`, the
+nonblocking validity expression reads the old `noise_window_sc_seen=0` and can
+assert `NOISE_READY` for a contaminated window.  Earlier hits and same-cycle
+locks are rejected correctly; the exposed case is specifically a non-locking
+hit on the completion edge.
+
+**Required fix/evidence:** include the current-cycle hit in the completion
+predicate (for example, reject on `noise_window_sc_seen || sc_hit_dbg ||
+sc_lock`) and add an integration test for contamination one cycle before, on,
+and one cycle after `training_done`.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/noise_window_edge/`
+(SGE job 5474).** TOPLEVEL = `noise_window_qual`, a **verbatim copy** of the
+`trouper_top.v` qualification always block (the same-cycle race cannot be
+phase-aligned through the full datapath; the copy carries a KEEP-IN-SYNC
+header). Contamination one cycle before / on / after `training_done`:
+`test_clean_window_qualifies`, `test_hit_before_completion_rejected`,
+`test_lock_on_completion_edge_rejected`, `test_hit_after_completion_ignored`
+all **PASS**; `test_nonlocking_hit_on_completion_edge` **FAILS** —
+`sigma2_valid` asserts for a window a non-locking `sc_hit_dbg` contaminated on
+the completion edge. A follow-up end-to-end version (driving real SPI) would
+also close the reachability argument.
+
+**Found:** 2026-09-03 full `src/` RTL review; NBA precedence trace, reproduced by
+`cocotb/noise_window_edge/`.
+
 
 ## Low
 
@@ -1812,6 +2025,30 @@ regression coverage; item 4 is confirmed working as intended.
 will validate items 1 and 3 against a real PSRAM part and real RESETB
 behavior — sim can characterize the digital logic's assumptions but not the
 analog reset/power-rail behavior itself.
+
+### 67. Debug probe's `qpi_busy` source is permanently asserted after PSRAM init
+
+`trouper_top.v:1197-1201` feeds the debug mux's `qpi_busy` input with
+`|psram_state_dbg`.  The normal initialized PSRAM states (`S_QE_INIT`,
+`S_WRITE`, and `S_REPLAY`) are all nonzero, so debug group `101`, selector 0
+reports busy continuously after initialization rather than showing individual
+QPI transactions.  `psram_buf_ctrl` has the real internal `qpi_busy` level but
+does not export it.  SPI-visible PSRAM status and functional operation are not
+affected; this is a first-silicon observability failure.
+
+**Fix/evidence:** export the actual transaction-busy level (or rename and
+document the probe as “PSRAM initialized/active state” if that was intended),
+then check idle/write/read transitions in the debug-mux regression and update
+`planning/two-pin-digital-debug-plan.md`.
+
+**2026-09-03 — CONFIRMED by directed bench `cocotb/dbg_qpi_busy/`
+(top-level, TOPLEVEL = `tb_trouper_cocotb`; SGE job 5472).**
+`test_qpi_busy_probe_stuck_after_init` points the shared `IRQ_OUT`/DBG1 pad at
+group 101 / sel 0 and samples it for 40 000 cycles: the internal
+`u_psram.qpi_busy` reads low on **12 500** of them, the probe pad on **0** —
+stuck at 1 for every post-init state.
+
+**Found:** 2026-09-03 full `src/` RTL review; reproduced by `cocotb/dbg_qpi_busy/`.
 
 ---
 

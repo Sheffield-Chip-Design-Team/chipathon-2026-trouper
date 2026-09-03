@@ -52,6 +52,15 @@ mcp_tacc_settle"
 
 SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
 
+# Directed confirmation benches for open RTL risks (planning/Open Risks.md
+# #61/#62/#63/#64/#65/#66/#67). Each asserts the INTENDED contract and is
+# EXPECTED TO FAIL until its risk is fixed -- so they are their own group and
+# are NOT part of `core`/`all`. Run them with SUITE_GROUPS=xfail (or an explicit
+# SUITES=...). A "FAILED" line for one of these is the confirmation, not a
+# regression; the per-suite run.log names the asserting testcase.
+SUITES_XFAIL="sc_acc_overflow tacc_acc_overflow pkt_timeout_states w_valid_split \
+bypass_backoff noise_window_edge dbg_qpi_busy"
+
 # Per-suite extra make arguments. trouper_capture is the only suite whose
 # in-test defaults do not land on a packet burst -- the window below was
 # located with cocotb/tests/sweep_captures.py against this specific file, and
@@ -81,8 +90,9 @@ else
         case "$g" in
         core)    SELECTED="$SELECTED $SUITES_CORE" ;;
         capture) SELECTED="$SELECTED $SUITES_CAPTURE" ;;
+        xfail)   SELECTED="$SELECTED $SUITES_XFAIL" ;;
         all)     SELECTED="$SELECTED $SUITES_CORE $SUITES_CAPTURE" ;;
-        *) echo "unknown group '$g' (want: core, capture, all)"; exit 2 ;;
+        *) echo "unknown group '$g' (want: core, capture, xfail, all)"; exit 2 ;;
         esac
     done
 fi
@@ -95,7 +105,7 @@ UNASSIGNED=""
 for mk in "$DESIGN_ROOT"/cocotb/*/Makefile; do
     [ -e "$mk" ] || continue
     d=$(basename "$(dirname "$mk")")
-    case " $SUITES_CORE $SUITES_CAPTURE " in
+    case " $SUITES_CORE $SUITES_CAPTURE $SUITES_XFAIL " in
         *" $d "*) ;;
         *) UNASSIGNED="$UNASSIGNED $d" ;;
     esac
