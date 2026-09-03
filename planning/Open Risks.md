@@ -511,7 +511,20 @@ a dedicated proof.
 
 ## High
 
-### 68. A firmware noise-window completion is aliased as packet-training completion
+### 68. A firmware noise-window completion is aliased as packet-training completion — CLOSED 2026-09-03 (mode-tagged completion + noise-window pre-empt + round-2/3 follow-ups; regression + A40 P&R clean)
+
+> **CLOSED 2026-09-03.** Fixed on `rtl/open-risk-fixes` (commits `a844409` /
+> `8a30d2d`): `training_done_pkt` (packet-mode-only completion) + `noise_abort`
+> pre-empt pulse, plus the three round-2/3 follow-up fixes (pipeline-flush via
+> per-window `win_epoch`, retrigger-race single priority ladder, eval-boundary
+> `noise_eval_armed`/`noise_eval_seen` gate with detector-dark bypass). All
+> detailed in the body. Verified: `test_noise_trig.py` +
+> `test_noise_window_edge.py` (10/10, SGE job 5498), combined `core` + `capture`
+> regression 50 suites all PASS (SGE job 5496). A40 P&R SGE job 5499
+> (`src/config/trouper_top.json`, rebased onto `pinout/dbg1-shared-irq-pad-27`):
+> signoff-clean (DRC 0, LVS 0, XOR 0, antenna 0/0, hold MET), SS setup
+> WNS −10.77 ns / TNS −370.4 — no regression vs reference runs 5379/5378.
+> Full P&R write-up in #66.
 
 `packet_ctrl_fsm` leaves `ST_IDLE` on any `sc_lock` rising edge
 (`packet_ctrl_fsm.v:199`) with no check on `training_armed` / noise mode.
@@ -1323,7 +1336,20 @@ Grouper-removal regression (tracked as a follow-up: update the reserved set in
 
 **Found:** 2026-09-03, while assessing PR #51 for merge.
 
-### 61. SC-detector full-symbol accumulators overflow and the delayed-energy snapshot drops the boundary sample
+### 61. SC-detector full-symbol accumulators overflow and the delayed-energy snapshot drops the boundary sample — CLOSED 2026-09-03 (32-bit widen + M-dependent saturating snapshot; regression + A40 P&R clean)
+
+> **CLOSED 2026-09-03.** Fixed on `rtl/open-risk-fixes` (commit `a844409`):
+> `acc_*`/`sym_*` widened 24 → 32-bit signed, snapshot changed to the
+> arithmetic M-scaled saturating `sat13(acc >>> (sf + sample_shift + 2))`,
+> `acc_E0del` forward-combined at the symbol boundary. Verified:
+> `cocotb/sc_acc_overflow/` 5/5 (was 1/5), SF7–SF12 × BW sweep + `sc_ant_sel`
+> + `sc_dbg` PASS, full `core` + `capture` regression SGE job 5496
+> (`sc_acc_overflow` promoted into the `core` group). A40 P&R SGE job 5499
+> (`src/config/trouper_top.json`, rebased onto `pinout/dbg1-shared-irq-pad-27`):
+> signoff-clean (DRC 0, LVS 0, XOR 0, antenna 0/0), SS setup WNS −10.77 ns /
+> TNS −370.4 — between reference runs 5379 (−10.13) / 5378 (−11.17), TNS beats
+> 5379's −383.5; no regression from the accumulator widening. Full P&R
+> write-up in #66.
 
 `src/frontend/sc_detector.v:141-160` supports `M = 128..16384` but keeps
 `acc_ci0`/`acc_cq0`/`acc_E0cur`/`acc_E0del` as signed 24-bit values.  A
