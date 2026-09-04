@@ -118,12 +118,14 @@ module psram_buf_ctrl (
     input  wire        packet_active,
     input  wire        clr_err,       // write-1 pulse: clear sticky error flags
 
-    // QPI pad interface.  The FSM computes the intended pad state on
-    // posedge clk_32m into *_pre; the negedge output-launch stage (Open Risk
-    // #69) republishes ce_n / sio_out / sio_oe and the SCK gate-enable on the
-    // FALLING edge so they change while SCK is low and the PSRAM gets a full
-    // half-cycle of setup before the sampling SCK rising edge.
+    // QPI pad interface.  ce_n / sio_out / sio_oe and the raw sck_en are all
+    // posedge-clk_32m here; trouper_top relaunches them onto negedge at the pad
+    // boundary (Open Risk #69) so the PSRAM samples a stable bus on the SCK
+    // rising edge.  `sck` is the pre-#69 posedge-gated clock, kept for the
+    // FORMAL harness / block-level use; the chip's PSRAM_SCK pad is driven from
+    // sck_en_o in trouper_top, not from this port.
     output wire        sck,           // PSRAM clock (32 MHz, gated internally)
+    output wire        sck_en_o,      // raw SCK gate-enable, for the pad-boundary relaunch
     output reg         ce_n,          // PSRAM CE# active-low
     output reg  [3:0]  sio_out,       // SIO[3:0] output to PSRAM
     input  wire [3:0]  sio_in,        // SIO[3:0] input from PSRAM
@@ -274,13 +276,7 @@ module psram_buf_ctrl (
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
-    // posedge (FSM) domain intent registers; the negedge output-launch stage
-    // below relaunches them onto the pads / SCK gate (Open Risk #69).
-    reg        ce_n_pre;
-    reg [3:0]  sio_out_pre;
-    reg [3:0]  sio_oe_pre;
-    reg        sck_en_pre;   // SCK should toggle this cycle
-    reg        sck_en;       // negedge-relaunched copy that actually gates the pad
+    reg  sck_en;
     // Deferred-effect copy of qspi_owner for the pad clock gate (TRPR-PSR-011):
     // latched only between QPI bursts, so an ownership request landing mid-burst
     // lets the in-flight transaction complete with its clock running (CE# low
@@ -289,36 +285,11 @@ module psram_buf_ctrl (
     // by the raw qspi_owner at every launch site, so nothing starts after the
     // request; the effect lands at the first engine-idle boundary.
     reg  qspi_owner_eff;
-    assign sck = sck_en & clk_32m;
+    assign sck      = sck_en & clk_32m;
+    assign sck_en_o = sck_en;
 
     wire [ABITS-1:0] cur_wr = wr_ptr;
     wire [ABITS-1:0] cur_rd = rd_ptr;
-
-    // -----------------------------------------------------------------------
-    // Output launch stage (Open Risk #69).  The FSM below drives ce_n_pre /
-    // sio_out_pre / sio_oe_pre / sck_en_pre on posedge clk_32m; these flops
-    // republish them on the FALLING edge.  Because SCK = sck_en & clk_32m is
-    // held low across the negedge, CE#, SIO data and the SCK gate all change
-    // in the SCK-low phase and the PSRAM samples them on the NEXT rising SCK
-    // edge — a full half-cycle (~15.6 ns @ 32 MHz) of setup/hold, vs ~0 ns
-    // when the FSM drove the pads and `sck` gated off the same posedge.  CE#
-    // assertion/deassertion likewise lands in the SCK-low phase (tCSP, CE#
-    // hold).  The first command nibble is published on the same negedge as
-    // sck_en, so it is valid a half-cycle before the first SCK rising edge
-    // (preload).  No glitch/runt: sck_en only ever changes while clk_32m=0.
-    always @(negedge clk_32m or negedge rst_n) begin
-        if (!rst_n) begin
-            ce_n    <= 1'b1;
-            sio_out <= 4'd0;
-            sio_oe  <= 4'd0;
-            sck_en  <= 1'b0;
-        end else begin
-            ce_n    <= ce_n_pre;
-            sio_out <= sio_out_pre;
-            sio_oe  <= sio_oe_pre;
-            sck_en  <= sck_en_pre;
-        end
-    end
 
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
@@ -354,11 +325,11 @@ module psram_buf_ctrl (
             dbg_wr_pend    <= 1'b0;
             dbg_wbuf       <= 64'd0;
             dbg_widx       <= 3'd0;
-            sck_en_pre         <= 1'b0;
+            sck_en         <= 1'b0;
             qspi_owner_eff <= 1'b0;
-            ce_n_pre           <= 1'b1;
-            sio_out_pre        <= 4'd0;
-            sio_oe_pre         <= 4'd0;
+            ce_n           <= 1'b1;
+            sio_out        <= 4'd0;
+            sio_oe         <= 4'd0;
             cur_i0 <= 8'sd0; cur_q0 <= 8'sd0;
             del_i0 <= 8'sd0; del_q0 <= 8'sd0;
             del_valid      <= 1'b0;
@@ -396,7 +367,7 @@ module psram_buf_ctrl (
             state_dbg    <= state;
 
             if (!qpi_busy) qspi_owner_eff <= qspi_owner;
-            sck_en_pre <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner_eff;
+            sck_en <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner_eff;
 
             // Sticky error clear (write-1 pulse via PSRAM_CLR_ERR). Placed before
             // the per-state error sets below and before sample_skip detection, so a
@@ -495,8 +466,8 @@ module psram_buf_ctrl (
 
                 // ------------------------------------------------------------
                 S_UNINIT: begin
-                    ce_n_pre   <= 1'b1;
-                    sio_oe_pre <= 4'd0;
+                    ce_n   <= 1'b1;
+                    sio_oe <= 4'd0;
                     if (init_start && !qspi_owner) begin
                         state    <= S_QE_INIT;
                         init_sub <= 6'd0;
@@ -508,7 +479,7 @@ module psram_buf_ctrl (
                 // S_QE_INIT — one-time PSRAM software-reset + QPI-mode-entry
                 // handshake (APS6404L datasheet §12 "Reset Operation" + §11.3
                 // "QPI Quad Mode Exit/Entry"). Bit-banged over legacy 1-wire
-                // SPI mode (sio_oe_pre=4'b0001, SIO[0] only) because the PSRAM
+                // SPI mode (sio_oe=4'b0001, SIO[0] only) because the PSRAM
                 // does not understand QPI-encoded commands until after the
                 // Enter-QPI command below has been sent the slow way — none
                 // of these three commands has a data phase, the PSRAM sends
@@ -545,46 +516,46 @@ module psram_buf_ctrl (
                 // only implements the software reset triggered by init_start.
                 // ------------------------------------------------------------
                 S_QE_INIT: begin
-                    sio_oe_pre <= 4'b0001;
+                    sio_oe <= 4'b0001;
                     case (init_sub)
                         // ---- RSTEN (0x66): 8 bits MSB-first on SIO[0] ----
-                        6'd0:  begin ce_n_pre <= 1'b0; sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd1; end
-                        6'd1:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd2; end
-                        6'd2:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd3; end
-                        6'd3:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd4; end
-                        6'd4:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd5; end
-                        6'd5:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd6; end
-                        6'd6:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd7; end
-                        6'd7:  begin sio_out_pre <= {3'd0, init_sr[7]}; init_sub <= 6'd8; end
+                        6'd0:  begin ce_n <= 1'b0; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd1; end
+                        6'd1:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd2; end
+                        6'd2:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd3; end
+                        6'd3:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd4; end
+                        6'd4:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd5; end
+                        6'd5:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd6; end
+                        6'd6:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd7; end
+                        6'd7:  begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd8; end
                         // ---- RSTEN done: CE# high, no data phase, no response expected ----
-                        6'd8:  begin ce_n_pre <= 1'b1; sio_oe_pre <= 4'd0; init_sub <= 6'd9; end
+                        6'd8:  begin ce_n <= 1'b1; sio_oe <= 4'd0; init_sub <= 6'd9; end
                         // ---- RST (0x99): 8 bits MSB-first, must follow RSTEN immediately ----
                         6'd9:  begin init_sr <= 8'h99; init_sub <= 6'd10; end
-                        6'd10: begin ce_n_pre <= 1'b0; sio_oe_pre <= 4'b0001; sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd11; end
-                        6'd11: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd12; end
-                        6'd12: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd13; end
-                        6'd13: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd14; end
-                        6'd14: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd15; end
-                        6'd15: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd16; end
-                        6'd16: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd17; end
-                        6'd17: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sub <= 6'd18; end
+                        6'd10: begin ce_n <= 1'b0; sio_oe <= 4'b0001; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd11; end
+                        6'd11: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd12; end
+                        6'd12: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd13; end
+                        6'd13: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd14; end
+                        6'd14: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd15; end
+                        6'd15: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd16; end
+                        6'd16: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd17; end
+                        6'd17: begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd18; end
                         // ---- RST done: CE# high, then hold >=tRST (50 ns min) before next CMD ----
-                        6'd18: begin ce_n_pre <= 1'b1; sio_oe_pre <= 4'd0; init_sub <= 6'd19; end
+                        6'd18: begin ce_n <= 1'b1; sio_oe <= 4'd0; init_sub <= 6'd19; end
                         6'd19: init_sub <= 6'd20; // idle sub-cycle — the tRST gap
                         // ---- Enter QPI (0x35): 8 bits MSB-first, switches SIO bus to 4-wire ----
                         6'd20: begin init_sr <= 8'h35; init_sub <= 6'd21; end
-                        6'd21: begin ce_n_pre <= 1'b0; sio_oe_pre <= 4'b0001; sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd22; end
-                        6'd22: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd23; end
-                        6'd23: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd24; end
-                        6'd24: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd25; end
-                        6'd25: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd26; end
-                        6'd26: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd27; end
-                        6'd27: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd28; end
-                        6'd28: begin sio_out_pre <= {3'd0, init_sr[7]}; init_sub <= 6'd29; end
+                        6'd21: begin ce_n <= 1'b0; sio_oe <= 4'b0001; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd22; end
+                        6'd22: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd23; end
+                        6'd23: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd24; end
+                        6'd24: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd25; end
+                        6'd25: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd26; end
+                        6'd26: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd27; end
+                        6'd27: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd28; end
+                        6'd28: begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd29; end
                         // ---- Enter QPI done: CE# high, PSRAM now in 4-wire QPI mode ----
                         6'd29: begin
-                            ce_n_pre         <= 1'b1;
-                            sio_oe_pre       <= 4'd0;
+                            ce_n         <= 1'b1;
+                            sio_oe       <= 4'd0;
                             qe_init_done <= 1'b1;
                             state        <= S_WRITE;
                         end
@@ -645,8 +616,8 @@ module psram_buf_ctrl (
                     end
 
                     if (!qpi_busy) begin
-                        ce_n_pre   <= 1'b1;
-                        sio_oe_pre <= 4'd0;
+                        ce_n   <= 1'b1;
+                        sio_oe <= 4'd0;
                         // Capture writes take priority; pending debug fetches
                         // are serviced in the spare idle cycles between them.
                         if (iq_valid && psram_en && qe_init_done && !qspi_owner) begin
@@ -687,33 +658,33 @@ module psram_buf_ctrl (
                             //      capture write, duplicated here so the
                             //      timing-critical capture arcs stay untouched.
                             case (sub)
-                            6'd0:  begin ce_n_pre<=1'b0; sio_oe_pre<=4'hF; sio_out_pre<=4'h0; sub<=6'd1; end
-                            6'd1:  begin sio_out_pre<=4'h2; sub<=6'd2; end
-                            6'd2:  begin sio_out_pre<=dbg_addr_cur[22:20]; sub<=6'd3; end
-                            6'd3:  begin sio_out_pre<=dbg_addr_cur[19:16]; sub<=6'd4; end
-                            6'd4:  begin sio_out_pre<=dbg_addr_cur[15:12]; sub<=6'd5; end
-                            6'd5:  begin sio_out_pre<=dbg_addr_cur[11:8];  sub<=6'd6; end
-                            6'd6:  begin sio_out_pre<=dbg_addr_cur[7:4];   sub<=6'd7; end
-                            6'd7:  begin sio_out_pre<=dbg_addr_cur[3:0];   sub<=6'd8; end
-                            6'd8:  begin sio_out_pre<=wr_data[63:60]; sub<=6'd9;  end
-                            6'd9:  begin sio_out_pre<=wr_data[59:56]; sub<=6'd10; end
-                            6'd10: begin sio_out_pre<=wr_data[55:52]; sub<=6'd11; end
-                            6'd11: begin sio_out_pre<=wr_data[51:48]; sub<=6'd12; end
-                            6'd12: begin sio_out_pre<=wr_data[47:44]; sub<=6'd13; end
-                            6'd13: begin sio_out_pre<=wr_data[43:40]; sub<=6'd14; end
-                            6'd14: begin sio_out_pre<=wr_data[39:36]; sub<=6'd15; end
-                            6'd15: begin sio_out_pre<=wr_data[35:32]; sub<=6'd16; end
-                            6'd16: begin sio_out_pre<=wr_data[31:28]; sub<=6'd17; end
-                            6'd17: begin sio_out_pre<=wr_data[27:24]; sub<=6'd18; end
-                            6'd18: begin sio_out_pre<=wr_data[23:20]; sub<=6'd19; end
-                            6'd19: begin sio_out_pre<=wr_data[19:16]; sub<=6'd20; end
-                            6'd20: begin sio_out_pre<=wr_data[15:12]; sub<=6'd21; end
-                            6'd21: begin sio_out_pre<=wr_data[11:8];  sub<=6'd22; end
-                            6'd22: begin sio_out_pre<=wr_data[7:4];   sub<=6'd23; end
-                            6'd23: begin sio_out_pre<=wr_data[3:0];   sub<=6'd24; end
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
+                            6'd2:  begin sio_out<=dbg_addr_cur[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=dbg_addr_cur[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=dbg_addr_cur[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=dbg_addr_cur[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=dbg_addr_cur[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=dbg_addr_cur[3:0];   sub<=6'd8; end
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            6'd23: begin sio_out<=wr_data[3:0];   sub<=6'd24; end
                             6'd24: begin
-                                ce_n_pre          <= 1'b1;
-                                sio_oe_pre        <= 4'd0;
+                                ce_n          <= 1'b1;
+                                sio_oe        <= 4'd0;
                                 dbg_fetch_busy<= 1'b0;
                                 dbg_mode      <= 1'b0;
                                 dbg_wr_mode   <= 1'b0;
@@ -725,15 +696,15 @@ module psram_buf_ctrl (
                             endcase
                         end else if (dbg_mode) begin
                             case (sub)
-                                6'd0:  begin ce_n_pre<=1'b0; sio_oe_pre<=4'hF; sio_out_pre<=4'hE; sub<=6'd1; end
-                                6'd1:  begin sio_out_pre<=4'hB; sub<=6'd2; end
-                                6'd2:  begin sio_out_pre<=dbg_addr_cur[22:20]; sub<=6'd3; end
-                                6'd3:  begin sio_out_pre<=dbg_addr_cur[19:16]; sub<=6'd4; end
-                                6'd4:  begin sio_out_pre<=dbg_addr_cur[15:12]; sub<=6'd5; end
-                                6'd5:  begin sio_out_pre<=dbg_addr_cur[11:8];  sub<=6'd6; end
-                                6'd6:  begin sio_out_pre<=dbg_addr_cur[7:4];   sub<=6'd7; end
-                                6'd7:  begin sio_out_pre<=dbg_addr_cur[3:0];   sub<=6'd8; end
-                                6'd8:  begin sio_oe_pre<=4'd0; sub<=6'd9; end
+                                6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd1; end
+                                6'd1:  begin sio_out<=4'hB; sub<=6'd2; end
+                                6'd2:  begin sio_out<=dbg_addr_cur[22:20]; sub<=6'd3; end
+                                6'd3:  begin sio_out<=dbg_addr_cur[19:16]; sub<=6'd4; end
+                                6'd4:  begin sio_out<=dbg_addr_cur[15:12]; sub<=6'd5; end
+                                6'd5:  begin sio_out<=dbg_addr_cur[11:8];  sub<=6'd6; end
+                                6'd6:  begin sio_out<=dbg_addr_cur[7:4];   sub<=6'd7; end
+                                6'd7:  begin sio_out<=dbg_addr_cur[3:0];   sub<=6'd8; end
+                                6'd8:  begin sio_oe<=4'd0; sub<=6'd9; end
                                 6'd9:  sub<=6'd10;
                                 6'd10: sub<=6'd11;
                                 6'd11: sub<=6'd12;
@@ -756,8 +727,8 @@ module psram_buf_ctrl (
                                 6'd28: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd29; end
                                 6'd29: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd30; end
                                 6'd30: begin
-                                    ce_n_pre          <= 1'b1;
-                                    sio_oe_pre        <= 4'd0;
+                                    ce_n          <= 1'b1;
+                                    sio_oe        <= 4'd0;
                                     dbg_buf       <= rd_data;
                                     dbg_idx       <= 3'd0;
                                     dbg_fetch_busy<= 1'b0;
@@ -770,36 +741,36 @@ module psram_buf_ctrl (
                         end else begin
                             case (sub)
                             // ---- QPI WRITE: CMD 0x02 ----
-                            6'd0:  begin ce_n_pre<=1'b0; sio_oe_pre<=4'hF; sio_out_pre<=4'h0; sub<=6'd1; end
-                            6'd1:  begin sio_out_pre<=4'h2; sub<=6'd2; end
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
                             // ---- WRITE ADDR ----
-                            6'd2:  begin sio_out_pre<=cur_wr[22:20]; sub<=6'd3; end
-                            6'd3:  begin sio_out_pre<=cur_wr[19:16]; sub<=6'd4; end
-                            6'd4:  begin sio_out_pre<=cur_wr[15:12]; sub<=6'd5; end
-                            6'd5:  begin sio_out_pre<=cur_wr[11:8];  sub<=6'd6; end
-                            6'd6:  begin sio_out_pre<=cur_wr[7:4];   sub<=6'd7; end
-                            6'd7:  begin sio_out_pre<=cur_wr[3:0];   sub<=6'd8; end
+                            6'd2:  begin sio_out<=cur_wr[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=cur_wr[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=cur_wr[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=cur_wr[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=cur_wr[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=cur_wr[3:0];   sub<=6'd8; end
                             // ---- WRITE DATA (8 bytes = 16 nibbles) ----
-                            6'd8:  begin sio_out_pre<=wr_data[63:60]; sub<=6'd9;  end
-                            6'd9:  begin sio_out_pre<=wr_data[59:56]; sub<=6'd10; end
-                            6'd10: begin sio_out_pre<=wr_data[55:52]; sub<=6'd11; end
-                            6'd11: begin sio_out_pre<=wr_data[51:48]; sub<=6'd12; end
-                            6'd12: begin sio_out_pre<=wr_data[47:44]; sub<=6'd13; end
-                            6'd13: begin sio_out_pre<=wr_data[43:40]; sub<=6'd14; end
-                            6'd14: begin sio_out_pre<=wr_data[39:36]; sub<=6'd15; end
-                            6'd15: begin sio_out_pre<=wr_data[35:32]; sub<=6'd16; end
-                            6'd16: begin sio_out_pre<=wr_data[31:28]; sub<=6'd17; end
-                            6'd17: begin sio_out_pre<=wr_data[27:24]; sub<=6'd18; end
-                            6'd18: begin sio_out_pre<=wr_data[23:20]; sub<=6'd19; end
-                            6'd19: begin sio_out_pre<=wr_data[19:16]; sub<=6'd20; end
-                            6'd20: begin sio_out_pre<=wr_data[15:12]; sub<=6'd21; end
-                            6'd21: begin sio_out_pre<=wr_data[11:8];  sub<=6'd22; end
-                            6'd22: begin sio_out_pre<=wr_data[7:4];   sub<=6'd23; end
-                            6'd23: begin sio_out_pre<=wr_data[3:0];   sub<=6'd24; end
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            6'd23: begin sio_out<=wr_data[3:0];   sub<=6'd24; end
                             // ---- WRITE DONE: CE# high, advance wr_ptr, save cur ----
                             6'd24: begin
-                                ce_n_pre    <= 1'b1;
-                                sio_oe_pre  <= 4'd0;
+                                ce_n    <= 1'b1;
+                                sio_oe  <= 4'd0;
                                 wr_ptr  <= (wr_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
                                 cur_i0  <= $signed(wr_data_ant_i);
                                 cur_q0  <= $signed(wr_data_ant_q);
@@ -812,17 +783,17 @@ module psram_buf_ctrl (
                                 sub     <= 6'd25;
                             end
                             // ---- DEL READ: CMD 0xEB ----
-                            6'd25: begin ce_n_pre<=1'b0; sio_oe_pre<=4'hF; sio_out_pre<=4'hE; sub<=6'd26; end
-                            6'd26: begin sio_out_pre<=4'hB; sub<=6'd27; end
+                            6'd25: begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd26; end
+                            6'd26: begin sio_out<=4'hB; sub<=6'd27; end
                             // ---- DEL READ ADDR ----
-                            6'd27: begin sio_out_pre<=del_addr[22:20]; sub<=6'd28; end
-                            6'd28: begin sio_out_pre<=del_addr[19:16]; sub<=6'd29; end
-                            6'd29: begin sio_out_pre<=del_addr[15:12]; sub<=6'd30; end
-                            6'd30: begin sio_out_pre<=del_addr[11:8];  sub<=6'd31; end
-                            6'd31: begin sio_out_pre<=del_addr[7:4];   sub<=6'd32; end
-                            6'd32: begin sio_out_pre<=del_addr[3:0];   sub<=6'd33; end
+                            6'd27: begin sio_out<=del_addr[22:20]; sub<=6'd28; end
+                            6'd28: begin sio_out<=del_addr[19:16]; sub<=6'd29; end
+                            6'd29: begin sio_out<=del_addr[15:12]; sub<=6'd30; end
+                            6'd30: begin sio_out<=del_addr[11:8];  sub<=6'd31; end
+                            6'd31: begin sio_out<=del_addr[7:4];   sub<=6'd32; end
+                            6'd32: begin sio_out<=del_addr[3:0];   sub<=6'd33; end
                             // ---- 6 DUMMY CLOCKS ----
-                            6'd33: begin sio_oe_pre<=4'd0; sub<=6'd34; end
+                            6'd33: begin sio_oe<=4'd0; sub<=6'd34; end
                             6'd34: sub<=6'd35;
                             6'd35: sub<=6'd36;
                             6'd36: sub<=6'd37;
@@ -836,8 +807,8 @@ module psram_buf_ctrl (
                             6'd42: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd43; end
                             // ---- DEL READ DONE: CE# high, latch del, assert del_valid ----
                             6'd43: begin
-                                ce_n_pre      <= 1'b1;
-                                sio_oe_pre    <= 4'd0;
+                                ce_n      <= 1'b1;
+                                sio_oe    <= 4'd0;
                                 del_i0    <= $signed(rd_data[15:8]);
                                 del_q0    <= $signed(rd_data[7:0]);
                                 del_valid <= del_rdy;
@@ -867,12 +838,12 @@ module psram_buf_ctrl (
                         replay_active  <= 1'b0;
                         qpi_busy       <= 1'b0;
                         sub            <= 6'd0;
-                        ce_n_pre           <= 1'b1;
-                        sio_oe_pre         <= 4'd0;
+                        ce_n           <= 1'b1;
+                        sio_oe         <= 4'd0;
                         state          <= S_WRITE;
                     end else if (!qpi_busy) begin
-                        ce_n_pre   <= 1'b1;
-                        sio_oe_pre <= 4'd0;
+                        ce_n   <= 1'b1;
+                        sio_oe <= 4'd0;
                         // !qspi_owner gate added 2026-07-06 (TRPR-PSR-010/011):
                         // S_WRITE's launch had it, this one didn't — an owner
                         // request mid-REPLAY never suspended the replay bursts.
@@ -885,51 +856,51 @@ module psram_buf_ctrl (
                     end else begin
                         case (sub)
                             // ---- QPI WRITE: CMD 0x02 ----
-                            6'd0:  begin ce_n_pre<=1'b0; sio_oe_pre<=4'hF; sio_out_pre<=4'h0; sub<=6'd1; end
-                            6'd1:  begin sio_out_pre<=4'h2; sub<=6'd2; end
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
                             // ---- WRITE ADDR ----
-                            6'd2:  begin sio_out_pre<=cur_wr[22:20]; sub<=6'd3; end
-                            6'd3:  begin sio_out_pre<=cur_wr[19:16]; sub<=6'd4; end
-                            6'd4:  begin sio_out_pre<=cur_wr[15:12]; sub<=6'd5; end
-                            6'd5:  begin sio_out_pre<=cur_wr[11:8];  sub<=6'd6; end
-                            6'd6:  begin sio_out_pre<=cur_wr[7:4];   sub<=6'd7; end
-                            6'd7:  begin sio_out_pre<=cur_wr[3:0];   sub<=6'd8; end
+                            6'd2:  begin sio_out<=cur_wr[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=cur_wr[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=cur_wr[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=cur_wr[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=cur_wr[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=cur_wr[3:0];   sub<=6'd8; end
                             // ---- WRITE DATA (8 bytes = 16 nibbles) ----
-                            6'd8:  begin sio_out_pre<=wr_data[63:60]; sub<=6'd9;  end
-                            6'd9:  begin sio_out_pre<=wr_data[59:56]; sub<=6'd10; end
-                            6'd10: begin sio_out_pre<=wr_data[55:52]; sub<=6'd11; end
-                            6'd11: begin sio_out_pre<=wr_data[51:48]; sub<=6'd12; end
-                            6'd12: begin sio_out_pre<=wr_data[47:44]; sub<=6'd13; end
-                            6'd13: begin sio_out_pre<=wr_data[43:40]; sub<=6'd14; end
-                            6'd14: begin sio_out_pre<=wr_data[39:36]; sub<=6'd15; end
-                            6'd15: begin sio_out_pre<=wr_data[35:32]; sub<=6'd16; end
-                            6'd16: begin sio_out_pre<=wr_data[31:28]; sub<=6'd17; end
-                            6'd17: begin sio_out_pre<=wr_data[27:24]; sub<=6'd18; end
-                            6'd18: begin sio_out_pre<=wr_data[23:20]; sub<=6'd19; end
-                            6'd19: begin sio_out_pre<=wr_data[19:16]; sub<=6'd20; end
-                            6'd20: begin sio_out_pre<=wr_data[15:12]; sub<=6'd21; end
-                            6'd21: begin sio_out_pre<=wr_data[11:8];  sub<=6'd22; end
-                            6'd22: begin sio_out_pre<=wr_data[7:4];   sub<=6'd23; end
-                            6'd23: begin sio_out_pre<=wr_data[3:0];   sub<=6'd24; end
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            6'd23: begin sio_out<=wr_data[3:0];   sub<=6'd24; end
                             // ---- WRITE DONE: CE# high, advance wr_ptr ----
                             6'd24: begin
-                                ce_n_pre   <= 1'b1;
-                                sio_oe_pre <= 4'd0;
+                                ce_n   <= 1'b1;
+                                sio_oe <= 4'd0;
                                 wr_ptr <= (wr_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
                                 sub    <= 6'd25;
                             end
                             // ---- QPI READ: CMD 0xEB ----
-                            6'd25: begin ce_n_pre<=1'b0; sio_oe_pre<=4'hF; sio_out_pre<=4'hE; sub<=6'd26; end
-                            6'd26: begin sio_out_pre<=4'hB; sub<=6'd27; end
+                            6'd25: begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd26; end
+                            6'd26: begin sio_out<=4'hB; sub<=6'd27; end
                             // ---- READ ADDR ----
-                            6'd27: begin sio_out_pre<=cur_rd[22:20]; sub<=6'd28; end
-                            6'd28: begin sio_out_pre<=cur_rd[19:16]; sub<=6'd29; end
-                            6'd29: begin sio_out_pre<=cur_rd[15:12]; sub<=6'd30; end
-                            6'd30: begin sio_out_pre<=cur_rd[11:8];  sub<=6'd31; end
-                            6'd31: begin sio_out_pre<=cur_rd[7:4];   sub<=6'd32; end
-                            6'd32: begin sio_out_pre<=cur_rd[3:0];   sub<=6'd33; end
+                            6'd27: begin sio_out<=cur_rd[22:20]; sub<=6'd28; end
+                            6'd28: begin sio_out<=cur_rd[19:16]; sub<=6'd29; end
+                            6'd29: begin sio_out<=cur_rd[15:12]; sub<=6'd30; end
+                            6'd30: begin sio_out<=cur_rd[11:8];  sub<=6'd31; end
+                            6'd31: begin sio_out<=cur_rd[7:4];   sub<=6'd32; end
+                            6'd32: begin sio_out<=cur_rd[3:0];   sub<=6'd33; end
                             // ---- 6 DUMMY CLOCKS ----
-                            6'd33: begin sio_oe_pre<=4'd0; sub<=6'd34; end
+                            6'd33: begin sio_oe<=4'd0; sub<=6'd34; end
                             6'd34: sub<=6'd35;
                             6'd35: sub<=6'd36;
                             6'd36: sub<=6'd37;
@@ -954,8 +925,8 @@ module psram_buf_ctrl (
                             6'd54: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd55; end
                             // ---- READ DONE: CE# high, advance rd_ptr, latch replay IQ ----
                             6'd55: begin
-                                ce_n_pre      <= 1'b1;
-                                sio_oe_pre    <= 4'd0;
+                                ce_n      <= 1'b1;
+                                sio_oe    <= 4'd0;
                                 rd_ptr    <= (rd_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
                                 rpl_i0    <= $signed(rd_data[63:56]);
                                 rpl_q0    <= $signed(rd_data[55:48]);
@@ -1030,9 +1001,9 @@ module psram_buf_ctrl (
         .del_valid      (del_valid),
         .del_cnt        (del_cnt),
         .del_n_r        (del_n_r),
-        .sio_oe         (sio_oe_pre),
+        .sio_oe         (sio_oe),
         .sub            (sub),
-        .ce_n           (ce_n_pre)
+        .ce_n           (ce_n)
     );
 `endif
 

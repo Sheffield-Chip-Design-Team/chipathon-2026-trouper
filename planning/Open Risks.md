@@ -1577,67 +1577,42 @@ Open Risks #14, #38 (same class, Host SPI port).
 **Found:** 2026-09-03 interface-timing review (applies equally to
 `pinout/dbg1-shared-irq-pad-27` — the interface files are byte-identical).
 
-**Fix landed 2026-09-03 (RTL + guardrail + signoff SDC):**
-`psram_buf_ctrl.v` — the FSM keeps computing the intended pad state on
-`posedge clk_32m` into `ce_n_pre` / `sio_out_pre` / `sio_oe_pre` /
-`sck_en_pre`; a new `always @(negedge clk_32m)` output-launch stage
-republishes them (and the SCK gate-enable) on the FALLING edge, so CE#, SIO
-data and SCK all change in the SCK-low phase and the PSRAM samples on the
-next rising SCK edge with ~half a core period (~15.6 ns) of setup. First
-command nibble is published on the same negedge as `sck_en` (half-cycle
-preload). No glitch/runt — `sck_en` only changes while `clk_32m=0`. Formal
-harness fed the `*_pre` (posedge-domain) signals, so its cycle-accurate
-properties are unchanged. cocotb is bit-identical: `psram_model.v` samples
-CE#/SIO on `posedge clk_32m` and the negedge republish lands in the same
-posedge window. `psram_model.v` gains an `sck` port + a simulation-only
-guardrail (`sio_out`/`ce_n`/`sio_oe` must not change while `sck` is high) —
-wired through `PSRAM_SCK_OUT` in `tb_trouper_cocotb.v` / `tb_array_pair.v`.
-Signoff SDC (v29 divergence): `PSRAM_SCK` generated clock off `IQ_CLK`;
-SIO outputs `-max 2.0 / -min -2.0` (APS6404L SIO setup 2.0 / hold 2.0),
-`PSRAM_CE_N_OUT` separately `-max 2.5 / -min -3.0` (CE# setup 2.5 / hold
-3.0); read data `-clock_fall -max 5.5 / -min 2.0` (the PSRAM launches read
-data 2.0–5.5 ns after the falling SCK edge and the controller samples on
-the next rising edge — a falling→rising half-cycle path); those pads
-excluded from the generic core-output rule. All zero pad/PCB-flight
-baselines — add pad + measured trace delay before tapeout. The P&R SDC is
-left unchanged (the generated clock stays out of it until a routed run
-clears the SCK-path clock-tree / DRT-0073 question — same caution as the
-v28 `tacc_accumulate` split). SGE regression **job 5503 CLEAN** — all 50
-core+capture suites PASS (`psram_ops`, `qspi_owner`, `replay_data`,
-`replay_delay`, `capture_two_packet`, `weight_gen_spi_flow`,
-`trouper_capture`, `trouper_top` 18/18); the `psram_model` SCK guardrail
-never fired (CE#/SIO only move while SCK is low).
+**Fix landed 2026-09-03, reworked to a pad-boundary relaunch 2026-09-04.**
+`trouper_top.v` relaunches the PSRAM `ce_n` / `sio_out` / `sio_oe` and the
+SCK gate-enable (`psram_buf_ctrl.sck_en_o`, a new raw-enable output) onto
+`negedge clk` at the pad boundary, and builds `PSRAM_SCK_OUT = sck_en_q &
+clk`. CE#, SIO and SCK all change while SCK is low → the PSRAM samples a
+stable bus on the SCK rising edge (~15.6 ns setup vs ~0); first command
+nibble is on the same negedge as the SCK enable (half-cycle preload); no
+glitch/runt since the enable only changes while `clk=0`. `psram_buf_ctrl.v`
+is otherwise **byte-identical to pre-#69** (only a 1-port + 1-assign add) —
+the FSM synthesises unchanged. `psram_model.v` keeps its sim-only guardrail
+(`sio_out`/`ce_n`/`sio_oe` must not move while `sck` is high), wired via
+`PSRAM_SCK_OUT`.
 
-**A40 P&R — SGE job 5504** (`src/config/trouper_top.json`, current `src/`
-+ both SDCs, distinct run dir). **Physically signoff-clean:** Magic DRC 0,
-LVS 0, XOR 0, antenna 0/0, route DRC 0, hold MET all corners (SS hold WS
-+1.71). **No DRT-0073** — the signoff-SDC v29 `PSRAM_SCK` generated clock
-did not perturb routing. DRV *improved*: SS max-slew 39→18, max-cap 11→7;
-nom_tt 17/7→3/3. Instance count 126174→126903 (+729: the 18 added negedge
-FFs + their repair).
+**Why the rework:** the first form put the negedge stage *inside*
+`psram_buf_ctrl.v` (rename of all pad regs to `*_pre` + an in-module
+`always @(negedge)`), which forced a full re-synth of the QPI FSM. Three
+A40 runs (5504 −14.2, 5506 −18.7, 5507 −20.9 SS WNS) each surfaced a
+*different* chronic worst cone in the re-synthesised `psram_buf_ctrl` /
+debug-mux region (`buf_active`→`DBG0_OUT`, `_68608_`→`_67914_`, …) —
+`_1`-strength unrepaired gates, −15..−21 ns, run-to-run lottery, not fixed
+by the GRT repair-margin lever (jobs 5507 GRT-50 / 5508 GRT-40). The
+in-module cell churn was the cause; the pad-boundary form removes it.
 
-**SS setup regressed: WNS −10.77→−14.20 ns, TNS −370→−1389.** Three
-contributors, separated by a same-corner path audit:
-- **~−350 ns TNS / 73 endpoints — the #70 single-negedge IQ capture** put
-  the CIC 14-bit add on a half-cycle (15.6 ns) path (worst −8.5). nom_tt /
-  max_ff MET. **Fixed 2026-09-04 by the #70 two-stage (negedge sample →
-  posedge retime) revision** — CIC back on the full period; re-run pending.
-- **~−210 ns / 18 endpoints — a `psram_buf_ctrl` internal register-load
-  cluster** (`_68948_` fanout, −11.8) — re-synth/repair-lottery swing from
-  adding the negedge output block (cell renumbering confirms full re-synth).
-- **WNS −14.20 — `buf_active` FF → ~11 `_1`-strength gates → `DBG0_OUT` /
-  `IRQ_OUT`** (shared DBG1 pad). Already 2nd-worst in job 5499
-  (`buf_active`→`IRQ_OUT` −10.44); an unrepaired debug-output cone, lottery.
-**Not a new tapeout blocker** — SS 32 MHz already fails by −10.8 (the
-voltage problem, #1/#40); the residual after the #70 retime is a
-psram-internal + debug-pad lottery swing (`DBG0_OUT` / `IRQ_OUT` already
-have an open SS output-delay-exception decision, see #57 / #1).
+Signoff SDC (v29 divergence, unchanged by the rework — port names are the
+same): `PSRAM_SCK` generated clock off `IQ_CLK`; SIO outputs
+`-max 2.0 / -min -2.0` (APS6404L SIO setup/hold 2.0/2.0), `PSRAM_CE_N_OUT`
+separately `-max 2.5 / -min -3.0` (CE# 2.5/3.0); read data
+`-clock_fall -max 5.5 / -min 2.0` (falling→rising half-cycle); those pads
+excluded from the generic core-output rule. Zero pad/PCB-flight baselines —
+add measured trace delay before tapeout. The P&R SDC is left unchanged.
 
-**Stays OPEN** pending the re-run P&R with the #70 retime (expect the 73
-CIC violations gone); if the psram/debug residual persists, settle it with
-a second run or the `DBG0_OUT`/`IRQ_OUT_OUT` SS output-delay exception. The
-interface fix itself (RTL + guardrail + SDC v29) is regression- and
-DRC/LVS/antenna-clean.
+**Verification (pad-boundary form):** SGE regression + A40 P&R re-run in
+progress. The #70 two-stage IQ capture (separate, already regression-clean
+job 5509 — `dbg_probe` 12/12 after a +1 settle-cycle test fix) removed the
+73 CIC half-cycle violations seen in 5504/5506/5507. **Stays OPEN** pending
+those re-run results.
 
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 

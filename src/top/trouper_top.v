@@ -240,15 +240,31 @@ module trouper_top (
     wire [3:0] IQ_DATA_Q_raw = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
     reg  [3:0] IQ_DATA_I_neg, IQ_DATA_Q_neg;
     reg  [3:0] IQ_DATA_I, IQ_DATA_Q;
-    wire [3:0] PSRAM_SIO_OUT;
     wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
                                PSRAM_SIO_1_IN, PSRAM_SIO_0_IN};
-    wire [3:0] PSRAM_SIO_OE;
+
+    // ---- PSRAM QPI pad relaunch (Open Risk #69) --------------------------
+    // psram_buf_ctrl drives CE#/SIO/SIO-OE and the raw SCK gate-enable on
+    // posedge clk; these negedge flops republish them at the pad boundary so
+    // CE#, SIO and SCK all change while SCK is low and the PSRAM samples a
+    // stable bus on the SCK rising edge (~15.6 ns setup vs ~0).  Done here,
+    // NOT inside psram_buf_ctrl: an in-module negedge stage re-synthesised the
+    // QPI FSM and swung SS setup timing -15..-21 ns run-to-run (jobs 5504/6/7);
+    // at the pad boundary the FSM is byte-identical to pre-#69.  First command
+    // nibble is published on the same negedge as the SCK enable (half-cycle
+    // preload); no glitch/runt since the enable only changes while clk=0.
+    wire [3:0] psram_sio_out_c, psram_sio_oe_c;   // combinational from u_psram (posedge domain)
+    wire       psram_ce_n_c, psram_sck_en_c;
+    reg  [3:0] psram_sio_out_q, psram_sio_oe_q;   // negedge-relaunched -> pads
+    reg        psram_ce_n_q, psram_sck_en_q;
+    // (the negedge relaunch process is with the other clk/rst_n logic below)
 
     assign {PSRAM_SIO_3_OUT, PSRAM_SIO_2_OUT,
-            PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = PSRAM_SIO_OUT;
+            PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = psram_sio_out_q;
     assign {PSRAM_SIO_3_OE, PSRAM_SIO_2_OE,
-            PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = PSRAM_SIO_OE;
+            PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = psram_sio_oe_q;
+    assign PSRAM_CE_N_OUT = psram_ce_n_q;
+    // PSRAM_SCK_OUT is gated from psram_sck_en_q below (needs `clk`, declared later).
 
     // ==== A40 padframe pad-control tie-offs (see module header + Pinout.md) ===
     assign IQ_CLK_PU = 1'b0;
@@ -280,28 +296,28 @@ module trouper_top (
     // gf180mcu_fd_io__bi_t does not characterize IE=OE=1.  The PSRAM
     // controller owns OE per lane, so enable the pad receiver only while
     // that lane is released to the PSRAM.
-    assign PSRAM_SIO_0_IE = ~PSRAM_SIO_OE[0];
+    assign PSRAM_SIO_0_IE = ~psram_sio_oe_q[0];
     assign PSRAM_SIO_0_CS = 1'b0;
     assign PSRAM_SIO_0_SL = 1'b0;
     assign PSRAM_SIO_0_PU = 1'b0;
     assign PSRAM_SIO_0_PD = 1'b0;
     assign PSRAM_SIO_0_PDRV0 = 1'b1;
     assign PSRAM_SIO_0_PDRV1 = 1'b1;
-    assign PSRAM_SIO_1_IE = ~PSRAM_SIO_OE[1];
+    assign PSRAM_SIO_1_IE = ~psram_sio_oe_q[1];
     assign PSRAM_SIO_1_CS = 1'b0;
     assign PSRAM_SIO_1_SL = 1'b0;
     assign PSRAM_SIO_1_PU = 1'b0;
     assign PSRAM_SIO_1_PD = 1'b0;
     assign PSRAM_SIO_1_PDRV0 = 1'b1;
     assign PSRAM_SIO_1_PDRV1 = 1'b1;
-    assign PSRAM_SIO_2_IE = ~PSRAM_SIO_OE[2];
+    assign PSRAM_SIO_2_IE = ~psram_sio_oe_q[2];
     assign PSRAM_SIO_2_CS = 1'b0;
     assign PSRAM_SIO_2_SL = 1'b0;
     assign PSRAM_SIO_2_PU = 1'b0;
     assign PSRAM_SIO_2_PD = 1'b0;
     assign PSRAM_SIO_2_PDRV0 = 1'b1;
     assign PSRAM_SIO_2_PDRV1 = 1'b1;
-    assign PSRAM_SIO_3_IE = ~PSRAM_SIO_OE[3];
+    assign PSRAM_SIO_3_IE = ~psram_sio_oe_q[3];
     assign PSRAM_SIO_3_CS = 1'b0;
     assign PSRAM_SIO_3_SL = 1'b0;
     assign PSRAM_SIO_3_PU = 1'b0;
@@ -438,6 +454,22 @@ module trouper_top (
             IQ_DATA_Q <= IQ_DATA_Q_neg;
         end
     end
+
+    // ---- PSRAM QPI pad relaunch (Open Risk #69) — see decl block above -----
+    always @(negedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            psram_sio_out_q <= 4'd0;
+            psram_sio_oe_q  <= 4'd0;
+            psram_ce_n_q    <= 1'b1;
+            psram_sck_en_q  <= 1'b0;
+        end else begin
+            psram_sio_out_q <= psram_sio_out_c;
+            psram_sio_oe_q  <= psram_sio_oe_c;
+            psram_ce_n_q    <= psram_ce_n_c;
+            psram_sck_en_q  <= psram_sck_en_c;
+        end
+    end
+    assign PSRAM_SCK_OUT = psram_sck_en_q & clk;   // gated: SCK held low across the negedge relaunch
 
     // ---- 16 MHz clock-enable (control-plane functional domain) --------------
     // Single 32 MHz clock; CE-gated FFs update every OTHER cycle, so their
@@ -973,11 +1005,12 @@ module trouper_top (
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
         .clr_err      (rb_psram_ctrl[1]),
-        .sck          (PSRAM_SCK_OUT),
-        .ce_n         (PSRAM_CE_N_OUT),
-        .sio_out      (PSRAM_SIO_OUT),
+        .sck          (),                  // pre-#69 gated clock; pad SCK is built below from sck_en_o
+        .sck_en_o     (psram_sck_en_c),
+        .ce_n         (psram_ce_n_c),
+        .sio_out      (psram_sio_out_c),
         .sio_in       (PSRAM_SIO_IN),
-        .sio_oe       (PSRAM_SIO_OE),
+        .sio_oe       (psram_sio_oe_c),
         // SC delay-line outputs (replace frontend_buf_ctrl + on-chip SRAM)
         .cur_i0       (psram_cur_i0),
         .cur_q0       (psram_cur_q0),

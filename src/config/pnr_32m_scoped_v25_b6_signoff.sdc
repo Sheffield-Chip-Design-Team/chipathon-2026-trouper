@@ -481,10 +481,11 @@ set_output_delay -max 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
 set_output_delay -min 0.0 -clock SPI_SCK [get_ports SPI_MISO_OUT]
 
 # --- PSRAM QPI source-synchronous output timing (Open Risk #69) --------------
-# SIGNOFF-ONLY divergence #2 (v29).  psram_buf_ctrl forwards a gated copy of
-# IQ_CLK on PSRAM_SCK_OUT and launches CE#/SIO on the FALLING core-clock edge
-# (the negedge output stage), so a real APS6404L samples the bus on the SCK
-# rising edge with ~half a core period of setup.  The plain P&R SDC still
+# SIGNOFF-ONLY divergence #2 (v29).  trouper_top gates a copy of IQ_CLK onto
+# PSRAM_SCK_OUT and relaunches CE#/SIO on the FALLING core-clock edge at the
+# pad boundary (Open Risk #69 pad-boundary relaunch), so a real APS6404L
+# samples the bus on the SCK rising edge with ~half a core period of setup.
+# The plain P&R SDC still
 # constrains these pads to IQ_CLK (generic core-output rule) -- migrating this
 # generated clock into the P&R SDC needs its own routed run to rule out a
 # clock-tree / DRT-0073 perturbation on the SCK path, so it is checked here
