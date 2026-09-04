@@ -1,20 +1,20 @@
-# cocotb/array_sync/Makefile
-# Multi-ASIC acquisition sync (test_array_sync.py): two complete trouper_top
-# instances sharing one ARRAY_ACQ_N wired-AND net.
-#
-# This is the only suite with two DUTs. TOPLEVEL is tb_array_pair, not the
-# usual tb_trouper_cocotb, and the source list adds cocotb/hdl/tb_array_pair.v.
-# Everything else follows the sc_force_lock recipe.
+# cocotb/bringup_src/Makefile
+# Deterministic bring-up sample source (test_bringup_src.py): the
+# BRINGUP_CTRL/BRINGUP_AMPL register pair, reset-to-normal selection, the
+# RX_HOLD && !PACKET_ACTIVE arming gate, every generator mode, amplitude
+# clamping, deterministic restart, and the proof that the disabled source
+# cannot perturb the combiner input stream.
+# See planning/foundational-block-bringup-plan.md.
 #
 # Usage (inside the chipathon26 container):
 #   make            # all testcases
-#   make TESTCASE=test_peer_sync_starts_idle_chip
+#   make TESTCASE=test_disabled_source_does_not_perturb_the_path
 #   make clean
 
 SIM           ?= verilator
 TOPLEVEL_LANG  = verilog
-TOPLEVEL            = tb_array_pair
-COCOTB_TEST_MODULES = test_array_sync
+TOPLEVEL            = tb_trouper_cocotb
+COCOTB_TEST_MODULES = test_bringup_src
 
 DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src
@@ -35,11 +35,15 @@ VERILOG_SOURCES = \
     $(SRC)/control/reg_bank.v            \
     $(SRC)/remod/sd_remod.v              \
     $(HDL)/psram_model.v                 \
-    $(HDL)/tb_array_pair.v
+    $(HDL)/tb_trouper_cocotb.v
 
 EXTRA_ARGS += --timing -Wno-fatal --public-flat-rw
 
-PYTHONPATH    := $(TESTS)
+# cocotb finds the Python test module via PYTHONPATH.  DESIGN_ROOT is on the
+# path too: the end-to-end re-modulator checks reconstruct the 1-bit output
+# with sim.tests.remod_order_sweep.brickwall_lp_decim, the same R=64
+# decimation the remod SQNR model uses.
+PYTHONPATH    := $(DESIGN_ROOT):$(TESTS)
 
 COCOTB_RESULTS_FILE = results.xml
 

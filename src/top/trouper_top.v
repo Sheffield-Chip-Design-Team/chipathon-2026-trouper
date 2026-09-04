@@ -533,6 +533,8 @@ module trouper_top (
     // Two-pin digital debug (planning/two-pin-digital-debug-plan.md)
     wire [7:0]  rb_dbg_ctrl0;   // 0x04: selector for the dedicated DBG0 pad
     wire [7:0]  rb_dbg_ctrl1;   // 0x06: selector for the shared IRQ_OUT/DBG1 pad
+    wire [7:0]  rb_bringup_ctrl;      // BRINGUP_CTRL (0x10) — Open Risks #59
+    wire signed [7:0] rb_bringup_ampl; // BRINGUP_AMPL (0x11)
     wire [7:0]  rb_irq_status_dbg;
     wire        sc_tdm_busy_dbg;
     wire        psram_del_rdy_dbg;
@@ -1043,8 +1045,50 @@ module trouper_top (
         .dbg_wr_trig    (rb_psram_dbg_wr_trig)
     );
 
-    // Combiner input mux: live decimator IQ during normal/buffering,
-    // PSRAM replay IQ during replay. x_valid follows the active source.
+    // -------------------------------------------------------------------------
+    // BRINGUP_SRC: deterministic first-silicon sample source.
+    //
+    // Proves sd_remod without a working frontend, SC acquisition, PSRAM replay
+    // path or combiner.  Injected at the RE-MODULATOR INPUT (stage 9 below),
+    // not at the combiner input.  See
+    // planning/foundational-block-bringup-plan.md.
+    //
+    // The generator is declared here, next to the register decode it reads,
+    // and consumed at the sd_remod instance; the mux itself lives there.
+    //
+    // The enable is qualified HERE, not in the generator: arming is already
+    // refused by reg_bank unless cfg_wr_ok, but the level term must also hold
+    // continuously, because sd_remod's integrators carry state across samples.
+    // A mux that flipped mid-stream would leave the loop tracking a mixture of
+    // the injected and live streams, and the recovery transient would be read
+    // as modulator misbehaviour rather than as a control-plane glitch.
+    // -------------------------------------------------------------------------
+    wire              bringup_en_q = rb_bringup_ctrl[0] && rb_rx_hold && !packet_active;
+    wire signed [7:0] bsrc_i, bsrc_q;
+    wire              bsrc_valid;
+
+    bringup_src #(.DECIM(64)) u_bringup_src (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .en        (bringup_en_q),
+        .mode      (rb_bringup_ctrl[2:1]),
+        .ampl      (rb_bringup_ampl),
+        .src_i     (bsrc_i),
+        .src_q     (bsrc_q),
+        .src_valid (bsrc_valid)
+    );
+
+    // Combiner input mux: live decimator IQ during normal/buffering, PSRAM
+    // replay IQ during replay. x_valid follows the active source.
+    //
+    // BRINGUP_SRC is NOT an arm here.  It was, until the coverage work showed
+    // the combiner insertion point bought nothing: MRC is unreachable while the
+    // source is armed (W_valid is held only during a packet, the armed source
+    // requires none), so the only combiner behaviour the source could reach was
+    // the bypass passthrough -- a wire.  Injecting at the re-modulator input
+    // instead proves exactly the same thing for a 3-point mux rather than a
+    // 9-point one, and isolates sd_remod properly: a bad output stream there
+    // implicates sd_remod alone, not sd_remod OR the bypass path.
     wire signed [7:0] comb_xi [0:3];
     wire signed [7:0] comb_xq [0:3];
     wire              comb_xvalid;
@@ -1110,14 +1154,31 @@ module trouper_top (
                                                : comb_y_i;
     wire signed [7:0] remod_bo_q = comb_use_mrc ? ($signed(comb_y_q) >>> rb_remod_backoff_shift)
                                                : comb_y_q;
-    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 : remod_bo_i;
-    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 : remod_bo_q;
+    wire signed [7:0] remod_src_i = psram_silence ? 8'sd0 : remod_bo_i;
+    wire signed [7:0] remod_src_q = psram_silence ? 8'sd0 : remod_bo_q;
+
+    // BRINGUP_SRC injection point (Open Risks #59).  The armed source takes
+    // ABSOLUTE priority -- ahead of psram_silence, the backoff shift AND the
+    // comb_use_mrc bypass select -- deliberately:
+    //   * psram_silence would let a buffer state zero the stimulus, and silence
+    //     at the pads is indistinguishable from a dead re-modulator, which is
+    //     the exact diagnosis this source exists to make possible.
+    //   * the backoff shift / bypass select would make the pad signature depend
+    //     on COMB_CFG / W_valid, so the reference a bring-up engineer compares
+    //     against would no longer be the value they programmed.
+    // Skipping the backoff is safe: the generator clamps to +/-64 of a signed-8
+    // full scale (-6 dBFS), already inside sd_remod's -3 dBFS stability bound,
+    // so no shift is needed to keep the NTF out of wrap-around.
+    wire signed [7:0] remod_in_i = bringup_en_q ? bsrc_i : remod_src_i;
+    wire signed [7:0] remod_in_q = bringup_en_q ? bsrc_q : remod_src_q;
+    wire              remod_in_valid = bringup_en_q ? bsrc_valid : comb_y_valid;
+
     sd_remod u_remod (
         .clk_32m  (clk),
         .rst_n    (rst_n),
         .in_i     (remod_in_i),
         .in_q     (remod_in_q),
-        .in_valid (comb_y_valid),
+        .in_valid (remod_in_valid),
         .en       (1'b1),
         .out_i    (REMOD_A_I_OUT),
         .out_q    (REMOD_A_Q_OUT)
@@ -1332,6 +1393,8 @@ module trouper_top (
         .array_sync_en   (rb_array_sync_en),
         .dbg_ctrl0       (rb_dbg_ctrl0),
         .dbg_ctrl1       (rb_dbg_ctrl1),
+        .bringup_ctrl    (rb_bringup_ctrl),
+        .bringup_ampl    (rb_bringup_ampl),
         .dbg_pad_value   (dbg_pad_value),
         .irq_status_dbg  (rb_irq_status_dbg),
         .sc_thr          (rb_sc_thr),

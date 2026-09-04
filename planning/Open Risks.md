@@ -2589,6 +2589,58 @@ job 5491 did not carry over) → `trouper_top.json` stays 65/65. **CLOSED.**
 
 ## Low
 
+### 61. `formal/run_formal_both.sh` was broken and under-scoped — every proof silently unrun — FIXED 2026-09-03, one failure exposed
+
+The formal runner has been non-functional since `/foss/designs` went read-only
+(NFS `manage_gids`, 2026-07-27/28): `sby` creates its work directory in the CWD,
+so **every** proof died with `OSError: [Errno 30] Read-only file system` before
+doing any work. It also iterated only two of the four `.sby` files —
+`spi_slave` was already missing before `bringup_src` was added. Fixed 2026-09-03
+(stages into `$RUN_DIR`; iterates all four). Now: `psram_buf_ctrl` PASS,
+`packet_ctrl_fsm` PASS, `bringup_src` PASS, and **`spi_slave` BMC FAILS** —
+`a_addr_incr_wrap`, `formal/spi_slave_formal.sv:213`, step 33 (job 5438). That
+failure is pre-existing and untriaged; it is not a `bringup_src` regression. It
+needs its own investigation against
+`planning/verification-plan/spi-slave-verification-plan.md` rows #13/#15.
+
+**Priority: high** — an unrun proof is indistinguishable from a passing one in
+every report that quotes it, and this one hid a real assertion failure for an
+unknown number of weeks.
+
+### 62. `DRT-0073` on the `IQ_CLK` clock tree is placement-perturbation sensitive, not netlist-size sensitive
+
+`src/config/trouper_top.json` `_comment_density` frames the recurring
+DRT-0073/DRT-1231 pin-access failures as "sensitive to netlist size, not to
+anything about SPI", on the evidence of job 5281 (a 144-cell growth broke a
+clean run). That framing is wrong in the general case and should not be relied
+on when judging whether a change is safe.
+
+Counter-example, 2026-09-03: moving `BRINGUP_SRC` from the combiner input to the
+re-modulator input **shrinks** the netlist — 35,436 vs 35,597 cells at
+synthesis, 48,900 vs 49,020 at CTS, 49,022 vs 49,137 at global routing — and yet
+fails detailed routing reproducibly (jobs 5425, 5436, identical error):
+
+```
+[DRT-0073] No access point for clkbuf_2_2_0_IQ_CLK_regs/I
+           (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+```
+
+while the larger combiner-insertion netlist (job 5404) routed clean at the same
+settings. The mechanism is placement perturbation around the `IQ_CLK` tree, so
+**"my change removes cells" is not evidence that it will route.** Any netlist
+perturbation on this die is a fresh routability question.
+
+Related and still standing: do not downsize the clock tree or drop `clkbuf_16`
+(job 5197 moved the failure to a `clkbuf_12` instead), `DIODE_PADDING: 4` is
+what cleared antenna without crowding the clkbufs (job 5198), and
+`PL_TARGET_DENSITY_PCT: 65` is a routability floor rather than area headroom.
+
+**Priority: medium** — it does not threaten the current signoff netlist, but it
+invalidates a documented heuristic that a future change will otherwise be judged
+by. Probes for the specific `BRINGUP_SRC` case are tracked in
+`planning/foundational-block-bringup-plan.md` (TRPR-BRU-009): `DPL_CELL_PADDING`
+3 (job 5439, cancelled, unevaluated) and `PL_TARGET_DENSITY_PCT` 64 (job 5440).
+
 ### 56. Trouper standalone flow has never run a real-source IR-drop analysis
 
 `VSRC_LOC_FILES` (OpenROAD PSM's realistic-downbond-location IR-drop mode)

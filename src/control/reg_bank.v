@@ -113,6 +113,13 @@ module reg_bank (
     output reg  [7:0]  dbg_ctrl1,       // 0x06: same layout, shared IRQ/DBG1 pad
     input  wire [1:0]  dbg_pad_value,   // 0x05: [0] DBG0 pad, [1] IRQ_OUT/DBG1 pad
     output wire [7:0]  irq_status_dbg,
+    // BRINGUP_SRC deterministic first-silicon sample source (Open Risks #59).
+    // Feeds a mux at the re-modulator input in trouper_top; lets mrc_combiner /
+    // sd_remod be exercised without a working frontend/SC/PSRAM chain.
+    // Relocated from 0x06/0x07 to 0x10/0x11 on the main rebase (0x06 is now
+    // DBG_CTRL1, 0x07 stays reserved).
+    output reg  [7:0]         bringup_ctrl,   // 0x10: [0] EN, [2:1] MODE
+    output reg  signed [7:0]  bringup_ampl,   // 0x11: signed sample amplitude
     output reg         sc_force_lock,  // 0x19[0]: W1P — blocked while packet_active
     // 0x1A[0]: level.  1 = SC detector held disabled (ORed into sc_clr at the
     // top level) AND the quasi-static config registers are writable.  0 = the
@@ -195,7 +202,14 @@ module reg_bank (
     // appears in no MCP group and times honestly single-cycle.
     wire cfg_locked_addr = (addr == 8'h09) || (addr == 8'h0A) || (addr == 8'h18) ||
                            (addr == 8'h0B) || (addr == 8'h0E) ||
-                           (addr == 8'h1B) || (addr == 8'h27);
+                           (addr == 8'h1B) || (addr == 8'h27) ||
+                           // BRINGUP_CTRL/BRINGUP_AMPL (0x10/0x11): the test
+                           // source may only be armed or retuned while the
+                           // receiver is held.  It drives the re-modulator
+                           // input mux, so a mid-burst change would flip the
+                           // source under sd_remod's input.  Rejection lands in
+                           // CFG_WR_REJECTED.
+                           (addr == 8'h10) || (addr == 8'h11);
 
     // BOTH conditions are required, and rx_hold does NOT imply !packet_active:
     // firmware may assert RX_HOLD mid-packet, which holds sc_clr and clears the
@@ -228,6 +242,10 @@ module reg_bank (
             sc_force_lock    <= 1'b0;
             dbg_ctrl0        <= 8'h00;
             dbg_ctrl1        <= 8'h00;
+            // Reset selects the normal path: EN=0 means the re-modulator sees
+            // the combiner output, exactly as if the source did not exist.
+            bringup_ctrl     <= 8'h00;
+            bringup_ampl     <= 8'h00;
             noise_trig       <= 1'b0;
             tacc_window_syms <= 4'd8;
             replay_delay_samples <= 16'd1500; // ≈3 ms: measured Grouper rv32emc
@@ -320,6 +338,12 @@ module reg_bank (
                     // packet, no receiver hold.  When EN=0 the pad reverts to
                     // the sticky interrupt at the top level.
                     8'h06: if (!packet_active) dbg_ctrl1 <= wdata;
+                    // BRINGUP_SRC control (Open Risks #59).  Same cfg_wr_ok gate
+                    // (rx_hold && !packet_active) as the quasi-static config: the
+                    // source feeds the re-modulator input mux, so it may only be
+                    // armed, re-moded or retuned while the receiver is held.
+                    8'h10: if (cfg_wr_ok) bringup_ctrl <= {5'h0, wdata[2:0]};
+                    8'h11: if (cfg_wr_ok) bringup_ampl <= wdata;
                     // SC_FORCE_LOCK.  Same weak !packet_active gate as DBG_CTRL,
                     // and likewise reported: a write rejected mid-packet raises
                     // CFG_WR_REJECTED.  Without that it was silently dropped --
@@ -401,6 +425,8 @@ module reg_bank (
             8'h04: rdata_next = dbg_ctrl0;                          // DBG_CTRL0
             8'h05: rdata_next = {6'h0, dbg_pad_value};              // DBG_STATUS (RO)
             8'h06: rdata_next = dbg_ctrl1;                          // DBG_CTRL1
+            8'h10: rdata_next = bringup_ctrl;                       // BRINGUP_CTRL
+            8'h11: rdata_next = bringup_ampl;                       // BRINGUP_AMPL
             8'h18: rdata_next = {7'h0, array_sync_en};              // ARRAY_SYNC_CTRL
             8'h0B: rdata_next = pkt_timeout_syms;
             8'h0C: rdata_next = sc_thr[15:8];

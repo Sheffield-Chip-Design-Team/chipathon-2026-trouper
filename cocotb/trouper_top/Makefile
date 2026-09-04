@@ -39,6 +39,7 @@ VERILOG_SOURCES = \
     $(SRC)/frontend/sc_detector.v        \
     $(SRC)/combiner/training_acc.v       \
     $(SRC)/combiner/mrc_combiner.v       \
+    $(SRC)/debug/bringup_src.v           \
     $(SRC)/control/packet_ctrl_fsm.v     \
     $(SRC)/control/psram_buf_ctrl.v      \
     $(SRC)/control/spi_slave.v           \
