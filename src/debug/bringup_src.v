@@ -110,8 +110,12 @@ module bringup_src #(
     end
 
     // ---- PRBS --------------------------------------------------------------
-    // Galois LFSR x^9 + x^5 + 1, period 511.  Long-run switching stress only:
-    // a failed PRBS transfer is hard to diagnose and does not establish
+    // Galois LFSR x^9 + x^5 + 1. NOT maximal-length from this seed/tap
+    // combination: simulating the exact recurrence below from seed 9'h1FF
+    // returns to the seed after 255 steps, not the 511 a true period-2^9-1
+    // sequence would give (found 2026-09-04; the tap/seed pair was never
+    // re-checked after being written). Long-run switching stress only either
+    // way: a failed PRBS transfer is hard to diagnose and does not establish
     // modulation fidelity, so DC and tone remain the primary diagnostics.
     reg [8:0] lfsr;
     wire      lfsr_fb = lfsr[0];
@@ -141,7 +145,13 @@ module bringup_src #(
             src_valid <= tick;
             if (tick) begin
                 case (mode)
-                    MODE_DC:   begin src_i <= a_pos;  src_q <= a_pos;  end
+                    // Sign of the commanded amplitude carries through: DC
+                    // mode's density is documented as BRINGUP_AMPL / 127
+                    // (Register Map 0x10-0x11), a signed formula, and the
+                    // board bring-up procedure compares the captured density
+                    // against that signed reference.
+                    MODE_DC:   begin src_i <= ampl_ext[8] ? a_neg : a_pos;
+                                     src_q <= ampl_ext[8] ? a_neg : a_pos; end
                     MODE_TONE: begin src_i <= tone_i; src_q <= tone_q; end
                     MODE_PRBS: begin src_i <= prbs_i; src_q <= prbs_q; end
                     default:   begin src_i <= 8'sd0;  src_q <= 8'sd0;  end

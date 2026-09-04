@@ -207,10 +207,15 @@ async def test_zero_mode(dut):
 
 @cocotb.test()
 async def test_dc_mode_polarity(dut):
-    """Signed DC, both polarities, on I and Q independently."""
-    for ampl, want in ((0x20, 32), (0xE0, 32), (0x10, 16)):
-        # 0xE0 is -32: the generator uses |ampl|, so the magnitude is what
-        # reaches the output. Polarity of the *stream* is exercised by the tone.
+    """Signed DC, both polarities, on I and Q independently.
+
+    BRINGUP_AMPL's sign carries through DC mode -- Register Map 0x10-0x11
+    documents the density as the *signed* BRINGUP_AMPL / 127, and the board
+    procedure compares against that signed reference. (Fixed 2026-09-04:
+    DC mode used to hardcode the magnitude, silently dropping the sign --
+    0xE0 = -32 produced +32.)
+    """
+    for ampl, want in ((0x20, 32), (0xE0, -32), (0x10, 16)):
         await reset_dut(dut)
         await arm(dut, MODE_DC, ampl)
         for i, q in await collect(dut, 6):
@@ -540,8 +545,12 @@ async def test_dc_signature_at_the_remod_output(dut):
     I and Q are checked independently here; DC drives both rails to the same
     value, so a swap is invisible in this mode -- the tone test below is what
     separates them.
+
+    Includes negative levels (2026-09-04): DC mode used to hardcode the
+    magnitude of BRINGUP_AMPL, silently dropping the sign, so this check was
+    previously vacuous for the negative half of the documented signed range.
     """
-    for A in (16, 32, 48):
+    for A in (16, 32, 48, -16, -32, -48):
         await reset_dut(dut)
         await spi_write(dut, REG_MIMO_CTRL, 0xF1)
         await spi_write(dut, REG_COMB_CFG, 0x01)
