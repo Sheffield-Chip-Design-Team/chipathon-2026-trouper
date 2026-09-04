@@ -1,19 +1,24 @@
 # pnr_32m_scoped_v25_b6_signoff.sdc
 # ============================================================================
-# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus two
-# marked signoff-only additions:
+# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus the
+# marked signoff-only additions v28..v31:
 #   v28 (2026-08-27) -- the `tacc_accumulate` exception group.
-#   v29 (2026-09-03) -- PSRAM QPI source-synchronous output timing (Open Risk
-#        #69): a PSRAM_SCK generated clock + CE#/SIO output delays + read-data
-#        input delays, and exclusion of those pads from the generic core-output
-#        rule.
+#   v29 (2026-08-27) -- dcr_valid -> iq_samp_cnt[*] and (2026-09-03) PSRAM QPI
+#        source-synchronous output timing (Open Risk #69): a PSRAM_SCK generated
+#        clock + CE#/SIO output delays + read-data input delays, and exclusion
+#        of those pads from the generic core-output rule.
+#   v30 (2026-08-27) -- pcfsm B6 down-counter load + tick-decrement paced MCP.
+#   v31 (2026-09-04) -- set_false_path on the two-pin digital debug-probe pad
+#        paths (DBG0_OUT wholesale; the debug side of the shared IRQ_OUT/DBG1
+#        pad), which the generic core-output rule otherwise leaves as the SS
+#        worst path in the design.
 # It is used as SIGNOFF_SDC_FILE only; PNR_SDC_FILE stays the plain
 # pnr_32m_scoped_v25_b6.sdc so the placed/routed netlist is bit-for-bit the
 # job-5105 flow (adding tacc_accumulate to the P&R SDC strands the IQ_CLK root
 # clkbuf with no routing access point -- DRT-0073, job 5112; the PSRAM
 # generated clock is kept out of the P&R SDC for the same class of reason
 # until a routed run clears it).
-# Keep everything except the marked v28 / v29 blocks identical to the P&R SDC.
+# Keep everything except the marked v28..v31 blocks identical to the P&R SDC.
 # ============================================================================
 #
 # pnr_32m_scoped_v25_b6.sdc
@@ -606,3 +611,33 @@ set mcp_audit_groups {
 set dbg_nets [get_nets -hierarchical {u_psram.dbg_addr_cur[*] u_psram.dbg_buf[*] \
               u_psram.dbg_idx[*] u_psram.dbg_fetch_busy u_psram.dbg_mode u_psram.dbg_pend}]
 set_false_path -through $dbg_nets
+
+# ==== v31 (2026-09-04) -- SIGNOFF-ONLY: two-pin digital debug-probe pads =========
+# u_dbg (debug_probe_mux) is feed-forward observability ONLY: it drives DBG0_OUT
+# and -- while DBG_CTRL1.EN=1 -- the shared IRQ_OUT/DBG1 pad, from taps that are
+# already registered upstream, selected by the quasi-static rb_dbg_ctrl0/1 config
+# bytes (0x04 / 0x06).  Nothing on-chip reads either pad and the off-chip
+# consumer is a logic analyser, so no path depends on them meeting the 31.25 ns
+# IQ_CLK budget the generic core-output rule (core_output_ports, above) pins them
+# to.  Post-DRV the SS worst path in the ENTIRE design is
+#   rb_remod_backoff_shift[1] -> u_dbg group-110 combiner tap -> IRQ_OUT_OUT
+#   (-14.44 ns, job 5527, main@78b4a33),
+# with a -6.31 ns sibling into DBG0_OUT -- both debug-only.  See
+# planning/drv-margin-sweep-2026-09-03.md (2026-09-04 re-verification section).
+#
+# DBG0_OUT is a dedicated debug pad -- false-path it wholesale.
+set_false_path -to [get_ports DBG0_OUT]
+#
+# IRQ_OUT_OUT also carries the functional rb_irq_out_sticky level interrupt, so
+# scope the exception to the DEBUG side only and anchor it at the port: the
+# sticky arc (rb_irq_out_sticky -> IRQ_OUT_OUT, no debug net on it) stays timed.
+# rb_irq_out_sticky / dbg1_en_w / sc_tdm_busy_dbg do NOT survive synthesis as
+# named nets (job 5527 netlist), so the surviving quasi-static handles
+# rb_dbg_ctrl1* (the DBG1 pad selector) and rb_remod_backoff_shift* (the config
+# operand on the current worst debug arc) are used instead -- same "scope by
+# what survives" discipline as v21 / v28.  A path through rb_remod_backoff_shift*
+# that does NOT end at IRQ_OUT_OUT (e.g. the real comb_y >>> shift into sd_remod)
+# is untouched by the -to anchor.
+set dbg1_pad_srcs [get_nets -hierarchical {rb_dbg_ctrl1[*] rb_remod_backoff_shift[*]}]
+set_false_path -through $dbg1_pad_srcs -to [get_ports IRQ_OUT_OUT]
+# ==== end v31 signoff-only block ================================================

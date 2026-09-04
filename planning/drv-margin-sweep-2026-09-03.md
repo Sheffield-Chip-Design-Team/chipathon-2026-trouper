@@ -1,8 +1,11 @@
 # DRV repair-margin sweep — 2026-09-03
 
-**Status:** finding recorded, change **not yet applied**. The recommended knob
-change waits on an incoming RTL merge — re-run the sweep's winner against the
-merged netlist before adopting.
+**Status: SUPERSEDED — do NOT apply the recommended change.** The re-verification
+run (2026-09-04, jobs 5527/5528/5529, see the section at the bottom) found the
+GRT-margin lever is **dead on the merged netlist**: it no longer clears the
+nom_tt DRV and slightly regresses max_ff / SS DRV. `trouper_top_drvp1.json` and
+`trouper_top_drvp4.json` should be retired. The 2026-09-03 result below is kept
+for the mechanism write-up only.
 
 ## Why
 
@@ -62,3 +65,87 @@ all converged to 0).
 
 `src/config/trouper_top_drvp1.json` is kept as the ready-to-run variant for that
 re-verification. `trouper_top_drvp2.json` / `_drvp3.json` deleted (rejected).
+
+---
+
+## Re-verification against the merged netlist — 2026-09-04 (jobs 5527/5528/5529)
+
+Run on `main` @ `78b4a33` — i.e. after the Grouper-boundary removal, the
+`rtl/open-risk-fixes` merge (#61–68), and #69/#70 (PSRAM QPI pad relaunch +
+two-stage IQ capture). All three full A40 P&R, canonical flow, `--project
+lora-mimo`, DRC/LVS/antenna **0** on all.
+
+| Job | Variant | GRT margin | nom_tt slew/cap | max_ff slew/cap | SS slew/cap | SS WNS | SS TNS | cells |
+|---|---|---|---|---|---|---|---|---|
+| **5527** | base | 65 | **2 / 2** | 4 / 2 | 9 / 3 | −14.44 | −1008.7 | 127 200 |
+| 5528 | drvp1 | 50 | 2 / 2 | 6 / 2 | 13 / 4 | −13.48 | −1121.8 | 127 204 |
+| 5529 | drvp4 | 40 | 2 / 2 | 6 / 2 | 13 / 4 | −13.48 | −1121.8 | 127 204 |
+
+### Findings
+
+1. **The GRT-margin lever no longer works.** nom_tt DRV stays at 2/2 for every
+   value tried. Pre-merge (job 5491) GRT-50 drove it to 0/0 — a strict win.
+   Post-merge it clears nothing and regresses max_ff (4→6) and SS (9/3→13/4),
+   plus SS TNS −1009 → −1122. **Retire `trouper_top_drvp1.json` /
+   `trouper_top_drvp4.json` and this doc's "Recommended change".**
+2. **GRT 50 and GRT 40 produced a bit-identical netlist** (5528 ≡ 5529: same
+   cells, WNS, TNS, DRV). The post-GRT repair is saturated — no headroom left
+   in that knob.
+3. **Job 5527 (base) reproduces the promoted `final/` (job 5511) byte-for-byte**
+   — SS WNS −14.436, TNS −1008.73, 127 200 cells, 68.7 % util, DRV 9/3
+   identical. There is **no regression** from this work; the −276 SS TNS in the
+   2026-09-03 baseline (job 5469) is not comparable — 5469 predates all of the
+   merges above.
+4. **The residual nom_tt DRV is two specific gates, unchanged across all runs:**
+   `_39367_` (`nor4_1`, max-slew −0.30 ns *and* max-cap −0.009 pF at GRT-50) and
+   `_39500_` (`oai221_1`, max-cap −0.005 pF). Both sit in the `reg_bank`
+   W-shadow readback / `u_psram.dbg_buf` debug-probe mux cone — wide fan-in
+   combinational logic, **not on a timing path** (nom_tt WNS +3.3 ns). GRT-50
+   improved the dominant `_39367_` slew slack (−1.36 → −0.30 ns) but did not
+   close it and nudged the marginal `_39500_` cap further over.
+5. **SS critical-path structure (job 5527, 246 setup violators):** dominated by
+   high-fanout control nets, not deep logic —
+   `u_pcfsm.packet_active_ps` on **186 / 246** paths, `sc_lock` on 73,
+   `u_psram.sub[3]` on 72. `sd_remod` owns the numerically worst single path
+   (`rb_remod_backoff_shift[1] → IRQ_OUT_OUT`, −14.44 ns, through the DBG1/IRQ
+   shared-pad debug mux) plus a ~16-path `u_remod.s2_i` integrator-ripple
+   cluster at −11.3 ns, but is a minority of the count. SS −14 ns at 3.0 V is
+   the known voltage problem (closes at ~4.5 V), not a P&R-knob target.
+
+### Actions taken
+
+- `pnr_32m_scoped_v25_b6_signoff.sdc` v31: `set_false_path` on the two-pin
+  digital debug-probe pad paths (`DBG0_OUT` wholesale; the debug side of
+  `IRQ_OUT_OUT` scoped through `rb_dbg_ctrl1*` / `rb_remod_backoff_shift*`,
+  leaving the functional `rb_irq_out_sticky → IRQ_OUT_OUT` interrupt arc timed).
+  Drops the −14.44 ns worst path and the `DBG0_OUT` −6.31 ns sibling off the SS
+  report — both are logic-analyser observability, not synchronous interfaces.
+- `trouper_top_drvp1.json` / `trouper_top_drvp4.json`: deleted (rejected — the
+  GRT-margin lever this doc originally recommended).
+
+### v31 overlaps Open Risk #41 — reconciled 2026-09-04 (job 5534)
+
+Open Risk #41's exit run (job 5530, `RCX_RULESETS` min_ff override, **no SDC
+change**) independently produces the **exact same** SS report as v31: SS WNS
+−11.343569959984231, 245 setup violators, `DBG0_OUT` clear, one
+`packet_active_ps → IRQ_OUT_OUT` residual at −11.25. Both changes clear the
+same −14.44 ns `rb_remod_backoff_shift → IRQ_OUT_OUT` debug arc by different
+mechanisms (#41: honest re-extraction re-times it; v31: excluded from the
+report), landing on the same `u_remod.s2_i` integrator-ripple floor either way
+— **the −14.44 → −11.34 SS-WNS improvement is not v31's; #41 already banked
+it.**
+
+Job 5534 (`trouper_top_minff_rcx.json` — #41's RCX override *plus* v31, via
+the shared signoff SDC — **fresh full P&R**, not a re-STA of job 5527's
+netlist) confirms the two are compatible and the −11.34 floor is deterministic,
+not repair-lottery: SS WNS −11.343569959984231, bit-identical to jobs 5530 and
+5531 to 15 significant figures. Route DRC 0 (159→…→0 across iterations), no
+GRT-0116/DRT-1231/DRT-0073, DRC/LVS/XOR/antenna 0, hold MET all corners, and
+#41's RCX deck additionally clears ff DRV (slew 4→0, cap 2→1) — which v31
+alone does not touch. **Decision: keep v31 anyway** (debug pads have no
+business being timed, and it guards future `DBG_CTRL` selections), fold #41's
+`RCX_RULESETS` into `src/config/trouper_top.json` separately when #41 is
+adopted. Caveat: all four jobs (5527/5528/5529/5530/5531/5534) share one
+seed-deterministic routed netlist — LibreLane P&R here doesn't vary with these
+config deltas, so this does not probe placement-seed robustness of the −11.34
+floor, only its config-independence.
