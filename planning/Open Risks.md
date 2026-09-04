@@ -1720,13 +1720,17 @@ SS-regression follow-up tracked under #69.
 
 ## Moderate
 
-### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source
+### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source — MITIGATION IMPLEMENTED 2026-09-03, blocked on routing
 
 Trouper can independently prove SPI/register access, PSRAM QPI service, and packet/IRQ control (`SC_FORCE_LOCK`), and an FPGA can drive its existing one-bit IQ inputs for frontend testing. However, `mrc_combiner` and `sd_remod` have no deterministic internal source: their normal inputs depend on successful upstream capture/replay. A failure in the frontend, PSRAM, or acquisition chain can therefore prevent a standalone first-silicon proof of the final combiner/re-modulator foundation blocks even though their dedicated `REMOD_A_I/Q` output pads are working.
 
-**Proposed mitigation — not approved or implemented:** one small, reset-off 500 kS/s deterministic complex source, muxed at either the re-modulator input (minimum scope) or combiner input (broader proof), enabled only under `RX_HOLD=1 && !PACKET_ACTIVE`. Required patterns are zero, bounded signed DC, and a repeating bounded I/Q tone; seeded PRBS is optional stress only. It uses no pins, but needs register allocation, assertions/cocotb coverage, top-level timing/P&R evidence, and a bench reconstruction procedure before it can be accepted. Do not add separate BIST engines to every block.
+**Mitigation — IMPLEMENTED 2026-09-03 on `feat/bringup-src`, functionally complete, blocked on routing.** `BRINGUP_SRC` (`src/debug/bringup_src.v`, `BRINGUP_CTRL` `0x06` / `BRINGUP_AMPL` `0x07`): a reset-off 500 kS/s deterministic complex source at the **re-modulator input**, enabled only under `RX_HOLD=1 && !PACKET_ACTIVE`, no pins. Zero / bounded signed DC / fs/4 tone / PRBS.
 
-**Decision gate:** implement only if the first-silicon team judges this downstream demonstration path more valuable than the added mux/control/timing risk. The existing no-new-RTL bring-up sequence remains the baseline. See `planning/foundational-block-bringup-plan.md`.
+The "broader proof" the combiner insertion point was supposed to buy does not exist: MRC is unreachable while the source is armed (`W_valid` is held only during a packet, the armed source requires none), so the combiner surface on offer was the bypass passthrough — a wire. The minimum-scope option is therefore also the better one, and it diagnoses more sharply: a bad 1-bit stream implicates `sd_remod` alone rather than `sd_remod` or the bypass path.
+
+**Status of the acceptance conditions listed above:** register allocation ✅ (`planning/Register Map.md`); cocotb coverage ✅ 23/23, job 5427; formal ✅ `formal/bringup_src.sby` PASS, job 5438; bench reconstruction procedure ✅ (`Register Map.md` §`0x06`–`0x07`, DC-density and tone-direction signatures); **top-level P&R evidence ❌ — the netlist does not route** (`DRT-0073` on `clkbuf_2_2_0_IQ_CLK_regs/I`, jobs 5425 and 5436, deterministic). See risk #62 and `planning/foundational-block-bringup-plan.md` TRPR-BRU-009.
+
+**Decision gate:** the functional case is settled; what remains is whether the routing cost is acceptable. If no cheap placement perturbation clears DRT-0073, the choice is between paying for a routing fix and dropping the feature for the no-new-RTL bring-up sequence, which remains the baseline. See `planning/foundational-block-bringup-plan.md`.
 
 ### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
 
@@ -2326,6 +2330,58 @@ job 5491 did not carry over) → `trouper_top.json` stays 65/65. **CLOSED.**
 
 
 ## Low
+
+### 61. `formal/run_formal_both.sh` was broken and under-scoped — every proof silently unrun — FIXED 2026-09-03, one failure exposed
+
+The formal runner has been non-functional since `/foss/designs` went read-only
+(NFS `manage_gids`, 2026-07-27/28): `sby` creates its work directory in the CWD,
+so **every** proof died with `OSError: [Errno 30] Read-only file system` before
+doing any work. It also iterated only two of the four `.sby` files —
+`spi_slave` was already missing before `bringup_src` was added. Fixed 2026-09-03
+(stages into `$RUN_DIR`; iterates all four). Now: `psram_buf_ctrl` PASS,
+`packet_ctrl_fsm` PASS, `bringup_src` PASS, and **`spi_slave` BMC FAILS** —
+`a_addr_incr_wrap`, `formal/spi_slave_formal.sv:213`, step 33 (job 5438). That
+failure is pre-existing and untriaged; it is not a `bringup_src` regression. It
+needs its own investigation against
+`planning/verification-plan/spi-slave-verification-plan.md` rows #13/#15.
+
+**Priority: high** — an unrun proof is indistinguishable from a passing one in
+every report that quotes it, and this one hid a real assertion failure for an
+unknown number of weeks.
+
+### 62. `DRT-0073` on the `IQ_CLK` clock tree is placement-perturbation sensitive, not netlist-size sensitive
+
+`src/config/trouper_top.json` `_comment_density` frames the recurring
+DRT-0073/DRT-1231 pin-access failures as "sensitive to netlist size, not to
+anything about SPI", on the evidence of job 5281 (a 144-cell growth broke a
+clean run). That framing is wrong in the general case and should not be relied
+on when judging whether a change is safe.
+
+Counter-example, 2026-09-03: moving `BRINGUP_SRC` from the combiner input to the
+re-modulator input **shrinks** the netlist — 35,436 vs 35,597 cells at
+synthesis, 48,900 vs 49,020 at CTS, 49,022 vs 49,137 at global routing — and yet
+fails detailed routing reproducibly (jobs 5425, 5436, identical error):
+
+```
+[DRT-0073] No access point for clkbuf_2_2_0_IQ_CLK_regs/I
+           (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+```
+
+while the larger combiner-insertion netlist (job 5404) routed clean at the same
+settings. The mechanism is placement perturbation around the `IQ_CLK` tree, so
+**"my change removes cells" is not evidence that it will route.** Any netlist
+perturbation on this die is a fresh routability question.
+
+Related and still standing: do not downsize the clock tree or drop `clkbuf_16`
+(job 5197 moved the failure to a `clkbuf_12` instead), `DIODE_PADDING: 4` is
+what cleared antenna without crowding the clkbufs (job 5198), and
+`PL_TARGET_DENSITY_PCT: 65` is a routability floor rather than area headroom.
+
+**Priority: medium** — it does not threaten the current signoff netlist, but it
+invalidates a documented heuristic that a future change will otherwise be judged
+by. Probes for the specific `BRINGUP_SRC` case are tracked in
+`planning/foundational-block-bringup-plan.md` (TRPR-BRU-009): `DPL_CELL_PADDING`
+3 (job 5439, cancelled, unevaluated) and `PL_TARGET_DENSITY_PCT` 64 (job 5440).
 
 ### 56. Trouper standalone flow has never run a real-source IR-drop analysis
 

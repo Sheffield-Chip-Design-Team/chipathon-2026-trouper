@@ -45,8 +45,11 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
 | `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Locks after encoded value + 1 hits. Values 1–3 are normal operation (2–4 hits); 0 is diagnostic-only one-hit mode. |
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
-| **Reserved** (`0x10`–`0x17`) | | | | | |
-| `0x10`–`0x17` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below. `0x18`, the last of that block, is now `ARRAY_SYNC_CTRL`) |
+| **Bring-up source** (`0x10`–`0x11`) | | | | | |
+| `0x10` | `BRINGUP_CTRL` | R/W | `0x00` | Bring-up source | [0] `EN`: arm the deterministic test source at the **re-modulator input**; [2:1] `MODE` (0 = zero, 1 = signed DC, 2 = fs/4 complex tone, 3 = PRBS); [7:3] 0. **Resets to 0** — the normal datapath is selected out of reset. Gated: write ignored unless `RX_HOLD=1` and `PACKET_ACTIVE=0`, rejection latched in `RX_HOLD.CFG_WR_REJECTED`. The qualified enable also drops continuously if `RX_HOLD` is released. See `planning/foundational-block-bringup-plan.md` (Open Risks #59) |
+| `0x11` | `BRINGUP_AMPL` | R/W | `0x00` | Bring-up source | [7:0] signed sample amplitude. The magnitude is clamped to `±64` in hardware — `sd_remod`'s 3rd-order NTF is permanently unstable on input wrap-around, so the bound is functional, not advisory. Same gate as `0x10` |
+| **Reserved** (`0x12`–`0x17`) | | | | | |
+| `0x12`–`0x17` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW`/`RX_GAIN_ACTIVE`/`RX_GAIN_CTRL` block; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below. `0x10`/`0x11` in this former block are now `BRINGUP_CTRL`/`BRINGUP_AMPL`; `0x18`, the last slot, is `ARRAY_SYNC_CTRL`) |
 | `0x18` | `ARRAY_SYNC_CTRL` | R/W | `0x00` | Array acquisition sync | [0] `ARRAY_SYNC_EN`: arm the shared `ARRAY_ACQ_N` link. **Resets to 0** — the pin is inert in both directions until firmware opts in, so an unused/unpopulated pad cannot start the receiver. [7:1] reserved. Gated: write ignored unless `RX_HOLD=1` and `PACKET_ACTIVE=0`. See `planning/array-acquisition-sync.md` |
 | `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`/`SC_ANT_SEL`) |
 | `0x1A` | `RX_HOLD` | R/W | `0x01` | Schmidl-Cox / config interlock | [0] `RX_HOLD` (level): 1 = SC detector held disabled (ORed into `sc_clr`) and the gated config registers are writable; 0 = detector may lock and those writes are refused. **Set out of reset — firmware must configure, then clear it to receive.** [1] `CFG_WR_REJECTED` RO sticky, W1C: a gated config write was dropped |
@@ -111,7 +114,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 113 implemented + 15 reserved = 128. (Updated 2026-09-03: `DBG_CTRL1` `0x06` implemented — the second selector for the split-selector debug mux after `DBG1` was merged onto the `IRQ_OUT` pad (27-pad budget); one address moved from reserved to implemented, so the reserved slots are now `0x07`, `0x10`–`0x17`, `0x7A`–`0x7E` and `0x7F`. Updated 2026-08-30: `DBG_CTRL` (now `DBG_CTRL0`) `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. Two addresses moved from reserved to implemented. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before either change was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. (Reserved-slot list as of 2026-09-03: `0x07`, `0x10`–`0x17`, `0x7A`–`0x7E`, `0x7F` — 15 slots.))
+**Occupancy:** 115 implemented + 13 reserved = 128. (Updated 2026-09-04: `BRINGUP_CTRL`/`BRINGUP_AMPL` implemented at `0x10`/`0x11` (Open Risks #59) — relocated from `0x06`/`0x07` on the rebase onto `main`, because `0x06` is now `DBG_CTRL1` and `0x07` stays reserved; two addresses moved from the former `RX_GAIN` reserved block to implemented, so the reserved slots are now `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E` and `0x7F`. Updated 2026-09-03: `DBG_CTRL1` `0x06` implemented — the second selector for the split-selector debug mux after `DBG1` was merged onto the `IRQ_OUT` pad (27-pad budget). Updated 2026-08-30: `DBG_CTRL` (now `DBG_CTRL0`) `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before those changes was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. (Reserved-slot list as of 2026-09-04: `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E`, `0x7F` — 13 slots.))
 
 ---
 
@@ -161,11 +164,35 @@ Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchan
 `0x04`/`0x05` were reclaimed 2026-08-30 as `DBG_CTRL`/`DBG_STATUS` for the digital debug
 probe. `0x06` was reclaimed 2026-09-03 as `DBG_CTRL1`, the second independent selector,
 after `DBG1` was merged onto the `IRQ_OUT` pad to hold the pin count at 27 — see
-`planning/two-pin-digital-debug-plan.md`. `DBG_CTRL` is now `DBG_CTRL0`.
+`planning/two-pin-digital-debug-plan.md`. `DBG_CTRL` is now `DBG_CTRL0`. `0x07` stays
+reserved.
+
+### `0x10`–`0x11` — BRINGUP_CTRL / BRINGUP_AMPL (former `RX_GAIN` block)
+
+Reclaimed 2026-09-04 for `BRINGUP_SRC`, the deterministic first-silicon sample source (Open Risks #59) — see `planning/foundational-block-bringup-plan.md`. The feature was originally at `0x06`/`0x07` on branch `feat/bringup-src`; it moved to `0x10`/`0x11` (first two slots of the former `RX_GAIN` reserved block) when rebased onto `main`, where `0x06` is `DBG_CTRL1` and `0x07` stays reserved.
+
+`BRINGUP_SRC` injects a known 500 kS/s complex sample stream at the **re-modulator input** so that `sd_remod` can be proven without a working frontend, Schmidl-Cox acquisition, PSRAM replay path, or combiner. A bad 1-bit output stream is then unambiguously `sd_remod`'s fault.
+
+The insertion point is the re-modulator input, not the combiner input: the combiner point had been chosen so one generator would prove both blocks, but MRC mode turned out to be unreachable while the source is armed — `W_valid` is held only during a packet and the armed source requires there be none — leaving the bypass passthrough, a wire, as the entire combiner surface on offer. See `planning/foundational-block-bringup-plan.md` for the full argument and the routing cost that is still open.
+
+**What the source can and cannot reach.** Everything upstream of the injection point is bypassed: the decimator, DC removal, Schmidl-Cox, `training_acc`, PSRAM and `mrc_combiner` are *not* stimulated by it and keep their own independent evidence paths. The armed source takes absolute priority at the mux, ahead of `psram_silence`, `REMOD_BACKOFF_SHIFT` and the `comb_use_mrc` bypass select — a buffer state must never be able to produce silence at the pads (indistinguishable from a dead re-modulator), and the pad signature must be the value written to `BRINGUP_AMPL`, not that value scaled by `COMB_CFG` / `W_valid`. Skipping the backoff is safe because the ±64 clamp already sits inside `sd_remod`'s −3 dBFS stability bound.
+
+The two-pin debug probe's COMB group taps the same node (`remod_in_i/q`), so an armed source is also visible on `DBG0`/`DBG1` — a second, byte-level view of the stimulus with no radio attached.
+
+The generator owns its own 64-clock valid cadence — the whole point is to run with the IQ pads dead — and restarts deterministically from reset in every mode, so a captured stream can be compared against a precomputed reference.
+
+**Board procedure:** set `RX_HOLD` (`0x1A[0]`, already set out of reset), write `BRINGUP_AMPL` (`0x11`) then `BRINGUP_CTRL` (`0x10`), capture `REMOD_A_I`/`REMOD_A_Q` against the shared `IQ_CLK` reference, decimate externally and compare with the known signature, then clear `BRINGUP_CTRL` before releasing `RX_HOLD`.
+
+Two signatures, in increasing order of what they prove:
+
+- **DC** (`MODE=1`): the mean of the ±1 output stream is `BRINGUP_AMPL / 127`. Needs no filter and no phase alignment — computable from a bit count on a logic-analyser capture. Checks I and Q independently.
+- **fs/4 tone** (`MODE=2`): decimate by 64 and fit against `A/127·exp(+jπn/2)`. Check the **rotation direction**, not just the magnitude: a swapped or inverted rail leaves both per-rail densities untouched and shows up only as the conjugate tone. This is the check that tests I and Q together.
+
+`MODE=3` (PRBS) is long-run switching stress only; a failed PRBS transfer is hard to diagnose and does not establish modulation fidelity, so DC and tone remain the primary diagnostics. Both are regression-checked against the RTL in `cocotb/tests/test_bringup_src.py`.
 
 JTAG and GPIO were removed from Trouper. There is no JTAG TAP in the RTL, and the
 former GPIO direction/output/input path was never wired out of the macro boundary.
-These four addresses are now unimplemented: reads return `0x00`, writes are ignored.
+The remaining former JTAG/GPIO addresses are unimplemented: reads return `0x00`, writes are ignored.
 
 The four pads formerly described as `TCK_IRQ`/`TMS_GPIO0`/`TDI_GPIO1`/`TDO_GPIO2`
 now carry only `PSRAM_SIO[3:0]` on four dedicated pads; `IRQ_OUT` has its own
@@ -197,7 +224,7 @@ step 1.
 | Register(s) | Mid-packet policy | Result / firmware rule |
 | --- | --- | --- |
 | `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
-| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `ARRAY_SYNC_CTRL`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x18`, `0x1B`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
+| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `ARRAY_SYNC_CTRL`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS`, `BRINGUP_CTRL`, `BRINGUP_AMPL` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x18`, `0x1B`, `0x27`, `0x06`, `0x07`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
 | `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
 | W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
 | `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
@@ -527,7 +554,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed. `0x04`/`0x05`/`0x06` now `DBG_CTRL0`/`DBG_STATUS`/`DBG_CTRL1` (debug probe); `0x07` reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x18`, `0x1A`–`0x1B`, `0x7A`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x17`, `0x7A`–`0x7F`). Corrected 2026-09-02: this line previously listed `0x18` and `0x1A`–`0x1B`, all three of which are live (`ARRAY_SYNC_CTRL`, `RX_HOLD`, `SC_ANT_SEL`), and omitted `0x7F`. Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -537,7 +564,7 @@ If a future revision reinstates any of these features, allocate addresses from t
 | --- | --- |
 | `0x00`–`0x07` | Global / IRQ (`0x04`–`0x06` debug probe; `0x07` reserved) |
 | `0x08`–`0x0F` | RX / modem configuration |
-| `0x10`–`0x1B` | `0x10`–`0x18` reserved (former gain/AGC/SX1257 live RX control, removed); `0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A`–`0x1B` reserved |
+| `0x10`–`0x1B` | `0x10`–`0x17` reserved (former gain/AGC/SX1257 live RX control, removed); `0x18` is `ARRAY_SYNC_CTRL`; `0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A` is `RX_HOLD`; `0x1B` is `SC_ANT_SEL` |
 | `0x1C`–`0x23` | Packet / weight-path / training control |
 | `0x24`–`0x2F` | SC status, `TACC_WINDOW_SYMS`, and bring-up debug |
 | `0x30`–`0x3F` | W shadow bank |

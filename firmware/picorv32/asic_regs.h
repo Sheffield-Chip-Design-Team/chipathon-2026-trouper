@@ -36,9 +36,19 @@ enum {
 
     /* RX / modem config (0x08-0x0F).
      * NOTE: SF_CFG, BW_CFG, PKT_TIMEOUT_SYMS, SC_HITS_REQ, SC_ANT_SEL,
-     * ARRAY_SYNC_CTRL and
+     * ARRAY_SYNC_CTRL, BRINGUP_CTRL, BRINGUP_AMPL and
      * (below) TACC_WINDOW_SYMS are GATED — hardware rejects writes unless RX_HOLD is
      * set and no packet is active. See REG_RX_HOLD and asic_cfg_begin(). */
+
+    /* Deterministic bring-up sample source (BRINGUP_SRC). Injects a known
+     * 500 kS/s complex stream at the re-modulator input so mrc_combiner and
+     * sd_remod can be proven without a working frontend/SC/PSRAM path.
+     * Bring-up only — clear REG_BRINGUP_CTRL before releasing RX_HOLD.
+     * At 0x10/0x11 (former RX_GAIN block); was 0x06/0x07 before the main rebase.
+     * See planning/foundational-block-bringup-plan.md. */
+    REG_BRINGUP_CTRL     = 0x10,   /* [0] EN, [2:1] MODE             (gated) */
+    REG_BRINGUP_AMPL     = 0x11,   /* signed ampl, HW-clamped ±64    (gated) */
+
     REG_MIMO_CTRL        = 0x08,   /* [0] MODE, [7:4] ANTENNA_EN */
     REG_SF_CFG           = 0x09,   /* [3:0] SF 7-12                  (gated) */
     REG_BW_CFG           = 0x0A,   /* [0] bw_sel                     (gated) */
@@ -110,6 +120,15 @@ enum { WGT_CTRL_W_COMMIT = 1u << 0 };
 enum {
     RX_HOLD_BIT             = 1u << 0,  /* 1 = detector held, config writable */
     RX_HOLD_CFG_WR_REJECTED = 1u << 1   /* RO sticky, W1C */
+};
+
+/* BRINGUP_CTRL (0x10) fields. */
+enum {
+    BRINGUP_EN         = 1u << 0,
+    BRINGUP_MODE_ZERO  = 0u << 1,
+    BRINGUP_MODE_DC    = 1u << 1,
+    BRINGUP_MODE_TONE  = 2u << 1,   /* fs/4 complex rotation */
+    BRINGUP_MODE_PRBS  = 3u << 1
 };
 
 enum {

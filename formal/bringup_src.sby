@@ -1,0 +1,28 @@
+[tasks]
+prove
+cover
+
+[options]
+# mode prove (k-induction): bringup_src is a small single-clock generator whose
+# properties are all local invariants over the divider, the output register and
+# the amplitude clamp -- no cross-clock delayed-compare, so none of the
+# false-counterexample class that forces spi_slave.sby down to plain BMC.
+# Depth 40 covers more than half a DECIM=64 tick period plus reset; the
+# induction step is what actually closes the amplitude bound over all 256
+# values of `ampl`, which is the property with silicon consequences.
+prove: mode prove
+prove: depth 40
+cover: mode cover
+cover: depth 200
+
+[engines]
+smtbmc
+
+[script]
+read_verilog -formal -DFORMAL bringup_src.v
+read_verilog -sv -formal bringup_src_formal.sv
+prep -top bringup_src
+
+[files]
+../src/debug/bringup_src.v
+bringup_src_formal.sv
