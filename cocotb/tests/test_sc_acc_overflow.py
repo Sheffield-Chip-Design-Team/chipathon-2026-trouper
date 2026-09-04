@@ -23,11 +23,16 @@ incremented and snapshotted with non-blocking assignments on the SAME edge, so
 delayed-energy term. acc_E0cur (updated at TDM step 5) does not share this, so
 with cur==del every sample the two snapshots must be equal and are not.
 
-The accumulators are zeroed at the symbol boundary (line 395-396), so a
-background monitor records their running peak/min *during* the symbol; the
-persistent metric-engine snapshots (eval_E0cur/eval_E0del/eval_ci0) are read
-after. SF7/M=256 must PASS; the SF9/SF10 cases are EXPECTED TO FAIL until #61
-is fixed.
+The accumulators are zeroed at the symbol boundary, so a background monitor
+records their running peak/min *during* the symbol; the persistent
+metric-engine snapshots (eval_E0cur/eval_E0del/eval_ci0) are read after.
+
+Regresses the #61 fix (branch rtl/open-risk-fixes): acc_ci0/cq0/E0cur/E0del
+widened to signed [31:0]; snapshot is `sat13(acc >>> (sf+sample_shift+2))`
+(sign-preserving, M-scaled, saturating); acc_E0del forward-combined at the
+boundary. All cases now PASS -- the accumulators no longer wrap, the snapshots
+stay sign-correct and non-degenerate at every SF, sc_lock fires, and
+eval_E0cur == eval_E0del when cur==del.
 """
 
 import cocotb
@@ -158,7 +163,8 @@ async def test_sf9_energy_snapshot_sign_flip(dut):
     """M=1024 at the ~90-count AGC point. acc_E0cur reaches ~16.6 M with bit
     [23] set, so both the running signed accumulator and the acc_*[22:10]
     snapshot read NEGATIVE even though every sample contributed a non-negative
-    squared magnitude. EXPECTED FAIL until #61 is fixed."""
+    squared magnitude. Post-#61-fix: 32-bit accumulator + sign-preserving
+    M-scaled snapshot -> stays positive."""
     cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
     s = await _run_one_symbol(dut, sf=9, shift=1, amp=90)     # M = 1024
 
@@ -183,8 +189,8 @@ async def test_sf9_energy_snapshot_sign_flip(dut):
 async def test_sf9_amp64_lock_never_fires(dut):
     """M=1024, amp=64: acc_E0cur reaches exactly 2^23, so acc_E0cur[22:10] == 0,
     eval_e_acc degenerates to 0, eval_hit is forced false and sc_lock never
-    asserts for a clean, strong, perfectly-correlated preamble. EXPECTED FAIL
-    until #61 is fixed."""
+    asserts for a clean, strong, perfectly-correlated preamble. Post-#61-fix:
+    the snapshot no longer degenerates to 0, so lock fires."""
     cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
     s = await _run_one_symbol(dut, sf=9, shift=1, amp=64)     # M = 1024
 
@@ -204,7 +210,8 @@ async def test_e0del_drops_boundary_sample(dut):
     step 7 with a non-blocking assignment on the same edge the symbol-boundary
     snapshot latches eval_E0del <= acc_E0del[22:10], so eval_E0del is missing
     the final sample's del_i0^2 + del_q0^2. M=64, amp=13 chosen so the missing
-    term flips the >>10 slice by one. EXPECTED FAIL until #61 is fixed."""
+    term flips the slice by one. Post-#61-fix: acc_E0del is forward-combined at
+    the boundary, so the two snapshots match."""
     cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
     s = await _run_one_symbol(dut, sf=6, shift=0, amp=13)     # M = 64
 
@@ -220,8 +227,8 @@ async def test_e0del_drops_boundary_sample(dut):
 async def test_sf10_accumulator_true_wrap(dut):
     """M=2048 at the ~90-count AGC point: the true energy sum (~33.2 M) exceeds
     2^24, so the raw 24-bit accumulator wraps and never actually reaches the
-    true peak -- magnitude loss, not just sign interpretation. EXPECTED FAIL
-    until #61 is fixed."""
+    true peak -- magnitude loss, not just sign interpretation. Post-#61-fix:
+    the 32-bit accumulator holds the full sum."""
     cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
     s = await _run_one_symbol(dut, sf=9, shift=2, amp=90)     # M = 2048
 

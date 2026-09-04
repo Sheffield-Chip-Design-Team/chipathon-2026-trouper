@@ -77,6 +77,19 @@ def pads(dut):
     return int(dut.DBG0_OUT.value), int(dut.IRQ_OUT.value)
 
 
+async def raw_settle(dut):
+    """Clocks for an IQ pad change to reach the debug pads via the raw-RX group.
+
+    Path: pad -> IQ negedge sample -> posedge retime (Open Risk #70 two-stage
+    capture) -> debug_probe_mux posedge register -> pad.  Three rising edges
+    plus a delta for the final combinational hop to the pad.
+    """
+    await RisingEdge(dut.IQ_CLK)
+    await RisingEdge(dut.IQ_CLK)
+    await RisingEdge(dut.IQ_CLK)
+    await Timer(1, unit="ns")
+
+
 # ---------------------------------------------------------------------------
 # Structural: pads, reset state, tie-offs
 # ---------------------------------------------------------------------------
@@ -166,7 +179,9 @@ async def test_reserved_encodings_drive_zero(dut):
 
 @cocotb.test()
 async def test_raw_rx_probe_follows_iq_pads(dut):
-    """Group 001 reproduces each antenna's I/Q pad, delayed one cycle.
+    """Group 001 reproduces each antenna's I/Q pad, after the two-stage IQ
+    capture (Open Risk #70: negedge sample + posedge retime) plus the mux
+    register -- see raw_settle().
 
     Drives a distinct pattern per branch so a mis-wired ANT decode shows up as a
     wrong branch rather than as a plausible-looking bitstream.
@@ -178,10 +193,7 @@ async def test_raw_rx_probe_follows_iq_pads(dut):
         for pattern_i, pattern_q in ((0xF, 0x0), (0x0, 0xF), (1 << ant, 0xF ^ (1 << ant))):
             dut.IQ_DATA_I.value = pattern_i
             dut.IQ_DATA_Q.value = pattern_q
-            # one edge to capture into the debug flops, then sample
-            await RisingEdge(dut.IQ_CLK)
-            await RisingEdge(dut.IQ_CLK)
-            await Timer(1, unit="ns")
+            await raw_settle(dut)
             want = ((pattern_i >> ant) & 1, (pattern_q >> ant) & 1)
             assert pads(dut) == want, (
                 f"raw probe ANT={ant} I=0x{pattern_i:X} Q=0x{pattern_q:X}: "
@@ -205,9 +217,7 @@ async def test_selectors_are_independent(dut):
     for pattern in (0x1, 0x0, 0x1):
         dut.IQ_DATA_I.value = pattern
         dut.IQ_DATA_Q.value = 0
-        await RisingEdge(dut.IQ_CLK)
-        await RisingEdge(dut.IQ_CLK)
-        await Timer(1, unit="ns")
+        await raw_settle(dut)
         d0, d1 = pads(dut)
         assert d0 == pattern, f"DBG0 did not follow raw I[0]={pattern}: got {d0}"
         assert d1 == 0, f"shared pad moved while only DBG_CTRL0 changed: {d1}"
@@ -235,9 +245,7 @@ async def test_shared_pad_reverts_to_irq(dut):
     for pattern in (0x1, 0x0, 0x1):
         dut.IQ_DATA_Q.value = pattern
         dut.IQ_DATA_I.value = 0
-        await RisingEdge(dut.IQ_CLK)
-        await RisingEdge(dut.IQ_CLK)
-        await Timer(1, unit="ns")
+        await raw_settle(dut)
         assert int(dut.IRQ_OUT.value) == pattern, (
             f"shared pad {int(dut.IRQ_OUT.value)} did not follow raw Q[0]={pattern} "
             f"with DBG_CTRL1.EN=1"
@@ -246,9 +254,7 @@ async def test_shared_pad_reverts_to_irq(dut):
     # Clear EN: pad back to the (idle) interrupt regardless of IQ activity.
     await spi_write(dut, REG_DBG_CTRL1, ctrl(G_RAW, ant=0, en=False))
     dut.IQ_DATA_Q.value = 0xF
-    await RisingEdge(dut.IQ_CLK)
-    await RisingEdge(dut.IQ_CLK)
-    await Timer(1, unit="ns")
+    await raw_settle(dut)
     assert int(dut.IRQ_OUT.value) == 0, "shared pad did not revert to IRQ after DBG_CTRL1.EN=0"
     dut._log.info("DBG_CTRL1.EN switches the shared pad between IRQ and the mux")
 
@@ -301,9 +307,7 @@ async def test_dbg_status_mirrors_the_pads(dut):
     for pattern in (0x1, 0x0):
         dut.IQ_DATA_I.value = pattern
         dut.IQ_DATA_Q.value = pattern
-        await RisingEdge(dut.IQ_CLK)
-        await RisingEdge(dut.IQ_CLK)
-        await Timer(1, unit="ns")
+        await raw_settle(dut)
         d0, d1 = pads(dut)
         st = await spi_read(dut, REG_DBG_STATUS)
         assert (st & 0x1) == d0 and ((st >> 1) & 0x1) == d1, (

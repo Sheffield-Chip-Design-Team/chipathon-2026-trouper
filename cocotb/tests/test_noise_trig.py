@@ -341,3 +341,115 @@ async def test_noise_trig_rejected_after_training_during_active_packet(dut):
     assert await _read_u24(dut, 0x64) == z_before, f"{tag}: rejected trigger overwrote Zdiag"
     assert not ((await spi_read(dut, 0x02)) & 0x10), f"{tag}: rejected trigger raised NOISE_READY"
     dut._log.info(f"{tag}: PASS -- active-packet trigger rejected after normal training")
+
+
+@cocotb.test()
+async def test_noise_window_preempted_by_real_packet(dut):
+    """Open Risk (RTL review): a noise-window completion must NOT be aliased as
+    packet-training completion.
+
+    A firmware noise measurement is armed while idle; a real packet then
+    arrives mid-window and sc_lock asserts. Before the fix, training_acc kept
+    running the noise window (armed already set) and its mode-untagged
+    training_done advanced the packet FSM out of ST_PREAMBLE_ACQ and set
+    w_pending -- firmware would read noise/mixed Z as packet-training results.
+
+    After the fix: on sc_lock training_acc CANCELS the noise window
+    (noise_abort pulse, noise_mode clears) and re-arms a proper packet-mode
+    window; only training_done_pkt (packet mode) reaches w_pending / the FSM.
+    Checks:
+      * noise_abort pulses, noise_window_active drops, NOISE_READY never fires
+      * w_pending is NOT set by the (cancelled) noise completion
+      * the real packet's training completes (training_done_pkt) and the FSM
+        reaches the payload phase with a coherent Z snapshot
+    """
+    tag = "noise_pkt_preempt"
+    sf, sample_shift = 7, 1
+    M = 1 << (sf + sample_shift)
+    sym_ns = M * 64 * CLK_NS
+
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value = 1
+    dut.SPI_MOSI.value = 0
+    dut.SPI_SCK.value = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    mode = _StimMode()
+    cocotb.start_soon(_noise_or_cw_driver(dut, mode))
+
+    await spi_read(dut, 0x00)
+    await spi_write(dut, 0x09, sf & 0x0F)
+    await spi_write(dut, 0x0A, 0)      # 250 kHz
+    await spi_write(dut, 0x0C, 0x01)   # low SC threshold -> the CW locks
+    await spi_write(dut, 0x0D, 0x00)
+    await spi_write(dut, 0x0E, 0x00)
+    await spi_write(dut, 0x27, 0x08)   # TACC_WINDOW_SYMS = 8
+    await spi_write(dut, 0x28, 20)     # PKT_TIMEOUT_SYMS
+    await release_rx_hold(dut)
+    await Timer(4 * sym_ns, unit="ns")
+
+    # PSRAM up so the SC detector has its delay line and can actually lock.
+    await spi_write(dut, 0x70, 0x01)
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    # --- arm a noise window while idle, keep the stimulus as noise for now ---
+    assert int(dut.u_dut.packet_active.value) == 0, f"{tag}: packet active before trigger"
+    await spi_write(dut, 0x1F, 0x01)   # TACC_NOISE_TRIG
+    await Timer(sym_ns, unit="ns")
+    assert int(dut.u_dut.training_armed.value) == 1, f"{tag}: noise window did not arm"
+    assert int(dut.u_dut.u_tacc.noise_mode_r.value) == 1, f"{tag}: not in noise mode"
+    assert int(dut.u_dut.noise_window_active.value) == 1, f"{tag}: top noise window not open"
+
+    # --- real packet arrives: flip the driver to CW, watch for the pre-empt ---
+    abort_seen = False
+    wpend_during_noise = False
+    noise_ready = False
+    lock_seen = False
+
+    async def _watch_abort():
+        nonlocal abort_seen
+        while True:
+            await RisingEdge(dut.IQ_CLK)
+            if int(dut.u_dut.noise_abort.value):
+                abort_seen = True
+
+    cocotb.start_soon(_watch_abort())
+    mode.cw = True
+
+    for _ in range(30):
+        await Timer(sym_ns, unit="ns")
+        irq = await spi_read(dut, 0x02)
+        lock_seen = lock_seen or bool(irq & 0x01)
+        noise_ready = noise_ready or bool(irq & 0x10)
+        # w_pending must never be raised while the cancelled noise window's
+        # completion could still be in flight and no real training has finished
+        if int(dut.u_dut.w_pending.value) and not lock_seen:
+            wpend_during_noise = True
+        if lock_seen and int(dut.u_dut.packet_phase.value) >= 3:
+            break
+
+    assert lock_seen, f"{tag}: CW stimulus never locked -- pre-empt not exercised"
+    assert abort_seen, f"{tag}: noise_abort never pulsed -- window was not cancelled by sc_lock"
+    assert not wpend_during_noise, f"{tag}: w_pending set before any real training completed"
+    assert not noise_ready, f"{tag}: NOISE_READY fired for a window a real packet pre-empted"
+    assert int(dut.u_dut.noise_window_active.value) == 0, f"{tag}: noise window still open after pre-empt"
+
+    # the real packet must still complete its (packet-mode) training and advance
+    assert int(dut.u_dut.packet_phase.value) >= 3, \
+        f"{tag}: FSM never reached payload phase after the real lock (phase=" \
+        f"{int(dut.u_dut.packet_phase.value)})"
+    zdiag0 = await _read_u24(dut, 0x64)
+    assert zdiag0 > 0, f"{tag}: Zdiag_0 == 0 after the real packet's training window"
+    dut._log.info(f"{tag}: PASS -- noise window cancelled on sc_lock, no aliased "
+                  f"completion, real packet trained (Zdiag_0={zdiag0})")

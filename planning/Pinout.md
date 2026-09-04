@@ -331,6 +331,19 @@ drive rather than above it. Series-resistor footprints (0402, populated 0 Ω)
 close to the ASIC pin on `SIO[3:0]`, `CE_N`, `SCK` and `REMOD_A_{I,Q}` are the
 intended post-silicon lever and should be on the PCB.
 
+**PSRAM power-up state is a board obligation (Open Risks #55 item 5, #69).**
+The APS6404L wants SCK low, CE# high (tracking VDD), SIO[3:0] low and no
+commands for its first 150 µs, then a software reset. The ASIC cannot hold
+that state: all PSRAM pads reset Hi-Z with internal pulls disabled
+(`_PU`=`_PD`=`0` in the table above). The PCB must therefore carry:
+- weak pull-downs on `PSRAM_SCK` and `PSRAM_SIO[3:0]`;
+- a pull-up on `PSRAM_CE_N` to the PSRAM supply;
+- a low-ESR 1 µF cap next to PSRAM VDD;
+- firmware holding `PSRAM_CTRL.PSRAM_EN` off ≥ 150 µs after PSRAM power is
+  valid (also Open Risks #55 item 1);
+- total PSRAM-net loading within the datasheet's 15 pF characterisation
+  limit (the `PSRAM_SCK_SL=0` / drive analysis above assumes ~13.6 pF).
+
 **Verification (2026-08-29).** These values are asserted against this table by
 `cocotb/pad_tieoffs` (`cocotb/tests/test_pad_tieoffs.py`, job 5223) — all 96
 constants in reset and re-checked every clock through live QPI traffic, plus

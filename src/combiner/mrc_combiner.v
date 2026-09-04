@@ -35,7 +35,12 @@ module mrc_combiner (
     input  wire [1:0]  bypass_ant,
     input  wire [2:0]  post_gain_shift,
     output reg  signed [7:0] y_i, y_q,
-    output reg         y_valid
+    output reg         y_valid,
+    // Burst-aligned "this y_* pair is an MRC result" flag (= W_valid && !mode,
+    // sampled at the state-0 burst start, held for the burst). trouper_top uses
+    // it to apply REMOD_BACKOFF_SHIFT to MRC output only, not to bypass
+    // passthrough (Open Risk #65 / TRPR-PCF-011 / TRPR-RMD-008).
+    output wire        use_mrc
 );
 
     reg [3:0] state;
@@ -59,6 +64,7 @@ module mrc_combiner (
     reg signed [7:0]  xr_q [0:3];
     reg signed [7:0]  bypass_i_r, bypass_q_r;
     reg               use_mrc_r;
+    assign use_mrc = use_mrc_r;   // Open Risk #65: burst-aligned MRC/bypass flag
 
     // 2 shared multiplier input registers
     reg signed [7:0]  w_r;

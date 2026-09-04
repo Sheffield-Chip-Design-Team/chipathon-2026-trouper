@@ -635,7 +635,7 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
 
 @cocotb.test()
 async def test_reserved_addresses_zero_and_ignored(dut):
-    """Verify all 17 reserved addresses read zero and writes are ignored.
+    """Verify all 16 reserved addresses read zero and writes are ignored.
 
     Closes verification-plan row #3: "Fixed IDs and all reserved addresses
     read zero/write ignored" (TRPR-REG-004). Exhaustively verifies the
@@ -658,19 +658,20 @@ async def test_reserved_addresses_zero_and_ignored(dut):
     """
     await _bring_up(dut)
 
-    # 17 reserved slots. Five former-reserved addresses are now real registers
-    # and are excluded: 0x1A is RX_HOLD (see NOTE above), 0x1B became
-    # SC_ANT_SEL, 0x18 -- the last of the former RX_GAIN block -- became
-    # ARRAY_SYNC_CTRL, and 0x04/0x05 became DBG_CTRL/DBG_STATUS, all on
-    # 2026-08-30.
+    # 16 reserved slots. Former-reserved addresses that are now real registers
+    # are excluded: 0x1A is RX_HOLD (see NOTE above), 0x1B became SC_ANT_SEL,
+    # 0x18 -- the last of the former RX_GAIN block -- became ARRAY_SYNC_CTRL,
+    # 0x04/0x05 became DBG_CTRL0/DBG_STATUS (2026-08-30), and 0x06 became
+    # DBG_CTRL1 -- the shared IRQ_OUT/DBG1 pad selector (pinout cut to 27 pads,
+    # 2026-09).
     reserved_addrs = [
-        0x06, 0x07,                                     # former DEBUG_CTRL/GPIO
+        0x07,                                          # former DEBUG_GPIO
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,  # former RX_GAIN_*
         0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,             # reserved for future
         0x7F,                                            # protocol escape
     ]
 
-    assert len(reserved_addrs) == 17, f"Expected 17 reserved addresses, got {len(reserved_addrs)}"
+    assert len(reserved_addrs) == 16, f"Expected 16 reserved addresses, got {len(reserved_addrs)}"
 
     # Test each reserved address with multiple patterns
     patterns = [0x00, 0xFF, 0xAA, 0x55, 0xA5, 0x5A]

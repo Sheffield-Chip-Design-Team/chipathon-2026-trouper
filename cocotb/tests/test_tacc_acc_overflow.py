@@ -20,7 +20,9 @@ wrap past 2^32 after ~133147 samples.
 Bench: TOPLEVEL = training_acc in noise mode (fully-forward window from the
 trigger instant), branches 0 and 1 held at (127, 127) so Zpair_i0 (= Z_01)
 accumulates the worst-case correlated term; branches 2, 3 held at zero.
-EXPECTED TO FAIL until #63 is fixed.
+Regresses the #63 fix (saturating sadd32/uadd32 on every Z accumulate;
+branch rtl/open-risk-fixes): Zpair_i0 now clamps at INT32_MAX and Zdiag_0
+stays monotonic instead of wrapping. PASS once the fix is in.
 """
 
 import cocotb
@@ -106,42 +108,49 @@ async def _accumulate(dut, sf, shift, max_samples, probe):
 
 @cocotb.test()
 async def test_zpair_i_overflows_within_legal_window(dut):
-    """Zpair_i0 is signed [31:0]; with Z_01 accumulating 32258/sample it must
-    stay >= 0 for at least the ~66573 samples it takes to reach 2^31 -- which is
-    well inside the 245760-sample legal window. EXPECTED FAIL: it wraps negative
-    around sample 66573."""
+    """Zpair_i0 is signed [31:0]; with Z_01 accumulating 32258/sample it reaches
+    2^31 around sample 66573 -- well inside the 245760-sample legal window.
+    Pre-fix it wrapped negative there. With the #63 saturating add it must clamp
+    at INT32_MAX and never go negative."""
     def probe(d, n):
         v = d.Zpair_i0.value.signed_integer
         if v < 0:
-            return f"Zpair_i0 wrapped to {v} at sample {n} (expected ~{ZPAIR_OVERFLOW_SAMPLE})"
+            return f"Zpair_i0 wrapped to {v} at sample {n} (expected clamp at 2^31-1)"
         return None
 
     n, msg = await _accumulate(dut, sf=12, shift=2, max_samples=70_000, probe=probe)
-    dut._log.info(f"stopped at sample {n}, Zpair_i0={dut.Zpair_i0.value.signed_integer}")
+    final = dut.Zpair_i0.value.signed_integer
+    dut._log.info(f"stopped at sample {n}, Zpair_i0={final}")
     assert msg is None, (
-        f"{msg} -- signed int32 cross-pair accumulator overflows at a legal "
-        f"TACC_WINDOW_SYMS=15 / SF12 / BW125 window; firmware weight computation "
-        f"reads a sign-inverted Z (Open Risk #63)")
+        f"{msg} -- signed int32 cross-pair accumulator wrapped instead of clamping; "
+        f"the #63 saturating add regressed (firmware would read a sign-inverted Z)")
+    assert final == INT32_MAX, (
+        f"Zpair_i0={final} did not clamp at INT32_MAX ({INT32_MAX}) after {n} samples "
+        f"-- expected saturation by ~sample {ZPAIR_OVERFLOW_SAMPLE} (Open Risk #63 fix)")
 
 
 @cocotb.test()
 async def test_zdiag_overflows_within_legal_window(dut):
     """Zdiag_0 is unsigned [31:0] and accumulates a non-negative term every
     sample, so it must be monotonically non-decreasing for the whole window.
-    EXPECTED FAIL: it wraps past 2^32 around sample 133147, still inside the
-    legal window."""
+    Pre-fix it wrapped past 2^32 around sample 133147. With the #63 saturating
+    add it must clamp at UINT32_MAX and stay monotonic."""
     state = {"prev": 0}
 
     def probe(d, n):
         v = int(d.Zdiag_0.value)
         if v < state["prev"]:
             return (f"Zdiag_0 decreased {state['prev']} -> {v} at sample {n} "
-                    f"(expected wrap ~{ZDIAG_OVERFLOW_SAMPLE})")
+                    f"(expected clamp at 2^32-1)")
         state["prev"] = v
         return None
 
     n, msg = await _accumulate(dut, sf=12, shift=2, max_samples=140_000, probe=probe)
-    dut._log.info(f"stopped at sample {n}, Zdiag_0={int(dut.Zdiag_0.value)}")
+    final = int(dut.Zdiag_0.value)
+    dut._log.info(f"stopped at sample {n}, Zdiag_0={final}")
     assert msg is None, (
-        f"{msg} -- unsigned int32 diagonal accumulator wraps within a legal window "
-        f"(Open Risk #63)")
+        f"{msg} -- unsigned int32 diagonal accumulator wrapped instead of clamping; "
+        f"the #63 saturating add regressed")
+    assert final == UINT32_MAX, (
+        f"Zdiag_0={final} did not clamp at UINT32_MAX ({UINT32_MAX}) after {n} samples "
+        f"-- expected saturation by ~sample {ZDIAG_OVERFLOW_SAMPLE} (Open Risk #63 fix)")

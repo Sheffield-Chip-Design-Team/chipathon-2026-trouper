@@ -22,7 +22,10 @@ goes (and stays) high, the top copy is high for a single cycle then cleared by
 So the packet neither combines with the committed weights nor reports a miss.
 A single authoritative W_valid would do exactly one of those.
 
-Top-level bench, TOPLEVEL = tb_trouper_cocotb. EXPECTED TO FAIL until #62 is fixed.
+Top-level bench, TOPLEVEL = tb_trouper_cocotb. Regresses the #62 fix (single
+authoritative W_valid exported from packet_ctrl_fsm; branch rtl/open-risk-fixes):
+FSM and top-level W_valid now agree, and the packet either combines or reports
+the miss. PASS once the fix is in.
 """
 
 import cocotb

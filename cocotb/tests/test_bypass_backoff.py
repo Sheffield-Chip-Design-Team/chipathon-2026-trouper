@@ -14,8 +14,10 @@ before its bit-exact compare; this test keeps the RESET DEFAULT shift.
 
 Flow: lock in Mode 1, restore COMB_CFG to its reset value (0x10 = backoff
 shift 1, post-gain 0), wait for PSRAM replay to lift psram_silence, then on
-every clean combiner pairing require remod_in == comb_y. EXPECTED TO FAIL:
-remod_in == comb_y >> 1.
+every clean combiner pairing require remod_in == comb_y. Regresses the #65 fix
+(REMOD_BACKOFF_SHIFT gated to the MRC path via mrc_combiner's use_mrc output;
+branch rtl/open-risk-fixes): bypass now passes the raw int8 sample through
+unshifted. PASS once the fix is in.
 
 Top-level bench, TOPLEVEL = tb_trouper_cocotb.
 """
