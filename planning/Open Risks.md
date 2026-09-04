@@ -910,7 +910,20 @@ primitive at `src/rtl/sync.sv`.
   32-bit bridge word maps onto that packing non-trivially).
 - Re-verify `reg_bank` arbitration against the bridge once its RTL lands.
 
-### 49. Grouper external-AHB endpoint is not yet an integration-safe macro interface
+### 49. Grouper external-AHB endpoint is not yet an integration-safe macro interface — **CLOSED 2026-09-04 (obsolete)**
+
+> **CLOSED — the endpoint no longer exists.** Grouper is not taping out this
+> round. The `GRP_*` byte bus, the AHB-Lite `H*` endpoint added in `095ae2e`,
+> and `IRQ_GROUPER` were all removed from `src/top/trouper_top.v` with the
+> Grouper-boundary removal (2026-09-01; the only remaining trace is the removal
+> note at `trouper_top.v:25`). SPI is now the sole register master, so there is
+> no inter-project AHB interface left to harden, constrain, or BFM-test. If
+> Grouper integration is revived in a future round this item must be re-opened
+> against the re-added endpoint. Related: item 29 (CDC) and item 16 (SPI
+> arbitration) are already closed-obsolete on the same grounds; item 50 (PSRAM
+> debug-port arbitration) keeps only its non-Grouper residual — the `dbg_widx`
+> wrap-after-8 bug; item 60 (functional sim of the removal itself) stays open.
+> Original analysis retained below for the record.
 
 Commit `095ae2e` adds Grouper's current 8-bit external-peripheral signals
 (`HADDR`, `HWDATA`, `HTRANS`, `HSIZE`, `HWRITE`, `HRDATA`, `HREADY`, and
@@ -1182,7 +1195,34 @@ run WNS should still be treated cautiously at this density.
 
 ---
 
-### 41. Hold signoff corner pulls the wrong RCX deck; the corrected (min_ff) config fails routing at signoff density
+### 41. Hold signoff corner pulls the wrong RCX deck; the corrected (min_ff) config fails routing at signoff density — **CLOSED 2026-09-04 (exit run clean)**
+
+> **CLOSED — the one-run exit passed.** Job 5530 applied the `RCX_RULESETS`
+> override (`max_ff_n40C_3v60` → `rules.openrcx.gf180mcuD.min`, `STA_CORNERS`
+> unchanged — no corner rename) to the canonical 1675×1110 / 65 % A40 config
+> (`src/config/trouper_top_minff_rcx.json` = canonical + that one key). Result on
+> the current floorplan:
+> - **Routes clean.** magic DRC 0, route DRC 0, LVS 0, XOR 0, antenna 0 net /
+>   0 pin. **No `GRT-0116`, no `DRT-1231`, no `DRT-0073`** — the only "congestion"
+>   log lines are routine `GPL-004x` placement stats (top-1 % ≈ 1.10). The
+>   2026-07-18 congestion objection was measured on the retired 1200×1100 / 88 %
+>   die and **does not reproduce** at 1675×1110 / 65 %.
+> - **Hold MET against the real min-RC deck.** Hold WNS 0 at all three corners;
+>   ff worst-slack +0.13 ns (unchanged vs the `.max`-deck baseline). RCX log
+>   confirms `Using RCX ruleset '…rules.openrcx.gf180mcuD.min'` for the ff corner.
+> - **SS setup slightly better, not worse:** WNS −11.34 ns / TNS −999 ns vs the
+>   `.max`-deck baseline job 5527's −14.44 / −1009 (~3 ns improvement — the
+>   honest optimistic-RC deck makes hold look less critical, so the resizer
+>   over-buffers less; ff max-slew 4→0, ff max-cap 2→1). nom_tt / max_ff setup
+>   still MET.
+>
+> **To adopt:** fold the `RCX_RULESETS` block into `src/config/trouper_top.json`
+> (3 entries — nom→.nom, ss→.max made explicit, ff→.min). No RTL change, no SDC
+> change. Config + wrapper staged at `src/config/trouper_top_minff_rcx.json` /
+> `rtl-test/scripts/run_pnr_a40_minff_rcx.sh` (uncommitted). Run:
+> `/srv/eda/runs/timothyn-dev/lora-mimo/5530/a40_minff_rcx/run`.
+> The `.min` path is `/foss/pdks/gf180mcuD/libs.tech/librelane/rules.openrcx.gf180mcuD.min`
+> (mechanism verified originally by job 3444; see `project_rcx_min_ff_ruleset_fix` memory).
 
 `max_ff_n40C_3v60` extracts with a `.max` RCX ruleset, so hold is checked
 against pessimistic-setup RC, not true min-RC. The working fix is an
@@ -1428,7 +1468,19 @@ See #66 for the full P&R write-up.
 **Found:** 2026-09-03 full `src/` RTL review; static analysis, reproduced by
 `cocotb/sc_acc_overflow/`; fixed same day.
 
-### 62. IDLE `W_COMMIT` splits controller and top-level `W_valid` state
+### 62. IDLE `W_COMMIT` splits controller and top-level `W_valid` state — **CLOSED 2026-09-04**
+
+> **CLOSED — one authoritative `W_valid`, verified.** Fixed on
+> `rtl/open-risk-fixes` (merged to `main` via PR #53): `packet_ctrl_fsm.v`
+> promotes its internal `W_valid` to a module output (`:28`), and `trouper_top.v`
+> deletes its own `W_valid_set`-pulse reconstruction, sourcing the single FSM
+> level for the combiner, the `reg_bank` live-weight write-lock, and
+> readback/debug. An IDLE-committed vector now legitimately applies to the next
+> packet (combined, no false `W_MISSED_PACKET`). Verified: `cocotb/w_valid_split/`
+> PASS (SGE job 5477), `packet_ctrl_fsm` formal PASS by k-induction (job 5479),
+> full `core` cocotb regression (job 5476), A40 P&R signoff-clean (jobs 5499 /
+> 5511, DRC/LVS/XOR/antenna/hold). Strengthens item 13's safety claim rather
+> than weakening it. Detail retained below.
 
 `packet_ctrl_fsm.v:122-184` deliberately accepts a commit in any state and
 retains its own sticky internal `W_valid`.  `trouper_top.v:758-763` separately
@@ -1475,7 +1527,20 @@ stale `reg_bank` reserved-address test, fixed in the same branch).
 **Found:** 2026-09-03 full `src/` RTL review; cycle-by-cycle static trace, now
 reproduced by `cocotb/w_valid_split/`.
 
-### 63. `training_acc` signed cross-pairs overflow at a legal 15-symbol window
+### 63. `training_acc` signed cross-pairs overflow at a legal 15-symbol window — **CLOSED 2026-09-04**
+
+> **CLOSED — saturating accumulate, verified.** Fixed on `rtl/open-risk-fixes`
+> (merged to `main` via PR #53): `training_acc.v` gains `sadd32`/`uadd32`
+> saturating helpers (`:226-251`) applied to all 16 Z accumulate sites (6 complex
+> `Zpair` + 4 `Zdiag` + `zdiag3_final`); a would-be wrap now clamps at
+> `INT32_MAX/MIN` / `UINT32_MAX` so firmware weight computation degrades
+> gracefully instead of reading a sign-inverted value. No readback / register-map
+> / firmware change. `Trouper Chip Specification.md` §4.5 rewritten (normative
+> "Z accumulator saturation" paragraph replaces the obsolete 8-symbol headroom
+> note). Verified: `cocotb/tacc_acc_overflow/` PASS (`Zpair_i0` clamps at
+> `INT32_MAX`, `Zdiag_0` stays monotonic — job 5477); `mcp_tacc_settle`,
+> `tacc_window_clamp`, `noise_trig` bit-exact preserved at nominal levels
+> (job 5476); A40 P&R signoff-clean (jobs 5499 / 5511). Detail retained below.
 
 `TACC_WINDOW_SYMS` exposes 8..15 symbols and `M` reaches 16384, so the legal
 maximum is 245760 accumulated samples (`training_acc.v:248-249`).  The six
@@ -1728,6 +1793,102 @@ Trouper can independently prove SPI/register access, PSRAM QPI service, and pack
 
 **Decision gate:** implement only if the first-silicon team judges this downstream demonstration path more valuable than the added mux/control/timing risk. The existing no-new-RTL bring-up sequence remains the baseline. See `planning/foundational-block-bringup-plan.md`.
 
+**2026-09-04 — BRINGUP_SRC built, verified, and rebased onto `main`; decision still owed.**
+`src/debug/bringup_src.v` (deterministic generator — modes zero / signed DC /
+fs÷4 complex tone / PRBS, own 64-clock valid cadence, ±64 clamp) plus a 2:1 mux
+at the **re-modulator input** (`bringup_en_q = BRINGUP_CTRL[0] && RX_HOLD &&
+!PACKET_ACTIVE`, armed source takes absolute priority ahead of `psram_silence`,
+`REMOD_BACKOFF_SHIFT` and the `comb_use_mrc` bypass select). Config regs
+`BRINGUP_CTRL` **0x10** / `BRINGUP_AMPL` **0x11** (relocated from 0x06/0x07 on
+the rebase — 0x06 is now `DBG_CTRL1`). Lives on branch `bringup-src-rebased`
+(squash-rebase of `feat/bringup-src` onto `main`; **committed, not merged**).
+
+- **Insertion point is the re-modulator input, not the combiner input.** MRC mode
+  is unreachable while the source is armed (`W_valid` holds only during a packet;
+  the armed source requires none), so the combiner-input option gave up almost
+  nothing — bypass passthrough is a wire — while costing more. See
+  `planning/foundational-block-bringup-plan.md`.
+- **Functional verification (SGE job 5532, RTL rebased onto main):**
+  `bringup_src` 23/23 (DC + fs÷4 + PRBS signatures end-to-end through `sd_remod`;
+  all mux-priority cases; write-gate; cadence; reset determinism; DBG-probe
+  visibility), `reg_bank` 39/39 (0x10/0x11 + reserved sweep), `trouper_top`
+  18/18, plus `w_valid_split` / `bypass_backoff` (job 5536, after a Makefile
+  fix — the #62/#65 RTL is intact under the merge). Every real suite passes;
+  the only red is the pre-existing `dbg_qpi_busy` xfail (#67), unrelated.
+- **Synthesis cost (post-synth, job 5533 vs bringup-free baseline 5527):**
+  +118 cells (37 202 → 37 320), +6 155 µm² stdcell area (**+0.59 %**), 0 new
+  latches.
+- **P&R cost — A40 1675×1110 / 65 %, job 5533 vs job 5527 (identical config):**
+
+  | metric | baseline 5527 | **+ BRINGUP_SRC 5533** | delta |
+  |---|---|---|---|
+  | magic DRC / route DRC / LVS / XOR | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | clean |
+  | antenna nets / pins | 0 / 0 | 0 / 0 | — |
+  | hold WNS (ss / tt / ff) | 0 / 0 / 0 | 0 / 0 / 0 | MET |
+  | setup nom_tt / max_ff | MET | +3.59 / +6.11 ns | MET |
+  | **SS setup WNS** (`max_ss_125C_3v00`) | **−14.44 ns** | **−15.94 ns** | **−1.50 ns** |
+  | **SS setup TNS** | **−1008.7 ns** | **−1480.7 ns** | **×1.47** |
+  | placed cells / util | 50 894 / 68.7 % | 51 089 / 69.1 % | +195 / +0.4 pt |
+  | SS max-slew violations | 9 | 8 | −1 |
+
+  Physically signoff-clean; hold and the realistic-silicon corners unaffected.
+  The cost is **SS setup: −1.5 ns WNS / +472 ns (×1.47) TNS** on a corner that is
+  already ≈ −14 ns underwater (items 1 / 40 — the voltage problem, not this
+  feature). Cheaper than the pre-rebase combiner-input version (×1.82 TNS,
+  +8 790 µm², job 5404), but n=1 and +472 ns TNS is beyond repair-lottery
+  scatter. Run: `/srv/eda/runs/timothyn-dev/lora-mimo-bringup/5533/a40_bringup/run`.
+
+The "top-level timing/P&R evidence" the mitigation required now exists. The
+decision gate stays open: accept the bounded (roughly-free to ×1.47 TNS,
+see the 2026-09-04 update below) SS-timing cost for a standalone
+`mrc_combiner` + `sd_remod` first-silicon proof, or drop the feature and rely on
+the no-new-RTL bring-up sequence. If accepted, the branch needs merging and a
+Register-Map / firmware review of the 0x10/0x11 assignment.
+
+**2026-09-04 — two review findings on the branch, one fixed, one comment-only
+(commit `edd6edc`, not yet re-run through P&R):**
+- **DC mode dropped the sign of `BRINGUP_AMPL` (fixed).** `bringup_src.v`
+  hardcoded the magnitude (`a_pos`) in `MODE_DC`, so `BRINGUP_AMPL=0xE0` (−32)
+  emitted `+32` — contradicting the documented signed density
+  (`BRINGUP_AMPL / 127`, Register Map 0x10–0x11) and the board procedure, which
+  compares a capture against that signed reference. The bug had been enshrined
+  in `test_dc_mode_polarity` (asserted `0xE0 → +32`) and
+  `test_dc_signature_at_the_remod_output` never armed a negative level, so
+  23/23 stayed green with it present. Fixed to select `a_neg`/`a_pos` off the
+  sign, same as TONE/PRBS; both tests corrected/extended. Re-verified:
+  `bringup_src` 23/23 (SGE job 5537).
+- **PRBS period comment was wrong (comment-only).** Claimed period 511;
+  simulating the exact Galois recurrence from seed `9'h1FF` returns to the
+  seed after 255 steps — not maximal-length from this seed/tap pair. No RTL or
+  test change: PRBS is documented as long-run switching stress only, and no
+  test asserts a period.
+
+**2026-09-04 — re-ran P&R with the DC-sign fix (job 5538): SS cost is bounded,
+not fixed.**
+
+  | metric | baseline 5527 | 5533 (pre-fix) | **5538 (fixed)** |
+  |---|---|---|---|
+  | DRC / route DRC / LVS / XOR | 0/0/0/0 | 0/0/0/0 | 0/0/0/0 |
+  | antenna | 0/0 | 0/0 | 0/0 |
+  | hold WNS (ss/tt/ff) | 0/0/0 | 0/0/0 | 0/0/0 |
+  | nom_tt / max_ff setup | MET | +3.59 / +6.11 | +3.17 / +5.82, MET |
+  | **SS setup WNS** | −14.44 ns | −15.94 ns | **−14.49 ns** |
+  | **SS setup TNS** | −1008.7 ns | −1480.7 ns (×1.47) | **−834.9 ns** (better than baseline) |
+  | placed cells / util | 50 894 / 68.7 % | 51 089 / 69.1 % | 51 197 / 68.8 % |
+
+  Both post-fix runs are physically signoff-clean. The DC-sign fix only swaps
+  which of two already-existing equal-width values a mux selects — no logic
+  added or removed — so it should not move SS timing at all. The swing from
+  5533's ×1.47 TNS down to 5538's near-baseline TNS is almost certainly
+  resizer/CTS repair-order nondeterminism ("n=1 repair-lottery scatter", the
+  same effect documented elsewhere in this file), not a causal result of the
+  fix. **Read as bounded, not a fixed number:** BRINGUP_SRC's real SS-timing
+  cost at the re-modulator input sits somewhere between "roughly free" and
+  "×1.47 TNS" — narrower than pre-rebase (×1.82 TNS at the combiner input), but
+  noisier than the +0.59 % synth-area delta alone suggests. Two runs is enough
+  to bound it for the decision below; a third would only narrow the range, not
+  change its shape.
+
 ### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
 
 At 1380×1100, `root_only` NDR preserved clock SI at no timing cost. Below
@@ -1913,7 +2074,13 @@ records), `planning/Pinout.md`.
 
 ---
 
-### 47. Only 2 of 4 padframe quadrants get bonded per package — unconfirmed whether Trouper's quadrant is guaranteed included
+### 47. Only 2 of 4 padframe quadrants get bonded per package — unconfirmed whether Trouper's quadrant is guaranteed included — **CLOSED 2026-09-04 (obsolete)**
+
+> **CLOSED — no bonding lottery.** This round tapes out Trouper only, not
+> Grouper. There is no 2-of-4 quadrant selection to lose: Trouper's quadrant is
+> the one being fabricated and bonded. The pinout work this item was hedging is
+> therefore not at risk. Re-open only if a future spin shares the padframe with
+> other quadrant projects again. Original note retained below.
 
 New organizer information (2026-08-19, not yet in any planning doc before this): the shared
 padframe holds up to **4 quadrant projects, but only 2 are bonded out to package pins at
@@ -1926,7 +2093,16 @@ spin (though the die itself is presumably still fabricated and could be bonded i
 run). **Action:** confirm bonding-pair assignment with the track lead before treating any
 pin-budget work as final.
 
-### 48. Digital input pins may be shareable between quadrant projects — pin-budget lever not yet evaluated
+### 48. Digital input pins may be shareable between quadrant projects — pin-budget lever not yet evaluated — **CLOSED 2026-09-04 (not needed)**
+
+> **CLOSED — the lever it was reserved for is gone.** Digital input pins are
+> **not** shared with other quadrant projects; each project bonds its own. That
+> is fine: the pin budget is met anyway. This item existed only as a cheaper
+> alternative to the `IRQ_OUT`-removal waiver / NR=3 fallback for closing the
+> 22-pad / 1117.5² gap in item 46 — and item 46's pin half is already resolved
+> (the real ACV allocation is 27 pads, not 22; see items 52 and 57). With no
+> budget gap to close there is nothing for this lever to do. Re-open only if a
+> future spin re-introduces a pin-count shortfall. Original note retained below.
 
 Same 2026-08-19 organizer update as item 47: "it may be possible to share digital input pins
 between projects." Not yet investigated for this design, but a real candidate exists —
@@ -2025,7 +2201,39 @@ already recorded in item 27. The feature is synthesis-proven only: +111 cells /
 LVS, pad-ring or pull-up validated.
 
 
-### 52. A40 ACV allocation is 28 pad slots — one spent on `ARRAY_ACQ_N`, two spare; slot N15 still needs a DEF regen
+### 52. A40 ACV allocation is 28 pad slots — one spent on `ARRAY_ACQ_N`, two spare; slot N15 still needs a DEF regen — **CLOSED 2026-09-04**
+
+> **CLOSED — ACV confirmed at 27 pads, integrator DEF regenerated, P&R against it
+> clean.** The allocation is **27** (not 28 — see #57). The 159-entry
+> `src/config/A40_ACV_rtlnames.def` was regenerated 2026-09-03 (commit `224c151`)
+> by `rtl-test/scripts/regen_a40_def.sh`, which runs the integrator's own padring
+> tooling (`ip/chipathon-2026-padring-system`, `make -f Makefile.padframe
+> project-def-A40`) from the full 27-pin `info.yaml` — byte-for-byte reproducible,
+> raw generator artifacts (`interface.yaml`, `pad_map.yaml`, `padring.v`,
+> `selected_variants.json`) kept under `rtl-test/ol_trouper_top/a40_integrator/`.
+> `ARRAY_ACQ_N` (N15) and `DBG0` (N16) carry real generator coordinates, not the
+> old synthetic stopgap. First full A40 P&R against this template — **job 5511**
+> (`FP_DEF_TEMPLATE = A40_ACV_rtlnames.def`, strict match), corroborated by
+> DRV-sweep baseline **job 5527**: **physically signoff-clean** — magic DRC 0,
+> route DRC 0, LVS 0 (all sub-counts), XOR 0, antenna 0 net / 0 pin, hold MET all
+> three corners (worst slack +0.135 ns ff / +1.79 ns ss), setup nom_tt +3.34 /
+> max_ff +5.94 MET; 1675×1110, util 68.7 %.
+>
+> **Residuals (tracked elsewhere, not blocking this item):**
+> - SS setup WNS −14.44 ns / TNS −1008.7 ns — the pre-existing voltage-bound
+>   floor plus the #69/#70 FF perturbation; **items 1 / 40 / 69**, not a DEF/pin
+>   issue. The GRT repair-margin lever does **not** help on this netlist (jobs
+>   5528/5529: SS TNS −1121.8, more DRV, not less).
+> - DRV residual: SS max-slew 9 / max-cap 3 (nom_tt 2/2) — existing DRV waiver
+>   (`_comment_drv_closure` / `_comment_drv_margin_sweep`).
+> - `ARRAY_ACQ_N` open-drain pad-level electrical review — **item 53**.
+> - `DBG0_OUT` / `IRQ_OUT_OUT` SS output-delay exception (**TRPR-DBG-012**) — open
+>   under #57.
+> - A literal integrator human sign-off that the 27 slot names / IO-cell types /
+>   bonding match the regen — the regen used the integrator's tooling and
+>   artifacts, so this is confirmation, not open design work.
+>
+> Original entry retained below.
 
 The current A40 integration artifacts declare and place **25** Trouper pads (23 signal,
 `VDD`, and `VSS`). The reported ACV allocation is **28** pads, leaving **three** slots
@@ -2068,7 +2276,32 @@ allocation is now exactly 28/28 with none spare. See item 57, which is the
 current statement of the pin budget; only the slot-confirmation half of this
 entry is still live.
 
-### 57. The pin allocation is now exactly full (27/27), and two of those slots are unconfirmed
+### 57. The pin allocation is now exactly full (27/27), and two of those slots are unconfirmed — **CLOSED 2026-09-04 (slots confirmed; TRPR-DBG-012 spun out)**
+
+> **CLOSED — the "unconfirmed slots" half is resolved; the "no margin" half is a
+> documented state, not an open action.** N15/N16 (`ARRAY_ACQ_N`, `DBG0`) and the
+> `IRQ_OUT`/`DBG1` shared pad now come from a DEF regenerated with the
+> **integrator's own padring tooling** from the full 27-pin `info.yaml` (commit
+> `224c151`, `regen_a40_def.sh`; artifacts under
+> `rtl-test/ol_trouper_top/a40_integrator/`), not our hand-extended template.
+> P&R against that DEF — **job 5511** / DRV-sweep **job 5527** — is
+> physically signoff-clean (DRC 0, route DRC 0, LVS 0, XOR 0, antenna 0/0, hold
+> MET all corners; 1675×1110, util 68.7 %). The DBG0 slot is placed and routes
+> clean, so "is spending the last dedicated slot on `DBG0_OUT` right" is a
+> judgement call with no technical blocker; the two features remain independently
+> back-outable (`array-acquisition-sync.md`, `two-pin-digital-debug-plan.md`).
+>
+> **Still open, spun out so this entry can close:**
+> - **TRPR-DBG-012** — the `DBG0_OUT` / `IRQ_OUT_OUT` SS `set_output_delay`
+>   exception decision (debug-observability pads don't need 32 MHz SS closure;
+>   see #69's "recommended, not applied" note and #1). Recommend re-homing this
+>   under #69 or #1.
+> - The zero-pin-margin exposure (problem 1 below) — real, but it is a state to
+>   manage, not a fix to land. Any future pin need displaces an allocated slot.
+> - SS setup WNS −14.44 ns — items 1 / 40 / 69, not a pin issue.
+> - Integrator human sign-off on the regenerated slot map (confirmation only).
+>
+> Original entry retained below.
 
 **Update 2026-09-03 — the budget is 27, not 28.** Integrator feedback corrected
 the ACV allocation to **27 pads**. Rather than drop a debug channel, `DBG1` was
@@ -2139,7 +2372,24 @@ acquisition link is a functional feature.
 and 56 were already taken on this branch by the host-SPI GLS/SDF, startup-
 sequencing and IR-drop entries respectively.)*
 
-### 64. Packet timeout is ignored until `PAYLOAD_ACTIVE`
+### 64. Packet timeout is ignored until `PAYLOAD_ACTIVE` — **CLOSED 2026-09-04 (spec clarification, no RTL)**
+
+> **CLOSED — `PKT_TIMEOUT_SYMS` redefined as a payload-phase deadline.** No RTL
+> change. The FSM already bounds every phase: `PREAMBLE_ACQ` by `acq_cnt` and
+> `W_PENDING` by `wpend_cnt` (both `TACC_WINDOW_SYMS`-derived, `packet_ctrl_fsm.v:245`
+> / `:263` → IDLE), and `PAYLOAD_ACTIVE` by `pkt_cnt` (`:297`). So `packet_active`
+> is finite for every legal register value — worst case is the sum of the three
+> windows. The only real defect was semantic: TRPR-PCF-007 read as if
+> `PKT_TIMEOUT_SYMS` were a global watchdog. Fixed in the docs:
+> `Trouper Chip Specification.md` TRPR-PCF-007, `Register Map.md` `0x0B` (table +
+> detail), `Traceability.md`, and packet-ctrl-fsm verification plan row 14 /
+> item 3 — all now state payload-phase semantics and that the register cannot
+> abort a bad acquisition early. `cocotb/pkt_timeout_states/` (job 5474) is
+> retained: `test_payload_timeout_forces_idle` is the TRPR-PCF-007 regression,
+> the ACQ/W_PENDING cases are documented expected behaviour.
+> **Re-open only if** firmware/host turns out to need a hard global packet
+> deadline shorter than the acquisition + weight-pending windows (would need the
+> ~4-line RTL fix: `pkt_cnt==0` forces IDLE in `ACQ`/`W_PENDING` too).
 
 `packet_ctrl_fsm.v:164-170` decrements `pkt_cnt` throughout
 `PREAMBLE_ACQ`, `W_PENDING`, and `PAYLOAD_ACTIVE`, but the zero test exists
@@ -2172,7 +2422,19 @@ payload-only timeout and document the resulting upper bound.
 noted in `planning/verification-plan/packet-ctrl-fsm-verification-plan.md` row 14;
 now reproduced by `cocotb/pkt_timeout_states/`.
 
-### 65. Remodulator backoff attenuates bypass despite the direct-stream contract
+### 65. Remodulator backoff attenuates bypass despite the direct-stream contract — **CLOSED 2026-09-04**
+
+> **CLOSED — backoff gated to active MRC, verified.** Fixed on
+> `rtl/open-risk-fixes` (merged to `main` via PR #53): `mrc_combiner.v` exports a
+> burst-aligned `use_mrc` flag (`= W_valid && !mode`, sampled at the state-0
+> burst start); `trouper_top.v:1109` applies `REMOD_BACKOFF_SHIFT` only when
+> `comb_use_mrc` is set, so Mode-1 / no-`W_valid` bypass forwards `comb_y`
+> unshifted per TRPR-PCF-011 / TRPR-RMD-008. The `< -3 dBFS` remod stability
+> contract is unaffected (bypass carries the selected antenna's int8 sample
+> directly, which already satisfies it). Verified: `cocotb/bypass_backoff/` PASS
+> — `remod_in == comb_y` in bypass at reset defaults (job 5477); `bypass_e2e`,
+> `bypass_antenna`, `remod_backoff`, `comb_remod_transfer`, `mcp_mrc_settle` all
+> PASS (job 5476); A40 P&R signoff-clean (jobs 5499 / 5511). Detail retained below.
 
 `trouper_top.v:924-926` applies `REMOD_BACKOFF_SHIFT` after the combiner for
 all modes.  The reset value is one (`reg_bank.v:219`), so Mode 1 and the
@@ -2531,7 +2793,20 @@ analog reset/power-rail behavior itself. Item 5 also needs a test-PCB
 schematic review (PSRAM pull-downs / CE# pull-up / decoupling / net load)
 before fab.
 
-### 67. Debug probe's `qpi_busy` source is permanently asserted after PSRAM init
+### 67. Debug probe's `qpi_busy` source is permanently asserted after PSRAM init — **CLOSED 2026-09-04 (redocumented, no RTL)**
+
+> **CLOSED — probe redocumented as a coarse active-state indicator.** No RTL
+> change. `101`/`SEL=0` d1 (`qpi_busy` = `|psram_state_dbg`) reads continuously
+> high after PSRAM init because every steady-state post-init state is non-zero;
+> it is not a per-transaction strobe and is now documented as
+> "PSRAM initialised / active-state". `two-pin-digital-debug-plan.md` updated —
+> the derivation note and the group-`101` table row both state this and point
+> bring-up at `101`/`SEL=1` (`buf_active`/`replay_active`) or `SEL=2`
+> (`sample_skip`/`replay_missed`) for per-transaction visibility. Functional
+> operation and SPI-visible PSRAM status were never affected. Exporting the real
+> `psram_buf_ctrl` transaction-busy level was judged not worth perturbing the
+> already-marginal debug-output timing cone (see #69). **Re-open only if** the
+> bring-up team needs true per-transaction busy on that specific probe position.
 
 `trouper_top.v:1197-1201` feeds the debug mux's `qpi_busy` input with
 `|psram_state_dbg`.  The normal initialized PSRAM states (`S_QE_INIT`,

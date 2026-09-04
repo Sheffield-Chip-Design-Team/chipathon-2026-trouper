@@ -114,7 +114,7 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
 | 11 | Same-cycle precedence at acquisition deadline | EDGE-SIM | `cocotb/packet_ctrl_fsm` → `test_training_done_wins_at_acquisition_deadline` | RTL branch priority | ✅ done — `training_done` with `acq_cnt==0` enters W_PENDING and suppresses pulse/sticky miss (SGE job 3719) |
 | 12 | Same-cycle precedence at weight deadline | EDGE-SIM + FORMAL | `cocotb/packet_ctrl_fsm` → `test_pending_commit_wins_at_weight_deadline`; formal missed-cause property | RTL branch priority | ✅ done — a previously captured pending commit with `wpend_cnt==0` sets valid, enters payload, clears pending, and suppresses pulse/sticky miss (SGE job 3719) |
 | 13 | Packet timeout, IDLE return, PACKET_DONE, and re-arm | SPEC-SIM | `cocotb/w_missed`; `test_capture_two_packet.py` | TRPR-PCF-007/008/010 | ✅ done for a normal deadline later than acquisition/weight deadlines |
-| 14 | Packet deadline earlier than acquisition or W-pending deadline | SPEC-SIM / ANALYSIS | standalone test | TRPR-PCF-007 | ⚠️ spec/RTL issue — the RTL tests `pkt_cnt==0` only in PAYLOAD_ACTIVE, so a short `PKT_TIMEOUT_SYMS` cannot force IDLE while still in ACQ/W_PENDING; define whether the requirement or RTL must change, then lock the decision with a regression |
+| 14 | Packet deadline earlier than acquisition or W-pending deadline | ANALYSIS | `cocotb/pkt_timeout_states/` (job 5474, characterisation) | TRPR-PCF-007 | ✅ resolved 2026-09-04 by spec clarification, no RTL change — TRPR-PCF-007 and Register Map `0x0B` redefined as a **payload-phase** deadline. `PREAMBLE_ACQ` and `W_PENDING` are bounded independently by `TACC_WINDOW_SYMS`-derived deadlines (`acq_cnt`/`wpend_cnt`), so `packet_active` is finite for every legal register value; `PKT_TIMEOUT_SYMS` is documented as not a global watchdog (Open Risks #64). Bench keeps `test_payload_timeout_forces_idle` as the TRPR-PCF-007 regression; the ACQ/W_PENDING cases are documented expected behaviour, not failures |
 | 15 | Back-to-back packets and sticky clear at next lock | SPEC-SIM | `test_capture_two_packet.py`; `cocotb/w_missed` | TRPR-PCF-002/008/010 | ✅ done (real-capture job 3273; sticky re-lock path in jobs 3305/3310) |
 | 16 | `packet_phase`, active outputs, and legal-state lockstep | FORMAL + SPEC-SIM | formal phase/active assertions; `cocotb/packet_ctrl_fsm`, `cocotb/w_missed`, `cocotb/sc_force_lock` | TRPR-PCF-001/002/008/009 | ✅ done — formal proves lockstep globally; standalone simulation directly observes internal ACQ_SETUP with public phase 1, and integration tests read phases 0/1/2/3 |
 | 17 | `packet_active_ps` mirrors `packet_active` | FORMAL + DIFF-SIM | formal `a_ps_mirror`; `tb_pcfsm_b6_equiv.v` | physical fanout split | ✅ done |
@@ -142,9 +142,9 @@ pre-B6 reference; **INTERFACE/SYSTEM** = behavior owned partly outside this bloc
    IRQ behavior.~~
    ✅ Done (`cocotb/w_missed` → `test_w_missed_on_acq_timeout` / `test_w_commit_late_during_payload`,
    SGE job 3893; full-block regression re-confirmation job 3895).
-3. Resolve row #14 before declaring TRPR-PCF-007 closed for all legal register values.
-   A test written to the current SHALL will fail the present RTL when the packet deadline
-   expires before the FSM reaches PAYLOAD_ACTIVE.
+3. Row #14 resolved 2026-09-04 by spec clarification (payload-phase semantics), not RTL —
+   TRPR-PCF-007 and Register Map `0x0B` now match the RTL for all legal register values;
+   `PKT_TIMEOUT_SYMS` is documented as not a global watchdog (Open Risks #64).
 4. Add the successful-path `PACKET_STATUS.W_VALID=1` read in row #26.
 5. Run the complete directed, differential, and formal regression, then instrument the
    baseline coverage and begin constrained-random closure.

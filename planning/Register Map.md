@@ -40,7 +40,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x08` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
 | `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12, firmware-enforced — not clamped in HW); write ignored while `PACKET_ACTIVE` |
 | `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); [7:1] reserved; write gated by `RX_HOLD` + `!PACKET_ACTIVE` |
-| `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
+| `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Payload-phase timeout in LoRa symbols (not a global packet watchdog — see 0x0B detail) |
 | `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
 | `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Locks after encoded value + 1 hits. Values 1–3 are normal operation (2–4 hits); 0 is diagnostic-only one-hit mode. |
@@ -234,7 +234,16 @@ while `PACKET_ACTIVE = 1`; a BW (or SF) change re-arms decimator/delay warm-up.
 
 ### `0x0B` — PKT_TIMEOUT_SYMS (read/write)
 
-Maximum packet duration in LoRa symbols before the Packet Control FSM forces a return to `IDLE`.
+Maximum duration of the **payload phase** (`PAYLOAD_ACTIVE`), in LoRa symbols,
+before the Packet Control FSM forces a return to `IDLE` and asserts the
+`PACKET_DONE` IRQ.
+
+It does **not** bound the acquisition (`PREAMBLE_ACQ`) or weight-pending
+(`W_PENDING`) phases — those have independent deadlines derived from
+`TACC_WINDOW_SYMS` — so `PKT_TIMEOUT_SYMS` is not a global packet watchdog and
+cannot abort a false lock early. Worst-case `packet_active` time is the sum of
+the acquisition, weight-pending, and this payload window; it is finite for every
+legal value. (Open Risks #64.)
 
 ### `0x0C`–`0x0D` — SC_THR (read/write)
 
