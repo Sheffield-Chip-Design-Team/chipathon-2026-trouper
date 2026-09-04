@@ -1720,17 +1720,109 @@ SS-regression follow-up tracked under #69.
 
 ## Moderate
 
-### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source — MITIGATION IMPLEMENTED 2026-09-03, blocked on routing
+### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source
 
 Trouper can independently prove SPI/register access, PSRAM QPI service, and packet/IRQ control (`SC_FORCE_LOCK`), and an FPGA can drive its existing one-bit IQ inputs for frontend testing. However, `mrc_combiner` and `sd_remod` have no deterministic internal source: their normal inputs depend on successful upstream capture/replay. A failure in the frontend, PSRAM, or acquisition chain can therefore prevent a standalone first-silicon proof of the final combiner/re-modulator foundation blocks even though their dedicated `REMOD_A_I/Q` output pads are working.
 
-**Mitigation — IMPLEMENTED 2026-09-03 on `feat/bringup-src`, functionally complete, blocked on routing.** `BRINGUP_SRC` (`src/debug/bringup_src.v`, `BRINGUP_CTRL` `0x06` / `BRINGUP_AMPL` `0x07`): a reset-off 500 kS/s deterministic complex source at the **re-modulator input**, enabled only under `RX_HOLD=1 && !PACKET_ACTIVE`, no pins. Zero / bounded signed DC / fs/4 tone / PRBS.
+**Proposed mitigation — not approved or implemented:** one small, reset-off 500 kS/s deterministic complex source, muxed at either the re-modulator input (minimum scope) or combiner input (broader proof), enabled only under `RX_HOLD=1 && !PACKET_ACTIVE`. Required patterns are zero, bounded signed DC, and a repeating bounded I/Q tone; seeded PRBS is optional stress only. It uses no pins, but needs register allocation, assertions/cocotb coverage, top-level timing/P&R evidence, and a bench reconstruction procedure before it can be accepted. Do not add separate BIST engines to every block.
 
-The "broader proof" the combiner insertion point was supposed to buy does not exist: MRC is unreachable while the source is armed (`W_valid` is held only during a packet, the armed source requires none), so the combiner surface on offer was the bypass passthrough — a wire. The minimum-scope option is therefore also the better one, and it diagnoses more sharply: a bad 1-bit stream implicates `sd_remod` alone rather than `sd_remod` or the bypass path.
+**Decision gate:** implement only if the first-silicon team judges this downstream demonstration path more valuable than the added mux/control/timing risk. The existing no-new-RTL bring-up sequence remains the baseline. See `planning/foundational-block-bringup-plan.md`.
 
-**Status of the acceptance conditions listed above:** register allocation ✅ (`planning/Register Map.md`); cocotb coverage ✅ 23/23, job 5427; formal ✅ `formal/bringup_src.sby` PASS, job 5438; bench reconstruction procedure ✅ (`Register Map.md` §`0x06`–`0x07`, DC-density and tone-direction signatures); **top-level P&R evidence ❌ — the netlist does not route** (`DRT-0073` on `clkbuf_2_2_0_IQ_CLK_regs/I`, jobs 5425 and 5436, deterministic). See risk #62 and `planning/foundational-block-bringup-plan.md` TRPR-BRU-009.
+**2026-09-04 — BRINGUP_SRC built, verified, and rebased onto `main`; decision still owed.**
+`src/debug/bringup_src.v` (deterministic generator — modes zero / signed DC /
+fs÷4 complex tone / PRBS, own 64-clock valid cadence, ±64 clamp) plus a 2:1 mux
+at the **re-modulator input** (`bringup_en_q = BRINGUP_CTRL[0] && RX_HOLD &&
+!PACKET_ACTIVE`, armed source takes absolute priority ahead of `psram_silence`,
+`REMOD_BACKOFF_SHIFT` and the `comb_use_mrc` bypass select). Config regs
+`BRINGUP_CTRL` **0x10** / `BRINGUP_AMPL` **0x11** (relocated from 0x06/0x07 on
+the rebase — 0x06 is now `DBG_CTRL1`). Lives on branch `bringup-src-rebased`
+(squash-rebase of `feat/bringup-src` onto `main`; **committed, not merged**).
 
-**Decision gate:** the functional case is settled; what remains is whether the routing cost is acceptable. If no cheap placement perturbation clears DRT-0073, the choice is between paying for a routing fix and dropping the feature for the no-new-RTL bring-up sequence, which remains the baseline. See `planning/foundational-block-bringup-plan.md`.
+- **Insertion point is the re-modulator input, not the combiner input.** MRC mode
+  is unreachable while the source is armed (`W_valid` holds only during a packet;
+  the armed source requires none), so the combiner-input option gave up almost
+  nothing — bypass passthrough is a wire — while costing more. See
+  `planning/foundational-block-bringup-plan.md`.
+- **Functional verification (SGE job 5532, RTL rebased onto main):**
+  `bringup_src` 23/23 (DC + fs÷4 + PRBS signatures end-to-end through `sd_remod`;
+  all mux-priority cases; write-gate; cadence; reset determinism; DBG-probe
+  visibility), `reg_bank` 39/39 (0x10/0x11 + reserved sweep), `trouper_top`
+  18/18, plus `w_valid_split` / `bypass_backoff` (job 5536, after a Makefile
+  fix — the #62/#65 RTL is intact under the merge). Every real suite passes;
+  the only red is the pre-existing `dbg_qpi_busy` xfail (#67), unrelated.
+- **Synthesis cost (post-synth, job 5533 vs bringup-free baseline 5527):**
+  +118 cells (37 202 → 37 320), +6 155 µm² stdcell area (**+0.59 %**), 0 new
+  latches.
+- **P&R cost — A40 1675×1110 / 65 %, job 5533 vs job 5527 (identical config):**
+
+  | metric | baseline 5527 | **+ BRINGUP_SRC 5533** | delta |
+  |---|---|---|---|
+  | magic DRC / route DRC / LVS / XOR | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | clean |
+  | antenna nets / pins | 0 / 0 | 0 / 0 | — |
+  | hold WNS (ss / tt / ff) | 0 / 0 / 0 | 0 / 0 / 0 | MET |
+  | setup nom_tt / max_ff | MET | +3.59 / +6.11 ns | MET |
+  | **SS setup WNS** (`max_ss_125C_3v00`) | **−14.44 ns** | **−15.94 ns** | **−1.50 ns** |
+  | **SS setup TNS** | **−1008.7 ns** | **−1480.7 ns** | **×1.47** |
+  | placed cells / util | 50 894 / 68.7 % | 51 089 / 69.1 % | +195 / +0.4 pt |
+  | SS max-slew violations | 9 | 8 | −1 |
+
+  Physically signoff-clean; hold and the realistic-silicon corners unaffected.
+  The cost is **SS setup: −1.5 ns WNS / +472 ns (×1.47) TNS** on a corner that is
+  already ≈ −14 ns underwater (items 1 / 40 — the voltage problem, not this
+  feature). Cheaper than the pre-rebase combiner-input version (×1.82 TNS,
+  +8 790 µm², job 5404), but n=1 and +472 ns TNS is beyond repair-lottery
+  scatter. Run: `/srv/eda/runs/timothyn-dev/lora-mimo-bringup/5533/a40_bringup/run`.
+
+The "top-level timing/P&R evidence" the mitigation required now exists. The
+decision gate stays open: accept the bounded (roughly-free to ×1.47 TNS,
+see the 2026-09-04 update below) SS-timing cost for a standalone
+`mrc_combiner` + `sd_remod` first-silicon proof, or drop the feature and rely on
+the no-new-RTL bring-up sequence. If accepted, the branch needs merging and a
+Register-Map / firmware review of the 0x10/0x11 assignment.
+
+**2026-09-04 — two review findings on the branch, one fixed, one comment-only
+(commit `edd6edc`, not yet re-run through P&R):**
+- **DC mode dropped the sign of `BRINGUP_AMPL` (fixed).** `bringup_src.v`
+  hardcoded the magnitude (`a_pos`) in `MODE_DC`, so `BRINGUP_AMPL=0xE0` (−32)
+  emitted `+32` — contradicting the documented signed density
+  (`BRINGUP_AMPL / 127`, Register Map 0x10–0x11) and the board procedure, which
+  compares a capture against that signed reference. The bug had been enshrined
+  in `test_dc_mode_polarity` (asserted `0xE0 → +32`) and
+  `test_dc_signature_at_the_remod_output` never armed a negative level, so
+  23/23 stayed green with it present. Fixed to select `a_neg`/`a_pos` off the
+  sign, same as TONE/PRBS; both tests corrected/extended. Re-verified:
+  `bringup_src` 23/23 (SGE job 5537).
+- **PRBS period comment was wrong (comment-only).** Claimed period 511;
+  simulating the exact Galois recurrence from seed `9'h1FF` returns to the
+  seed after 255 steps — not maximal-length from this seed/tap pair. No RTL or
+  test change: PRBS is documented as long-run switching stress only, and no
+  test asserts a period.
+
+**2026-09-04 — re-ran P&R with the DC-sign fix (job 5538): SS cost is bounded,
+not fixed.**
+
+  | metric | baseline 5527 | 5533 (pre-fix) | **5538 (fixed)** |
+  |---|---|---|---|
+  | DRC / route DRC / LVS / XOR | 0/0/0/0 | 0/0/0/0 | 0/0/0/0 |
+  | antenna | 0/0 | 0/0 | 0/0 |
+  | hold WNS (ss/tt/ff) | 0/0/0 | 0/0/0 | 0/0/0 |
+  | nom_tt / max_ff setup | MET | +3.59 / +6.11 | +3.17 / +5.82, MET |
+  | **SS setup WNS** | −14.44 ns | −15.94 ns | **−14.49 ns** |
+  | **SS setup TNS** | −1008.7 ns | −1480.7 ns (×1.47) | **−834.9 ns** (better than baseline) |
+  | placed cells / util | 50 894 / 68.7 % | 51 089 / 69.1 % | 51 197 / 68.8 % |
+
+  Both post-fix runs are physically signoff-clean. The DC-sign fix only swaps
+  which of two already-existing equal-width values a mux selects — no logic
+  added or removed — so it should not move SS timing at all. The swing from
+  5533's ×1.47 TNS down to 5538's near-baseline TNS is almost certainly
+  resizer/CTS repair-order nondeterminism ("n=1 repair-lottery scatter", the
+  same effect documented elsewhere in this file), not a causal result of the
+  fix. **Read as bounded, not a fixed number:** BRINGUP_SRC's real SS-timing
+  cost at the re-modulator input sits somewhere between "roughly free" and
+  "×1.47 TNS" — narrower than pre-rebase (×1.82 TNS at the combiner input), but
+  noisier than the +0.59 % synth-area delta alone suggests. Two runs is enough
+  to bound it for the decision below; a third would only narrow the range, not
+  change its shape.
 
 ### 11. Clock-net signal-integrity tradeoff is active in the current signoff config (not merely contingent)
 
