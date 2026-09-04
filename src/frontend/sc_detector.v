@@ -9,17 +9,25 @@
 //     Eval steps: 7 → 4 (ci0², cq0², E0cur×E0del, threshold).
 //     training_acc does its own independent 4-channel preamble accumulation,
 //     so sc_detector ch1 outputs were not load-bearing for MIMO combining.
-//   Accumulator width: 32 → 24 bit.  Max value = 128 × 255² ≈ 8.3 M = 23 bits;
-//     32-bit was 8 bits of wasted headroom.
-//   Eval multiplier: 17 → 13 bit (shift snapshot from [22:6] to [22:10]).
-//     13-bit gives ~78 dB SNR on the metric; channel noise dominates well before
-//     that.  Product width is 26 bits accordingly.
-//   Eval multiplier is bit-serial (serial_mul13): only 4 products/symbol inside a
-//     ≥4,096-clock budget, so a wide combinational multiply was pure area waste.
-//     The serial product is the exact integer a*b, so all metrics stay bit-exact.
-//   sc_thr firmware value must be divided by 64 vs the original to preserve
-//     the same detection threshold (both LHS and RHS of the comparison scale
-//     as k² with k = 1/64, so the ratio is invariant).
+//   Accumulator width: 24 → 32 bit (Open Risk #61, 2026-09).  The earlier
+//     24-bit width assumed the deleted 128-sample correlator; a full symbol is
+//     now Sum(cur_i0^2+cur_q0^2) over M ≤ 16384 samples, abs max
+//     16384·(127^2+127^2) ≈ 2^29, and at SF12 a nominal-AGC preamble overran
+//     24 bits (metric computed on wrapped / sign-flipped data → lock failure).
+//   Snapshot: eval_* ← acc_* >>> (sf + sample_shift + 2), ARITHMETIC (sign-
+//     preserving), saturated to signed 13-bit.  The old fixed [22:10] slice
+//     dropped the sign bit and did not scale with M.  The M-dependent shift
+//     keeps the 13-bit eval_* operand at ~constant magnitude for every SF
+//     (acc_E0cur ~ M·A^2·2 → >>(sf+ss+2) ~ A^2/2, M-independent).  K=2 keeps
+//     SF7/BW250 at the historical >>10.
+//   Eval multiplier: 13 bit, bit-serial (serial_mul13): only 4 products/symbol
+//     inside a ≥4,096-clock budget, so a wide combinational multiply was pure
+//     area waste.  The serial product is the exact integer a*b.
+//   sc_thr firmware value: a SINGLE value for every SF/BW (unchanged from the
+//     pre-#61 SF7/BW250 default).  The threshold comparison is a k^2 / k^2
+//     ratio (see eval_hit: both eval_mag_acc[27:1] and thr·eval_e_acc[25:13]
+//     scale by the same snapshot factor squared), so it is invariant under the
+//     M-dependent shift.
 //   Per-sample multipliers: 16 simultaneous combinational 8×8 wires → 1 shared
 //     8×8 multiplier, 8-step TDM FSM.
 //   eval_mag_acc/eval_e_acc: 48 → 28 bit. Max |C|² = 2×4095² < 2^25; 28 bits
@@ -104,6 +112,23 @@ module sc_detector (
     output reg  [31:0] timing_ref,
     output reg  signed [31:0] c_i0, c_q0,
     output wire        sc_tdm_busy_dbg,  // debug-probe observability only (DBG_CTRL group 011)
+    // "An evaluation is in flight that could still emit a hit." Open Risk #66:
+    // sc_hit_dbg is a registered 1-cycle pulse that can become visible a
+    // variable number of edges after a noise window's training_done, so the
+    // trouper_top contamination gate holds its verdict until this is low.
+    output wire        sc_pipe_active,
+    // 1-cycle pulse: a per-symbol metric evaluation just completed (hit or not).
+    // Open Risk #66 (P2): the trouper_top noise-window gate uses this to prove
+    // the symbol that was accumulating at training_done has actually been
+    // judged before it renders a verdict -- sc_pipe_active going low only means
+    // nothing is *currently* in flight, not that the pending symbol was scored.
+    output wire        sc_eval_done_pulse,
+    // 1-cycle pulse: a per-symbol metric evaluation just LAUNCHED (at the symbol
+    // boundary). Open Risk #66 (P2): the trouper_top noise-window gate uses this
+    // to require a verdict-qualifying evaluation that STARTED after training_done
+    // -- one already in flight at training_done was fed the symbol *before* the
+    // noise-window tail and must not count.
+    output wire        sc_eval_start_pulse,
     output reg  [15:0] sc_stat,
     output reg         sc_hit_dbg,
     // Held mirror of sc_hit_dbg for register readback (SC_DBG_FLAGS[0]):
@@ -154,10 +179,36 @@ module sc_detector (
     end
 
     // =========================================================
-    // Per-symbol accumulators (NR=1, 24-bit)
+    // Per-symbol accumulators (NR=1).  Open Risk #61: widened 24 -> 32 bit.
+    // One symbol of energy is Sum(cur_i0^2 + cur_q0^2) over M <= 16384 samples;
+    // absolute max (both components clipped to +-127 for a whole symbol) is
+    // 16384 * (127^2 + 127^2) = 528,515,072 (~2^29), so signed 32-bit has ~4x
+    // headroom and never wraps in one symbol. The old 24-bit width assumed the
+    // deleted 128-sample correlator; at SF12 a nominal-AGC preamble overran it.
     // =========================================================
-    reg signed [23:0] acc_ci0, acc_cq0;
-    reg signed [23:0] acc_E0cur, acc_E0del;
+    reg signed [31:0] acc_ci0, acc_cq0;
+    reg signed [31:0] acc_E0cur, acc_E0del;
+
+    // Symbol-boundary snapshot shift (Open Risk #61). The 13-bit eval_* operands
+    // must hold the top ~12 significant bits of one symbol's accumulator for
+    // ANY M, so the shift tracks M: M = 2^(sf+sample_shift), and shifting by
+    // (sf+sample_shift+2) makes the snapshot magnitude M-independent
+    //   acc_E0cur ~ M*A^2*2  ->  >> (sf+ss+2)  ~  A^2/2  (constant in M).
+    // K=2 keeps SF7/BW250 at the historical >>10, so sc_thr is unchanged; the
+    // metric is a k^2/k^2 ratio (see eval_hit) so sc_thr stays a single value
+    // for every SF/BW. A near-full-scale (overdriven) symbol can still push the
+    // shifted value past 13 bits -- sat13() clamps it there rather than wrap
+    // (bounded, degraded, same policy as training_acc Open Risk #63).
+    wire [4:0] snap_sh = {1'b0, sf} + {3'b0, sample_shift} + 5'd2;
+
+    function signed [12:0] sat13;
+        input signed [31:0] v;
+        begin
+            if      (v >  32'sd4095)  sat13 = 13'sd4095;
+            else if (v < -32'sd4096)  sat13 = -13'sd4096;
+            else                      sat13 = v[12:0];
+        end
+    endfunction
 
     // =========================================================
     // TDM per-sample 8×8 multiplier
@@ -182,6 +233,12 @@ module sc_detector (
     reg signed [7:0]  tdm_a_r, tdm_b_r;
     wire signed [15:0] tdm_mul = tdm_a_r * tdm_b_r;
     reg  signed [15:0] tdm_mul_r;
+    // acc_E0del with this sample's del-energy folded in (Open Risk #61):
+    // acc_E0del is written at TDM step 7, the same edge the symbol-boundary
+    // snapshot reads it, so the snapshot uses this forward-combined value.
+    wire signed [31:0] acc_E0del_next = acc_E0del
+                                + {{16{tdm_mul_r[15]}}, tdm_mul_r}
+                                + {{16{tdm_mul[15]}},   tdm_mul};
     // SS-timing pacing: the 8x8 tdm multiply is ~76 ns at the FD SS corner and
     // cannot settle in one 31.25 ns cycle.  The TDM burst is ~8 steps once per
     // 500 kS/s sample (64 clocks), so we hold each step TDM_WAIT+1 = 3 cycles
@@ -197,12 +254,13 @@ module sc_detector (
     reg [1:0]  tdm_wait;
     reg        iq_inc_pending;   // defer a sample_count++ that lands mid-burst
 
-    reg signed [23:0] sym_ci0, sym_cq0;
+    reg signed [31:0] sym_ci0, sym_cq0;   // Open Risk #61: 24 -> 32 bit (raw correlation sum)
     reg signed [27:0] sym_mag_sc;   // max |C|² = 2×4095² < 2^25; 28-bit sufficient
 
     reg [1:0]  hit_count;
     reg [31:0] first_hit_sample, eval_sample_mark;
     reg        metric_valid_pulse;
+    reg        metric_start_pulse;   // Open Risk #66 P2: 1-cycle at eval launch (symbol boundary)
 
     // =========================================================
     // Serialised metric engine — 4 multiplications (steps 0..3), one shared
@@ -210,6 +268,13 @@ module sc_detector (
     // product, wait ~14 cycles for `mul_done`, accumulate, launch the next.
     // =========================================================
     reg        eval_busy;
+    // Open Risk #66: high while a per-sample TDM burst, the serial metric
+    // engine, its completion pulse, or the resulting 1-cycle sc_hit_dbg is in
+    // flight -- i.e. while an in-progress evaluation could still register a hit.
+    // The trouper_top noise-window gate holds its verdict until this is low.
+    assign sc_pipe_active = tdm_busy | eval_busy | metric_valid_pulse | sc_hit_dbg;
+    assign sc_eval_done_pulse = metric_valid_pulse;
+    assign sc_eval_start_pulse = metric_start_pulse;
     reg [3:0]  eval_step;
     reg        mul_start;
     reg signed [27:0] eval_mag_acc, eval_e_acc;  // 28-bit: 3-bit headroom over max 2^25
@@ -250,8 +315,8 @@ module sc_detector (
         if (!rst_n) begin
             sample_count    <= 32'd0;
             sym_cnt         <= 15'd0;
-            acc_ci0  <= 24'sd0; acc_cq0  <= 24'sd0;
-            acc_E0cur<= 24'sd0; acc_E0del<= 24'sd0;
+            acc_ci0  <= 32'sd0; acc_cq0  <= 32'sd0;
+            acc_E0cur<= 32'sd0; acc_E0del<= 32'sd0;
             tlat_ci0 <= 8'sd0; tlat_qi0 <= 8'sd0;
             tlat_di0 <= 8'sd0; tlat_dq0 <= 8'sd0;
             tdm_busy    <= 1'b0;
@@ -260,12 +325,13 @@ module sc_detector (
             iq_inc_pending <= 1'b0;
             tdm_a_r     <= 8'sd0; tdm_b_r <= 8'sd0;
             tdm_mul_r   <= 16'sd0;
-            sym_ci0  <= 24'sd0; sym_cq0  <= 24'sd0;
+            sym_ci0  <= 32'sd0; sym_cq0  <= 32'sd0;
             sym_mag_sc <= 28'sd0;
             hit_count        <= 2'd0;
             first_hit_sample <= 32'd0;
             eval_sample_mark <= 32'd0;
             metric_valid_pulse <= 1'b0;
+            metric_start_pulse <= 1'b0;
             eval_busy       <= 1'b0;
             eval_step       <= 4'd0;
             mul_start       <= 1'b0;
@@ -285,6 +351,7 @@ module sc_detector (
             sc_lock_sample_dbg <= 32'd0;
         end else begin
             metric_valid_pulse <= 1'b0;
+            metric_start_pulse <= 1'b0;
             sc_hit_dbg         <= 1'b0;
             sc_lock_natural_pulse <= 1'b0;
             mul_start          <= 1'b0;  // default; pulsed to launch a product
@@ -351,21 +418,25 @@ module sc_detector (
                     default: begin end  // step 7: last step
                 endcase
 
-                // Accumulate at odd steps (24-bit accumulators)
+                // Accumulate at odd steps (32-bit accumulators, Open Risk #61 —
+                // sign-extend the 16-bit product to 32).
                 case (tdm_step)
                     4'd1:  acc_ci0   <= acc_ci0
-                                + {{8{tdm_mul_r[15]}}, tdm_mul_r}
-                                + {{8{tdm_mul[15]}},   tdm_mul};
+                                + {{16{tdm_mul_r[15]}}, tdm_mul_r}
+                                + {{16{tdm_mul[15]}},   tdm_mul};
                     4'd3:  acc_cq0   <= acc_cq0
-                                + {{8{tdm_mul_r[15]}}, tdm_mul_r}
-                                - {{8{tdm_mul[15]}},   tdm_mul};
+                                + {{16{tdm_mul_r[15]}}, tdm_mul_r}
+                                - {{16{tdm_mul[15]}},   tdm_mul};
                     4'd5:  acc_E0cur <= acc_E0cur
-                                + {{8{tdm_mul_r[15]}}, tdm_mul_r}
-                                + {{8{tdm_mul[15]}},   tdm_mul};
+                                + {{16{tdm_mul_r[15]}}, tdm_mul_r}
+                                + {{16{tdm_mul[15]}},   tdm_mul};
                     4'd7: begin
-                        acc_E0del <= acc_E0del
-                                + {{8{tdm_mul_r[15]}}, tdm_mul_r}
-                                + {{8{tdm_mul[15]}},   tdm_mul};
+                        // acc_E0del's increment lands on THIS edge; the boundary
+                        // snapshot below must see the completed value, so
+                        // forward-combine it (Open Risk #61 last-sample fix —
+                        // acc_ci0/cq0/E0cur are updated at steps 1/3/5 and are
+                        // already complete here).
+                        acc_E0del <= acc_E0del_next;
                         // ----- End of TDM for this sample -----
                         // (sample_count is NOT incremented here — this sample
                         // was already counted at its iq_valid_r; see the
@@ -376,14 +447,20 @@ module sc_detector (
                             sym_cnt <= 15'd0;
                             sym_ci0 <= acc_ci0; sym_cq0 <= acc_cq0;
 
-                            // Snapshot for eval: shift right by 10 → 13-bit signed
-                            eval_ci0   <= acc_ci0[22:10];   eval_cq0   <= acc_cq0[22:10];
-                            eval_E0cur <= acc_E0cur[22:10]; eval_E0del <= acc_E0del[22:10];
+                            // Snapshot for eval: M-dependent arithmetic right
+                            // shift -> sign-preserving 13-bit operand, magnitude
+                            // ~constant in M, saturated at overdrive (Open Risk
+                            // #61). acc_E0del uses the forward-combined value.
+                            eval_ci0   <= sat13(acc_ci0        >>> snap_sh);
+                            eval_cq0   <= sat13(acc_cq0        >>> snap_sh);
+                            eval_E0cur <= sat13(acc_E0cur      >>> snap_sh);
+                            eval_E0del <= sat13(acc_E0del_next >>> snap_sh);
 
                             eval_mag_acc    <= 28'sd0;
                             eval_e_acc      <= 28'sd0;
                             eval_step       <= 4'd0;
                             eval_busy       <= 1'b1;
+                            metric_start_pulse <= 1'b1;  // Open Risk #66 P2: eval launched
                             mul_start       <= 1'b1;  // launch product 0 (ci0²)
                             // sample_count already includes the current sample
                             // (counted at its iq_valid_r), so the mark is the
@@ -392,8 +469,8 @@ module sc_detector (
                             // yet in the same NBA cycle. 1-based index either way.
                             eval_sample_mark <= sample_count;
 
-                            acc_ci0   <= 24'sd0; acc_cq0   <= 24'sd0;
-                            acc_E0cur <= 24'sd0; acc_E0del <= 24'sd0;
+                            acc_ci0   <= 32'sd0; acc_cq0   <= 32'sd0;
+                            acc_E0cur <= 32'sd0; acc_E0del <= 32'sd0;
                         end else begin
                             sym_cnt <= sym_cnt + 15'd1;
                         end
@@ -461,8 +538,8 @@ module sc_detector (
                             sc_off = {14'd0, n_hits_p1} << (sf + sample_shift);
                             timing_ref <= eval_sample_mark - {15'd0, sc_off} + 32'd1;
                         end
-                        c_i0 <= {{8{sym_ci0[23]}}, sym_ci0};
-                        c_q0 <= {{8{sym_cq0[23]}}, sym_cq0};
+                        c_i0 <= sym_ci0;   // Open Risk #61: sym_ci0/cq0 now 32-bit
+                        c_q0 <= sym_cq0;
                         sc_first_hit_dbg <= first_hit_sample;
                         hit_count <= 2'd0;
                     end else begin
@@ -541,8 +618,8 @@ module sc_detector (
                 sc_lock            <= 1'b0;
                 hit_count          <= 2'd0;
                 first_hit_sample   <= 32'd0;
-                acc_ci0   <= 24'sd0; acc_cq0   <= 24'sd0;
-                acc_E0cur <= 24'sd0; acc_E0del <= 24'sd0;
+                acc_ci0   <= 32'sd0; acc_cq0   <= 32'sd0;
+                acc_E0cur <= 32'sd0; acc_E0del <= 32'sd0;
                 sym_cnt            <= 15'd0;
                 tdm_busy           <= 1'b0;
                 tdm_wait           <= 2'd0;
@@ -550,6 +627,7 @@ module sc_detector (
                 eval_busy          <= 1'b0;
                 mul_start          <= 1'b0;
                 metric_valid_pulse <= 1'b0;
+                metric_start_pulse <= 1'b0;
                 sc_hit_dbg         <= 1'b0;
                 sc_hit_hold        <= 1'b0;
             end

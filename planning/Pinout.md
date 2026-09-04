@@ -1,7 +1,10 @@
 # ASIC Pinout
 
-GF180MCU MIMO ASIC logical pin list. **28 pins occupying all 28 A40 slots**: 26 signal +
-`VDD_CORE` + `VSS`. The allocation is now FULL — no spare slot remains.
+GF180MCU MIMO ASIC logical pin list. **27 pins occupying all 27 A40 slots**: 25 signal +
+`VDD_CORE` + `VSS`. The allocation is now FULL — no spare slot remains. (The budget was
+corrected from 28 to **27** by the integrator on 2026-09-03; `DBG1` was merged onto the
+`IRQ_OUT` pad — split-selector debug mux, `DBG_CTRL0`/`DBG_CTRL1` — to fit without losing
+a debug channel. See `planning/two-pin-digital-debug-plan.md`.)
 
 > **Terminology.** Trouper is a hardened macro and instantiates **no IO cells at
 > all**. A *slot* is a padring position allocated to this project; a *boundary
@@ -15,18 +18,20 @@ GF180MCU MIMO ASIC logical pin list. **28 pins occupying all 28 A40 slots**: 26 
 grounds that ground was shared die-wide and not a per-project pad — that is no longer
 true. The A40 padring requires a per-project `VSS` pin, `info.yaml` declares it, and the
 integrator places it at slot W12, so **it consumes a slot and must be counted** in any
-budget comparison. `info.yaml`'s entry count (26) is the authoritative occupancy number.
+budget comparison. `info.yaml`'s entry count (27) is the authoritative occupancy number.
 **`VDD_IO` removed 2026-08-19** — it is the same net as `VDD_CORE` in every current PDN
 config (no independent IO rail is actually built), so it isn't a second pin. See
 `planning/5v-core-voltage-strategy.md` §2026-08-19, Open Risks #27.
 
-**Allocation status — RESOLVED 2026-08-30: the assigned budget is 28 pads.** Trouper's
-A40 ACV allocation is **28 pad slots**, confirmed with the integrator. `info.yaml`
-declares **28** pins — 26 signal + `VDD_CORE` + `VSS`, all of which take a slot — so
-**28 of 28 are used and none are spare**. The last two went to `DBG0_OUT`/`DBG1_OUT`
-(2026-08-30). The budget is no longer a *constraint* in the sense that everything fits,
-but it is now exactly full: any further pin need must displace something already
-allocated. Weigh that before adding anything.
+**Allocation status — CORRECTED 2026-09-03: the assigned budget is 27 pads.** Trouper's
+A40 ACV allocation is **27 pad slots** (integrator feedback superseded the 2026-08-30
+figure of 28). `info.yaml` declares **27** pins — 25 signal + `VDD_CORE` + `VSS`, all of
+which take a slot — so **27 of 27 are used and none are spare**. The 28th pin would have
+been a second dedicated debug pad (`DBG1_OUT`); instead `DBG1` now rides the `IRQ_OUT`
+pad via a split-selector mux (`DBG_CTRL0` → `DBG0_OUT`, `DBG_CTRL1` → the shared
+`IRQ_OUT`/`DBG1` pad; the pad carries the sticky interrupt unless `DBG_CTRL1.EN=1`). Both
+debug channels are retained. The budget is exactly full: any further pin need must
+displace something already allocated. Weigh that before adding anything.
 
 This supersedes the earlier working assumption of a **22-pad** team allocation, and with
 it the pin half of the NR=3 / `IRQ_OUT`-waiver contingency: neither is needed to fit the
@@ -41,7 +46,7 @@ superseded for the A40 build, which defers to the integrator DEF at 1675×1110 (
 
 ---
 
-## Signal pads (26)
+## Signal pads (25)
 
 All signal pads use **GF180 5 V-capable IO cells**, run at **3.3 V**. There is one power
 pad (`VDD_CORE`) and one shared ground (`GND`/`VSS`, not a per-project pad) — see the
@@ -99,11 +104,15 @@ Dedicated interface for external register access and bring-up.
 | `SPI_SCK` | in | Host SPI SCK | SPI clock, Mode 0, up to 2 MHz |
 | `HOST_CS` | in | Host SPI chip select | Active-low slave select |
 
-### Interrupt output (1 pad, output)
+### Interrupt output / shared debug pad (1 pad, output)
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `IRQ_OUT` | out | Host RPi IRQ GPIO | Dedicated level-high sticky interrupt (packet ready, preamble lock, etc.). Mirrors the inter-project `IRQ_GROUPER` line. |
+| `IRQ_OUT` | out | Host RPi IRQ GPIO (+ debug test point) | Level-high sticky interrupt (packet ready, preamble lock, etc.) **by default**. Also carries debug-probe channel `DBG1` when `DBG_CTRL1.EN=1` (`0x06`); reverts to the interrupt when `DBG_CTRL1.EN=0`. Firmware polls `IRQ_STATUS` (`0x02`) while the pad is borrowed for debug. |
+
+`DBG1` shares this pad rather than occupying a 28th slot (integrator budget is 27,
+corrected 2026-09-03). The mux is a pure output override — nothing in the core reads
+`IRQ_OUT` back, so debug traffic on it cannot perturb the receiver (TRPR-DBG-004).
 
 ### Array acquisition sync (1 pad, bidirectional) — NOT YET COMMITTED
 
@@ -116,36 +125,43 @@ does not add spatial degrees of freedom to a single chip. Protocol, coherency
 prerequisites, and the firmware-side combining story are in
 `planning/array-acquisition-sync.md`.
 
-**Status:** declared last in `info.yaml` (A40 slot N15, after `VDD`, so no existing pin
-moves). The 28-pad allocation confirmed 2026-08-30 covers it with 2 slots still spare, so
-the pin budget is not the open question — what remains is that no P&R run has been built
-against a 26-pin DEF, and the pad has had no electrical review (Open Risks #52, #53).
-Self-contained: deleting the `info.yaml` entry, the two `io_placement` entries, and the
-`ARRAY_ACQ_N_*` ports backs it out completely.
+**Status:** declared last but one in `info.yaml` (A40 slot N15, after `VDD`, so no
+existing pin moves). The 27-pad allocation (corrected 2026-09-03) covers it with no spare
+— what remains is that no P&R run has been built against the 27-pin DEF, and the pad has
+had no electrical review (Open Risks #52, #53). Self-contained: deleting the `info.yaml`
+entry, the two `io_placement` entries, and the `ARRAY_ACQ_N_*` ports backs it out
+completely.
 
-### Digital debug probes (2 pads, output) — NOT YET COMMITTED
+### Digital debug probe — 1 dedicated pad + the shared `IRQ_OUT` pad — NOT YET COMMITTED
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `DBG0_OUT` | out | Logic analyser / test point | Register-selected debug probe, channel 0 |
-| `DBG1_OUT` | out | Logic analyser / test point | Register-selected debug probe, channel 1 |
+| `DBG0_OUT` | out | Logic analyser / test point | Register-selected debug probe, dedicated pad (d0 column of the mux table) |
+| `IRQ_OUT` | out | Host RPi IRQ GPIO + test point | Shared: sticky interrupt by default, debug channel `DBG1` (d1 column) when `DBG_CTRL1.EN=1` |
 
-`DBG_CTRL` (`0x04`) selects one of eight source groups — raw RX, decimated IQ,
-SC, packet/weights, PSRAM, combiner, IRQ — onto the two pins; `DBG_STATUS`
-(`0x05`) reads the driven values back as a connectivity check. Both pads drive 0
-during reset and whenever `DBG_CTRL.EN=0`. The probe is feed-forward only and
-cannot alter receiver behaviour (TRPR-DBG-004). Full mux encoding and the
-first-silicon sequence: `planning/two-pin-digital-debug-plan.md`.
+Split selector: `DBG_CTRL0` (`0x04`) drives `DBG0_OUT`, `DBG_CTRL1` (`0x06`) drives the
+shared pad. Each byte is `[7]EN [6:4]GROUP [3:2]ANT [1:0]SEL` and is decoded
+independently, so the two pads can point at unrelated signals — e.g. pin the shared pad
+to the `IRQ` group (`irq_out`) while `DBG0` roams the other groups. `GROUP` selects one
+of eight source groups (raw RX, decimated IQ, SC, packet/weights, PSRAM, combiner, IRQ);
+`DBG_STATUS` (`0x05`) reads both driven pad values back as a connectivity check. `DBG0`
+drives 0 during reset and whenever `DBG_CTRL0.EN=0`; the shared pad reverts to the sticky
+interrupt whenever `DBG_CTRL1.EN=0`. The probe is feed-forward only and cannot alter
+receiver behaviour (TRPR-DBG-004). Full mux encoding and the first-silicon sequence:
+`planning/two-pin-digital-debug-plan.md`.
 
-**Board obligation:** these can toggle on every 32 MHz edge in raw-RX mode, so
-route them short, populate the 0-ohm series-resistor footprint at each ASIC pin,
-and probe with a low-capacitance active probe. Put a ground test point beside
-each. Use `IRQ_OUT` as an analyser trigger — it must not be reused as a probe.
+**Board obligation:** both pads can toggle on every 32 MHz edge in raw-RX mode, so route
+them short, populate the 0-ohm series-resistor footprint at each ASIC pin (including the
+`IRQ_OUT` net — its pad slew was moved to fast for this reason), and probe with a
+low-capacitance active probe. Put a ground test point beside each. `IRQ_OUT` can no
+longer double as a dedicated analyser trigger while `DBG_CTRL1` is armed — trigger on
+`DBG0_OUT` or an `IRQ`-group selection instead.
 
-**Status:** slots N16/N17, unconfirmed by the integrator, and they take the
-allocation to exactly 28 of 28. Open Risks #52. Self-contained: deleting the two
-`info.yaml` entries, the `io_placement` entries, the `DBG*` ports and
-`debug_probe_mux` backs the feature out completely.
+**Status:** `DBG0_OUT` at slot N16, unconfirmed by the integrator; with `ARRAY_ACQ_N` it
+takes the allocation to exactly 27 of 27. Open Risks #52. Self-contained: deleting the
+`DBG0_OUT` `info.yaml` entry + `io_placement` entries + ports, dropping `DBG_CTRL1` and
+the `dbg_ctrl1` decode, and reverting `IRQ_OUT_OUT` to `rb_irq_out_sticky` + `IRQ_OUT_SL`
+to `1'b1` backs the feature out completely.
 
 ### PSRAM data bus (4 pads, bidirectional)
 
@@ -261,8 +277,9 @@ The A40 (ACV) workshop padring exposes each pad's full IO-cell control interface
 the core, and has **no output-only cell** — every functional output sits on a
 bidirectional pad. `trouper_top.v` therefore drives all pad-control pins itself
 (`src/top/trouper_top.v`, "A40 padframe pad-control tie-offs" block) so integration
-is a straight wire-up with no assumptions about a padring wrapper. 106 added ports:
-100 constant outputs + 6 unused `_IN` inputs.
+is a straight wire-up with no assumptions about a padring wrapper. 97 added pad-control
+ports (was 106 before `DBG1` was merged onto the `IRQ_OUT` pad on 2026-09-03, which
+removed `DBG1`'s 8 constant control outputs and one unused `_IN`).
 
 **Drive-strength encoding.** `PDRV` is a 2-bit code on `bi_t`. Written below in
 `info.yaml`-legacy order as `PDRV0,PDRV1` — note this is the *reverse* of the
@@ -290,8 +307,9 @@ fixed** — see the constraint note below the table.
 | `PSRAM_CE_N` (output on `bi_t`) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OE=1`, `_SL=0` fast, drive `1,1` max, rest `0` |
 | `PSRAM_SCK` (output on `bi_24t`, drive fixed) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD` | `_OE=1`, `_SL=0` fast, rest `0` |
 | `REMOD_A_I`, `REMOD_A_Q` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` fast, drive `1,1` **max (16 mA, raised from `1,0`/8 mA on 2026-08-30)**, rest `0` |
-| `SPI_MISO`, `IRQ_OUT` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
-| `DBG0_OUT`, `DBG1_OUT` (output on `bi_t`) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OE=1`, `_IE=0` (output-only — never enable a receiver on a pin nothing drives), `_CS=0` CMOS, `_SL=0` **fast**, `_PU=0`/`_PD=0`, drive `1,0` = 8 mA. Fast slew and mid drive differ from `SPI_MISO`/`IRQ_OUT` deliberately: raw-RX mode toggles every 32 MHz edge, so the host link's slow-slew setting is not adequate here. |
+| `SPI_MISO` (output on `bi_t`) | as `PSRAM_CE_N` | `_OE=1` (Option A: host link point-to-point, per TRPR-SPS-008), `_SL=1` slow, drive `1,0` mid, rest `0` |
+| `IRQ_OUT` (output on `bi_t`; shared with `DBG1`) | as `PSRAM_CE_N` | `_OE=1`, `_SL=0` **fast** (changed from slow 2026-09-03), drive `1,0` mid, rest `0`. Fast slew because the `DBG1` debug probe shares this pad and raw-RX mode toggles every 32 MHz edge; the board damps the RPi IRQ net with a series resistor instead (`TRPR-SPS-008` slow-slew choice reversed for this pin). |
+| `DBG0_OUT` (output on `bi_t`) | `_IN`(unused), `_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OE=1`, `_IE=0` (output-only — never enable a receiver on a pin nothing drives), `_CS=0` CMOS, `_SL=0` **fast**, `_PU=0`/`_PD=0`, drive `1,0` = 8 mA. Fast slew differs from `SPI_MISO` deliberately: raw-RX mode toggles every 32 MHz edge, so the host link's slow-slew setting is not adequate here. |
 | `ARRAY_ACQ_N` (emulated open drain on `bi_t`) | `_OUT`,`_IN`,`_OE`,`_IE`,`_CS`,`_SL`,`_PU`,`_PD`,`_PDRV0`,`_PDRV1` | `_OUT=0` always, `_OE` = core drive request (this is the open-drain emulation), `_IE=1`, `_CS=1` **Schmitt** (long shared board net), `_SL=1` slow, **`_PU=1`** (the only pad on the chip with an internal pull enabled — see below), `_PD=0`, drive `0,0` min 4 mA |
 
 **`PSRAM_SCK_SL = 0` is a hard constraint, not a provisional value.** The
@@ -312,6 +330,19 @@ several booting from external SPI flash, so 16 mA here is *below* proven-working
 drive rather than above it. Series-resistor footprints (0402, populated 0 Ω)
 close to the ASIC pin on `SIO[3:0]`, `CE_N`, `SCK` and `REMOD_A_{I,Q}` are the
 intended post-silicon lever and should be on the PCB.
+
+**PSRAM power-up state is a board obligation (Open Risks #55 item 5, #69).**
+The APS6404L wants SCK low, CE# high (tracking VDD), SIO[3:0] low and no
+commands for its first 150 µs, then a software reset. The ASIC cannot hold
+that state: all PSRAM pads reset Hi-Z with internal pulls disabled
+(`_PU`=`_PD`=`0` in the table above). The PCB must therefore carry:
+- weak pull-downs on `PSRAM_SCK` and `PSRAM_SIO[3:0]`;
+- a pull-up on `PSRAM_CE_N` to the PSRAM supply;
+- a low-ESR 1 µF cap next to PSRAM VDD;
+- firmware holding `PSRAM_CTRL.PSRAM_EN` off ≥ 150 µs after PSRAM power is
+  valid (also Open Risks #55 item 1);
+- total PSRAM-net loading within the datasheet's 15 pF characterisation
+  limit (the `PSRAM_SCK_SL=0` / drive analysis above assumes ~13.6 pF).
 
 **Verification (2026-08-29).** These values are asserted against this table by
 `cocotb/pad_tieoffs` (`cocotb/tests/test_pad_tieoffs.py`, job 5223) — all 96
@@ -460,4 +491,4 @@ RE/RDATA/READY`, with an AHB-Lite slave as the eventual target) and the
   instead of two unidirectional ones. See the deferred entry at the end of this section
   for the original framing.
 - **JTAG / GPIO pins:** Removed. No JTAG TAP is instantiated in the RTL and GPIO was never wired out of the macro; host debug uses the SPI register / PSRAM-readback path. See Trouper Chip Specification §4.16.
-- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock) — SUPERSEDED 2026-08-30 by `ARRAY_ACQ_N`:** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads. **2026-08-30:** the assigned allocation is confirmed at **28 pads**, so the headroom argument is settled — and the headroom was spent, on `ARRAY_ACQ_N` (one bidirectional wired-AND pin doing the same job as these two unidirectional ones). "No pad available" was never the real reason and is now definitively not. `ARRAY_ACQ_N` deliberately does **not** OR into `sc_lock_force` (`SC_FORCE_LOCK`, `reg_bank` 0x19): that register is a diagnostic override with no verified preamble edge behind it, so propagating it between chips would establish an invalid shared time origin. A peer event instead enters `sc_detector` on the idle-gated `sc_lock_sync` port and reconstructs `timing_ref` normally. `IRQ_OUT` could not have doubled as this pin in any case — it is output-only.
+- **`sc_lock_in`/`sc_lock_out` (NR2/3 cascade OR-lock) — SUPERSEDED 2026-08-30 by `ARRAY_ACQ_N`:** Previously deferred as "no pad available" against a 26-pad budget — that was against the stale 25-pad count. **2026-08-19:** with `VDD_IO` removed, current pinout is 24 pads. **2026-08-30:** the assigned allocation is confirmed at **28 pads** (later corrected to **27**, 2026-09-03), so the headroom argument is settled — and the headroom was spent, on `ARRAY_ACQ_N` (one bidirectional wired-AND pin doing the same job as these two unidirectional ones). "No pad available" was never the real reason and is now definitively not. `ARRAY_ACQ_N` deliberately does **not** OR into `sc_lock_force` (`SC_FORCE_LOCK`, `reg_bank` 0x19): that register is a diagnostic override with no verified preamble edge behind it, so propagating it between chips would establish an invalid shared time origin. A peer event instead enters `sc_detector` on the idle-gated `sc_lock_sync` port and reconstructs `timing_ref` normally. `IRQ_OUT` could not have doubled as this pin in any case — it is output-only.

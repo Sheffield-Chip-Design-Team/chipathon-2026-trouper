@@ -1,0 +1,21 @@
+{
+  "project_size": {
+    "source_gds": "/work/gds/A40/trouper_top.gds",
+    "top_cell": "trouper_top",
+    "layer": 0,
+    "datatype": 0,
+    "layout_dbu_microns": 0.001,
+    "rectangle_dbu": [
+      0,
+      0,
+      1675000,
+      1110000
+    ],
+    "width_microns": "1675",
+    "height_microns": "1110"
+  },
+  "participant_pin_count": 27,
+  "selected_variants": [
+    "ACV"
+  ]
+}

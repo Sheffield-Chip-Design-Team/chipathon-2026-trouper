@@ -19,14 +19,24 @@ TOP = REPO / "src" / "top" / "trouper_top.v"
 # Suffixes of the gf180mcu_fd_io bidirectional-cell control interface.
 CTRL_SUFFIXES = ("_PU", "_PD", "_IE", "_OE", "_CS", "_SL", "_PDRV0", "_PDRV1")
 
-# planning/Pinout.md, "A40 pad-control tie-offs": 106 added ports =
-# 100 pad-control outputs (96 constant + 4 dynamic PSRAM_SIO_n_IE) + 6 unused
-# _IN inputs.  The 4 PSRAM_SIO_n_OE ports pre-date the A40 work and are driven
-# functionally by psram_buf_ctrl, giving 104 control outputs in total.
-EXPECTED_CTRL_OUTPUTS = 104
-EXPECTED_CONSTANT = 96
-EXPECTED_DYNAMIC = 4          # PSRAM_SIO_n_IE = ~PSRAM_SIO_OE[n]
+# planning/Pinout.md, "A40 pad-control tie-offs".  Pad-control outputs ending in
+# a bi_t control suffix, as of 2026-09-03 (DBG1 merged onto the IRQ_OUT pad, so
+# no DBG1_* control ports; ARRAY_ACQ_N present with a dynamic OE):
+#   111 constant tie-offs
+# +   5 dynamic  (4 PSRAM_SIO_n_IE = ~PSRAM_SIO_OE[n]; ARRAY_ACQ_N_OE = the
+#                 open-drain drive request)
+# +   4 functional PSRAM_SIO_n_OE (driven by a concatenation from psram_buf_ctrl)
+# = 120
+EXPECTED_CTRL_OUTPUTS = 120
+EXPECTED_CONSTANT = 111
+EXPECTED_DYNAMIC = 5
 EXPECTED_FUNCTIONAL = 4       # PSRAM_SIO_n_OE, driven by a concatenation
+
+# Pad _IN paths that are functionally consumed (not sunk in _unused_pad_in):
+# the 4 PSRAM_SIO_n_IN read-data lanes and ARRAY_ACQ_N_IN (the wired-AND peer
+# sense).  Everything else ending in _IN is an output-only pad and must be sunk.
+_FUNCTIONAL_IN = re.compile(r"PSRAM_SIO_\d_IN|ARRAY_ACQ_N_IN")
+EXPECTED_UNUSED_IN = 7       # PSRAM_CE_N, REMOD_A_I/Q, SPI_MISO, IRQ_OUT, PSRAM_SCK, DBG0
 
 
 @pytest.fixture(scope="module")
@@ -91,9 +101,14 @@ def test_tieoff_drivers_are_constants(ports):
     assert len(const) == EXPECTED_CONSTANT, (
         f"{len(const)} constant tie-offs, expected {EXPECTED_CONSTANT}"
     )
-    assert set(dynamic) == {f"PSRAM_SIO_{n}_IE" for n in range(4)}, (
+    expected_dynamic = {f"PSRAM_SIO_{n}_IE" for n in range(4)} | {"ARRAY_ACQ_N_OE"}
+    assert set(dynamic) == expected_dynamic, (
         "unexpected non-constant pad-control driver(s): "
         + ", ".join(f"{p} = {v}" for p, v in sorted(dynamic.items()))
+    )
+    # ARRAY_ACQ_N emulates open drain: OE is the core's drive-low request.
+    assert dynamic["ARRAY_ACQ_N_OE"] == "array_acq_drive_oe", (
+        f"ARRAY_ACQ_N_OE is '{dynamic['ARRAY_ACQ_N_OE']}', expected 'array_acq_drive_oe'"
     )
     # The IE=OE=1 state is uncharacterized for gf180mcu_fd_io__bi_t, so each
     # lane's IE must be exactly the inversion of its own OE.
@@ -105,13 +120,13 @@ def test_tieoff_drivers_are_constants(ports):
 
 
 def test_unused_pad_inputs_are_sunk(ports):
-    """The 6 output-only pads' _IN paths must be explicitly sunk, not dangling."""
+    """Output-only pads' _IN paths must be explicitly sunk, not dangling."""
     portlist, body = ports
     ins = re.findall(r"input\s+wire\s+(?:\[[^\]]+\]\s+)?(\w+)", portlist)
     pad_ins = [p for p in ins if p.endswith("_IN")]
-    # 4 PSRAM_SIO_n_IN are functional read-data; the other 6 are unused.
-    unused = [p for p in pad_ins if not re.fullmatch(r"PSRAM_SIO_\d_IN", p)]
-    assert len(unused) == 6, f"expected 6 unused pad inputs, found {unused}"
+    unused = [p for p in pad_ins if not _FUNCTIONAL_IN.fullmatch(p)]
+    assert len(unused) == EXPECTED_UNUSED_IN, \
+        f"expected {EXPECTED_UNUSED_IN} unused pad inputs, found {unused}"
 
     m = re.search(r"wire\s+_unused_pad_in\s*=\s*&\{([^}]*)\}", body)
     assert m, "no _unused_pad_in sink found in trouper_top.v"

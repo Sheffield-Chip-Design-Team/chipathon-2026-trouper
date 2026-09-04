@@ -40,7 +40,10 @@ _INPUT_PADS = (
 # Output-on-bidir pads: (OE, IE, CS, SL, PU, PD, PDRV0, PDRV1).
 # Drive code {PDRV1,PDRV0}: 00=4mA, 01=8mA, 10=12mA, 11=16mA.
 # PSRAM lanes, CE_N and REMOD are all 16 mA (PDRV0=1, PDRV1=1) with fast slew.
-# MISO/IRQ are 8 mA + slow slew (SL=1): 2 MHz, ~50x timing margin.
+# SPI_MISO is 8 mA + slow slew (SL=1): 2 MHz, ~50x timing margin.  IRQ_OUT is
+# 8 mA but FAST slew (SL=0, changed 2026-09-03) because the DBG1 debug probe
+# shares the pad and can toggle at 32 MHz; the board damps the IRQ net with a
+# series resistor instead (Pinout.md, A40 pad-control tie-offs).
 _OUTPUT_PADS = {
     "PSRAM_CE_N": dict(OE=1, IE=0, CS=0, SL=0, PU=0, PD=0, PDRV0=1, PDRV1=1),
     # REMOD raised 8 -> 16 mA 2026-08-30: 32 MHz into an SX1302 whose input
@@ -48,7 +51,7 @@ _OUTPUT_PADS = {
     "REMOD_A_I":  dict(OE=1, IE=0, CS=0, SL=0, PU=0, PD=0, PDRV0=1, PDRV1=1),
     "REMOD_A_Q":  dict(OE=1, IE=0, CS=0, SL=0, PU=0, PD=0, PDRV0=1, PDRV1=1),
     "SPI_MISO":   dict(OE=1, IE=0, CS=0, SL=1, PU=0, PD=0, PDRV0=1, PDRV1=0),
-    "IRQ_OUT":    dict(OE=1, IE=0, CS=0, SL=1, PU=0, PD=0, PDRV0=1, PDRV1=0),
+    "IRQ_OUT":    dict(OE=1, IE=0, CS=0, SL=0, PU=0, PD=0, PDRV0=1, PDRV1=0),
     # PSRAM_SCK sits on a fixed-drive bi_24t cell: no PDRV select exists.
     "PSRAM_SCK":  dict(OE=1, IE=0, CS=0, SL=0, PU=0, PD=0),
 }

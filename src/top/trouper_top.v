@@ -72,15 +72,20 @@ module trouper_top (
     input  wire        SPI_MOSI,
     output wire        SPI_MISO_OUT,
 
-    // ---- Interrupt outputs ----
-    output wire        IRQ_OUT_OUT,       // → dedicated IRQ pad; sticky, level-high
+    // ---- Interrupt output / shared debug pad ----
+    // IRQ_OUT_OUT carries the sticky, level-high interrupt by default and the
+    // selected debug source only while DBG_CTRL1.EN=1 (planning/
+    // two-pin-digital-debug-plan.md).  Feed-forward: no core logic reads this
+    // pad back, so debug traffic on it cannot change receiver behaviour.
+    output wire        IRQ_OUT_OUT,       // → IRQ pad, shared with DBG1
 
-    // ---- Array acquisition synchronisation (external pull-up required) ----
-    // Two-pin digital debug probes (planning/two-pin-digital-debug-plan.md).
+    // ---- Digital debug probe (planning/two-pin-digital-debug-plan.md) ----
+    // One dedicated pad (DBG0_OUT) plus the shared IRQ_OUT pad above.
     // Output-only at the logical top level; feed-forward observability with no
     // path back into the datapath, FSMs, interrupts, or register gating.
     output wire        DBG0_OUT,
-    output wire        DBG1_OUT,
+
+    // ---- Array acquisition synchronisation (external pull-up required) ----
     output wire        ARRAY_ACQ_N_OUT, // permanently 0; OE provides open-drain emulation
     input  wire        ARRAY_ACQ_N_IN,
     output wire        ARRAY_ACQ_N_OE,
@@ -199,7 +204,8 @@ module trouper_top (
     output wire        IRQ_OUT_PDRV0,
     output wire        IRQ_OUT_PDRV1,
     // -- ARRAY_ACQ_N: bidir pad emulating open drain (OUT=0, OE=drive) --
-    // -- DBG0/DBG1: outputs on bi_t (A40 has no output-only cell) --
+    // -- DBG0: output on bi_t (A40 has no output-only cell); DBG1 is merged
+    //    onto the IRQ_OUT pad, so it has no control ports of its own --
     input  wire        DBG0_IN,          // unused; pad is bidirectional in the padframe
     output wire        DBG0_OE,
     output wire        DBG0_IE,
@@ -209,15 +215,6 @@ module trouper_top (
     output wire        DBG0_PD,
     output wire        DBG0_PDRV0,
     output wire        DBG0_PDRV1,
-    input  wire        DBG1_IN,
-    output wire        DBG1_OE,
-    output wire        DBG1_IE,
-    output wire        DBG1_CS,
-    output wire        DBG1_SL,
-    output wire        DBG1_PU,
-    output wire        DBG1_PD,
-    output wire        DBG1_PDRV0,
-    output wire        DBG1_PDRV1,
     output wire        ARRAY_ACQ_N_IE,
     output wire        ARRAY_ACQ_N_CS,
     output wire        ARRAY_ACQ_N_SL,
@@ -236,17 +233,38 @@ module trouper_top (
 );
 
     // Reassemble scalar physical pins into the vectors used inside the design.
-    wire [3:0] IQ_DATA_I = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
-    wire [3:0] IQ_DATA_Q = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
-    wire [3:0] PSRAM_SIO_OUT;
+    // IQ_DATA_*_raw are the raw pad values; IQ_DATA_*_neg are the negedge
+    // (data-eye) samples; IQ_DATA_I/Q are the posedge-retimed, datapath-facing
+    // versions (Open Risk #70).
+    wire [3:0] IQ_DATA_I_raw = {IQ_DATA_I_3, IQ_DATA_I_2, IQ_DATA_I_1, IQ_DATA_I_0};
+    wire [3:0] IQ_DATA_Q_raw = {IQ_DATA_Q_3, IQ_DATA_Q_2, IQ_DATA_Q_1, IQ_DATA_Q_0};
+    reg  [3:0] IQ_DATA_I_neg, IQ_DATA_Q_neg;
+    reg  [3:0] IQ_DATA_I, IQ_DATA_Q;
     wire [3:0] PSRAM_SIO_IN = {PSRAM_SIO_3_IN, PSRAM_SIO_2_IN,
                                PSRAM_SIO_1_IN, PSRAM_SIO_0_IN};
-    wire [3:0] PSRAM_SIO_OE;
+
+    // ---- PSRAM QPI pad relaunch (Open Risk #69) --------------------------
+    // psram_buf_ctrl drives CE#/SIO/SIO-OE and the raw SCK gate-enable on
+    // posedge clk; these negedge flops republish them at the pad boundary so
+    // CE#, SIO and SCK all change while SCK is low and the PSRAM samples a
+    // stable bus on the SCK rising edge (~15.6 ns setup vs ~0).  Done here,
+    // NOT inside psram_buf_ctrl: an in-module negedge stage re-synthesised the
+    // QPI FSM and swung SS setup timing -15..-21 ns run-to-run (jobs 5504/6/7);
+    // at the pad boundary the FSM is byte-identical to pre-#69.  First command
+    // nibble is published on the same negedge as the SCK enable (half-cycle
+    // preload); no glitch/runt since the enable only changes while clk=0.
+    wire [3:0] psram_sio_out_c, psram_sio_oe_c;   // combinational from u_psram (posedge domain)
+    wire       psram_ce_n_c, psram_sck_en_c;
+    reg  [3:0] psram_sio_out_q, psram_sio_oe_q;   // negedge-relaunched -> pads
+    reg        psram_ce_n_q, psram_sck_en_q;
+    // (the negedge relaunch process is with the other clk/rst_n logic below)
 
     assign {PSRAM_SIO_3_OUT, PSRAM_SIO_2_OUT,
-            PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = PSRAM_SIO_OUT;
+            PSRAM_SIO_1_OUT, PSRAM_SIO_0_OUT} = psram_sio_out_q;
     assign {PSRAM_SIO_3_OE, PSRAM_SIO_2_OE,
-            PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = PSRAM_SIO_OE;
+            PSRAM_SIO_1_OE, PSRAM_SIO_0_OE} = psram_sio_oe_q;
+    assign PSRAM_CE_N_OUT = psram_ce_n_q;
+    // PSRAM_SCK_OUT is gated from psram_sck_en_q below (needs `clk`, declared later).
 
     // ==== A40 padframe pad-control tie-offs (see module header + Pinout.md) ===
     assign IQ_CLK_PU = 1'b0;
@@ -278,28 +296,28 @@ module trouper_top (
     // gf180mcu_fd_io__bi_t does not characterize IE=OE=1.  The PSRAM
     // controller owns OE per lane, so enable the pad receiver only while
     // that lane is released to the PSRAM.
-    assign PSRAM_SIO_0_IE = ~PSRAM_SIO_OE[0];
+    assign PSRAM_SIO_0_IE = ~psram_sio_oe_q[0];
     assign PSRAM_SIO_0_CS = 1'b0;
     assign PSRAM_SIO_0_SL = 1'b0;
     assign PSRAM_SIO_0_PU = 1'b0;
     assign PSRAM_SIO_0_PD = 1'b0;
     assign PSRAM_SIO_0_PDRV0 = 1'b1;
     assign PSRAM_SIO_0_PDRV1 = 1'b1;
-    assign PSRAM_SIO_1_IE = ~PSRAM_SIO_OE[1];
+    assign PSRAM_SIO_1_IE = ~psram_sio_oe_q[1];
     assign PSRAM_SIO_1_CS = 1'b0;
     assign PSRAM_SIO_1_SL = 1'b0;
     assign PSRAM_SIO_1_PU = 1'b0;
     assign PSRAM_SIO_1_PD = 1'b0;
     assign PSRAM_SIO_1_PDRV0 = 1'b1;
     assign PSRAM_SIO_1_PDRV1 = 1'b1;
-    assign PSRAM_SIO_2_IE = ~PSRAM_SIO_OE[2];
+    assign PSRAM_SIO_2_IE = ~psram_sio_oe_q[2];
     assign PSRAM_SIO_2_CS = 1'b0;
     assign PSRAM_SIO_2_SL = 1'b0;
     assign PSRAM_SIO_2_PU = 1'b0;
     assign PSRAM_SIO_2_PD = 1'b0;
     assign PSRAM_SIO_2_PDRV0 = 1'b1;
     assign PSRAM_SIO_2_PDRV1 = 1'b1;
-    assign PSRAM_SIO_3_IE = ~PSRAM_SIO_OE[3];
+    assign PSRAM_SIO_3_IE = ~psram_sio_oe_q[3];
     assign PSRAM_SIO_3_CS = 1'b0;
     assign PSRAM_SIO_3_SL = 1'b0;
     assign PSRAM_SIO_3_PU = 1'b0;
@@ -340,10 +358,16 @@ module trouper_top (
     assign SPI_MISO_PD = 1'b0;
     assign SPI_MISO_PDRV0 = 1'b1;
     assign SPI_MISO_PDRV1 = 1'b0;
+    // IRQ_OUT is shared with the DBG1 debug probe (planning/
+    // two-pin-digital-debug-plan.md).  SL=0 FAST, not the slow host-link
+    // setting used for SPI_MISO: in raw-RX debug mode this pad can toggle on
+    // every 32 MHz edge.  The board carries a series-resistor footprint at the
+    // pin to damp the edge into the RPi IRQ net instead (Pinout.md, A40
+    // pad-control tie-offs; TRPR-SPS-008 slow-slew choice reversed 2026-09-03).
     assign IRQ_OUT_OE = 1'b1;
     assign IRQ_OUT_IE = 1'b0;
     assign IRQ_OUT_CS = 1'b0;
-    assign IRQ_OUT_SL = 1'b1;
+    assign IRQ_OUT_SL = 1'b0;
     assign IRQ_OUT_PU = 1'b0;
     assign IRQ_OUT_PD = 1'b0;
     assign IRQ_OUT_PDRV0 = 1'b1;
@@ -357,11 +381,12 @@ module trouper_top (
     assign ARRAY_ACQ_N_IE    = 1'b1;
     assign ARRAY_ACQ_N_CS    = 1'b1; // Schmitt input for a board-level wire
     assign ARRAY_ACQ_N_SL    = 1'b1;
-    // DBG0/DBG1 pad controls. Permanently enabled outputs, CMOS, FAST slew and
-    // mid (8 mA) drive: unlike SPI_MISO/IRQ_OUT these can toggle on every
-    // 32 MHz edge in raw-RX mode, so the slow-slew choice used for the host
-    // link is not adequate here (see the plan's electrical contract; the board
-    // carries a 0-ohm series footprint at each pin for damping instead).
+    // DBG0 pad controls. Permanently enabled output, CMOS, FAST slew and
+    // mid (8 mA) drive: unlike SPI_MISO this can toggle on every 32 MHz edge
+    // in raw-RX mode, so the slow-slew choice used for the host link is not
+    // adequate here (see the plan's electrical contract; the board carries a
+    // 0-ohm series footprint at the pin for damping instead).  DBG1 shares the
+    // IRQ_OUT pad and inherits its (now equally fast) tie-offs above.
     assign DBG0_OE    = 1'b1;
     assign DBG0_IE    = 1'b0;   // output only; never turn the receiver on
     assign DBG0_CS    = 1'b0;   // CMOS
@@ -370,14 +395,6 @@ module trouper_top (
     assign DBG0_PD    = 1'b0;
     assign DBG0_PDRV0 = 1'b1;   // {PDRV1,PDRV0} = 01 -> 8 mA
     assign DBG0_PDRV1 = 1'b0;
-    assign DBG1_OE    = 1'b1;
-    assign DBG1_IE    = 1'b0;
-    assign DBG1_CS    = 1'b0;
-    assign DBG1_SL    = 1'b0;
-    assign DBG1_PU    = 1'b0;
-    assign DBG1_PD    = 1'b0;
-    assign DBG1_PDRV0 = 1'b1;
-    assign DBG1_PDRV1 = 1'b0;
 
     // Internal pull-up ENABLED, unlike every other input pad on this chip.
     // ARRAY_ACQ_N is the one pin a board may legitimately leave unpopulated
@@ -398,13 +415,61 @@ module trouper_top (
     assign PSRAM_SCK_PD = 1'b0;
     // Sink the unused pad-input-path nets from the output-only bidir pads.
     wire _unused_pad_in = &{1'b0, PSRAM_CE_N_IN, REMOD_A_I_IN, REMOD_A_Q_IN,
-                            SPI_MISO_IN, IRQ_OUT_IN, PSRAM_SCK_IN};
+                            SPI_MISO_IN, IRQ_OUT_IN, PSRAM_SCK_IN, DBG0_IN};
 
     // =========================================================================
     // Global clock and reset
     // =========================================================================
     wire clk   = IQ_CLK;
     wire rst_n = RESETB;
+
+    // ---- SX1257 IQ input capture (Open Risk #70) ---------------------------
+    // The SX1257 presents its 1-bit ΣΔ I/Q streams with a data-valid
+    // (setup-and-hold) window of ~25 ns centred on the FALLING edge of the
+    // shared clock (DS_SX1257 §3.7.4 RX digital interface).  Two-stage capture:
+    //   *_neg       — sampled on `negedge clk`, i.e. in the middle of the eye.
+    //   IQ_DATA_I/Q — retimed onto `posedge clk` before the datapath sees them.
+    // The negedge→posedge hop (`*_neg` → `IQ_DATA_*`) carries no logic, so it
+    // clears the unavoidable half-cycle path with ~15 ns of slack, and every
+    // real datapath path (CIC integrators, comb, HB) runs on the full 31.25 ns
+    // period again.  A single negedge stage feeding the datapath directly put
+    // the CIC 14-bit add on a half-cycle path and lost SS timing (73
+    // violations, job 5504).  Cost: +1 clk latency (31 ns) — negligible at the
+    // 500 kS/s output rate.  Feeds BOTH the decimator and the debug probe.
+    always @(negedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            IQ_DATA_I_neg <= 4'd0;
+            IQ_DATA_Q_neg <= 4'd0;
+        end else begin
+            IQ_DATA_I_neg <= IQ_DATA_I_raw;
+            IQ_DATA_Q_neg <= IQ_DATA_Q_raw;
+        end
+    end
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            IQ_DATA_I <= 4'd0;
+            IQ_DATA_Q <= 4'd0;
+        end else begin
+            IQ_DATA_I <= IQ_DATA_I_neg;
+            IQ_DATA_Q <= IQ_DATA_Q_neg;
+        end
+    end
+
+    // ---- PSRAM QPI pad relaunch (Open Risk #69) — see decl block above -----
+    always @(negedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            psram_sio_out_q <= 4'd0;
+            psram_sio_oe_q  <= 4'd0;
+            psram_ce_n_q    <= 1'b1;
+            psram_sck_en_q  <= 1'b0;
+        end else begin
+            psram_sio_out_q <= psram_sio_out_c;
+            psram_sio_oe_q  <= psram_sio_oe_c;
+            psram_ce_n_q    <= psram_ce_n_c;
+            psram_sck_en_q  <= psram_sck_en_c;
+        end
+    end
+    assign PSRAM_SCK_OUT = psram_sck_en_q & clk;   // gated: SCK held low across the negedge relaunch
 
     // ---- 16 MHz clock-enable (control-plane functional domain) --------------
     // Single 32 MHz clock; CE-gated FFs update every OTHER cycle, so their
@@ -466,7 +531,8 @@ module trouper_top (
     wire [1:0]  rb_sc_ant_sel;
     wire        rb_array_sync_en;
     // Two-pin digital debug (planning/two-pin-digital-debug-plan.md)
-    wire [7:0]  rb_dbg_ctrl;
+    wire [7:0]  rb_dbg_ctrl0;   // 0x04: selector for the dedicated DBG0 pad
+    wire [7:0]  rb_dbg_ctrl1;   // 0x06: selector for the shared IRQ_OUT/DBG1 pad
     wire [7:0]  rb_irq_status_dbg;
     wire        sc_tdm_busy_dbg;
     wire        psram_del_rdy_dbg;
@@ -564,6 +630,9 @@ module trouper_top (
     wire [31:0] timing_ref;
     wire [15:0] sc_stat;
     wire        sc_hit_dbg;    // 1-cycle pulse: noise-window contamination latch
+    wire        sc_pipe_active; // Open Risk #66: SC eval pipeline in flight
+    wire        sc_eval_done_pulse; // Open Risk #66 P2: 1-cycle, an SC metric evaluation completed
+    wire        sc_eval_start_pulse; // Open Risk #66 P2: 1-cycle, an SC metric evaluation launched
     wire        sc_hit_hold;   // held per-symbol mirror: SC_DBG_FLAGS[0] readback
     wire [1:0]  sc_hit_cnt_dbg;
     wire [31:0] sc_first_hit_dbg, sc_lock_snap_dbg;
@@ -597,6 +666,9 @@ module trouper_top (
         .c_i0 (), .c_q0 (),
         .sc_stat              (sc_stat),
         .sc_tdm_busy_dbg      (sc_tdm_busy_dbg),
+        .sc_pipe_active       (sc_pipe_active),
+        .sc_eval_done_pulse   (sc_eval_done_pulse),
+        .sc_eval_start_pulse  (sc_eval_start_pulse),
         .sc_hit_dbg           (sc_hit_dbg),
         .sc_hit_hold          (sc_hit_hold),
         .sc_hit_count_dbg     (sc_hit_cnt_dbg),
@@ -622,7 +694,9 @@ module trouper_top (
     wire signed [31:0] Zpair_q [0:5];
     // Z_kk diagonal autocorrelation → reg_bank noise estimation
     wire [31:0]        Zdiag [0:3];
-    wire               training_done;
+    wire               training_done;      // either-mode completion (reg_bank status / IRQ, #66 block)
+    wire               training_done_pkt;  // packet-mode completion only (packet FSM + w_pending)
+    wire               noise_abort;        // armed noise window cancelled by a real sc_lock
     wire [17:0]        n_acc;
     wire               training_armed;
     wire               rb_noise_trig;    // firmware-triggered noise measurement pulse
@@ -682,7 +756,9 @@ module trouper_top (
         .Zpair_i5 (Zpair_i[5]), .Zpair_q5 (Zpair_q[5]),
         .Zdiag_0  (Zdiag[0]),   .Zdiag_1  (Zdiag[1]),
         .Zdiag_2  (Zdiag[2]),   .Zdiag_3  (Zdiag[3]),
-        .training_done   (training_done),
+        .training_done     (training_done),
+        .training_done_pkt (training_done_pkt),
+        .noise_abort       (noise_abort),
         .n_acc           (n_acc),
         .training_armed  (training_armed)
     );
@@ -696,30 +772,125 @@ module trouper_top (
     wire        sigma2_valid;
     reg         noise_window_active;
     reg         noise_window_sc_seen;
+    reg         noise_window_draining;   // training_done seen; waiting for the SC
+                                         // eval pipeline to drain before the verdict
+    reg  [6:0]  noise_drain_cnt;         // fixed minimum drain, covers SC metric latency
+    reg         noise_sc_was_active;     // Open Risk #66 (P2): sc_pipe_active seen at any
+                                         // point this window -> the SC detector is live
+    reg         noise_eval_armed;        // Open Risk #66 (P2): an SC evaluation has LAUNCHED
+                                         // since the drain began
+    reg         noise_eval_seen;         // Open Risk #66 (P2): that launched-in-drain
+                                         // evaluation has now completed
     reg         sigma2_valid_r;
+
+    // SC serial metric engine is ~57 cycles deep; hold the drain phase at least
+    // this long so an evaluation that was already in flight at training_done has
+    // definitely resolved (asserted sc_hit_dbg / sc_lock, or not) before we look.
+    // sc_pipe_active can read low for a cycle right after training_done while the
+    // contaminating evaluation is still mid-pipe -- the fixed count closes that
+    // race; the !sc_pipe_active term then only extends the wait if needed.
+    localparam [6:0] NOISE_DRAIN_MIN = 7'd72;
 
     // Firmware-triggered noise measurements reuse training_acc noise mode.
     // Accept the resulting Zdiag window only if no SC activity appeared while
     // the measurement was in flight.
+    //
+    // Open Risk #66: sc_hit_dbg / sc_lock are REGISTERED sc_detector outputs.
+    // A non-locking hit whose evaluation overlapped the window can register its
+    // sc_hit_dbg pulse a variable number of edges AFTER training_done (the
+    // serial metric engine is ~57 cycles deep), so simply peeking at sc_hit_dbg
+    // on the training_done edge misses it. Instead, on training_done enter a
+    // drain phase -- keep noise_window_active high so the sc_hit_dbg/sc_lock
+    // sampler below keeps running -- and hold the verdict until ALL of:
+    //   (1) a fixed NOISE_DRAIN_MIN count has elapsed (>= metric-engine depth);
+    //   (2) sc_pipe_active is low (no TDM burst / evaluation in flight);
+    //   (3) IF the SC detector is live this window (noise_sc_was_active): an SC
+    //       evaluation that was *launched after* the drain began has completed
+    //       (noise_eval_armed -> noise_eval_seen). An evaluation only launches
+    //       at a symbol boundary, so (2) alone does not prove the symbol that
+    //       was accumulating at training_done has been judged; and one already
+    //       in flight at training_done was fed the *previous* symbol, so it
+    //       must not count (Open Risk #66 P2). If the SC detector never ran this
+    //       window (PSRAM / SC-delay path disabled -> no evaluations at all),
+    //       there is no contamination to wait for and (3) is skipped so
+    //       NOISE_READY cannot deadlock.
+    // Worst-case NOISE_READY latency grows by ~1 symbol period, irrelevant for
+    // the AGC noise-EMA use. Safe-biased: a stray hit AFTER the window merely
+    // suppresses this measurement (firmware retries); it can never let a
+    // contaminated window through.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            noise_window_active  <= 1'b0;
-            noise_window_sc_seen <= 1'b0;
-            sigma2_valid_r       <= 1'b0;
+            noise_window_active   <= 1'b0;
+            noise_window_sc_seen  <= 1'b0;
+            noise_window_draining <= 1'b0;
+            noise_drain_cnt       <= 7'd0;
+            noise_sc_was_active   <= 1'b0;
+            noise_eval_armed      <= 1'b0;
+            noise_eval_seen       <= 1'b0;
+            sigma2_valid_r        <= 1'b0;
         end else begin
-            sigma2_valid_r <= 1'b0;
+            sigma2_valid_r    <= 1'b0;
 
+            // Open Risk #66/#68: ONE priority ladder. The previous two-chain
+            // form let a fresh trigger accepted on the drain-release edge race
+            // the old window's verdict (verdict won -> new window silently
+            // lost). A fresh trigger now unconditionally wins and starts a
+            // clean window, pre-empting any in-progress drain/verdict; the
+            // abandoned measurement is fine (firmware asked for a new one).
             if (noise_trig_accept) begin
-                noise_window_active  <= 1'b1;
-                noise_window_sc_seen <= 1'b0;
-            end else if (noise_window_active && (sc_hit_dbg || sc_lock)) begin
-                noise_window_sc_seen <= 1'b1;
-            end
+                noise_window_active   <= 1'b1;
+                noise_window_sc_seen  <= 1'b0;
+                noise_window_draining <= 1'b0;
+                noise_drain_cnt       <= 7'd0;
+                noise_sc_was_active   <= 1'b0;
+                noise_eval_armed      <= 1'b0;
+                noise_eval_seen       <= 1'b0;
+            end else if (noise_window_active && noise_abort) begin
+                // A real packet pre-empted this firmware noise measurement
+                // (training_acc cancelled the window). Drop it with no verdict:
+                // firmware's NOISE_READY wait times out and it retries once the
+                // packet clears.
+                noise_window_active   <= 1'b0;
+                noise_window_sc_seen  <= 1'b0;
+                noise_window_draining <= 1'b0;
+                noise_drain_cnt       <= 7'd0;
+                noise_sc_was_active   <= 1'b0;
+                noise_eval_armed      <= 1'b0;
+                noise_eval_seen       <= 1'b0;
+            end else if (noise_window_active) begin
+                if (sc_hit_dbg || sc_lock)
+                    noise_window_sc_seen <= 1'b1;
+                if (sc_pipe_active)
+                    noise_sc_was_active <= 1'b1;   // SC detector is live this window
 
-            if (noise_window_active && training_done) begin
-                sigma2_valid_r       <= ~noise_window_sc_seen && !sc_lock;
-                noise_window_active  <= 1'b0;
-                noise_window_sc_seen <= 1'b0;
+                if (!noise_window_draining) begin
+                    if (training_done) begin
+                        noise_window_draining <= 1'b1;      // start draining
+                        noise_drain_cnt       <= NOISE_DRAIN_MIN;
+                        noise_eval_armed      <= 1'b0;
+                        noise_eval_seen       <= 1'b0;
+                    end
+                end else begin
+                    if (noise_drain_cnt != 7'd0)
+                        noise_drain_cnt <= noise_drain_cnt - 7'd1;
+                    // Open Risk #66 (P2): only an evaluation that LAUNCHED after
+                    // the drain began covers the symbol holding the noise-window
+                    // tail. Arm on its start pulse, latch seen on its completion.
+                    if (sc_eval_start_pulse)
+                        noise_eval_armed <= 1'b1;
+                    if (sc_eval_done_pulse && noise_eval_armed)
+                        noise_eval_seen <= 1'b1;
+                    if (noise_drain_cnt == 7'd0 && !sc_pipe_active &&
+                            (!noise_sc_was_active || noise_eval_seen)) begin
+                        sigma2_valid_r        <= ~(noise_window_sc_seen || sc_lock);
+                        noise_window_active   <= 1'b0;
+                        noise_window_sc_seen  <= 1'b0;
+                        noise_window_draining <= 1'b0;
+                        noise_sc_was_active   <= 1'b0;
+                        noise_eval_armed      <= 1'b0;
+                        noise_eval_seen       <= 1'b0;
+                    end
+                end
             end
         end
     end
@@ -755,18 +926,22 @@ module trouper_top (
         .peer_lock_pulse (array_peer_lock_pulse)
     );
 
-    // W_valid register: set by W_valid_set pulse, cleared at FSM IDLE entry
-    reg  W_valid;
-    always @(posedge clk or negedge rst_n)
-        if (!rst_n)           W_valid <= 1'b0;
-        else if (W_valid_set) W_valid <= 1'b1;
-        else if (!packet_active) W_valid <= 1'b0;
+    // W_valid: single authoritative copy, exported from packet_ctrl_fsm
+    // (Open Risk #62). The old top-level reconstruction from the W_valid_set
+    // pulse cleared on every !packet_active, so a commit consumed in IDLE left
+    // the FSM copy high and this copy low -- the next packet then combined in
+    // bypass with no W_MISSED_PACKET. The FSM level is now the only copy: it is
+    // consumed by the combiner, the reg_bank live-weight write-lock, and the
+    // debug/readback paths.
+    wire W_valid;
 
-    // W_pending: training complete but W not yet committed this packet
+    // W_pending: training complete but W not yet committed this packet.
+    // Gated on training_done_pkt (packet-mode only) so a firmware noise-window
+    // completion can never raise w_pending / advance the packet FSM.
     reg  w_pending;
     always @(posedge clk or negedge rst_n)
-        if (!rst_n)             w_pending <= 1'b0;
-        else if (training_done) w_pending <= 1'b1;
+        if (!rst_n)                 w_pending <= 1'b0;
+        else if (training_done_pkt) w_pending <= 1'b1;
         else if (W_commit_hw || !packet_active) w_pending <= 1'b0;
 
     packet_ctrl_fsm u_pcfsm (
@@ -778,13 +953,14 @@ module trouper_top (
         .sample_shift    (rb_sample_shift),
         .sc_lock         (sc_lock),
         .timing_ref      (timing_ref),
-        .training_done   (training_done),
+        .training_done   (training_done_pkt),
         .W_commit        (W_commit_hw),
         .mode_shadow     (rb_mimo_mode),
         .antenna_en_shadow (rb_antenna_en),
         .pkt_timeout_syms (rb_pkt_timeout_syms),
         .tacc_window_syms (rb_tacc_window_syms),
         .W_valid_set     (W_valid_set),
+        .W_valid         (W_valid),
         .W_missed_packet (W_missed_packet),
         .W_missed_q      (W_missed_q),
         .packet_phase      (packet_phase),
@@ -829,11 +1005,12 @@ module trouper_top (
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
         .clr_err      (rb_psram_ctrl[1]),
-        .sck          (PSRAM_SCK_OUT),
-        .ce_n         (PSRAM_CE_N_OUT),
-        .sio_out      (PSRAM_SIO_OUT),
+        .sck          (),                  // pre-#69 gated clock; pad SCK is built below from sck_en_o
+        .sck_en_o     (psram_sck_en_c),
+        .ce_n         (psram_ce_n_c),
+        .sio_out      (psram_sio_out_c),
         .sio_in       (PSRAM_SIO_IN),
-        .sio_oe       (PSRAM_SIO_OE),
+        .sio_oe       (psram_sio_oe_c),
         // SC delay-line outputs (replace frontend_buf_ctrl + on-chip SRAM)
         .cur_i0       (psram_cur_i0),
         .cur_q0       (psram_cur_q0),
@@ -883,6 +1060,7 @@ module trouper_top (
     // =========================================================================
     wire signed [7:0] comb_y_i, comb_y_q;
     wire              comb_y_valid;
+    wire              comb_use_mrc;   // burst-aligned MRC(1)/bypass(0), Open Risk #65
 
     // bypass_ant: lowest set bit of active_antenna_en. Fixed 2026-07-05 (Open
     // Risks #4): the original mux tested en[1]/en[2]/en[3] and fell back to
@@ -911,7 +1089,8 @@ module trouper_top (
         .post_gain_shift(rb_comb_post_gain_shift),
         .y_i    (comb_y_i),
         .y_q    (comb_y_q),
-        .y_valid(comb_y_valid)
+        .y_valid(comb_y_valid),
+        .use_mrc(comb_use_mrc)
     );
 
     // =========================================================================
@@ -922,8 +1101,17 @@ module trouper_top (
     // During REPLAY: combiner processes PSRAM replay IQ → normal remod path.
     // =========================================================================
     wire psram_silence = psram_buf_active && !psram_replay_active_w;
-    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 : ($signed(comb_y_i) >>> rb_remod_backoff_shift);
-    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 : ($signed(comb_y_q) >>> rb_remod_backoff_shift);
+    // REMOD_BACKOFF_SHIFT is an MRC-path safety margin only: the combiner output
+    // can exceed the sd_remod < -3 dBFS stability limit. Mode-1 / no-W_valid
+    // bypass just forwards one antenna's int8 sample, which is always in range,
+    // so the shift must NOT attenuate it (Open Risk #65 / TRPR-PCF-011 /
+    // TRPR-RMD-008). comb_use_mrc is burst-aligned with comb_y_i/q.
+    wire signed [7:0] remod_bo_i = comb_use_mrc ? ($signed(comb_y_i) >>> rb_remod_backoff_shift)
+                                               : comb_y_i;
+    wire signed [7:0] remod_bo_q = comb_use_mrc ? ($signed(comb_y_q) >>> rb_remod_backoff_shift)
+                                               : comb_y_q;
+    wire signed [7:0] remod_in_i = psram_silence ? 8'sd0 : remod_bo_i;
+    wire signed [7:0] remod_in_q = psram_silence ? 8'sd0 : remod_bo_q;
     sd_remod u_remod (
         .clk_32m  (clk),
         .rst_n    (rst_n),
@@ -1082,8 +1270,9 @@ module trouper_top (
     assign spi_reg_rdata = rb_peek_rdata_w;
 
     // ---- Register Bank ----
+    // rb_irq_out_sticky drives the shared IRQ_OUT/DBG1 pad below, muxed with
+    // the debug probe by dbg1_en_w.
     wire rb_irq_out_sticky;
-    assign IRQ_OUT_OUT = rb_irq_out_sticky;
 
     reg_bank u_rb (
         .clk        (clk),
@@ -1141,7 +1330,8 @@ module trouper_top (
         .bw_sel          (rb_bw_sel),
         .sc_ant_sel      (rb_sc_ant_sel),
         .array_sync_en   (rb_array_sync_en),
-        .dbg_ctrl        (rb_dbg_ctrl),
+        .dbg_ctrl0       (rb_dbg_ctrl0),
+        .dbg_ctrl1       (rb_dbg_ctrl1),
         .dbg_pad_value   (dbg_pad_value),
         .irq_status_dbg  (rb_irq_status_dbg),
         .sc_thr          (rb_sc_thr),
@@ -1167,15 +1357,18 @@ module trouper_top (
     // Two-pin digital debug probe
     // =========================================================================
     // Feed-forward observability only: every input below is an already-existing
-    // registered signal, and the only outputs are the two pads plus the
-    // DBG_STATUS readback.  Nothing here drives the datapath, the FSMs, the
-    // interrupt tree, PSRAM ownership, or register-write gating, so a stuck or
-    // shorted debug pad cannot change how the receiver behaves.
-    // See planning/two-pin-digital-debug-plan.md.
+    // registered signal, and the only outputs are DBG0_OUT, the shared-pad
+    // value/enable pair, and the DBG_STATUS readback.  Nothing here drives the
+    // datapath, the FSMs, the interrupt tree, PSRAM ownership, or register-write
+    // gating, so a stuck or shorted debug pad cannot change how the receiver
+    // behaves.  Split selector: DBG_CTRL0 -> DBG0_OUT, DBG_CTRL1 -> the shared
+    // IRQ_OUT/DBG1 pad.  See planning/two-pin-digital-debug-plan.md.
+    wire dbg1_val_w, dbg1_en_w;
     debug_probe_mux u_dbg (
         .clk            (clk),
         .rst_n          (rst_n),
-        .dbg_ctrl       (rb_dbg_ctrl),
+        .dbg_ctrl0      (rb_dbg_ctrl0),
+        .dbg_ctrl1      (rb_dbg_ctrl1),
         // group 001 raw RX (registered inside the mux, never combinational
         // pad-to-pad)
         .iq_data_i      (IQ_DATA_I),
@@ -1210,9 +1403,14 @@ module trouper_top (
         .irq_status     (rb_irq_status_dbg),
         .irq_out        (rb_irq_out_sticky),
         .dbg0           (DBG0_OUT),
-        .dbg1           (DBG1_OUT)
+        .dbg1_val       (dbg1_val_w),
+        .dbg1_en        (dbg1_en_w)
     );
-    assign dbg_pad_value = {DBG1_OUT, DBG0_OUT};
+    // Shared IRQ_OUT / DBG1 pad: the sticky interrupt by default, the selected
+    // debug source only while DBG_CTRL1.EN=1.  Nothing in the core reads
+    // IRQ_OUT_OUT, so this mux is feed-forward and cannot perturb the receiver.
+    assign IRQ_OUT_OUT   = dbg1_en_w ? dbg1_val_w : rb_irq_out_sticky;
+    assign dbg_pad_value = {IRQ_OUT_OUT, DBG0_OUT};
 
 endmodule
 
@@ -1228,10 +1426,24 @@ endmodule
 // pad would create a pad-to-pad path with no flop between.  Eight dedicated
 // flops sample them first, so the probe is an exact copy delayed by one cycle.
 // Every other group taps a signal that is already registered upstream.
+// Split-selector debug mux (planning/two-pin-digital-debug-plan.md).
+//
+//   DBG_CTRL0 (0x04) -> the dedicated DBG0 pad, taking the d0 column of the
+//                       encoding table.
+//   DBG_CTRL1 (0x06) -> the shared IRQ_OUT/DBG1 pad, taking the d1 column.
+//                       dbg1_en = DBG_CTRL1.EN tells the top level whether the
+//                       pad carries this value or the sticky interrupt.
+//
+// Each byte is {EN, GROUP[2:0], ANT[1:0], SEL[1:0]} and is decoded fully
+// independently, so DBG0 and the shared pad can point at unrelated signals --
+// e.g. the shared pad pinned to G_IRQ (irq_out) while DBG0 roams the other
+// groups.  Bit-for-bit the same source table as the pre-split single-selector
+// version; only the control fan-in changed.
 module debug_probe_mux (
     input  wire        clk,
     input  wire        rst_n,
-    input  wire [7:0]  dbg_ctrl,
+    input  wire [7:0]  dbg_ctrl0,
+    input  wire [7:0]  dbg_ctrl1,
     input  wire [3:0]  iq_data_i,
     input  wire [3:0]  iq_data_q,
     input  wire signed [7:0] dc_i0, dc_i1, dc_i2, dc_i3,
@@ -1257,15 +1469,10 @@ module debug_probe_mux (
     input  wire signed [7:0] comb_q,
     input  wire [7:0]  irq_status,
     input  wire        irq_out,
-    output wire        dbg0,
-    output wire        dbg1
+    output wire        dbg0,       // dedicated DBG0 pad (d0 column, EN0-gated)
+    output wire        dbg1_val,   // shared-pad debug value (d1 column, EN1-gated)
+    output wire        dbg1_en     // 1 = shared pad carries dbg1_val, else IRQ
 );
-    wire       en    = dbg_ctrl[7];
-    wire [2:0] group = dbg_ctrl[6:4];
-    wire [1:0] ant   = dbg_ctrl[3:2];
-    wire [1:0] sel   = dbg_ctrl[1:0];
-
-    localparam [2:0] G_OFF    = 3'b000;
     localparam [2:0] G_RAW    = 3'b001;
     localparam [2:0] G_DEC    = 3'b010;
     localparam [2:0] G_SC     = 3'b011;
@@ -1289,74 +1496,83 @@ module debug_probe_mux (
         end
     end
 
-    reg [7:0] dc_i_sel, dc_q_sel;
-    always @* begin
-        case (ant)
-            2'd0: begin dc_i_sel = dc_i0; dc_q_sel = dc_q0; end
-            2'd1: begin dc_i_sel = dc_i1; dc_q_sel = dc_q1; end
-            2'd2: begin dc_i_sel = dc_i2; dc_q_sel = dc_q2; end
-            default: begin dc_i_sel = dc_i3; dc_q_sel = dc_q3; end
-        endcase
-    end
-
-    // Byte selection for the two sample groups.  SEL maps to bits 7, 6, 1, 0 --
-    // sign bit first, because it is the one that shows a tone without needing a
-    // numerical reading.  Built as a re-ordered 4-bit lane so SEL indexes it
-    // directly: lane[0] is bit 7, lane[1] is bit 6, lane[2] is bit 1,
-    // lane[3] is bit 0.
-    wire [3:0] dc_i_lane   = {dc_i_sel[0], dc_i_sel[1], dc_i_sel[6], dc_i_sel[7]};
-    wire [3:0] dc_q_lane   = {dc_q_sel[0], dc_q_sel[1], dc_q_sel[6], dc_q_sel[7]};
-    wire [3:0] comb_i_lane = {comb_i[0],   comb_i[1],   comb_i[6],   comb_i[7]};
-    wire [3:0] comb_q_lane = {comb_q[0],   comb_q[1],   comb_q[6],   comb_q[7]};
-
-    reg d0, d1;
-    always @* begin
-        d0 = 1'b0;
-        d1 = 1'b0;
-        case (group)
-            G_RAW: begin
-                d0 = raw_i_q[ant];
-                d1 = raw_q_q[ant];
-            end
-            G_DEC: begin
-                d0 = dc_i_lane[sel];
-                d1 = dc_q_lane[sel];
-            end
-            G_SC: case (sel)
-                2'd0: begin d0 = sc_hit;  d1 = sc_lock;       end
-                2'd1: begin d0 = del_rdy; d1 = sc_tdm_busy;   end
-                2'd2: begin d0 = sc_lock; d1 = packet_active; end
-                default: begin d0 = 1'b0; d1 = 1'b0; end   // reserved
+    // {d1, d0} for one (group, ant, sel) selection.  d0 is the DBG0-column
+    // source, d1 the shared-pad-column source.  SEL maps sample-group bytes to
+    // bits 7, 6, 1, 0 (sign bit first).  Reserved encodings return 0 on both
+    // columns -- never clamped, so an invalid selection reads back verbatim but
+    // drives its pad low.
+    function [1:0] probe_pair;
+        input [2:0] group;
+        input [1:0] ant;
+        input [1:0] sel;
+        reg d0, d1;
+        reg [7:0] dc_i_sel, dc_q_sel;
+        reg [3:0] dc_i_lane, dc_q_lane, comb_i_lane, comb_q_lane;
+        begin
+            d0 = 1'b0;
+            d1 = 1'b0;
+            case (ant)
+                2'd0: begin dc_i_sel = dc_i0; dc_q_sel = dc_q0; end
+                2'd1: begin dc_i_sel = dc_i1; dc_q_sel = dc_q1; end
+                2'd2: begin dc_i_sel = dc_i2; dc_q_sel = dc_q2; end
+                default: begin dc_i_sel = dc_i3; dc_q_sel = dc_q3; end
             endcase
-            G_PKT: case (sel)
-                2'd0: begin d0 = packet_active;   d1 = training_done;   end
-                2'd1: begin d0 = w_pending;       d1 = w_valid;         end
-                2'd2: begin d0 = packet_phase[0]; d1 = packet_phase[1]; end
-                default: begin d0 = 1'b0; d1 = 1'b0; end   // reserved
+            dc_i_lane   = {dc_i_sel[0], dc_i_sel[1], dc_i_sel[6], dc_i_sel[7]};
+            dc_q_lane   = {dc_q_sel[0], dc_q_sel[1], dc_q_sel[6], dc_q_sel[7]};
+            comb_i_lane = {comb_i[0],   comb_i[1],   comb_i[6],   comb_i[7]};
+            comb_q_lane = {comb_q[0],   comb_q[1],   comb_q[6],   comb_q[7]};
+            case (group)
+                G_RAW: begin
+                    d0 = raw_i_q[ant];
+                    d1 = raw_q_q[ant];
+                end
+                G_DEC: begin
+                    d0 = dc_i_lane[sel];
+                    d1 = dc_q_lane[sel];
+                end
+                G_SC: case (sel)
+                    2'd0: begin d0 = sc_hit;  d1 = sc_lock;       end
+                    2'd1: begin d0 = del_rdy; d1 = sc_tdm_busy;   end
+                    2'd2: begin d0 = sc_lock; d1 = packet_active; end
+                    default: begin d0 = 1'b0; d1 = 1'b0; end   // reserved
+                endcase
+                G_PKT: case (sel)
+                    2'd0: begin d0 = packet_active;   d1 = training_done;   end
+                    2'd1: begin d0 = w_pending;       d1 = w_valid;         end
+                    2'd2: begin d0 = packet_phase[0]; d1 = packet_phase[1]; end
+                    default: begin d0 = 1'b0; d1 = 1'b0; end   // reserved
+                endcase
+                G_PSRAM: case (sel)
+                    2'd0: begin d0 = psram_init_done; d1 = qpi_busy;       end
+                    2'd1: begin d0 = buf_active;      d1 = replay_active;  end
+                    2'd2: begin d0 = sample_skip;     d1 = replay_missed;  end
+                    default: begin d0 = psram_dbg_busy; d1 = qspi_owner;   end
+                endcase
+                G_COMB: begin
+                    d0 = comb_i_lane[sel];
+                    d1 = comb_q_lane[sel];
+                end
+                G_IRQ: begin
+                    // SEL is 2 bits, so only irq_status[3:0] is reachable on the
+                    // d0 column; the remaining sticky bits stay readable over
+                    // SPI at IRQ_STATUS (0x02).
+                    d0 = irq_status[sel];
+                    d1 = irq_out;
+                end
+                default: begin d0 = 1'b0; d1 = 1'b0; end   // G_OFF and reserved
             endcase
-            G_PSRAM: case (sel)
-                2'd0: begin d0 = psram_init_done; d1 = qpi_busy;       end
-                2'd1: begin d0 = buf_active;      d1 = replay_active;  end
-                2'd2: begin d0 = sample_skip;     d1 = replay_missed;  end
-                default: begin d0 = psram_dbg_busy; d1 = qspi_owner;   end
-            endcase
-            G_COMB: begin
-                d0 = comb_i_lane[sel];
-                d1 = comb_q_lane[sel];
-            end
-            G_IRQ: begin
-                // SEL is 2 bits, so only irq_status[3:0] is reachable here.
-                // The plan's SEL=0..4 assumed a wider field; the remaining
-                // sticky bits stay readable over SPI at IRQ_STATUS (0x02).
-                d0 = irq_status[sel];
-                d1 = irq_out;
-            end
-            default: begin d0 = 1'b0; d1 = 1'b0; end   // G_OFF and reserved
-        endcase
-    end
+            probe_pair = {d1, d0};
+        end
+    endfunction
 
-    assign dbg0 = en ? d0 : 1'b0;
-    assign dbg1 = en ? d1 : 1'b0;
+    wire       en0   = dbg_ctrl0[7];
+    wire [1:0] pair0 = probe_pair(dbg_ctrl0[6:4], dbg_ctrl0[3:2], dbg_ctrl0[1:0]);
+    wire       en1   = dbg_ctrl1[7];
+    wire [1:0] pair1 = probe_pair(dbg_ctrl1[6:4], dbg_ctrl1[3:2], dbg_ctrl1[1:0]);
+
+    assign dbg0     = en0 ? pair0[0] : 1'b0;
+    assign dbg1_val = en1 ? pair1[1] : 1'b0;
+    assign dbg1_en  = en1;
 endmodule
 
 // Kept in this compilation unit so existing standalone top-level test targets

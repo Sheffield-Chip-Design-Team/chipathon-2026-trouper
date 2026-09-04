@@ -158,6 +158,7 @@ module trouper_chip #(
     output wire        ARRAY_ACQ_N_PDRV1
 );
     wire       psram_ce_n;
+    wire       psram_sck;   // real gated SCK, for the psram_model #69 guardrail
     wire [3:0] psram_sio_out, psram_sio_oe, psram_sio_in, psram_sio_ie;
     wire [3:0] psram_sio_drive;
 
@@ -176,7 +177,7 @@ module trouper_chip #(
         .IQ_DATA_Q_3         (IQ_DATA_Q[3]),
         .REMOD_A_I_OUT       (REMOD_A_I),
         .REMOD_A_Q_OUT       (REMOD_A_Q),
-        .PSRAM_SCK_OUT       (),
+        .PSRAM_SCK_OUT       (psram_sck),
         .PSRAM_CE_N_OUT      (psram_ce_n),
         .PSRAM_SIO_0_OUT     (psram_sio_out[0]),
         .PSRAM_SIO_1_OUT     (psram_sio_out[1]),
@@ -197,7 +198,6 @@ module trouper_chip #(
         .IRQ_OUT_OUT         (IRQ_OUT),
         .ARRAY_ACQ_N_OUT     (ARRAY_ACQ_N_OUT),
         .DBG0_IN             (1'b0),
-        .DBG1_IN             (1'b0),
         .ARRAY_ACQ_N_IN      (ARRAY_ACQ_N_IN),
         .ARRAY_ACQ_N_OE      (ARRAY_ACQ_N_OE),
         .IQ_CLK_PU           (),
@@ -321,7 +321,8 @@ module trouper_chip #(
         .ce_n    (psram_ce_n),
         .sio_out (psram_sio_out),
         .sio_oe  (psram_sio_oe),
-        .sio_in  (psram_sio_drive)
+        .sio_in  (psram_sio_drive),
+        .sck     (psram_sck)
     );
 endmodule
 `default_nettype wire

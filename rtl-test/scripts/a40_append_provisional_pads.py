@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Append provisional boundary pins for pads the integrator template predates.
+"""SUPERSEDED 2026-09-03 by rtl-test/scripts/regen_a40_def.sh.
+
+The integrator padframe tooling (ip/chipathon-2026-padring-system) now
+generates the full 27-pin A40_ACV.def directly, with real coordinates for
+ARRAY_ACQ_N (N15) and DBG0 (N16) -- there is nothing left to append. Kept only
+as the record of how the synthetic-coordinate stopgap worked.
+
+Append provisional boundary pins for pads the integrator template predates.
 
 FP_DEF_TEMPLATE matching is strict: every top-level port must exist in the
 template DEF, or OpenROAD fails with "must exist in template".  Trouper has
-since grown three pads the integrator's A40_ACV.def does not contain --
-ARRAY_ACQ_N (slot N15) and DBG0_OUT/DBG1_OUT (N16/N17) -- so a P&R run against
-the stock template cannot even start.
+since grown two pads the integrator's A40_ACV.def does not contain --
+ARRAY_ACQ_N (slot N15) and DBG0_OUT (N16) -- so a P&R run against the stock
+template cannot even start.  (DBG1 was merged onto the IRQ_OUT pad on
+2026-09-03 to hold the count at 27; it is no longer a pad of its own.)
 
 This script appends them at synthetic north-edge coordinates so the flow can
 run and produce real timing/DRC/LVS numbers for the new RTL.  It follows the
@@ -51,7 +59,6 @@ TERMINALS = ["OUT", "PU", "PD", "OE", "IE", "CS", "SL", "PDRV0", "PDRV1", "IN"]
 PADS = [
     ("ARRAY_ACQ_N", {"IN"}),
     ("DBG0",        {"IN"}),
-    ("DBG1",        {"IN"}),
 ]
 
 

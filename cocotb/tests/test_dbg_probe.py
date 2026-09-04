@@ -1,15 +1,18 @@
 """
-test_dbg_probe.py -- two-pin digital debug probe (DBG0_OUT / DBG1_OUT).
+test_dbg_probe.py -- digital debug probe: one dedicated pad (DBG0_OUT) plus the
+shared IRQ_OUT/DBG1 pad, driven by the split selector DBG_CTRL0 (0x04) /
+DBG_CTRL1 (0x06).
 
-Covers planning/two-pin-digital-debug-plan.md: the DBG_CTRL/DBG_STATUS register
-pair, every mux group, the reset/disabled/reserved zero states, the idle-only
-write gate, and -- the one that actually matters for tapeout risk -- proof that
-the probe cannot perturb the receiver.
+Covers planning/two-pin-digital-debug-plan.md: the DBG_CTRL0/DBG_CTRL1/
+DBG_STATUS registers, every mux group, the reset/disabled/reserved zero states,
+the idle-only write gate, the shared pad reverting to the sticky interrupt when
+DBG_CTRL1.EN=0, and -- the one that actually matters for tapeout risk -- proof
+that the probe cannot perturb the receiver.
 
-The non-interference test is the reason this suite exists. Everything else here
-checks that the feature works; test_probe_does_not_perturb_the_receiver checks
-that it cannot break anything if it doesn't. A debug feature that is merely
-"probably harmless" is worse than no debug feature, because it ships.
+The non-interference tests are the reason this suite exists. Everything else
+here checks that the feature works; test_probe_does_not_perturb_the_receiver
+checks that it cannot break anything if it doesn't. A debug feature that is
+merely "probably harmless" is worse than no debug feature, because it ships.
 """
 
 import cocotb
@@ -17,11 +20,12 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
 from test_trouper_top import (
-    CLK_NS, spi_read, spi_write, release_rx_hold, assert_rx_hold, sdm_driver,
+    CLK_NS, spi_read, spi_write, release_rx_hold, sdm_driver,
 )
 
-REG_DBG_CTRL       = 0x04
+REG_DBG_CTRL0      = 0x04
 REG_DBG_STATUS     = 0x05
+REG_DBG_CTRL1      = 0x06
 REG_SF_CFG         = 0x09
 REG_BW_CFG         = 0x0A
 REG_SC_THR_HI      = 0x0C
@@ -37,11 +41,22 @@ EN = 0x80
 
 
 def ctrl(group, ant=0, sel=0, en=True):
-    """Pack DBG_CTRL = {EN, GROUP[2:0], ANT[1:0], SEL[1:0]}."""
+    """Pack a DBG_CTRLx byte = {EN, GROUP[2:0], ANT[1:0], SEL[1:0]}."""
     return (EN if en else 0) | ((group & 0x7) << 4) | ((ant & 0x3) << 2) | (sel & 0x3)
 
 
 G_OFF, G_RAW, G_DEC, G_SC, G_PKT, G_PSRAM, G_COMB, G_IRQ = range(8)
+
+
+async def set_probe(dut, group, ant=0, sel=0, en=True):
+    """Point BOTH pads at the same group/sel/ant.
+
+    DBG0 takes the d0 column of the encoding table, the shared IRQ_OUT/DBG1 pad
+    the d1 column, so writing the identical selector to both reproduces the
+    paired probe the pre-split single selector produced.
+    """
+    await spi_write(dut, REG_DBG_CTRL0, ctrl(group, ant, sel, en))
+    await spi_write(dut, REG_DBG_CTRL1, ctrl(group, ant, sel, en))
 
 
 async def reset_dut(dut):
@@ -58,7 +73,21 @@ async def reset_dut(dut):
 
 
 def pads(dut):
-    return int(dut.DBG0_OUT.value), int(dut.DBG1_OUT.value)
+    """(DBG0 pad, shared IRQ_OUT/DBG1 pad)."""
+    return int(dut.DBG0_OUT.value), int(dut.IRQ_OUT.value)
+
+
+async def raw_settle(dut):
+    """Clocks for an IQ pad change to reach the debug pads via the raw-RX group.
+
+    Path: pad -> IQ negedge sample -> posedge retime (Open Risk #70 two-stage
+    capture) -> debug_probe_mux posedge register -> pad.  Three rising edges
+    plus a delta for the final combinational hop to the pad.
+    """
+    await RisingEdge(dut.IQ_CLK)
+    await RisingEdge(dut.IQ_CLK)
+    await RisingEdge(dut.IQ_CLK)
+    await Timer(1, unit="ns")
 
 
 # ---------------------------------------------------------------------------
@@ -71,16 +100,18 @@ async def test_reset_and_disabled_drive_low(dut):
 
     Step 1 of the first-silicon sequence depends on this: if the pins are not
     provably low when disabled, an engineer cannot tell a dead probe from an
-    idle one.
+    idle one. The shared pad is low here only because the sticky interrupt is
+    also idle out of reset; test_shared_pad_reverts_to_irq covers the mux side.
     """
     await reset_dut(dut)
     assert pads(dut) == (0, 0), f"pads not low out of reset: {pads(dut)}"
 
-    # DBG_CTRL resets to 0 -> disabled.
-    assert (await spi_read(dut, REG_DBG_CTRL)) == 0x00, "DBG_CTRL did not reset to 0"
+    # Both selectors reset to 0 -> disabled.
+    assert (await spi_read(dut, REG_DBG_CTRL0)) == 0x00, "DBG_CTRL0 did not reset to 0"
+    assert (await spi_read(dut, REG_DBG_CTRL1)) == 0x00, "DBG_CTRL1 did not reset to 0"
 
-    # Selecting a live group with EN=0 must still drive low.
-    await spi_write(dut, REG_DBG_CTRL, ctrl(G_PKT, sel=0, en=False))
+    # Selecting a live group with EN=0 must still drive low on both pads.
+    await set_probe(dut, G_PKT, sel=0, en=False)
     await Timer(20 * CLK_NS, unit="ns")
     assert pads(dut) == (0, 0), f"pads driven with EN=0: {pads(dut)}"
 
@@ -91,12 +122,12 @@ async def test_reset_and_disabled_drive_low(dut):
 
 @cocotb.test()
 async def test_pad_tieoffs(dut):
-    """Debug pads are permanently-enabled CMOS outputs, fast slew, 8 mA.
+    """DBG0 is a permanently-enabled CMOS output, fast slew, 8 mA.
 
-    Fast slew and mid drive are deliberate and differ from SPI_MISO/IRQ_OUT:
-    raw-RX mode toggles on every 32 MHz edge, so the slow-slew setting used for
-    the host link is not adequate. IE=0 because these are output-only in
-    function -- never turn the receiver on, on a pin nothing drives.
+    Fast slew and mid drive are deliberate: raw-RX mode toggles on every 32 MHz
+    edge. IE=0 because DBG0 is output-only in function -- never turn the
+    receiver on, on a pin nothing drives. The shared DBG1 signal rides the
+    IRQ_OUT pad, whose slew was moved to fast (SL=0) for the same reason.
     """
     await reset_dut(dut)
     expected = {
@@ -104,10 +135,15 @@ async def test_pad_tieoffs(dut):
         "PU": 0, "PD": 0,
         "PDRV0": 1, "PDRV1": 0,     # {PDRV1,PDRV0} = 01 -> 8 mA
     }
-    for pad in ("DBG0", "DBG1"):
-        for name, want in expected.items():
-            got = int(getattr(dut, f"{pad}_{name}").value)
-            assert got == want, f"{pad}_{name} tied to {got}, expected {want}"
+    for name, want in expected.items():
+        got = int(getattr(dut, f"DBG0_{name}").value)
+        assert got == want, f"DBG0_{name} tied to {got}, expected {want}"
+
+    # The shared pad: IRQ_OUT must now be fast slew (SL=0), otherwise raw-RX
+    # debug on it is not electrically adequate.
+    assert int(dut.IRQ_OUT_SL.value) == 0, \
+        "IRQ_OUT_SL must be 0 (fast) now that DBG1 shares the pad"
+    assert int(dut.IRQ_OUT_OE.value) == 1, "IRQ_OUT_OE must stay 1"
     dut._log.info("debug pad tie-offs correct")
 
 
@@ -117,7 +153,7 @@ async def test_reserved_encodings_drive_zero(dut):
 
     The plan requires no clamping: an unrecognised selection reads back as
     written but drives zero, so it is indistinguishable from disabled and can
-    never be mistaken for live data.
+    never be mistaken for live data. Checked on both selectors.
     """
     await reset_dut(dut)
     reserved = [
@@ -125,10 +161,13 @@ async def test_reserved_encodings_drive_zero(dut):
         ctrl(G_PKT,   sel=3),   # packet/weights likewise
     ]
     for c in reserved:
-        await spi_write(dut, REG_DBG_CTRL, c)
+        await spi_write(dut, REG_DBG_CTRL0, c)
+        await spi_write(dut, REG_DBG_CTRL1, c)
         await Timer(20 * CLK_NS, unit="ns")
-        rb = await spi_read(dut, REG_DBG_CTRL)
-        assert rb == c, f"DBG_CTRL 0x{c:02X} not stored verbatim (got 0x{rb:02X})"
+        assert (await spi_read(dut, REG_DBG_CTRL0)) == c, \
+            f"DBG_CTRL0 0x{c:02X} not stored verbatim"
+        assert (await spi_read(dut, REG_DBG_CTRL1)) == c, \
+            f"DBG_CTRL1 0x{c:02X} not stored verbatim"
         assert pads(dut) == (0, 0), \
             f"reserved encoding 0x{c:02X} drove pads {pads(dut)}, expected (0, 0)"
     dut._log.info("reserved encodings drive zero and are not clamped")
@@ -140,7 +179,9 @@ async def test_reserved_encodings_drive_zero(dut):
 
 @cocotb.test()
 async def test_raw_rx_probe_follows_iq_pads(dut):
-    """Group 001 reproduces each antenna's I/Q pad, delayed one cycle.
+    """Group 001 reproduces each antenna's I/Q pad, after the two-stage IQ
+    capture (Open Risk #70: negedge sample + posedge retime) plus the mux
+    register -- see raw_settle().
 
     Drives a distinct pattern per branch so a mis-wired ANT decode shows up as a
     wrong branch rather than as a plausible-looking bitstream.
@@ -148,20 +189,74 @@ async def test_raw_rx_probe_follows_iq_pads(dut):
     await reset_dut(dut)
 
     for ant in range(4):
-        await spi_write(dut, REG_DBG_CTRL, ctrl(G_RAW, ant=ant))
+        await set_probe(dut, G_RAW, ant=ant)
         for pattern_i, pattern_q in ((0xF, 0x0), (0x0, 0xF), (1 << ant, 0xF ^ (1 << ant))):
             dut.IQ_DATA_I.value = pattern_i
             dut.IQ_DATA_Q.value = pattern_q
-            # one edge to capture into the debug flops, then sample
-            await RisingEdge(dut.IQ_CLK)
-            await RisingEdge(dut.IQ_CLK)
-            await Timer(1, unit="ns")
+            await raw_settle(dut)
             want = ((pattern_i >> ant) & 1, (pattern_q >> ant) & 1)
             assert pads(dut) == want, (
                 f"raw probe ANT={ant} I=0x{pattern_i:X} Q=0x{pattern_q:X}: "
                 f"pads {pads(dut)}, expected {want}"
             )
     dut._log.info("raw-RX probe tracks all four I/Q pairs")
+
+
+@cocotb.test()
+async def test_selectors_are_independent(dut):
+    """DBG0 and the shared pad decode DBG_CTRL0 / DBG_CTRL1 separately.
+
+    Points the shared pad at G_IRQ (irq_out, idle 0) and DBG0 independently at a
+    raw-RX bit, then toggles that bit. DBG0 must follow it while the shared pad
+    stays put -- proof the two selectors do not share a GROUP/SEL field.
+    """
+    await reset_dut(dut)
+    await spi_write(dut, REG_DBG_CTRL1, ctrl(G_IRQ, sel=0))      # shared pad -> irq_out
+    await spi_write(dut, REG_DBG_CTRL0, ctrl(G_RAW, ant=0))      # DBG0 -> raw I[0]
+
+    for pattern in (0x1, 0x0, 0x1):
+        dut.IQ_DATA_I.value = pattern
+        dut.IQ_DATA_Q.value = 0
+        await raw_settle(dut)
+        d0, d1 = pads(dut)
+        assert d0 == pattern, f"DBG0 did not follow raw I[0]={pattern}: got {d0}"
+        assert d1 == 0, f"shared pad moved while only DBG_CTRL0 changed: {d1}"
+    dut._log.info("DBG_CTRL0 and DBG_CTRL1 decode independently")
+
+
+@cocotb.test()
+async def test_shared_pad_reverts_to_irq(dut):
+    """DBG_CTRL1.EN selects between the sticky interrupt and the debug mux.
+
+    Proven without a packet: with `EN=0` the pad follows `irq_out` (idle 0);
+    with `EN=1` selecting a raw-RX bit it follows that bit as `IQ_DATA_Q[0]` is
+    toggled, i.e. the interrupt no longer reaches the pad. Clearing `EN` hands
+    the pad back to the (still idle) interrupt.
+    """
+    await reset_dut(dut)
+
+    # EN=0: pad tracks irq_out, which is idle low here.
+    await spi_write(dut, REG_DBG_CTRL1, ctrl(G_IRQ, sel=0, en=False))
+    await Timer(20 * CLK_NS, unit="ns")
+    assert int(dut.IRQ_OUT.value) == 0, "shared pad not low with DBG_CTRL1.EN=0 and no IRQ"
+
+    # EN=1, raw-RX Q[0]: pad follows the debug bit, not the interrupt.
+    await spi_write(dut, REG_DBG_CTRL1, ctrl(G_RAW, ant=0, en=True))
+    for pattern in (0x1, 0x0, 0x1):
+        dut.IQ_DATA_Q.value = pattern
+        dut.IQ_DATA_I.value = 0
+        await raw_settle(dut)
+        assert int(dut.IRQ_OUT.value) == pattern, (
+            f"shared pad {int(dut.IRQ_OUT.value)} did not follow raw Q[0]={pattern} "
+            f"with DBG_CTRL1.EN=1"
+        )
+
+    # Clear EN: pad back to the (idle) interrupt regardless of IQ activity.
+    await spi_write(dut, REG_DBG_CTRL1, ctrl(G_RAW, ant=0, en=False))
+    dut.IQ_DATA_Q.value = 0xF
+    await raw_settle(dut)
+    assert int(dut.IRQ_OUT.value) == 0, "shared pad did not revert to IRQ after DBG_CTRL1.EN=0"
+    dut._log.info("DBG_CTRL1.EN switches the shared pad between IRQ and the mux")
 
 
 @cocotb.test()
@@ -177,7 +272,7 @@ async def test_packet_group_tracks_fsm(dut):
     await spi_write(dut, REG_SC_THR_HI, 0x01)
     await spi_write(dut, REG_SC_THR_LO, 0x00)
     await spi_write(dut, REG_SC_HITS_REQ, 0x00)
-    await spi_write(dut, REG_DBG_CTRL, ctrl(G_PKT, sel=0))
+    await spi_write(dut, REG_DBG_CTRL0, ctrl(G_PKT, sel=0))   # DBG0 -> packet_active
     await release_rx_hold(dut)
     await spi_write(dut, REG_PSRAM_CTRL, 0x01)
 
@@ -208,13 +303,11 @@ async def test_packet_group_tracks_fsm(dut):
 async def test_dbg_status_mirrors_the_pads(dut):
     """DBG_STATUS is a post-mux connectivity check, not an independent path."""
     await reset_dut(dut)
-    await spi_write(dut, REG_DBG_CTRL, ctrl(G_RAW, ant=0))
+    await set_probe(dut, G_RAW, ant=0)
     for pattern in (0x1, 0x0):
         dut.IQ_DATA_I.value = pattern
         dut.IQ_DATA_Q.value = pattern
-        await RisingEdge(dut.IQ_CLK)
-        await RisingEdge(dut.IQ_CLK)
-        await Timer(1, unit="ns")
+        await raw_settle(dut)
         d0, d1 = pads(dut)
         st = await spi_read(dut, REG_DBG_STATUS)
         assert (st & 0x1) == d0 and ((st >> 1) & 0x1) == d1, (
@@ -229,7 +322,7 @@ async def test_dbg_status_mirrors_the_pads(dut):
 
 @cocotb.test()
 async def test_config_is_idle_only_and_sticky_records_rejection(dut):
-    """DBG_CTRL writes are refused mid-packet, and the rejection is visible.
+    """Both DBG_CTRL bytes are refused mid-packet, and rejection is visible.
 
     The requirement is that the selection is fixed for a whole packet -- an
     analyser capture whose meaning changes halfway through is worse than no
@@ -251,9 +344,12 @@ async def test_config_is_idle_only_and_sticky_records_rejection(dut):
             break
 
     # Writable while idle.
-    idle_sel = ctrl(G_SC, sel=0)
-    await spi_write(dut, REG_DBG_CTRL, idle_sel)
-    assert (await spi_read(dut, REG_DBG_CTRL)) == idle_sel, "idle DBG_CTRL write refused"
+    idle0 = ctrl(G_SC, sel=0)
+    idle1 = ctrl(G_IRQ, sel=0)
+    await spi_write(dut, REG_DBG_CTRL0, idle0)
+    await spi_write(dut, REG_DBG_CTRL1, idle1)
+    assert (await spi_read(dut, REG_DBG_CTRL0)) == idle0, "idle DBG_CTRL0 write refused"
+    assert (await spi_read(dut, REG_DBG_CTRL1)) == idle1, "idle DBG_CTRL1 write refused"
 
     # Clear the sticky, then get a packet going.
     await spi_write(dut, REG_RX_HOLD, 0x02)      # W1C CFG_WR_REJECTED
@@ -265,16 +361,16 @@ async def test_config_is_idle_only_and_sticky_records_rejection(dut):
             break
     assert (await spi_read(dut, REG_PACKET_STATUS)) & 0x01, "packet never started"
 
-    # Mid-packet write must be dropped, and recorded.
-    await spi_write(dut, REG_DBG_CTRL, ctrl(G_PSRAM, sel=1))
-    rb = await spi_read(dut, REG_DBG_CTRL)
-    assert rb == idle_sel, \
-        f"DBG_CTRL changed mid-packet: 0x{idle_sel:02X} -> 0x{rb:02X}"
+    # Mid-packet writes to either selector must be dropped, and recorded.
+    await spi_write(dut, REG_DBG_CTRL0, ctrl(G_PSRAM, sel=1))
+    await spi_write(dut, REG_DBG_CTRL1, ctrl(G_PSRAM, sel=1))
+    assert (await spi_read(dut, REG_DBG_CTRL0)) == idle0, "DBG_CTRL0 changed mid-packet"
+    assert (await spi_read(dut, REG_DBG_CTRL1)) == idle1, "DBG_CTRL1 changed mid-packet"
 
     hold = await spi_read(dut, REG_RX_HOLD)
     assert hold & 0x02, \
         "mid-packet DBG_CTRL write was dropped without setting CFG_WR_REJECTED"
-    dut._log.info("DBG_CTRL is idle-only and records rejections")
+    dut._log.info("both DBG_CTRL bytes are idle-only and record rejections")
 
 
 # ---------------------------------------------------------------------------
@@ -283,24 +379,20 @@ async def test_config_is_idle_only_and_sticky_records_rejection(dut):
 
 @cocotb.test()
 async def test_probe_does_not_perturb_the_receiver(dut):
-    """Sweeping every debug selection must not change receiver behaviour at all.
+    """Sweeping the dedicated DBG0 selection must not change receiver behaviour.
 
     Runs the same acquisition twice from identical resets, and compares every
-    functionally-visible output cycle by cycle.
+    functionally-visible output cycle by cycle. Only DBG_CTRL0 (the dedicated
+    pad) is exercised here: DBG_CTRL1 deliberately steals the IRQ pad, so its
+    effect on IRQ_OUT is covered separately by
+    test_shared_pad_changes_only_irq.
 
-    BOTH runs issue byte-for-byte identical SPI traffic, including the DBG_CTRL
+    BOTH runs issue byte-for-byte identical SPI traffic, including the DBG_CTRL0
     write -- the only difference is the EN bit inside that one written value.
     That matters: an earlier version of this test skipped the write entirely in
     the baseline run, which shifted every subsequent event by the duration of an
     SPI transaction and made the two traces diverge for a reason that had
-    nothing to do with the probe. A timing-shifted comparison would fail
-    whatever the RTL did, which is worse than no test.
-
-    This is what makes the feature safe to ship rather than merely believed
-    safe. The RTL argument is that debug_probe_mux is feed-forward -- its only
-    outputs are the two pads and the DBG_STATUS readback -- but "I read the code
-    and it looked feed-forward" is not evidence, and a stray connection into the
-    datapath would be invisible in every other test in the suite.
+    nothing to do with the probe.
 
     Compared: REMOD_A_I/Q (the receiver's actual output), IRQ_OUT, and the
     packet FSM's status register.
@@ -313,7 +405,7 @@ async def test_probe_does_not_perturb_the_receiver(dut):
         await spi_write(dut, REG_SC_THR_LO, 0x00)
         await spi_write(dut, REG_SC_HITS_REQ, 0x00)
         # Identical bus traffic either way; only the EN bit differs.
-        await spi_write(dut, REG_DBG_CTRL, ctrl(G_RAW, ant=0, en=probe_enabled))
+        await spi_write(dut, REG_DBG_CTRL0, ctrl(G_RAW, ant=0, en=probe_enabled))
         await release_rx_hold(dut)
         await spi_write(dut, REG_PSRAM_CTRL, 0x01)
         for _ in range(500):
@@ -349,16 +441,69 @@ async def test_probe_does_not_perturb_the_receiver(dut):
         f"0x{base_status:02X} vs 0x{probe_status:02X}"
     )
     dut._log.info(
-        f"{len(baseline)} cycles bit-identical with the probe enabled -- "
+        f"{len(baseline)} cycles bit-identical with the DBG0 probe enabled -- "
         f"probe is feed-forward"
     )
 
 
 @cocotb.test()
-async def test_every_group_is_harmless_while_selected(dut):
-    """Walk all eight groups mid-run and confirm nothing downstream reacts.
+async def test_shared_pad_changes_only_irq(dut):
+    """Arming DBG_CTRL1 may repaint IRQ_OUT, but nothing else.
 
-    Complements the test above, which enables one group for a whole run. Here
+    The shared pad deliberately overrides the interrupt line, so IRQ_OUT is
+    allowed to differ. Every other functional output -- REMOD_A_I/Q and the
+    packet FSM status -- must stay bit-identical, proving the override is a pure
+    output mux with no path back into the core.
+    """
+    async def run(share_enabled):
+        await reset_dut(dut)
+        await spi_write(dut, REG_SF_CFG, 7)
+        await spi_write(dut, REG_BW_CFG, 0)
+        await spi_write(dut, REG_SC_THR_HI, 0x01)
+        await spi_write(dut, REG_SC_THR_LO, 0x00)
+        await spi_write(dut, REG_SC_HITS_REQ, 0x00)
+        await spi_write(dut, REG_DBG_CTRL1, ctrl(G_RAW, ant=0, en=share_enabled))
+        await release_rx_hold(dut)
+        await spi_write(dut, REG_PSRAM_CTRL, 0x01)
+        for _ in range(500):
+            await Timer(8 * CLK_NS, unit="ns")
+            if (await spi_read(dut, REG_PSRAM_STATUS)) & 0x08:
+                break
+
+        stim = cocotb.start_soon(sdm_driver(dut, 7, 250))
+        trace = []
+        for _ in range(4000):
+            await RisingEdge(dut.IQ_CLK)
+            trace.append((int(dut.REMOD_A_I.value), int(dut.REMOD_A_Q.value)))
+        stim.kill()
+        status = await spi_read(dut, REG_PACKET_STATUS)
+        return trace, status
+
+    baseline, base_status = await run(share_enabled=False)
+    shared,   shared_status = await run(share_enabled=True)
+
+    assert len(baseline) == len(shared)
+    for i, (b, s) in enumerate(zip(baseline, shared)):
+        assert b == s, (
+            f"REMOD output diverged at cycle {i} with the shared debug pad "
+            f"armed: baseline={b}, shared={s}. The IRQ_OUT override is not a "
+            f"pure output mux."
+        )
+    assert base_status == shared_status, (
+        f"PACKET_STATUS differs with the shared pad armed: "
+        f"0x{base_status:02X} vs 0x{shared_status:02X}"
+    )
+    dut._log.info(
+        f"{len(baseline)} cycles bit-identical (REMOD + packet status) with "
+        f"the shared debug pad armed -- override is feed-forward"
+    )
+
+
+@cocotb.test()
+async def test_every_group_is_harmless_while_selected(dut):
+    """Walk all eight groups on both selectors mid-run; nothing downstream reacts.
+
+    Complements the tests above, which enable one group for a whole run. Here
     the selection changes repeatedly between packets, which is the bring-up loop
     an engineer actually performs, and the check is that packet state never
     moves as a *result* of the selection change.
@@ -374,7 +519,8 @@ async def test_every_group_is_harmless_while_selected(dut):
     before = await spi_read(dut, REG_PACKET_STATUS)
     for group in range(8):
         for sel in range(4):
-            await spi_write(dut, REG_DBG_CTRL, ctrl(group, ant=sel, sel=sel))
+            await spi_write(dut, REG_DBG_CTRL0, ctrl(group, ant=sel, sel=sel))
+            await spi_write(dut, REG_DBG_CTRL1, ctrl(group, ant=sel, sel=sel))
             await Timer(20 * CLK_NS, unit="ns")
             after = await spi_read(dut, REG_PACKET_STATUS)
             assert after == before, (

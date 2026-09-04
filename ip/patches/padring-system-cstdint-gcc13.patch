@@ -1,0 +1,26 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 15d1dbb..36cfcac 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,6 +23,9 @@ project(padring)
+ set (CMAKE_CXX_STANDARD 17)
+ set (CMAKE_BUILD_TYPE Debug)
+ 
++# GCC 13+ no longer transitively includes <cstdint>; the 2019 sources rely on it.
++add_compile_options(-include cstdint)
++
+ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+ 
+ ##################################################
+diff --git a/src/logging.h b/src/logging.h
+index fceef95..4c22f48 100644
+--- a/src/logging.h
++++ b/src/logging.h
+@@ -21,6 +21,7 @@
+ #define logging_h
+ 
+ #include <string>
++#include <cstdint>
+ 
+ typedef enum {LOG_VERBOSE = 1, LOG_DEBUG = 2, LOG_INFO = 3, LOG_WARN = 4, 
+     LOG_ERROR = 8, LOG_QUIET = 255} logtype_t;

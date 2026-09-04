@@ -48,9 +48,19 @@ dbg_amask_wrap host_only_e2e pad_tieoffs io_cell_controls irq_pins \
 dc_removal comb_remod_transfer remod_backoff tacc_window_clamp \
 mcp_cfg_hold_settle mcp_decimator_settle mcp_iq_samp_cnt_settle \
 mcp_mrc_settle mcp_pcfsm_settle mcp_psram_bshift_settle mcp_sc_settle \
-mcp_tacc_settle"
+mcp_tacc_settle \
+w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow sc_acc_overflow"
 
 SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
+
+# Directed benches for open RTL risks (planning/Open Risks.md). Each asserts the
+# INTENDED contract; while the risk is open the asserting testcase FAILS (that
+# failure IS the confirmation), so these live outside `core`/`all` -- run with
+# SUITE_GROUPS=xfail. When a fix lands and its bench goes green, move that suite
+# into SUITES_CORE (done for #61/#62/#63/#65/#66 on branch rtl/open-risk-fixes).
+# Still open: #64 (pkt_timeout_states) and #67 (dbg_qpi_busy) -- both spec/doc
+# changes, no RTL fix, so their benches stay here as expected-fail markers.
+SUITES_XFAIL="pkt_timeout_states dbg_qpi_busy"
 
 # Per-suite extra make arguments. trouper_capture is the only suite whose
 # in-test defaults do not land on a packet burst -- the window below was
@@ -81,8 +91,9 @@ else
         case "$g" in
         core)    SELECTED="$SELECTED $SUITES_CORE" ;;
         capture) SELECTED="$SELECTED $SUITES_CAPTURE" ;;
+        xfail)   SELECTED="$SELECTED $SUITES_XFAIL" ;;
         all)     SELECTED="$SELECTED $SUITES_CORE $SUITES_CAPTURE" ;;
-        *) echo "unknown group '$g' (want: core, capture, all)"; exit 2 ;;
+        *) echo "unknown group '$g' (want: core, capture, xfail, all)"; exit 2 ;;
         esac
     done
 fi
@@ -95,7 +106,7 @@ UNASSIGNED=""
 for mk in "$DESIGN_ROOT"/cocotb/*/Makefile; do
     [ -e "$mk" ] || continue
     d=$(basename "$(dirname "$mk")")
-    case " $SUITES_CORE $SUITES_CAPTURE " in
+    case " $SUITES_CORE $SUITES_CAPTURE $SUITES_XFAIL " in
         *" $d "*) ;;
         *) UNASSIGNED="$UNASSIGNED $d" ;;
     esac

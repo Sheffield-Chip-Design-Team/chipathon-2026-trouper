@@ -56,8 +56,7 @@ module tb_trouper_cocotb (
         .ARRAY_ACQ_N_IN (1'b1),
         // Debug probes: inputs tied off (the pads are output-only in function);
         // outputs left unconnected.
-        .DBG0_IN        (1'b0),
-        .DBG1_IN        (1'b0)
+        .DBG0_IN        (1'b0)
     );
 
     psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(3)) u_psram (

@@ -128,7 +128,6 @@ module tb_trouper_cocotb #(
     output wire        ARRAY_ACQ_N_PDRV0,
     output wire        ARRAY_ACQ_N_PDRV1,
     output wire        DBG0_OUT,
-    output wire        DBG1_OUT,
     output wire        DBG0_OE,
     output wire        DBG0_IE,
     output wire        DBG0_CS,
@@ -136,17 +135,10 @@ module tb_trouper_cocotb #(
     output wire        DBG0_PU,
     output wire        DBG0_PD,
     output wire        DBG0_PDRV0,
-    output wire        DBG0_PDRV1,
-    output wire        DBG1_OE,
-    output wire        DBG1_IE,
-    output wire        DBG1_CS,
-    output wire        DBG1_SL,
-    output wire        DBG1_PU,
-    output wire        DBG1_PD,
-    output wire        DBG1_PDRV0,
-    output wire        DBG1_PDRV1
+    output wire        DBG0_PDRV1
 );
     wire        psram_ce_n;
+    wire        psram_sck;   // real gated SCK, for the psram_model #69 guardrail
     wire [3:0]  psram_sio_out, psram_sio_oe, psram_sio_in, psram_sio_ie;
     wire [3:0]  psram_sio_drive;
 `ifdef GF180_IO_MODEL
@@ -174,7 +166,7 @@ module tb_trouper_cocotb #(
         .IQ_DATA_Q_3 (IQ_DATA_Q[3]),
         .REMOD_A_I_OUT     (REMOD_A_I),
         .REMOD_A_Q_OUT     (REMOD_A_Q),
-        .PSRAM_SCK_OUT     (),
+        .PSRAM_SCK_OUT     (psram_sck),
         .PSRAM_CE_N_OUT    (psram_ce_n),
                 .PSRAM_SIO_0_OUT (psram_sio_out[0]),
         .PSRAM_SIO_1_OUT (psram_sio_out[1]),
@@ -304,9 +296,7 @@ module tb_trouper_cocotb #(
         .ARRAY_ACQ_N_PDRV0   (ARRAY_ACQ_N_PDRV0),
         .ARRAY_ACQ_N_PDRV1   (ARRAY_ACQ_N_PDRV1),
         .DBG0_IN             (1'b0),
-        .DBG1_IN             (1'b0),
         .DBG0_OUT            (DBG0_OUT),
-        .DBG1_OUT            (DBG1_OUT),
         .DBG0_OE             (DBG0_OE),
         .DBG0_IE             (DBG0_IE),
         .DBG0_CS             (DBG0_CS),
@@ -314,15 +304,7 @@ module tb_trouper_cocotb #(
         .DBG0_PU             (DBG0_PU),
         .DBG0_PD             (DBG0_PD),
         .DBG0_PDRV0          (DBG0_PDRV0),
-        .DBG0_PDRV1          (DBG0_PDRV1),
-        .DBG1_OE             (DBG1_OE),
-        .DBG1_IE             (DBG1_IE),
-        .DBG1_CS             (DBG1_CS),
-        .DBG1_SL             (DBG1_SL),
-        .DBG1_PU             (DBG1_PU),
-        .DBG1_PD             (DBG1_PD),
-        .DBG1_PDRV0          (DBG1_PDRV0),
-        .DBG1_PDRV1          (DBG1_PDRV1)
+        .DBG0_PDRV1          (DBG0_PDRV1)
     );
 
 `ifdef GF180_IO_MODEL
@@ -353,7 +335,8 @@ module tb_trouper_cocotb #(
         .ce_n    (psram_ce_n),
         .sio_out (psram_sio_out),
         .sio_oe  (psram_sio_oe),
-        .sio_in  (psram_sio_drive)
+        .sio_in  (psram_sio_drive),
+        .sck     (psram_sck)
     );
 
     // The GF180 bi_t cell leaves IE=OE=1 uncharacterized.  Keep this

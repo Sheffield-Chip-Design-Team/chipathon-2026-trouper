@@ -118,8 +118,14 @@ module psram_buf_ctrl (
     input  wire        packet_active,
     input  wire        clr_err,       // write-1 pulse: clear sticky error flags
 
-    // QPI pad interface
+    // QPI pad interface.  ce_n / sio_out / sio_oe and the raw sck_en are all
+    // posedge-clk_32m here; trouper_top relaunches them onto negedge at the pad
+    // boundary (Open Risk #69) so the PSRAM samples a stable bus on the SCK
+    // rising edge.  `sck` is the pre-#69 posedge-gated clock, kept for the
+    // FORMAL harness / block-level use; the chip's PSRAM_SCK pad is driven from
+    // sck_en_o in trouper_top, not from this port.
     output wire        sck,           // PSRAM clock (32 MHz, gated internally)
+    output wire        sck_en_o,      // raw SCK gate-enable, for the pad-boundary relaunch
     output reg         ce_n,          // PSRAM CE# active-low
     output reg  [3:0]  sio_out,       // SIO[3:0] output to PSRAM
     input  wire [3:0]  sio_in,        // SIO[3:0] input from PSRAM
@@ -279,7 +285,8 @@ module psram_buf_ctrl (
     // by the raw qspi_owner at every launch site, so nothing starts after the
     // request; the effect lands at the first engine-idle boundary.
     reg  qspi_owner_eff;
-    assign sck = sck_en & clk_32m;
+    assign sck      = sck_en & clk_32m;
+    assign sck_en_o = sck_en;
 
     wire [ABITS-1:0] cur_wr = wr_ptr;
     wire [ABITS-1:0] cur_rd = rd_ptr;
