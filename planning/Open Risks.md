@@ -1608,11 +1608,41 @@ separately `-max 2.5 / -min -3.0` (CE# 2.5/3.0); read data
 excluded from the generic core-output rule. Zero pad/PCB-flight baselines —
 add measured trace delay before tapeout. The P&R SDC is left unchanged.
 
-**Verification (pad-boundary form):** SGE regression + A40 P&R re-run in
-progress. The #70 two-stage IQ capture (separate, already regression-clean
-job 5509 — `dbg_probe` 12/12 after a +1 settle-cycle test fix) removed the
-73 CIC half-cycle violations seen in 5504/5506/5507. **Stays OPEN** pending
-those re-run results.
+**Verification (pad-boundary form, commit `1af183a`):**
+- **cocotb regression job 5510 CLEAN** — all 50 core+capture suites PASS
+  (`dbg_probe` 12/12 with the +1 settle-cycle test fix, job 5509). The
+  rework is functionally transparent.
+- **A40 P&R job 5511:** physically **signoff-clean** — Magic DRC 0, LVS 0
+  (device/net diff 0), XOR 0, antenna 0/0, route DRC 0, hold MET all
+  corners (SS hold WS +1.79). nom_tt setup +3.34 MET. **SS DRV is the
+  cleanest of the whole series: max-slew 9, max-cap 3** (baseline 5499 was
+  39/11; in-module #69 was 22/8). 127 200 insts, die 1675×1110.
+- **SS setup: WNS −14.44, TNS −1009** — recovered ~4 ns vs the in-module
+  form (5506 −18.7) but still ~−3.7 ns short of the 5499 baseline (−10.77).
+  Worst path `_66519_/Q → IRQ_OUT_OUT` (−14.4) is the `psram-status →
+  debug_probe_mux → IRQ_OUT/DBG1 pad` cone that was already 2nd-worst in
+  5499 (−10.44); plus a `_68745_` psram-internal register-load cluster at
+  −11.0…−11.3. **0 violations from the IQ capture FFs** (the #70 two-stage
+  capture holds).
+
+**Root cause of the residual −3.7 ns:** not the launch-edge choice (the
+pad-boundary form is strictly better than in-module) — it is that #69 + #70
+add ~29 FFs to `trouper_top`, perturbing CTS/placement enough that the
+already-marginal debug-output cone and one psram register cluster come out
+starved in the repair lottery. `psram_buf_ctrl.v` is byte-identical to
+pre-#69; only its placement moved.
+
+**Recommended, NOT applied (2026-09-04 — deferred to avoid re-perturbing a
+clean-enough netlist):** add `DBG0_OUT` + `IRQ_OUT_OUT` to an SS
+`set_output_delay` exception (legitimate — debug-observability pads do not
+need 32 MHz SS closure; already an open decision under #57 / #1). That
+deletes the −14.4 worst path, leaving `_68745_` at −11.3 ≈ lottery range
+vs baseline. The remaining SS gap is the #1/#40 voltage problem regardless.
+
+**Status:** the interface fix is regression-clean and DRC/LVS/antenna/hold
+signoff-clean; SS setup carries a bounded, understood, non-blocking
+regression on debug + psram cones. Ready to merge on that basis; the SS
+output-delay exception is a follow-up if/when the SS corner is revisited.
 
 ### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
 
@@ -1657,8 +1687,10 @@ logic; every real datapath path (CIC integrators, comb, HB) runs on the
 full 31.25 ns period. **Why the retime:** the first cut fed the negedge
 regs straight into the datapath, putting the CIC 14-bit add on a half-cycle
 (15.6 ns) path — job 5504 showed **73 SS setup violations** off those 8 FFs
-(worst −8.5 ns, ~−350 ns TNS), nom_tt/max_ff still MET. Cost of the retime:
-+1 clk latency (31 ns) — negligible at the 500 kS/s output rate. Both SDCs:
+(worst −8.5 ns, ~−350 ns TNS), nom_tt/max_ff still MET. **Confirmed fixed:**
+A40 P&R jobs 5506/5511 show **0 SS violations from the IQ capture FFs**;
+cocotb regression 5510 CLEAN (50/50). Cost of the retime: +1 clk latency
+(31 ns) — negligible at the 500 kS/s output rate. Both SDCs:
 IQ `set_input_delay -max 6.0 / -min 0.0 -clock IQ_CLK` is the pad→negedge-FF
 half-period input path (checked vs the falling edge ~15.6 ns later; ~9 ns
 slack); baseline for SX1257 clock-to-data + PCB flight, still to be replaced
