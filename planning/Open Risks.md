@@ -981,28 +981,58 @@ and add shared SPI/AHB debug-port tests.
 **See:** item 16 and `planning/Grouper PSRAM CSR Exploration.md`.
 **Found:** 2026-08-28, post-implementation review of `095ae2e`.
 
-### 38. Host SPI 2 MHz pad timing is not signed off — CDC portion FIXED, baseline SDC added
+### 38. Host SPI CDC/pad timing is not fully signed off — write-event CDC low risk; volatile-read CDC remains open
 
-**Partially fixed 2026-07-12:** the persistent toggle/mailbox CDC (commits
-`2b6af0f`, `fef30de`) closes the RTL half of this risk's Action item and
-Open Risk #15 outright — see above. The SDC half (declaring `SPI_SCK`,
-SCK-relative MOSI/MISO I/O delays, `SPI_SCK`/`IQ_CLK` asynchronous-clock
-exceptions, mailbox settling constraint) is still open:
-`src/config/pnr_32m_scoped_v25_b6.sdc` is the canonical signoff SDC. Remaining scope tracked as
-Implementation order steps 6-8 in
-`planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
+**Partially fixed 2026-07-12:** the persistent toggle/event CDC (commits
+`2b6af0f`, `fef30de`) closes Open Risk #15 outright and makes completed writes
+and read-side-effect events low functional risk at the specified 2 MHz rate.
+Consecutive byte events are separated by about 128 `IQ_CLK` cycles, versus the
+two-flop synchronizer's few-cycle delivery latency. The bundled mailbox and
+the reverse, core-to-SPI read-data crossing still need the qualifications
+below; this item must not be summarized as "all SPI CDC fixed."
 
 **2026-08-29:** the interface limit is now 2 MHz. The canonical P&R and
 signoff SDCs declare a 500 ns `SPI_SCK`, remove its blanket false path,
 declare the SPI/core clocks asynchronous, and use SPI-relative zero-board-delay
 MOSI/MISO constraints. This is an ASIC-only baseline, not board signoff.
 
-The production SDC declares only `IQ_CLK` and globally false-paths
-`SPI_SCK`. It also constrains `SPI_MOSI` relative to `IQ_CLK`, even though MOSI
-is captured by `SPI_SCK`-clocked flops. Consequently, STA does not prove the
-advertised 2 MHz SPI interface: SCK-domain register paths, MOSI setup/hold,
-and the falling-edge `SPI_MISO` output timing are either hidden or referenced
-to the wrong clock.
+**2026-09-05 CDC review — risk split and acceptance boundary.** The ordinary
+SPI framing and persistent-toggle paths are sound at RTL under the 2 MHz
+contract; the current standalone protocol suite passes 6/6, including
+randomized legal/aborted frames, burst wrap, MISO byte atomicity, deselected
+clocks and command-only recovery. That simulation cannot model metastability,
+and two structural gaps remain:
+
+1. `spi_slave.v` loads `miso_shreg` directly from the combinational
+   `reg_bank` peek bus on `negedge SPI_SCK`. Configuration registers and fixed
+   IDs are stable and therefore low risk, but live 32 MHz status can change
+   inside the sampling aperture. A volatile byte can be metastable or
+   incoherent even though the address had the full 250 ns half-period to
+   decode. The byte-atomicity test changes data only after the load edge, and
+   the formal checker declares `SPI_MISO`/`reg_rdata` as ports but does not
+   assert read-data correctness, so neither closes this case.
+2. `spi_wr_addr_lat`/`spi_wdata_lat` and `spi_re_addr_lat` are bundled data
+   crossing beside the synchronized toggles. The architecture gives them
+   ample settling time, but the signoff SDC's asynchronous clock grouping
+   false-paths the crossings and there is no mailbox max-delay/bus-skew check
+   or reviewed `ASYNC_REG` placement contract. `HOST_CS` recovery/removal and
+   CS-to-SCK timing are also false-pathed rather than bounded by a board
+   interface requirement.
+
+**Risk decision:** it is defensible to treat the *deployment consequence* as
+Low only with an explicit host-software contract: poll volatile flags rather
+than acting on one sample; read multi-byte/live status twice and accept it only
+when both copies match; read training/Z results only after the completion flag
+has frozen them; and tolerate an extra poll for `DBG_BUSY`, packet phase and
+similar state. This does not make the RTL "CDC clean." Without that firmware
+contract, the volatile-read path remains a real intermittent register-
+corruption risk and this High-section item stays open.
+
+The P&R SDC deliberately omits the `SPI_SCK` clock to suppress its CTS tree;
+the separate signoff SDC restores the 500 ns clock and zero-board-delay
+MOSI/MISO constraints. Its asynchronous `SPI_SCK`/`IQ_CLK` clock group still
+hides the core-to-SPI read snapshot and bundled mailbox crossings described
+above.
 
 The most critical read path has half an SCK period: the command address
 completes on its eighth rising edge, the asynchronous `reg_bank` peek decode
@@ -1010,19 +1040,24 @@ must settle, and the MISO shifter loads on the following falling edge (250 ns at
 2 MHz, before pad/PCB/host margin).
 
 **Risk:** a design that passes the current top-level timing reports can still
-fail register reads or writes at the specified 2 MHz on silicon.
+return an occasional corrupt volatile status byte, or fail register reads or
+writes at the specified 2 MHz after real pad/PCB timing is included.
 
-**Action:** declare a 100 ns
-`SPI_SCK` clock; add SCK-relative MOSI and MISO I/O delays; declare SCK and
-`IQ_CLK` asynchronous while excepting only the intentional synchronizer paths;
-constrain the bundled mailbox crossing; and run all-corner setup/hold plus
-unconstrained-path review. Derive board I/O delays from the Raspberry Pi, PCB,
-and GF180 pad timing rather than guessing them.
+**Action:** choose and document one closure route for volatile reads: preferably
+snapshot `reg_rdata` in the core domain and return it through a stable
+mailbox/handshake before the first MISO data bit; otherwise formally accept the
+firmware retry/double-read contract above as a protocol limitation. In either
+case, constrain and review the bundled mailbox settling path, add explicit
+synchronizer placement intent, constrain `HOST_CS` recovery/removal and legal
+CS-to-SCK timing, replace zero-delay MOSI/MISO assumptions with Raspberry Pi +
+PCB + GF180-pad numbers, and run all-corner setup/hold plus an unconstrained-
+endpoint/CDC review.
 
 **See:** Open Risk #15; `src/control/spi_slave.v`;
 `src/config/pnr_32m_scoped_v25_b6.sdc`;
 `planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
-**Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29.
+**Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29; CDC risk split reviewed
+2026-09-05.
 
 ### 54. Host-SPI post-route GLS/SDF check is missing
 
