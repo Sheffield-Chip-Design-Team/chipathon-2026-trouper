@@ -10,7 +10,11 @@
 // Weight width: 8-bit signed (was 16-bit). 48 dB dynamic range — sufficient
 // for 4-antenna MRC. Firmware writes weight to high byte of 16-bit shadow reg;
 // trouper_top passes rb_w_shadow[hi_byte] to W_re/im ports.
-// Multiplier: 8×8→16-bit (was 16×8→24-bit). Accumulator: 18-bit (was 26-bit).
+// Multiplier: 8×8→16-bit (was 16×8→24-bit). prod_i_r/prod_q_r: 17-bit (not
+// 16) -- the add path (prod_q = c_r + mul_q) reaches exactly +32768 at the
+// legal int8 rail extreme (w_re=w_im=x_i=x_q=-128), one past a 16-bit signed
+// max. Accumulator: 19-bit (was 26-bit) -- the 4-branch sum of that same
+// extreme is 131072, one past an 18-bit signed max.
 // Output shift: acc >>> (8 − pgs) — single combined shift replacing the old
 // two-step (acc >>> 8) << pgs. Eliminates amplified truncation: worst-case
 // loss < 0.05 dB across all pgs tiers. pgs ∈ [0,7] → net shift ∈ [1,8].
@@ -74,12 +78,17 @@ module mrc_combiner (
     // Sub-cycle 1 intermediate saves (w_re × x_i, w_re × x_q)
     reg signed [15:0] a_r, c_r;
 
-    // Registered multiply output
-    reg signed [15:0] prod_i_r, prod_q_r;
+    // Registered multiply output. 17-bit, not 16: the add path (prod_q_r <=
+    // c_r + mul_q_next) can reach exactly +32768 when both 8x8 products hit
+    // their shared extreme (w_re=w_im=x_i=x_q=-128), one past a 16-bit
+    // signed max -- confirmed reachable, not just a nominal bound.
+    reg signed [16:0] prod_i_r, prod_q_r;
 
-    // Accumulator (18-bit: 16-bit product sign-extended + 2 guard bits for 4 additions)
-    reg signed [17:0] acc_i, acc_q;
-    reg signed [17:0] acc_i_final_r, acc_q_final_r;
+    // Accumulator (19-bit: 17-bit product sign-extended + 2 guard bits for 4
+    // additions). The 4-branch sum of the +32768 extreme above is 131072,
+    // one past an 18-bit signed max -- 19 bits is the safe positive endpoint.
+    reg signed [18:0] acc_i, acc_q;
+    reg signed [18:0] acc_i_final_r, acc_q_final_r;
 
     // Two shared multipliers — combinatorial (8×8 → 16-bit)
     wire signed [15:0] mul_i_next = w_r * xi_r;
@@ -87,13 +96,13 @@ module mrc_combiner (
 
     // Saturation path — single combined shift acc >>> (8 − pgs)
     wire [3:0] net_rshift  = 4'd8 - {1'b0, post_gain_shift};
-    wire signed [17:0] shifted_i_f = acc_i_final_r >>> net_rshift;
-    wire signed [17:0] shifted_q_f = acc_q_final_r >>> net_rshift;
-    wire signed [8:0] sat_i = (shifted_i_f >  18'sd127) ?  9'sd127 :
-                               (shifted_i_f < -18'sd128) ? -9'sd128 :
+    wire signed [18:0] shifted_i_f = acc_i_final_r >>> net_rshift;
+    wire signed [18:0] shifted_q_f = acc_q_final_r >>> net_rshift;
+    wire signed [8:0] sat_i = (shifted_i_f >  19'sd127) ?  9'sd127 :
+                               (shifted_i_f < -19'sd128) ? -9'sd128 :
                                shifted_i_f[8:0];
-    wire signed [8:0] sat_q = (shifted_q_f >  18'sd127) ?  9'sd127 :
-                               (shifted_q_f < -18'sd128) ? -9'sd128 :
+    wire signed [8:0] sat_q = (shifted_q_f >  19'sd127) ?  9'sd127 :
+                               (shifted_q_f < -19'sd128) ? -9'sd128 :
                                shifted_q_f[8:0];
 
     always @(posedge clk_16m or negedge rst_n) begin
@@ -102,9 +111,9 @@ module mrc_combiner (
             mac_wait <= 2'd0;
             w_r <= 8'sd0; xi_r <= 8'sd0; xq_r <= 8'sd0;
             a_r <= 16'sd0; c_r <= 16'sd0;
-            prod_i_r <= 16'sd0; prod_q_r <= 16'sd0;
-            acc_i <= 18'sd0; acc_q <= 18'sd0;
-            acc_i_final_r <= 18'sd0; acc_q_final_r <= 18'sd0;
+            prod_i_r <= 17'sd0; prod_q_r <= 17'sd0;
+            acc_i <= 19'sd0; acc_q <= 19'sd0;
+            acc_i_final_r <= 19'sd0; acc_q_final_r <= 19'sd0;
             xr_i[0]<=8'sd0; xr_i[1]<=8'sd0; xr_i[2]<=8'sd0; xr_i[3]<=8'sd0;
             xr_q[0]<=8'sd0; xr_q[1]<=8'sd0; xr_q[2]<=8'sd0; xr_q[3]<=8'sd0;
             bypass_i_r<=8'sd0; bypass_q_r<=8'sd0; use_mrc_r<=1'b0;
@@ -133,7 +142,7 @@ module mrc_combiner (
                     default: begin bypass_i_r<=x_i3; bypass_q_r<=x_q3; end
                 endcase
                 use_mrc_r <= W_valid && !mode;
-                acc_i <= 18'sd0; acc_q <= 18'sd0;
+                acc_i <= 19'sd0; acc_q <= 19'sd0;
                 w_r <= W_re0; xi_r <= x_i0; xq_r <= x_q0;
                 state <= 4'd1;
             end
@@ -156,8 +165,8 @@ module mrc_combiner (
 
             // ── ANT1 SUB1: acc+=prod0; register w_re1 products ──────────────
             4'd3: begin
-                acc_i <= acc_i + {{2{prod_i_r[15]}}, prod_i_r};
-                acc_q <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
+                acc_i <= acc_i + {{2{prod_i_r[16]}}, prod_i_r};
+                acc_q <= acc_q + {{2{prod_q_r[16]}}, prod_q_r};
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
                 w_r <= W_im1; xi_r <= xr_q[1]; xq_r <= xr_i[1];
@@ -174,8 +183,8 @@ module mrc_combiner (
 
             // ── ANT2 SUB1: acc+=prod1; register w_re2 products ──────────────
             4'd5: begin
-                acc_i <= acc_i + {{2{prod_i_r[15]}}, prod_i_r};
-                acc_q <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
+                acc_i <= acc_i + {{2{prod_i_r[16]}}, prod_i_r};
+                acc_q <= acc_q + {{2{prod_q_r[16]}}, prod_q_r};
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
                 w_r <= W_im2; xi_r <= xr_q[2]; xq_r <= xr_i[2];
@@ -192,8 +201,8 @@ module mrc_combiner (
 
             // ── ANT3 SUB1: acc+=prod2; register w_re3 products ──────────────
             4'd7: begin
-                acc_i <= acc_i + {{2{prod_i_r[15]}}, prod_i_r};
-                acc_q <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
+                acc_i <= acc_i + {{2{prod_i_r[16]}}, prod_i_r};
+                acc_q <= acc_q + {{2{prod_q_r[16]}}, prod_q_r};
                 a_r <= mul_i_next;
                 c_r <= mul_q_next;
                 w_r <= W_im3; xi_r <= xr_q[3]; xq_r <= xr_i[3];
@@ -209,8 +218,8 @@ module mrc_combiner (
 
             // ── Final accumulate ─────────────────────────────────────────────
             4'd9: begin
-                acc_i_final_r <= acc_i + {{2{prod_i_r[15]}}, prod_i_r};
-                acc_q_final_r <= acc_q + {{2{prod_q_r[15]}}, prod_q_r};
+                acc_i_final_r <= acc_i + {{2{prod_i_r[16]}}, prod_i_r};
+                acc_q_final_r <= acc_q + {{2{prod_q_r[16]}}, prod_q_r};
                 state <= 4'd10;
             end
 
