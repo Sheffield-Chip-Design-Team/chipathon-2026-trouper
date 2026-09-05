@@ -141,6 +141,21 @@ vivado_project:
 vivado_synth:
 	$(VIVADO) -mode batch -source vivado/run_synth.tcl 2>&1 | tee vivado_synth.log
 
+# Bench bitstream: DSP domain clocked from the on-board MMCM 32 MHz instead of
+# the SX1257 CLK_OUT (F4), so trouper_top + the injection->DSP->combiner->remod
+# chain run with NO AFE board attached. NOT silicon-accurate -- bring-up/smoke
+# only. Regenerates the project with BENCH_CLK set, runs synth->impl->bitstream,
+# and saves the result as arty_dsp_emul_bench.bit alongside the default .bit.
+.PHONY: vivado_project_bench bench_bitstream
+vivado_project_bench:
+	BENCH_CLK=1 $(VIVADO) -mode batch -source vivado/create_project.tcl 2>&1 | tee vivado_create.log
+
+bench_bitstream: vivado_project_bench vivado_synth
+	cp -f arty_dsp_emul.bit arty_dsp_emul_bench.bit
+	@echo "Bench bitstream -> fpga-emul/arty_dsp_emul_bench.bit (DSP on MMCM 32 MHz, no AFE)"
+	@echo "NOTE: arty_dsp_emul.bit now holds the BENCH build. Rebuild the"
+	@echo "      silicon-accurate default with: make vivado_project && make vivado_synth"
+
 # ============================================================================
 # Bare-metal MicroBlaze test firmware (sw/test_fw.c)
 # Built with mb-gcc + crt0.S + lscript.ld — no Vitis BSP / -lxil dependency.

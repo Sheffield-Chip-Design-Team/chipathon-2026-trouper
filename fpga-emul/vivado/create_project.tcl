@@ -153,9 +153,37 @@ create_bd_port -dir I -type clk -freq_hz 32000000 sx_clk_out
 set clkbuf [create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 sx_clk_bufg]
 set_property CONFIG.C_BUF_TYPE {BUFG} $clkbuf
 connect_bd_net [get_bd_ports sx_clk_out] [get_bd_pins sx_clk_bufg/BUFG_I]
-# dsp_clk: the 32 MHz sample-clock net used across the whole DSP domain.
-set dsp_clk [get_bd_pins sx_clk_bufg/BUFG_O]
+
 set ctrl_clk [get_bd_pins clk_wiz_0/clk_out2]
+
+# --- BENCH_CLK: no-AFE-board bench clocking --------------------------------
+# When the BENCH_CLK env var is set (non-empty, != 0), clock the whole Trouper
+# DSP domain from the on-board MMCM 32 MHz (clk_wiz_0/clk_out2) instead of the
+# SX1257 CLK_OUT on F4. rst_32m then releases at power-up with no AFE board
+# attached, so trouper_top's register interface + the injection->DSP->combiner
+# ->remod chain run on the bench (drivable over the firmware's UDP 5007 I/Q
+# inject path). This restores the pre-2026-07 emulator clocking.
+#   NOT silicon-accurate -- a free-running MMCM 32 MHz bit-slips against a real
+#   board TCXO, so this is bring-up / smoke-test only. The default build (env
+#   unset) keeps dsp_clk = SX1257 CLK_OUT. The sx_clk_out port + BUFG are still
+#   created either way so arty_dsp_emul.xdc stays valid; in bench mode the F4
+#   BUFG output is simply unused.
+set bench_clk 0
+if {[info exists ::env(BENCH_CLK)] && $::env(BENCH_CLK) ne "" && $::env(BENCH_CLK) ne "0"} {
+    set bench_clk 1
+}
+if {$bench_clk} {
+    puts "############################################################"
+    puts "## BENCH_CLK set: Trouper DSP domain <- MMCM 32 MHz         "
+    puts "##   (clk_wiz_0/clk_out2). NO AFE board required.           "
+    puts "##   NOT silicon-accurate -- bench bring-up only.           "
+    puts "############################################################"
+    # dsp_clk: the 32 MHz sample-clock net used across the whole DSP domain.
+    set dsp_clk $ctrl_clk
+} else {
+    # dsp_clk: the 32 MHz sample-clock net used across the whole DSP domain.
+    set dsp_clk [get_bd_pins sx_clk_bufg/BUFG_O]
+}
 
 # proc_sys_reset for the 100 MHz AXI bus domain
 set psr100 [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100m]
