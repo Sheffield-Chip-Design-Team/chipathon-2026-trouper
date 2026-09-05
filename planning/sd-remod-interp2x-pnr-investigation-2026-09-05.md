@@ -1,5 +1,22 @@
 # sd_remod_interp2x P&R impact investigation (2026-09-05)
 
+**PROMOTED TO CANONICAL, 2026-09-05.** Following this investigation's full
+campaign (below) and the multiplierless fix in particular (§7.4), the
+combined interpolator + multiplierless-core design (job 5606's exact
+configuration: DRC 0, LVS clean, antenna 0, SS WNS −16.08ns, inside this
+design's normal signoff range) was promoted to `src/remod/sd_remod.v` /
+`src/remod/sd_remod_multiplierless.v`, superseding the plain-4th-order-only
+`sd_remod.v`. `trouper_top.v` needed **no changes** — the promoted `sd_remod`
+module keeps the exact same external port interface and sample cadence, so
+the existing `sd_remod u_remod (...)` instantiation is still correct as-is.
+The pre-promotion core is preserved at
+`rtl-test/rtl/sd_remod_pre_multiplierless_reference.v` solely so the
+bit-exact equivalence regression (`sim_sd_remod_multiplierless_equiv`) keeps
+a stable reference to check `sd_remod_multiplierless.v` against. Everything
+below this point documents the investigation that led to the promotion, not
+its current state — the "not yet an adopted fix" framing in the next section
+no longer applies to the final combined design that shipped.
+
 ## 1. Context
 
 `rtl-test/rtl/sd_remod_interp2x.v` is an experimental 2x half-band interpolator
@@ -384,6 +401,37 @@ is now a verified, drop-in-equivalent candidate to replace the deployed
 `sd_remod`'s arithmetic — not yet promoted to `src/`, that decision is still
 open.
 
+### 7.5 DRV (max slew/cap) tightening on top of job 5606 -- tried, REJECTED (job 5609)
+
+Job 5606's max-slew/max-cap violation counts (nom_tt 7/16, SS 12/44) are
+elevated relative to this project's best-tuned historical baseline (job 5491:
+`GRT_DESIGN_REPAIR_MAX_SLEW/CAP_PCT` 65->50, SS 7/1, nom_tt 0/0 -- a "strict
+win" on the pre-interp2x/pre-multiplierless netlist, never applied to the
+canonical config). Applying that exact same tightening on top of job 5606
+(`proxmox-agent`, confirmed free before submitting) **FAILED**, same failure
+signature and stage as the whole §3 campaign: `[DRT-1231] Pin
+clkbuf_0_IQ_CLK_regs/I does not have access point`, step 46/80.
+
+Mechanism, and why this is the opposite failure mode from job 5595 (§3.4) but
+the same underlying lesson: tightening the post-GRT repair margin makes that
+pass *more* aggressive, inserting more corrective buffers pre-route to hit
+the stricter threshold -- adding cells/congestion back into the exact region
+the multiplierless area reduction had only just barely cleared. This
+netlist evidently has little routing-headroom margin to spare near the
+clock tree, so the safe range for this knob (proven safe on a different,
+smaller netlist) is narrower here.
+
+A second, more conservative probe (job 5610, 65%->60%, a much smaller step)
+**also FAILED** -- same mechanism, `[DRT-0073] No access point for
+clkbuf_2_1_0_IQ_CLK_regs/I` (same clkbuf family, a related error code to
+DRT-1231 for the same "no legal access point" condition). Confirms this
+isn't a threshold specific to 50% -- there is essentially **zero headroom**
+on this knob in either direction for this netlist; any tightening at all
+reintroduces the routing failure. **REJECTED** at both 50% and 60%: job
+5606's default 65% margin remains the only clean candidate found; the
+elevated DRV counts are real but this specific proven-elsewhere fix is not
+safe to apply to this combination at any tested tightening.
+
 An additional local 200,000-clock differential run exercised production-like
 OSR=64 input pacing, random valid I/Q samples in the supported `[−90,+90]`
 range, arbitrary changes on the ignored input pins while `in_valid=0`, and two
@@ -412,6 +460,69 @@ Local reproduction artifacts:
 - `rtl-test/rtl/sd_remod_multiplierless.v`
 - `rtl-test/tb/tb_sd_remod_multiplierless_equiv.v`
 - `rtl-test/syn_mimo_per_module/run_sta_remod_multiplierless.sh`
+
+### 7.6 DRV/WNS knob-probe batch on the PROMOTED canonical config (jobs 5613-5620)
+
+After the 2026-09-05 promotion (see the doc header), six one-knob probes off
+the canonical `trouper_top_minff_rcx.json` were run to see whether any
+tool-side setting could reduce the residual max cap/slew counts. The
+LibreLane step definitions were read directly (`openroad.py` +
+`rsz_timing_postgrt.tcl` inside the `chipathon26` image) to pick knobs that
+target WNS/DRV without changing the margin threshold that had already been
+shown unsafe in §7.5.
+
+**First, a positive result that came for free: the promotion itself
+improved timing and DRV.** The promoted flat `sd_remod.v` (interpolator +
+`sd_remod_multiplierless` core) synthesizes to a better netlist than the
+pre-promotion nested experiment wrappers (`trouper_top_interp2x_multiplierless_experiment.v`
+around `sd_remod_interp2x_multiplierless.v` around `sd_remod_multiplierless.v`):
+
+| | job 5606 (pre-promotion experiment config) | promoted canonical (jobs 5613/5614/5615, identical) |
+|---|---|---|
+| SS WNS | −16.08 ns | **−12.99 ns** |
+| SS TNS | −1,773.6 ns | **−1,297.3 ns** |
+| max cap (tot/SS/nom_tt) | 12 / 12 / 7 | **2 / 2 / 1** |
+| max slew (tot/SS/nom_tt) | 44 / 44 / 16 | **11 / 11 / 2** |
+| DRC / LVS / antenna | 0 / clean / 0 | 0 / clean / 0 |
+
+nom_tt DRV on the promoted design (1 cap / 2 slew) is *better* than the last
+pre-remod-work `a40_minff_rcx` baseline (job 5563: 2 cap / 4 slew) and
+roughly matches the tightest clean signoffs this project has ever produced
+(jobs 5511/5527: 2 cap / 2 slew nom_tt, 3 cap / 9 slew SS). It is NOT a
+regression -- module hierarchy shape measurably affected synthesis QoR here.
+
+**The knob probes themselves found nothing to adopt:**
+
+| probe | knob | result |
+|---|---|---|
+| 5613 | `GRT_RESIZER_SETUP_MAX_BUFFER_PCT` 40→60 | NO-OP -- byte-identical WNS/TNS/DRV to the untouched baseline (−12.985961118434266 to 15 d.p.) |
+| 5614 | `GRT_RESIZER_SETUP_MAX_BUFFER_PCT` 40→70 | NO-OP -- byte-identical again |
+| 5615 | `GRT_RESIZER_SETUP_REPAIR_TNS_PCT` unset→100 | NO-OP -- byte-identical; OpenROAD's default `-repair_tns` already covers all endpoints |
+| 5618 | `CTS_SINK_BUFFER_MAX_CAP_DERATE_PCT` 50 (stronger clock buffers) | FAILED -- `[DRT-0073] No access point for clkbuf_4_5_0_IQ_CLK_regs/I`, step 46/80 |
+| 5619 | `GRT_RESIZER_FIX_HOLD_FIRST` true | NET WASH -- signoff fully clean (DRC 0, LVS 0, antenna 0) but SS WNS −13.28 (0.30 ns worse than the −12.99 baseline), SS TNS −1,310, SS cap/slew 3/8 (baseline 2/11), TT cap/slew 1/2 (unchanged). Trades 3 SS slew violations for 0.30 ns more setup loss + 1 more SS cap. Not adopted. |
+| 5620 | `CTS_APPLY_NDR` half→full | FAILED -- `[DRT-0073] No access point for clkbuf_4_6_0_IQ_CLK_regs/I`, detailed routing. Full non-default routing rules on the clock tree crowd IQ_CLK clkbuf pin access -- same failure class as 5618 and §7.5. |
+
+The buffer-budget no-ops confirm the setup resizer never exhausts even its
+default 40% budget on this netlist, so raising it does nothing. The
+`CTS_SINK_BUFFER_MAX_CAP_DERATE_PCT` (5618) and `CTS_APPLY_NDR=full` (5620)
+failures confirm CTS-side clock-tree strengthening is in the same risk class as
+§7.5's margin tightening -- it adds cells/drive/routing resource near the
+IQ_CLK tree and reintroduces the exact DRT-0073 routing-access failure the
+whole §3 campaign chased. `GRT_RESIZER_FIX_HOLD_FIRST` (5619) is the only
+probe that completed AND stayed signoff-clean, but it is a wash: 3 fewer SS
+slew violations bought at the cost of 0.30 ns more SS setup loss + 1 more SS
+cap violation, with TT DRV unchanged.
+
+**Standing lesson (make this the takeaway):** the max cap/slew counts on
+this die are effectively at the floor. Every P&R lever that adds
+cells, buffering, or routing resource near the IQ_CLK clock tree either
+does nothing (the resizer isn't budget-limited) or reintroduces
+DRT-1231/DRT-0073. Reducing them further requires an RTL netlist reduction
+or a floorplan change, not a tool knob. Do not re-probe
+`GRT_RESIZER_SETUP_MAX_BUFFER_PCT`, `GRT_RESIZER_SETUP_REPAIR_TNS_PCT`,
+`GRT_DESIGN_REPAIR_MAX_SLEW/CAP_PCT` (either direction),
+`GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH`, `CTS_SINK_BUFFER_MAX_CAP_DERATE_PCT`,
+`CTS_APPLY_NDR=full`, or `GRT_RESIZER_FIX_HOLD_FIRST` without a new mechanism.
 
 ## 9. Review findings fixed alongside this investigation (2026-09-05)
 

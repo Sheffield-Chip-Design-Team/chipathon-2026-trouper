@@ -341,7 +341,7 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 | TRPR-MRC-006 | H | I | Weights SHALL be stored as 4 complex pairs (w_RE, w_IM) in 16-bit big-endian shadow fields at registers 0x30–0x3F; the combiner consumes the high byte of each field as int8 Q0.7 (the low bytes are ignored — see Register Map.md). | I |
 | TRPR-MRC-007 | H | F | `COMB_POST_GAIN_SHIFT` (pgs, `COMB_CFG` 0x0F[2:0], reset 0, range 0–7) adjusts output amplitude by varying the combined shift: effective division = 2^(8−pgs). Firmware SHALL set pgs per-packet from ZDIAG to target ≈ 90 combined output counts. Worst-case quantisation loss with combined shift: < 0.2 dB (pgs=0); boundary cases at pgs=3/4 show 0.000 dB loss (verified tb_mrc_fw_rand, SGE job 2010). | T |
 | TRPR-MRC-008 | H | P | Post-combining SNR improvement SHALL be ≥ 5 dB relative to single-antenna baseline on a flat channel with equal-power branches (theoretical MRC gain ≈ 6 dB for NR=4). | T |
-| TRPR-MRC-009 | H | P | AGC SHALL keep per-branch amplitude ≤ −3 dBFS (≤ 90 counts int8) so the combined int32 sum fits within int8 after ÷2. Int8 saturation is a safety net only, not the normal operating path. | T |
+| TRPR-MRC-009 | H | P | AGC SHALL keep per-branch amplitude ≤ −3 dBFS (≤ 90 counts int8) so the combined int32 sum fits within int8 after ÷2. Int8 saturation is a safety net only, not the normal operating path. | P |
 | TRPR-MRC-010 | H | P | `ŷ[n]` SHALL match `W @ x` computed in numpy to within ±2 LSB (int8). | T |
 | TRPR-MRC-011 | M | I | `WGT_CTRL` (0x1E) SHALL expose: `W_COMMIT` (W1P), `W_VALID` (RO), `W_PENDING` (RO), `W_MISSED_PACKET` (RO), `W_COMMIT_LATE` (RO), and sticky `W_WR_REJECTED` (RO/W1C). | I |
 
@@ -349,11 +349,11 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 
 ### 4.9 ΣΔ Re-modulator (`sd_remod.v`) — TRPR-RMD
 
-4th-order CIFF ΣΔ modulator (not SX1257 Figure 6-3's 3rd order — see `sd_remod.v` header; the SX1302 receive-side interface it actually drives does not encode a modulator order). Converts int8 combined output back to 1-bit I+Q streams for SX1302.
+2x droop-compensating interpolator ahead of a 4th-order CIFF ΣΔ modulator core (not SX1257 Figure 6-3's 3rd order — see `sd_remod.v` header; the SX1302 receive-side interface it actually drives does not encode a modulator order). Converts int8 combined output back to 1-bit I+Q streams for SX1302.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 4th-order CIFF ΣΔ modulator, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. (Was 3rd order; raised 2026-09-04 to compensate the loop's real one-sample excess loop delay — a 3rd-order loop filter cannot meet TRPR-RMD-005/006/007 once that delay is accounted for, see `sd_remod.v` header.) | T |
+| TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 2x droop-compensating interpolator ahead of a 4th-order CIFF ΣΔ modulator core, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. (Core was 3rd order; raised 2026-09-04 to compensate the loop's real one-sample excess loop delay — a 3rd-order loop filter cannot meet TRPR-RMD-005/006/007 once that delay is accounted for. Interpolator promoted 2026-09-05 to close the STF gain droop at fs/4; core arithmetic rewritten shift/add-only the same day to fix the resulting SS timing regression, bit-exact verified. See `sd_remod.v` header and `planning/sd-remod-interp2x-pnr-investigation-2026-09-05.md`. **Verification status:** the SQNR / dither / re-demod evidence for TRPR-RMD-001/003/005/006/007 predates this rewrite and MUST be re-run against the 4th-order + interpolator topology before signoff — see `planning/Traceability.md` §4.9 open item 5.) | T |
 | TRPR-RMD-002 | C | F | The re-modulator SHALL operate at 32 MS/s output rate with OSR=64 (int8 at 500 kS/s → 1-bit at 32 MS/s). | T |
 | TRPR-RMD-003 | C | F | All integrators SHALL use saturating arithmetic. Wrap-around addition is prohibited; a wrapped integrator will cause permanent instability. | T |
 | TRPR-RMD-004 | C | P | Input amplitude SHALL be constrained to strictly < −3 dBFS (< 90 counts int8) by AGC (TRPR-MRC-009) plus `REMOD_BACKOFF_SHIFT`. No on-chip over-range flag exists and none is feasible: integrator states sit near-rail even in healthy operation, so they are not a valid instability signal (see `cocotb`/`test_remod_backoff.py`). | T |

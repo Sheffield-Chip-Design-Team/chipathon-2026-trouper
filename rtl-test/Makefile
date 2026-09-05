@@ -23,7 +23,8 @@ SRC = ../src
 # legacy-standalone targets below that still instantiate it directly).
 DSP_SRCS  = $(SRC)/frontend/dc_removal.v \
             $(SRC)/frontend/sc_detector.v $(SRC)/combiner/training_acc.v \
-            $(SRC)/combiner/mrc_combiner.v $(SRC)/remod/sd_remod.v
+            $(SRC)/combiner/mrc_combiner.v $(SRC)/remod/sd_remod.v \
+            $(SRC)/remod/sd_remod_multiplierless.v
 # Legacy-standalone targets (tb_dsp_chain_real*.v, tb_dsp_chain_loopback_probe.v)
 # instantiate frontend_buf_ctrl.v directly; it has no current src/ replacement
 # (superseded by psram_buf_ctrl.v, a different interface/architecture), so it
@@ -86,7 +87,8 @@ obj_dir_dsp_chain_real_probe_osr256/Vtb_dsp_chain_real: $(TB)/tb_dsp_chain_real_
 sim_remod_decim_const: obj_dir_const/Vtb_remod_decim_const
 	$<
 
-obj_dir_const/Vtb_remod_decim_const: $(TB)/tb_remod_decim_const.v $(SRC)/remod/sd_remod.v $(RTL)/sd_decimator_cic_only.v
+obj_dir_const/Vtb_remod_decim_const: $(TB)/tb_remod_decim_const.v $(SRC)/remod/sd_remod.v \
+                                      $(SRC)/remod/sd_remod_multiplierless.v $(RTL)/sd_decimator_cic_only.v
 	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_const \
 	    --top-module tb_remod_decim_const $^
 
@@ -159,7 +161,8 @@ obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand: $(TB)/tb_mrc_fw_rand.v $(SRC)/combiner/mrc_
 # 20 random A_k/phase cases; +seed=<N> plusarg overrides default seed
 # -----------------------------------------------------------------------
 DSP_SRCS_RAND = $(SRC)/frontend/dc_removal.v $(SRC)/frontend/sc_detector.v \
-                $(SRC)/combiner/training_acc.v $(SRC)/combiner/mrc_combiner.v $(SRC)/remod/sd_remod.v
+                $(SRC)/combiner/training_acc.v $(SRC)/combiner/mrc_combiner.v $(SRC)/remod/sd_remod.v \
+                $(SRC)/remod/sd_remod_multiplierless.v
 
 .PHONY: sim_dsp_chain_rand
 
@@ -188,11 +191,17 @@ obj_dir_dsp_chain_sf/Vtb_dsp_chain_sf: $(TB)/tb_dsp_chain_sf.v $(DSP_SRCS_RAND)
 sim_sd_remod: tb_sd_remod.vvp
 	$(VVP) $<
 
-tb_sd_remod.vvp: $(TB)/tb_sd_remod.v $(SRC)/remod/sd_remod.v
+tb_sd_remod.vvp: $(TB)/tb_sd_remod.v $(SRC)/remod/sd_remod.v $(SRC)/remod/sd_remod_multiplierless.v
 	$(IVERILOG) $(IFLAGS) -o $@ $^
 
 # -----------------------------------------------------------------------
-# sd_remod vs sd_remod_multiplierless bit-exact equivalence check (iverilog)
+# sd_remod_multiplierless vs the frozen pre-promotion core, bit-exact
+# equivalence check (iverilog). This was the promotion gate for the
+# 2026-09-05 sd_remod.v canonicalization (see sd_remod.v's header) --
+# checks against the PRESERVED pre-promotion reference
+# (sd_remod_pre_multiplierless_reference.v), not the current
+# src/remod/sd_remod.v (which is now the interpolator-wrapped promoted
+# module and would compare the wrong thing).
 # PASS: 0 mismatches across directed extremes + dense random + paced random.
 # -----------------------------------------------------------------------
 .PHONY: sim_sd_remod_multiplierless_equiv
@@ -201,7 +210,7 @@ sim_sd_remod_multiplierless_equiv: tb_sd_remod_multiplierless_equiv.vvp
 	$(VVP) $<
 
 tb_sd_remod_multiplierless_equiv.vvp: $(TB)/tb_sd_remod_multiplierless_equiv.v \
-                                       $(SRC)/remod/sd_remod.v \
+                                       $(RTL)/sd_remod_pre_multiplierless_reference.v \
                                        $(RTL)/sd_remod_multiplierless.v
 	$(IVERILOG) $(IFLAGS) -o $@ $^
 
@@ -259,6 +268,7 @@ TROUPER_TOP_SRCS = \
     $(RTL)/psram_buf_ctrl.v \
     $(RTL)/mrc_combiner.v \
     $(RTL)/sd_remod.v \
+    $(RTL)/sd_remod_multiplierless.v \
     $(RTL)/spi_slave.v \
     $(RTL)/reg_bank.v \
     ../fpga-emul/rtl/psram_model.v

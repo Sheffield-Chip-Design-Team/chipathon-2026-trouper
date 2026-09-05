@@ -11,6 +11,7 @@
     "dir::../frontend/sc_detector.v",
     "dir::../decimator/sd_decimator_poly.v",
     "dir::../remod/sd_remod.v",
+    "dir::../remod/sd_remod_multiplierless.v",
     "dir::../control/spi_slave.v",
     "dir::../combiner/training_acc.v"
   ],
