@@ -564,7 +564,42 @@ set_false_path -from [get_ports HOST_CS]
 # its violating cone doesn't survive synthesis as a named net (see v21 header).
 # Same reason u_tacc.acc_start/acc_end and u_sc's timing_ref write arc get
 # their own -from/-to blocks above instead of relying on this wildcard.
-set paced_nets [get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]
+#
+# v32 (2026-09-04): the blanket `u_dec.*` member of this wildcard is NOT honest
+# for the whole submodule -- it also swept up the CIC integrator recurrence
+# (sd_decimator_poly.v:286-289):
+#   int_i1[ch]<=int_i1[ch]+/-1; int_i2[ch]<=int_i2[ch]+int_i1[ch]; int_i3[ch]<=...
+#   int_q1/q2/q3 mirror the I path.
+# Unlike the HB1/HB2 MAC states (gated by hb1_busy/hb2_busy/hb1_wait/hb2_wait,
+# genuinely held for 3 clocks -- the v9/v10 "honest for all four DSP blocks"
+# claim above) these six accumulators update UNCONDITIONALLY every clk_32m
+# edge with no busy/wait gate, so the real launch->capture separation on that
+# arc is ONE cycle. Handing it a 3-cycle setup budget under the same wildcard
+# that legitimately paces the HB MACs can mask a real single-cycle SS
+# violation on the integrator recurrence itself. test_mcp_decimator_settle.py
+# (mcp_audit_manifest.json "paced_dsp" proof, SGE job 4083) exercises the HB
+# MAC settle behaviour, not this recurrence, so it was never actually proven
+# honest for these six nets.
+#
+# Fix: exclude int_i1/i2/i3/q1/q2/q3 from the u_dec.* member so they stay at
+# the default single-cycle budget, matching what they actually are. OpenSTA
+# has no remove_from_collection (see the core_output_ports filter above), so
+# subtract by name the same way. u_sc.*/u_tacc.*/u_comb.* are unaffected --
+# sc_detector's TDM/eval engines (tdm_wait==TDM_WAIT gate, sc_detector.v:402-
+# 481) and mrc_combiner's MAC_WAIT states are genuinely held every cycle they
+# touch, so no equivalent always-running recurrence was found there.
+set paced_nets_raw [get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]
+set dec_integrator_pats {u_dec.int_i1* u_dec.int_i2* u_dec.int_i3* \
+                         u_dec.int_q1* u_dec.int_q2* u_dec.int_q3*}
+set paced_nets {}
+foreach n $paced_nets_raw {
+    set full [get_full_name $n]
+    set is_integrator 0
+    foreach pat $dec_integrator_pats {
+        if {[string match $pat $full]} { set is_integrator 1; break }
+    }
+    if {!$is_integrator} { lappend paced_nets $n }
+}
 
 set_multicycle_path 3 -setup -through $paced_nets
 set_multicycle_path 2 -hold  -through $paced_nets
@@ -638,6 +673,45 @@ set_false_path -to [get_ports DBG0_OUT]
 # what survives" discipline as v21 / v28.  A path through rb_remod_backoff_shift*
 # that does NOT end at IRQ_OUT_OUT (e.g. the real comb_y >>> shift into sd_remod)
 # is untouched by the -to anchor.
-set dbg1_pad_srcs [get_nets -hierarchical {rb_dbg_ctrl1[*] rb_remod_backoff_shift[*]}]
-set_false_path -through $dbg1_pad_srcs -to [get_ports IRQ_OUT_OUT]
+#
+# 2026-09-04 update: BRINGUP_SRC (Open Risk #59) merged in and sits at the
+# re-modulator input, upstream of u_dbg's group-110 comb_i/comb_q tap -- so
+# its config registers now also reach the shared pad through the debug mux.
+# Confirmed the new worst path (job 5539, post-merge P&R): rb_bringup_ctrl[0]
+# -> u_dbg -> IRQ_OUT_OUT, -12.24 ns. rb_bringup_ctrl*/rb_bringup_ampl* added
+# to the same -through list, same justification (quasi-static reg_bank config,
+# survives synthesis) and same -to IRQ_OUT_OUT anchor, so the real
+# rb_bringup_* -> sd_remod input arc stays timed.
+#
+# 2026-09-04, second pass: rb_rx_hold gates BRINGUP_SRC's own enable
+# (bringup_en_q = BRINGUP_CTRL[0] && RX_HOLD && !PACKET_ACTIVE), so it also
+# reaches the debug mux the same way. Recurred as the worst IRQ_OUT_OUT path
+# on two different netlists (job 5541 canonical, -10.96 ns; job 5547 with
+# SYNTH_STRATEGY DELAY 2, -13.02 ns -- the actual design-wide SS worst path
+# there). Same quasi-static reg_bank justification and -to anchor as the
+# other three; RX_HOLD's real functional uses elsewhere (SC hold, W-commit
+# gating, etc.) are untouched since the anchor only silences paths that also
+# end at IRQ_OUT_OUT.
+#
+# 2026-09-04, third pass -- SUPERSEDED the scoped -through list above with a
+# wholesale false-path. Job 5550 (DELAY 2 + the rb_rx_hold-extended scope)
+# immediately surfaced a SIXTH distinct debug-mux source as the new worst
+# IRQ_OUT_OUT path: psram_buf_active (-11.34 ns) -- a group-101 PSRAM tap,
+# not even reg_bank config-register class like the other five. u_dbg fans in
+# ~30 signals across 8 groups (raw RX, decimated IQ, SC, packet/weights,
+# PSRAM, combiner, IRQ status, bringup) with no register between the final
+# mux and the pad, so enumerating sources one at a time is provably unbounded
+# -- confirmed by finding a new one on 3 different netlists in one session
+# (rb_dbg_ctrl1/rb_remod_backoff_shift -> rb_bringup_ctrl/rb_bringup_ampl ->
+# rb_rx_hold -> psram_buf_active). The scoped list above is KEPT for the
+# mechanism history but is no longer the active constraint.
+#
+# Falling back to the wholesale path is the correct call on its own merits,
+# not just as a way to stop the chase: IRQ_OUT_OUT is a STICKY LEVEL signal
+# (irq_out sticky bit, cleared by an explicit host write, trouper_top.v/
+# reg_bank.v) read by the host's interrupt controller or polled over SPI --
+# there is no synchronous IQ_CLK capture on the other end of this pad, so the
+# 31.25 ns core-output budget was never a real requirement for the functional
+# side either, only an artifact of the generic core_output_ports rule.
+set_false_path -to [get_ports IRQ_OUT_OUT]
 # ==== end v31 signoff-only block ================================================

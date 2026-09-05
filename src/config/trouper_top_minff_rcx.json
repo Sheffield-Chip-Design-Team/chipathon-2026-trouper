@@ -4,6 +4,7 @@
     "dir::../frontend/dc_removal.v",
     "dir::../top/trouper_top.v",
     "dir::../combiner/mrc_combiner.v",
+    "dir::../debug/bringup_src.v",
     "dir::../control/packet_ctrl_fsm.v",
     "dir::../control/psram_buf_ctrl.v",
     "dir::../control/reg_bank.v",
