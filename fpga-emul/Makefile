@@ -63,8 +63,8 @@ FPGA_SRCS   = $(RTL)/sync_fifo.v    \
 # Scripts in sge/ run inside the chipathon26 container on the NFS-mounted tree.
 # ============================================================================
 
-.PHONY: sge_sim_spi_reg sge_sim_all \
-        sim_spi_reg sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
+.PHONY: sge_sim_spi_reg sge_sim_dsp_chain sge_sim_all \
+        sim_spi_reg sim_dsp_chain sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
         test_fw run_test_fw eth_fw run_eth_fw
 
 sge_sim_spi_reg:
@@ -74,7 +74,15 @@ sge_sim_spi_reg:
 	    --mem 8G \
 	    $(NFS_DESIGN)/fpga-emul/sge/sim_spi_reg.sh
 
-sge_sim_all: sge_sim_spi_reg
+sge_sim_dsp_chain:
+	HLAB_SGE_URL=$(HLAB_SGE_URL) hqsub \
+	    --name fpga-sim-dsp-chain \
+	    --cpus 4 \
+	    --mem 8G \
+	    --project lora-mimo \
+	    $(NFS_DESIGN)/fpga-emul/sge/sim_dsp_chain.sh
+
+sge_sim_all: sge_sim_spi_reg sge_sim_dsp_chain
 
 # ============================================================================
 # Local Verilator targets (run inside chipathon26 container)
@@ -90,7 +98,19 @@ obj_dir_spi_reg/Vtb_fpga_spi_reg: tb/tb_fpga_spi_reg.v $(FPGA_SRCS) $(ASIC_SRCS)
 	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_spi_reg \
 	    --top-module tb_fpga_spi_reg $^
 
-sim_all: sim_spi_reg
+# Functional end-to-end sim THROUGH fpga_dsp_wrap: injection path -> 4x sd_remod
+# -> trouper_top full DSP chain -> internal psram_model -> combiner -> output
+# sd_remod. Drives a correlated in-band tone into inj_i/q, configures the chip
+# over the wrapper's host-SPI port, and checks sc_lock (IRQ_STATUS[0]) plus a
+# live MRC ΣΔ output. This is the deep counterpart to sim_spi_reg's wiring test.
+sim_dsp_chain: obj_dir_dsp_chain/Vtb_fpga_dsp_chain
+	$<
+
+obj_dir_dsp_chain/Vtb_fpga_dsp_chain: tb/tb_fpga_dsp_chain.v $(FPGA_SRCS) $(ASIC_SRCS)
+	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_dsp_chain \
+	    --top-module tb_fpga_dsp_chain $^
+
+sim_all: sim_spi_reg sim_dsp_chain
 
 # PSRAM model cosim: psram_buf_ctrl ⇄ psram_model, checks the SC delay path
 sim_psram: obj_dir_psram/Vtb_psram_model
@@ -177,6 +197,6 @@ run_eth_fw: $(SW)/lora_mimo_fw.elf
 # Clean
 # ============================================================================
 clean:
-	rm -rf obj_dir_spi_reg obj_dir_psram *.vcd
+	rm -rf obj_dir_spi_reg obj_dir_psram obj_dir_dsp_chain *.vcd
 	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map
 	rm -f $(SW)/lora_mimo_fw.elf
