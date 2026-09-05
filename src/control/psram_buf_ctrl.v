@@ -47,7 +47,10 @@
 // SC delay:
 //   N = 2^(SF+sample_shift) samples (one full LoRa symbol in the decimated sample domain).
 //   del_offset_bytes = N × 8 = 8 << (SF+sample_shift).
-//   del_rdy fires after N iq_valid pulses since qe_init_done.
+//   del_rdy fires after N completed capture writes since qe_init_done (not
+//   raw iq_valid pulses -- a sample dropped by a qspi_owner pause or a
+//   debug-fetch collision does not count, and del_rdy re-arms if a capture
+//   is ever missed after it has already gone high).
 //
 // Debug readback path (no PicoRV32 / Grouper required):
 //   When packet_active=0 (IDLE) and QSPI_OWNER=0, the host RPi can read arbitrary
@@ -192,6 +195,33 @@ module psram_buf_ctrl (
     reg             buf_base_valid;
     reg             sc_lock_prev;
 
+    // buf_base write-arc retiming (timing_ref -> u_psram.buf_base, SS worst
+    // path -14.49 ns, jobs 5539/5541). The original single-cycle version
+    // computed back_bytes = (iq_sample_cnt - timing_ref) << 3 combinationally
+    // on the SAME edge as sc_lock, then registered buf_base = wr_ptr -
+    // back_bytes -- the same dishonest same-cycle-compute shape Open Risk #39
+    // fixed in packet_ctrl_fsm.v (lat_timing_ref). buf_base is only consumed
+    // at replay start, wait_cnt samples after training_done -- thousands of
+    // cycles later -- so nothing requires this arithmetic to finish in the
+    // same cycle sc_lock asserts.
+    // Fix: snapshot all three raw operands (timing_ref, iq_sample_cnt,
+    // wr_ptr) on the sc_lock edge, then do the subtract/shift/subtract on the
+    // FROZEN copies one cycle later -- provably identical result to the
+    // original formula (same inputs, same arithmetic), just retimed.  Unlike
+    // packet_ctrl_fsm's fix (which recomputes from LIVE sample_count after
+    // its dwell, needing an iq_tick correction for exactly this reason),
+    // freezing wr_ptr too avoids relying on wr_ptr and iq_sample_cnt staying
+    // in lockstep across the delay window -- they do NOT always (sample_skip
+    // desyncs them whenever an iq_valid arrives while the QPI engine is
+    // busy), so re-reading wr_ptr live one cycle later would be a real
+    // correctness change, not just a timing retime. Freezing it is not: same
+    // inputs captured at the same instant as today, only the arithmetic is
+    // spread over an extra cycle.
+    reg [31:0]      lat_timing_ref_bb;
+    reg [31:0]      lat_iq_sample_cnt_bb;
+    reg [ABITS-1:0] lat_wr_ptr_bb;
+    reg             bufbase_pending;
+
     // Replay margin wait (continuous-delay redesign): armed at the
     // training_done rising edge, counts replay_delay_samples captured
     // samples (down-counter decremented at each write-done), then enters
@@ -291,6 +321,34 @@ module psram_buf_ctrl (
     wire [ABITS-1:0] cur_wr = wr_ptr;
     wire [ABITS-1:0] cur_rd = rd_ptr;
 
+    // del_rdy warm-up gating wires (see the del_rdy counter block below for
+    // the full rationale). Both are keyed off the real capture path only —
+    // dbg_mode transactions (debug read/write bursts) also run through
+    // sub==43 of the busy S_WRITE case, but that branch is dbg_mode-gated
+    // separately (see the case(sub) structure), so del_read_done_now, which
+    // requires !dbg_mode, never fires for a debug burst.
+    //
+    // del_read_done_now: true exactly on the cycle a REAL (non-debug)
+    // capture transaction's own del-read completes (S_WRITE sub==43). This
+    // is deliberately the READ-completion point, not the write-LAUNCH point
+    // (sub==0) — see the del_rdy counter block for why the off-by-one only
+    // goes away when anchored here.
+    wire del_read_done_now = (state == S_WRITE) && qpi_busy && !dbg_mode &&
+                              (sub == 6'd43);
+
+    // capture_missed_now: true when a real capture attempt (iq_valid,
+    // psram_en, qe_init_done) could not launch this cycle because the QPI
+    // engine was still busy with a prior transaction (mirrors sample_skip's
+    // own condition) or because qspi_owner had the pads (writes are gated
+    // off by !qspi_owner in both S_WRITE and S_REPLAY, so nothing lands in
+    // PSRAM for the whole ownership window — and unlike the qpi_busy case,
+    // that window sets no sticky flag at all today). Used below to re-arm
+    // del_rdy after it has already gone high, since either condition opens
+    // a real gap in the circular buffer's sample history.
+    wire capture_missed_now = iq_valid && psram_en && qe_init_done &&
+                               (state == S_WRITE || state == S_REPLAY) &&
+                               (qpi_busy || qspi_owner);
+
     always @(posedge clk_32m or negedge rst_n) begin
         if (!rst_n) begin
             state          <= S_UNINIT;
@@ -298,6 +356,10 @@ module psram_buf_ctrl (
             rd_ptr         <= {ABITS{1'b0}};
             buf_base       <= {ABITS{1'b0}};
             buf_base_valid <= 1'b0;
+            lat_timing_ref_bb    <= 32'd0;
+            lat_iq_sample_cnt_bb <= 32'd0;
+            lat_wr_ptr_bb        <= {ABITS{1'b0}};
+            bufbase_pending      <= 1'b0;
             sc_lock_prev   <= 1'b0;
             training_done_prev <= 1'b0;
             wait_armed     <= 1'b0;
@@ -366,7 +428,24 @@ module psram_buf_ctrl (
             del_valid    <= 1'b0;
             state_dbg    <= state;
 
-            if (!qpi_busy) qspi_owner_eff <= qspi_owner;
+            // S_QE_INIT is excluded from the deferred-owner update: qpi_busy
+            // is never set to 1 during S_QE_INIT (only S_WRITE/S_REPLAY touch
+            // it), so without this exclusion qspi_owner_eff tracked live
+            // qspi_owner with only a 1-cycle lag throughout the whole init
+            // sequence -- not deferred to a burst boundary at all. That let
+            // an ownership request landing mid-QE_INIT drop sck_en (freezing
+            // SCK) one cycle later while the init_sub case statement (which
+            // has no qspi_owner gate of its own) kept driving ce_n low and
+            // toggling sio_out through the RSTEN/RST/Enter-QPI bytes -- CE#
+            // low with SCK frozen and SIO still changing is exactly the pad
+            // glitch qspi_owner_eff exists to prevent. QE_INIT is also a
+            // hardware-interlocked 3-command sequence (RSTEN must be
+            // immediately followed by RST or the PSRAM abandons the reset
+            // arm) -- there is no safe mid-sequence boundary to hand off at,
+            // so the fix defers the whole handoff to the state boundary at
+            // sub==29 (state <- S_WRITE), same as every other in-flight-
+            // burst deferral in this design.
+            if (!qpi_busy && state != S_QE_INIT) qspi_owner_eff <= qspi_owner;
             sck_en <= ((state == S_QE_INIT) || qpi_busy) && !qspi_owner_eff;
 
             // Sticky error clear (write-1 pulse via PSRAM_CLR_ERR). Placed before
@@ -396,17 +475,54 @@ module psram_buf_ctrl (
             if (iq_valid && qpi_busy && psram_en && qe_init_done && !qspi_owner)
                 sample_skip <= 1'b1;
 
-            // del_rdy counter: accumulate iq_valid pulses after init. An sf or
-            // sample_shift change re-arms the warm-up so the SC detector never
-            // sees a delayed sample from an address not yet written with N =
+            // del_rdy counter: accumulate completed CAPTURE transactions
+            // (del_read_done_now) after init. An sf or sample_shift change
+            // re-arms the warm-up so the SC detector never sees a delayed
+            // sample from an address not yet written with N =
             // 2^(SF+sample_shift) fresh samples at the new delay distance.
+            //
+            // Anchored on del_read_done_now (the completing transaction's OWN
+            // del-read-done point, sub==43), not on the write LAUNCH (sub==0)
+            // of that same transaction. This matters for an off-by-one: at
+            // launch, del_addr is computed from the PRE-increment wr_ptr (the
+            // slot this transaction is about to write), so on the Nth
+            // transaction del_addr = wr_ptr_N - N*8 lands one slot BEFORE the
+            // oldest genuinely-written sample (slot -1, not slot 0) — counting
+            // at launch would let del_rdy go high 43 cycles before that same
+            // transaction's own (still-corrupted) del-read reaches sub==43,
+            // so `del_valid <= del_rdy;` there would expose the garbage read.
+            // Counting at sub==43 instead means: on the Nth transaction's own
+            // completion, `del_valid <= del_rdy;` (in the case(sub) block)
+            // reads del_rdy's PRE-edge value (still 0, nonblocking) in the
+            // exact same cycle del_rdy is being set here — so THIS
+            // transaction's contaminated read is correctly suppressed, and
+            // del_rdy is 1 by the time transaction N+1 launches. N+1's own
+            // del_addr = wr_ptr_(N+1) - N*8 = N*8 - N*8 = 0, correctly the
+            // oldest real sample — N+1 becomes the first valid pair.
+            //
+            // del_rdy is also re-armed (dropped back to 0, restarting the
+            // count from zero) if a capture is ever missed AFTER del_rdy has
+            // already gone high: a qspi_owner ownership pause or a debug-
+            // fetch collision (sample_skip) opens a real gap in the circular
+            // buffer's history, so the "N valid samples of unbroken history"
+            // invariant del_rdy encodes no longer holds and must not be left
+            // silently stuck high — that would expose a discontinuous/stale
+            // delay line for up to the gap's own length after resumption,
+            // with no flag anywhere to say so. Before del_rdy first goes
+            // high, a miss needs no special handling: del_cnt already only
+            // advances on del_read_done_now, so a missed cycle just doesn't
+            // increment it (correctly), and counting resumes cleanly once
+            // real captures do.
             if (!qe_init_done) begin
                 del_rdy <= 1'b0;
                 del_cnt <= 15'd0;
             end else if (sf != sf_prev || sample_shift != sample_shift_prev) begin
                 del_rdy <= 1'b0;
                 del_cnt <= 15'd0;
-            end else if (!del_rdy && iq_valid) begin
+            end else if (del_rdy && capture_missed_now) begin
+                del_rdy <= 1'b0;
+                del_cnt <= 15'd0;
+            end else if (!del_rdy && del_read_done_now) begin
                 if (del_cnt + 15'd1 >= del_n_r)
                     del_rdy <= 1'b1;
                 else
@@ -573,20 +689,61 @@ module psram_buf_ctrl (
                 // buf_base, independent of W_commit.
                 // ------------------------------------------------------------
                 S_WRITE: begin
-                    if (sc_lock && !sc_lock_prev && psram_en) begin : blk_bufbase_w
+                    // Stage 1 (sc_lock edge): snapshot the raw operands, and
+                    // set buf_active immediately -- UNCHANGED timing from the
+                    // original single-cycle version, and load-bearing:
+                    // packet_ctrl_fsm.v raises packet_active on this identical
+                    // sc_lock edge (formal's m_buf_active_implies_packet_active
+                    // comment), so buf_active must track that same edge, not
+                    // lag it -- delaying buf_active into stage 2 (tried first)
+                    // opened a 1-cycle gap where the per-module formal harness
+                    // can't yet constrain packet_active, and BMC found a real
+                    // counterexample on a_buf_active_needs_en through it. No
+                    // arithmetic happens here, only the raw operand snapshot.
+                    // Stage 2 below does the actual subtract/shift/subtract
+                    // on the frozen snapshots -- see the buf_base declaration
+                    // comment for the full write-arc-retiming rationale.
+                    if (sc_lock && !sc_lock_prev && psram_en) begin
+                        lat_timing_ref_bb    <= timing_ref;
+                        lat_iq_sample_cnt_bb <= iq_sample_cnt;
+                        lat_wr_ptr_bb        <= wr_ptr;
+                        bufbase_pending      <= 1'b1;
+                        buf_active           <= 1'b1;
+                        w_commit_late        <= 1'b0;  // per-packet sticky, cleared at packet start
+                    end
+
+                    // Stage 2: compute buf_base from the frozen stage-1
+                    // snapshots, one cycle after the sc_lock edge that
+                    // captured them -- same formula, same operand values,
+                    // just retimed off sc_lock's own edge. buf_base_valid now
+                    // lags buf_active by one cycle (it didn't before); see the
+                    // updated a_buf_base_valid_matches_active in the formal
+                    // harness for the corrected relationship.
+                    if (bufbase_pending) begin : blk_bufbase_compute
                         reg [22:0] back_bytes;
-                        back_bytes = (iq_sample_cnt - timing_ref) << 3;
-                        buf_base       <= (wr_ptr - back_bytes) & AMASK;
-                        buf_base_valid <= 1'b1;
-                        buf_active     <= 1'b1;
-                        w_commit_late  <= 1'b0;  // per-packet sticky, cleared at packet start
+                        back_bytes = (lat_iq_sample_cnt_bb - lat_timing_ref_bb) << 3;
+                        buf_base        <= (lat_wr_ptr_bb - back_bytes) & AMASK;
+                        buf_base_valid  <= 1'b1;
+                        bufbase_pending <= 1'b0;
                     end
 
                     // Arm the replay margin wait at the training_done rising
-                    // edge.  buf_base_valid gates out noise-mode training runs
-                    // (TACC_NOISE_TRIG fires training_done without sc_lock).
+                    // edge.  Gate on buf_active (not buf_base_valid) so a
+                    // packet is locked -- gates out noise-mode training runs
+                    // (TACC_NOISE_TRIG fires training_done without sc_lock)
+                    // the same way buf_base_valid used to. buf_active is used
+                    // here specifically because, post buf_base-retiming
+                    // (2-stage pipeline above), buf_base_valid now lags
+                    // buf_active by one cycle (the bufbase_pending window);
+                    // gating on buf_base_valid left a real 1-cycle hole where
+                    // a training_done edge landing in that window would be
+                    // silently missed. buf_base itself is only read at
+                    // replay start, wait_cnt (thousands of) cycles later, so
+                    // by then buf_base_valid is certainly 1 -- this gate only
+                    // ever needs to mean "a packet is locked", which is what
+                    // buf_active means from the same cycle sc_lock asserts.
                     if (training_done && !training_done_prev &&
-                        buf_base_valid && psram_en && !packet_end) begin
+                        buf_active && psram_en && !packet_end) begin
                         wait_armed <= 1'b1;
                         wait_cnt   <= replay_delay_samples;
                     end
@@ -609,10 +766,22 @@ module psram_buf_ctrl (
                         // Replay never started this packet: margin never met
                         // (short packet / training_done never fired) — clean
                         // fallback, flagged for firmware via REPLAY_MISSED.
-                        if (buf_base_valid) replay_missed <= 1'b1;
-                        buf_base_valid <= 1'b0;
-                        buf_active     <= 1'b0;
-                        wait_armed     <= 1'b0;
+                        // Gate on buf_active, not buf_base_valid: same 1-cycle
+                        // post-retiming hole as the training_done arm above --
+                        // a packet_end landing in the bufbase_pending window
+                        // (buf_active=1, buf_base_valid=0) genuinely means "a
+                        // lock happened and replay never started", so
+                        // REPLAY_MISSED must still fire; buf_base_valid alone
+                        // would silently miss it.
+                        if (buf_active) replay_missed <= 1'b1;
+                        buf_base_valid  <= 1'b0;
+                        buf_active      <= 1'b0;
+                        bufbase_pending <= 1'b0;  // abort stage 2 if a lock
+                                                   // just armed it this cycle
+                                                   // (keeps buf_active ==
+                                                   // (buf_base_valid ||
+                                                   // bufbase_pending) intact)
+                        wait_armed      <= 1'b0;
                     end
 
                     if (!qpi_busy) begin
@@ -833,10 +1002,18 @@ module psram_buf_ctrl (
                 // ------------------------------------------------------------
                 S_REPLAY: begin
                     if (packet_end) begin
-                        buf_base_valid <= 1'b0;
-                        buf_active     <= 1'b0;
-                        replay_active  <= 1'b0;
-                        qpi_busy       <= 1'b0;
+                        buf_base_valid  <= 1'b0;
+                        buf_active      <= 1'b0;
+                        bufbase_pending <= 1'b0;  // defensive: bufbase_pending
+                                                   // is only driven in S_WRITE
+                                                   // and should already be 0
+                                                   // here, but clear it too so
+                                                   // the buf_active invariant
+                                                   // can't be left stale by a
+                                                   // late S_WRITE->S_REPLAY
+                                                   // transition
+                        replay_active   <= 1'b0;
+                        qpi_busy        <= 1'b0;
                         sub            <= 6'd0;
                         ce_n           <= 1'b1;
                         sio_oe         <= 4'd0;
@@ -983,6 +1160,7 @@ module psram_buf_ctrl (
         .rd_ptr         (rd_ptr),
         .buf_base       (buf_base),
         .buf_base_valid (buf_base_valid),
+        .bufbase_pending(bufbase_pending),
         .wait_armed     (wait_armed),
         .wait_cnt       (wait_cnt),
         .buf_active     (buf_active),
