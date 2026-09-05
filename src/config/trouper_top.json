@@ -81,7 +81,7 @@
   "HOLD_VIOLATION_CORNERS": [
     ""
   ],
-  "ERROR_ON_ILLEGAL_OVERLAPS": false,
+  "ERROR_ON_ILLEGAL_OVERLAPS": true,
   "ERROR_ON_PDN_VIOLATIONS": true,
   "PDN_CFG": "dir::pdn_cfg.tcl",
   "IO_PIN_V_LAYER": "Metal2",

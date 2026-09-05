@@ -207,6 +207,15 @@ were fixed and verified; see Closed.)
 
 ### 43. Scoped-MCP exceptions require an independently reproducible netlist audit
 
+> **REOPENED 2026-09-05 — mechanical audit passes, item does not yet close.**
+> The automated audit (collection + resolved-arc, 14/14 groups) passes on the
+> job-5630 synth and routed netlists with the active signoff SDC, synth/route
+> object lists are byte-identical, and every group has a cited settling proof
+> (`audit_mcp.py` re-run 2026-09-05: `PASS: synth, 14 groups` / `PASS: route,
+> 14 groups`). That is necessary but not sufficient — see **Remaining before
+> closure** at the end of this item. Stays a revision-controlled signoff gate:
+> any change to the final RTL, netlist, libraries, or signoff SDC re-arms it.
+
 **Blocks:** timing signoff using any `set_multicycle_path` exception.
 
 The current 32 MHz closure strategy relies on MCP=3 for paced DSP cones and
@@ -500,12 +509,100 @@ documented waivers rather than growing the signoff MCP list further. The
 `rb_comb_post_gain_shift → comb_y` cone (−8.59 ns, 14 paths) is the same
 scope-miss class and could be a v31 signoff group if ever wanted.
 
-**Still open:** the settling-proof obligation is now met for `paced_dsp`,
-`regbank_write`, `psram_barrel_shift`, `pcfsm_mval_write`, `tacc_accumulate`,
-`iq_samp_cnt`, `pcfsm_tick_decrement`; `pcfsm_quasi_static` /
-`pcfsm_mval` / `pcfsm_latched_timing_ref` still fail their bench (the
-2026-08-14 finding above) and the `sc_*` / `timing_ref_*` groups still lack
-a dedicated proof.
+**Status, corrected 2026-09-05:** the final sentence above was stale: it
+described the pre-`f1aa262` failure and contradicted the 2026-08-15 evidence
+in this item. `RX_HOLD` plus the four-cycle `ST_ACQ_SETUP` dwell closed
+`pcfsm_quasi_static`, `pcfsm_mval`, `pcfsm_latched_timing_ref`,
+`sc_quasi_static`, `timing_ref_hits`, `timing_ref_config`, and
+`training_window` (jobs 4362/4368); `sc_clear` was withdrawn rather than
+waived (v26). The active manifest also records settling evidence for
+`paced_dsp`, `regbank_write`, `psram_barrel_shift`, `pcfsm_mval_write`,
+`tacc_accumulate`, `iq_samp_cnt`, and `pcfsm_tick_decrement`. The
+`tacc_accumulate` monitor was strengthened on 2026-09-05 to observe every
+`Zpair_*`/`Zdiag_*` endpoint directly; its normal and reset-rearm tests pass
+2/2 locally under Verilator, so that entry is no longer merely transitive.
+
+**Remaining signoff gate:** run `run_mcp_audit.sh` against both synthesized
+and final routed netlists with the exact final signoff SDC, review the resolved
+object lists, and update the reviewed baselines only if the collections remain
+non-empty and intentional. This is required for every SDC revision, including
+the signoff-only groups; no previously recorded audit is a substitute for the
+final netlist audit.
+
+**2026-09-05 — current candidate audit completed and baselined.** The latest
+successful P&R candidate is SGE job 5630
+(`trouper-pnr-sdc-array-acq-falsepath`). Its synthesis netlist
+(`06-yosys-synthesis/trouper_top.nl.v`) and final routed netlist plus max SPEF
+were audited with its exact active
+`src/config/pnr_32m_scoped_v25_b6_signoff.sdc`: collection audits synth job
+5638 and route job 5639; resolved max/min startpoint→endpoint arc audits synth
+job 5642 and route job 5643. All OpenROAD jobs exited 0; all **14/14** manifest
+groups resolved at or above their minimum object counts, and neither log
+contained `STA-0361`, `STA-0472`, or `no valid objects`. The synth and route
+object lists are byte-identical for every group after sorting; review completed
+and `mcp_audit_baseline.json` was updated for both stages. Every group now also
+has retained JSON `report_checks` evidence for both max/setup and min/hold,
+with a non-empty resolved startpoint/endpoint path required by the checker.
+(Preliminary jobs 5635/5636 used the stale `rtl-test` SDC copy and are not
+signoff evidence.)
+
+- `regbank_write` lost only `rb_addr[7]`, which synthesis now removes because
+  the implemented register map uses the low 7 address bits. The remaining
+  `{rb_we, rb_addr[6:0], rb_wdata[7:0]}` set is the intended CE-latched bus.
+- `sc_quasi_static` retained its six config source nets and grew from 253 to
+  289 endpoints, consistent with the additional high bits of the four widened
+  SC accumulators. This is an intentional same-cone endpoint expansion, but
+  still needs the normal source-to-endpoint review before acceptance.
+- `paced_dsp` excludes the six Open Risk #68 `u_tacc.win_epoch`, `tdm_epoch`,
+  and `acc_epoch` bits in signoff SDC v33. They are window-control tags, not
+  self-evidently 3-cycle paced datapath operands, so they now remain honestly
+  single-cycle timed. The resulting 2,939 through-object collection contains
+  no epoch control net. PNR SDC remains unchanged; this is a signoff-only
+  narrowing and therefore requires no new P&R run. **Post-route STA check:**
+  job 5648 reloaded job 5630's final netlist/SPEF with this exact narrowed SDC
+  and reported all six epoch nets at MCP=1: worst setup slack **+15.73 ns**,
+  worst hold slack **+2.55 ns**, no violations. The log is
+  `/srv/eda/runs/timothyn-dev/lora-mimo/5648/epoch_sta.log`.
+
+The current evidence files are `mcp_audit_synth.evidence` and
+`mcp_audit_route.evidence`; both now match their reviewed baselines. The audit
+runner defaults to the active `src/config` signoff SDC so future audits cannot
+silently select the stale legacy copy.
+
+**Final proof refresh:** `tacc_accumulate` was the last proof record with only
+local direct-endpoint execution. The strengthened all-16-endpoint monitor now
+passes on SGE job 5646 (2/2, normal and reset-mid-burst re-arm), so its proof
+record names durable scheduler evidence rather than local output.
+
+**Remaining before closure (2026-09-05):**
+
+1. **`sc_quasi_static` endpoint review.** The collection grew 253 → 289
+   endpoints between the last reviewed baseline and this candidate (the four
+   widened SC accumulators' high bits). The automated audit only checks that
+   the collection resolves and matches the *newly written* baseline — it does
+   **not** review why it grew. Someone must walk the added `sc_quasi_static`
+   startpoint→endpoint arcs and confirm every one is genuinely the same
+   quasi-static cone, not a real single-cycle path pulled in by the wildcard.
+   Until that review is signed off, the group is audited-but-not-accepted.
+2. **Re-run on the actual tapeout netlist.** All 2026-09-05 evidence is against
+   SGE job 5630, which is *not* the final candidate: a fresh guarded KLayout
+   DRC (#58) is owed and a remodulator / SS-waiver re-run may change the
+   netlist. Re-run `run_mcp_audit.sh` (collection + arc, synth + route) with
+   the exact final signoff SDC against whatever netlist tapes out, review any
+   collection deltas, and re-approve `mcp_audit_baseline.json`.
+3. **`tacc_accumulate` and `paced_dsp` proofs are transitive, not direct.**
+   `tacc_accumulate` rests on the shared `active_cycle`/`TDM_WAIT` pacing gate
+   (job 5646 monitor), not a direct `Zpair`/`Zdiag` endpoint settle assertion;
+   `paced_dsp` similarly leans on per-block wait-counter monitors. Both are
+   defensible but a direct endpoint-settle assertion on the relaxed registers
+   would make them airtight — noted, not blocking.
+4. **v33 epoch-net narrowing has only a post-route STA backstop.** Job 5648
+   confirms the six `u_tacc.*_epoch` nets are MET at MCP=1 on the job-5630
+   netlist (worst setup +15.73 ns). If (2) produces a new netlist, that check
+   repeats with it.
+
+The signoff SDC header (`pnr_32m_scoped_v25_b6_signoff.sdc`) was updated
+2026-09-05 to enumerate v32/v33 (it previously stopped at v31).
 
 ---
 
@@ -1082,7 +1179,47 @@ spec `TRPR-SPS-012` / `TRPR-WGN-002`.
 **Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29; CDC risk split reviewed
 2026-09-05; Route 2 contract documented 2026-09-05.
 
-### 54. Host-SPI post-route GLS/SDF check is missing
+### 54. Host-SPI post-route GLS/SDF check — first pass done 2026-09-05 (harness PASS on job-5630 netlist, nom_tt); re-run owed against the final tapeout netlist
+
+**2026-09-05 update — harness built and passing, item downgraded but not closed.**
+`rtl-test/tb/tb_trouper_spi_gl.v` is a black-box (port-only) Icarus gate-level
+host-SPI harness with `$sdf_annotate`. SGE job 5647 ran it against the
+tapeout-candidate routed netlist (job 5630 `final/nl/trouper_top.nl.v`, md5
+`831b33bb92608fcaeba92d6f2db253f4`) with the matching post-route SDF
+(`final/sdf/nom_tt_025C_3v30`, md5 `972cd78511d282bf33e73582f3dc6309`),
+iverilog 14.0, `-g2005 -gspecify -ginterconnect`. **PASS** — reset release,
+MISO deselected-low, first-read-data-bit (CHIP_ID `0xA7` / CHIP_REV `0x01` in
+byte 1), MISO-low after a read frame, minimum-CS-hold write + readback, minimum
+CS-high gap between frames, 8-byte burst write + auto-increment burst readback,
+and read-byte snapshot stability all hold with post-route delays; `$finish` at
+162.98 µs, EXIT 0, zero unmatched SDF arcs (one benign tri-state `Z`→`SPI_MISO_OE`
+intermodpath iverilog cannot model — OE is a static tie on a dedicated-output pad).
+Provenance and full method: `spi-slave-verification-plan.md` test 18.
+
+**Two limits keep the item open:**
+1. iverilog applies path + interconnect delays but does **not** enforce
+   `$setup`/`$hold` timing checks, so this cannot flag a pure hold-margin
+   violation. The fast/hold corner is covered separately by standalone OpenROAD
+   STA on the same routed DB + min-RC SPEF + `ff_n40C_3v60` liberty (job 5634):
+   **worst hold slack +0.12 ns, hold TNS 0.00** (whole design). NOTE: the
+   canonical `src/config/trouper_top.json` `STA_CORNERS` still omits a real
+   fast/min-RC corner and `HOLD_VIOLATION_CORNERS` is stubbed `[""]`. Adding
+   `min_ff_n40C_3v60` to `STA_CORNERS` does **not** work — LibreLane logs
+   `Skipping corner min_ff_n40C_3v60 for STA` and the rename historically breaks
+   GRT routing at this density (Open Risk #41, memory `rcx-min-ff-ruleset-fix`);
+   the supported lever is an `RCX_RULESETS` `.min` override on an ff corner
+   (job 3444), which redefines "max_ff" in existing DRV/signoff references and
+   was not taken this close to tapeout.
+2. Job 5630 is **not** the final tapeout netlist — a fresh guarded KLayout DRC
+   (#58) is owed, and a remod/SS-waiver re-run may change the netlist. Per the
+   standing obligation below, re-run job 5647's harness against whatever routed
+   netlist + SDF actually tapes out.
+
+Job scripts: `rtl-test/gl_spi_sdf_item54.sh` (functional, nom_tt),
+`rtl-test/gl_spi_sdf_item54_minff.sh` (standalone min_ff SDF gen + STA).
+Staged inputs: `rtl-test/gl_item54_inputs/`.
+
+---
 
 The 2 MHz SPI timing constraints and all-corner STA establish the timing
 contract, but no gate-level simulation has exercised the final routed

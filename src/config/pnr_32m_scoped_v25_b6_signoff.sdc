@@ -1,7 +1,7 @@
 # pnr_32m_scoped_v25_b6_signoff.sdc
 # ============================================================================
 # SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus the
-# marked signoff-only additions v28..v31:
+# marked signoff-only additions v28..v33:
 #   v28 (2026-08-27) -- the `tacc_accumulate` exception group.
 #   v29 (2026-08-27) -- dcr_valid -> iq_samp_cnt[*] and (2026-09-03) PSRAM QPI
 #        source-synchronous output timing (Open Risk #69): a PSRAM_SCK generated
@@ -12,13 +12,22 @@
 #        paths (DBG0_OUT wholesale; the debug side of the shared IRQ_OUT/DBG1
 #        pad), which the generic core-output rule otherwise leaves as the SS
 #        worst path in the design.
+#   v32 (2026-09-04) -- narrow the `paced_dsp` -through wildcard: exclude the six
+#        u_dec.int_i1/i2/i3/q1/q2/q3 CIC integrator recurrences (updated every
+#        clk_32m edge, real separation 1 cycle) from the 3-cycle budget. See the
+#        block comment at the paced_nets definition below.
+#   v33 (2026-09-05) -- narrow it again: exclude the Open Risk #68 window-epoch
+#        control tags (u_tacc.win_epoch/tdm_epoch/acc_epoch) -- window-control
+#        state, not multiply/accumulate state, so they stay single-cycle timed.
+#        Post-route STA backstop: SGE job 5648, all six nets MET at MCP=1,
+#        worst setup slack +15.73 ns.
 # It is used as SIGNOFF_SDC_FILE only; PNR_SDC_FILE stays the plain
 # pnr_32m_scoped_v25_b6.sdc so the placed/routed netlist is bit-for-bit the
 # job-5105 flow (adding tacc_accumulate to the P&R SDC strands the IQ_CLK root
 # clkbuf with no routing access point -- DRT-0073, job 5112; the PSRAM
 # generated clock is kept out of the P&R SDC for the same class of reason
 # until a routed run clears it).
-# Keep everything except the marked v28..v31 blocks identical to the P&R SDC.
+# Keep everything except the marked v28..v33 blocks identical to the P&R SDC.
 # ============================================================================
 #
 # pnr_32m_scoped_v25_b6.sdc
@@ -557,6 +566,10 @@ set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 set_false_path -from [get_ports RESETB]
 set_false_path -from [get_ports HOST_CS]
 
+# ARRAY_ACQ_N_IN: asynchronous open-drain array-sync wire, 2-FF synchronised in
+# u_array_acq_sync (acq_meta -> acq_sync). No timing relationship to IQ_CLK.
+set_false_path -from [get_ports ARRAY_ACQ_N_IN]
+
 # --- Scoped multicycle: ONLY the four paced DSP blocks get 3 cycles ----------
 # Net names retain hierarchy ('.' separator) after flatten; cell names do not.
 # packet_ctrl_fsm (u_pcfsm) is scoped separately above via -from/-to registered
@@ -587,10 +600,14 @@ set_false_path -from [get_ports HOST_CS]
 # subtract by name the same way. u_sc.*/u_tacc.*/u_comb.* are unaffected --
 # sc_detector's TDM/eval engines (tdm_wait==TDM_WAIT gate, sc_detector.v:402-
 # 481) and mrc_combiner's MAC_WAIT states are genuinely held every cycle they
-# touch, so no equivalent always-running recurrence was found there.
+# touch, so no equivalent always-running recurrence was found there. This was
+# narrowed again in v33 below: `u_tacc.*` also contains the Open Risk #68
+# window-epoch control tags, which are not multiply/accumulate state and must
+# not inherit a three-cycle budget merely because they sit in this module.
 set paced_nets_raw [get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]
 set dec_integrator_pats {u_dec.int_i1* u_dec.int_i2* u_dec.int_i3* \
                          u_dec.int_q1* u_dec.int_q2* u_dec.int_q3*}
+set tacc_epoch_pats {u_tacc.win_epoch* u_tacc.tdm_epoch* u_tacc.acc_epoch*}
 set paced_nets {}
 foreach n $paced_nets_raw {
     set full [get_full_name $n]
@@ -598,7 +615,11 @@ foreach n $paced_nets_raw {
     foreach pat $dec_integrator_pats {
         if {[string match $pat $full]} { set is_integrator 1; break }
     }
-    if {!$is_integrator} { lappend paced_nets $n }
+    set is_epoch_control 0
+    foreach pat $tacc_epoch_pats {
+        if {[string match $pat $full]} { set is_epoch_control 1; break }
+    }
+    if {!$is_integrator && !$is_epoch_control} { lappend paced_nets $n }
 }
 
 set_multicycle_path 3 -setup -through $paced_nets

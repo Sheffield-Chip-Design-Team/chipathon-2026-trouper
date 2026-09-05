@@ -314,7 +314,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | Strobe-paced | advanced by valid strobe (`iq_tick`/`dcr_valid`/…) + scoped MCP where honest | strobe-rate | `packet_ctrl_fsm`, `dc_removal`, `training_acc` |
 | CE-gated | `ce_16m` clock-enable + scoped MCP=2 | 62.5 ns | `reg_bank` (incl. interrupt aggregation) |
 
-`spi_slave` also carries a serial engine in the asynchronous `SPI_SCK` domain (the one CDC, above); the P&R SDC omits `SPI_SCK` to suppress its CTS tree, the signoff SDC restores it at 2 MHz async.
+`spi_slave` also carries a serial engine in the asynchronous `SPI_SCK` domain (the only clock-to-clock CDC, above); the P&R SDC omits `SPI_SCK` to suppress its CTS tree, the signoff SDC restores it at 2 MHz async. The `ARRAY_ACQ_N` array-sync wire is the one other asynchronous input — a single level, 2-FF synchronised into `IQ_CLK` in `array_acq_sync` and `set_false_path`-cut in every SDC.
 
 **Superseded:** the former `CLK_16M` scheme — a top-level registered divide-by-2 distributed as a second clock tree — no longer exists, and neither does the former single-cycle `sc_detector` TDM limitation that motivated pipelining its accumulator. `reg_bank` is clock-enable-gated (see `planning/ce-gated-quasi-static-retimer-experiment.md`), the rest of the control plane is strobe-paced, and every TDM/MAC cone is paced in RTL so its multicycle constraint is honest. The residual SS/3.0 V gap is a library limitation tracked under TRPR-PHY-008, not a clocking problem.
 

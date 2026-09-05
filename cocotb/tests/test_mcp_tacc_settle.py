@@ -7,8 +7,8 @@ Structural background (src/combiner/training_acc.v): the dual 8x8 multiply
 IQ_CLK cycle at the FD SS corner, so each TDM step is held for TDM_WAIT+1 = 3
 cycles (tdm_wait counting 0..TDM_WAIT while pipe_active) before the settled
 products are registered on `active_cycle = pipe_active && tdm_wait ==
-TDM_WAIT`, and only then consumed the following cycle by the Zpair_*/Zdiag_*
-accumulation (gated by acc_active && active_cycle). This is exactly the
+TDM_WAIT`, and only then consumed by the Zpair_*/Zdiag_* accumulation (gated
+by acc_active && active_cycle). This is exactly the
 relaxation the SDC's scoped `set_multicycle_path 3 -setup -through
 $paced_nets` (paced_dsp group, u_tacc.* in scope) grants.
 
@@ -25,7 +25,9 @@ starts and finishes correctly regardless of the stale mul_out left behind.
   test_mul_settle_gating     -- one full training window under normal
       sample/TDM activity; a background monitor asserts mul_out/mulB_out
       never change unless pipe_active && tdm_wait==TDM_WAIT held on the
-      preceding edge.
+      preceding edge. The same monitor directly checks every Zpair_*/Zdiag_*
+      endpoint: it may change only on that paced accumulation edge, or on the
+      explicit arm-time zero load.
   test_reset_mid_burst_rearm -- assert rst_n partway through a TDM step
       burst (tdm_active=1, tdm_wait < TDM_WAIT); confirms tdm_active/
       acc_active/tdm_pair/tdm_wait/armed all clear (mul_out deliberately
@@ -45,6 +47,12 @@ M = 1 << (SF + SHIFT)     # 64 samples/symbol
 SAMPLE_CLKS = 64          # iq_valid spacing
 WINDOW_SYMS = 8           # clamp floor
 RAW_I0, RAW_Q0 = 5, -3    # constant branch-0 sample -> Zdiag_0 = n_acc * 34
+Z_ENDPOINTS = (
+    "Zpair_i0", "Zpair_q0", "Zpair_i1", "Zpair_q1",
+    "Zpair_i2", "Zpair_q2", "Zpair_i3", "Zpair_q3",
+    "Zpair_i4", "Zpair_q4", "Zpair_i5", "Zpair_q5",
+    "Zdiag_0", "Zdiag_1", "Zdiag_2", "Zdiag_3",
+)
 
 
 async def _reset(dut):
@@ -75,20 +83,35 @@ async def _pulse(dut):
 
 def _snap(dut):
     return {
+        "rst_n": int(dut.rst_n.value),
         "tdm_active": int(dut.tdm_active.value),
         "acc_active": int(dut.acc_active.value),
         "tdm_wait": int(dut.tdm_wait.value),
         "mul_out": int(dut.mul_out.value),
         "mulB_out": int(dut.mulB_out.value),
+        "armed": int(dut.armed.value),
+        "sc_lock": int(dut.sc_lock.value),
+        "noise_trig": int(dut.noise_trig.value),
+        "z": tuple(int(getattr(dut, name).value) for name in Z_ENDPOINTS),
     }
 
 
-async def _settle_monitor(dut, violations):
+async def _settle_monitor(dut, violations, stats):
     prev = _snap(dut)
+    stats.setdefault("z_acc_updates", 0)
+    stats.setdefault("z_arm_loads", 0)
+    stats.setdefault("z_touched", set())
     while True:
         await RisingEdge(dut.clk)
         await ReadOnly()
         cur = _snap(dut)
+        # Reset is asynchronous and Z registers are intentionally resetless;
+        # do not construe simulator initialization/reset transitions as a
+        # paced datapath write. The re-arm test below covers the first real
+        # post-reset window.
+        if not cur["rst_n"] or not prev["rst_n"]:
+            prev = cur
+            continue
         pipe_active = prev["tdm_active"] or prev["acc_active"]
         active_cycle = pipe_active and prev["tdm_wait"] == TDM_WAIT
         if (cur["mul_out"] != prev["mul_out"] or cur["mulB_out"] != prev["mulB_out"]):
@@ -97,6 +120,28 @@ async def _settle_monitor(dut, violations):
                     f"mul_out/mulB_out changed with tdm_active={prev['tdm_active']} "
                     f"acc_active={prev['acc_active']} tdm_wait={prev['tdm_wait']} "
                     f"(need pipe_active=1 wait={TDM_WAIT})"
+                )
+        if cur["z"] != prev["z"]:
+            stats["z_touched"].update(
+                name for name, before, after in zip(Z_ENDPOINTS, prev["z"], cur["z"])
+                if before != after
+            )
+            # Every Z endpoint is written in exactly two places in the RTL:
+            # arm-time zeroing, or `if (acc_active && active_cycle)`.
+            # Check the actual endpoints rather than inferring their pacing
+            # transitively from mul_out/mulB_out.
+            arm_load = ((cur["sc_lock"] or cur["noise_trig"]) and
+                        not prev["armed"])
+            if prev["acc_active"] and prev["tdm_wait"] == TDM_WAIT:
+                stats["z_acc_updates"] += 1
+            elif arm_load:
+                stats["z_arm_loads"] += 1
+            else:
+                violations.append(
+                    "Zpair/Zdiag endpoint changed outside an arm-time zero load "
+                    f"or paced accumulate edge: prev(acc_active={prev['acc_active']}, "
+                    f"tdm_wait={prev['tdm_wait']}, armed={prev['armed']}, "
+                    f"sc_lock={prev['sc_lock']}, noise_trig={prev['noise_trig']})"
                 )
         prev = cur
 
@@ -135,7 +180,8 @@ async def test_mul_settle_gating(dut):
     await _reset(dut)
 
     violations = []
-    mon = cocotb.start_soon(_settle_monitor(dut, violations))
+    stats = {}
+    mon = cocotb.start_soon(_settle_monitor(dut, violations, stats))
 
     n_acc, zd = await _run_training_window(dut, tr_offset=1)
     exp_n = WINDOW_SYMS * M
@@ -144,6 +190,8 @@ async def test_mul_settle_gating(dut):
 
     mon.kill()
     assert not violations, "settle violations:\n" + "\n".join(violations)
+    assert stats["z_acc_updates"] > 0, "no paced Zpair/Zdiag update observed"
+    assert set(Z_ENDPOINTS) <= stats["z_touched"], "not every Z endpoint changed"
 
 
 @cocotb.test()
@@ -152,7 +200,8 @@ async def test_reset_mid_burst_rearm(dut):
     await _reset(dut)
 
     violations = []
-    mon = cocotb.start_soon(_settle_monitor(dut, violations))
+    stats = {}
+    mon = cocotb.start_soon(_settle_monitor(dut, violations, stats))
 
     # acc_start = timing_ref for a live-mode arm; use 0 so the very first
     # iq_valid pulse below satisfies sample_count(pre-increment)==0 >=
@@ -200,3 +249,5 @@ async def test_reset_mid_burst_rearm(dut):
 
     mon.kill()
     assert not violations, "settle violations after reset re-arm:\n" + "\n".join(violations)
+    assert stats["z_acc_updates"] > 0, "no paced Zpair/Zdiag update observed after reset"
+    assert set(Z_ENDPOINTS) <= stats["z_touched"], "not every Z endpoint changed after reset"

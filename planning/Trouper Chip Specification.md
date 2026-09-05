@@ -76,7 +76,7 @@ Single core clock: the external 32 MHz `IQ_CLK` drives every core flop, with no 
 | Strobe-paced | advanced by valid strobe (`iq_tick`/`dcr_valid`/…) + scoped MCP where honest | strobe-rate | `packet_ctrl_fsm`, `dc_removal`, `training_acc` |
 | CE-gated | `ce_16m` clock-enable + scoped MCP=2 | 62.5 ns | `reg_bank` (incl. IRQ aggregation) |
 
-`spi_slave` also contains a serial engine in the asynchronous `SPI_SCK` clock domain (host RPi, ≤2 MHz); that `SPI_SCK`↔`IQ_CLK` crossing is the one CDC in the design. The P&R SDC omits `SPI_SCK` to suppress its CTS tree; the signoff SDC restores it as a 2 MHz asynchronous clock.
+`spi_slave` also contains a serial engine in the asynchronous `SPI_SCK` clock domain (host RPi, ≤2 MHz); that `SPI_SCK`↔`IQ_CLK` crossing is the only clock-to-clock CDC in the design. The P&R SDC omits `SPI_SCK` to suppress its CTS tree; the signoff SDC restores it as a 2 MHz asynchronous clock. The one other asynchronous input is the `ARRAY_ACQ_N` array-sync wire: a single level, resynchronised into `IQ_CLK` by the 2-FF synchroniser in `array_acq_sync`, and cut in every SDC with `set_false_path -from [get_ports ARRAY_ACQ_N_IN]`.
 
 The former CLK_16M generated-clock scheme (registered divide-by-2 net) and the former single-cycle SC-detector TDM limitation are both superseded: `reg_bank` is clock-enable-gated (see `planning/ce-gated-quasi-static-retimer-experiment.md`), the rest of the control plane is strobe-paced, and every TDM/MAC cone is paced in RTL so its multicycle constraint is honest. The residual SS/3.0 V gap is a library limitation tracked under TRPR-PHY-008.
 

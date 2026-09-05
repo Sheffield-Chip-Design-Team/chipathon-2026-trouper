@@ -69,5 +69,38 @@ foreach group $mcp_audit_groups {
         emit "MCP_OBJECT|$id|endpoint|$object_name"
     }
 
+    # Retain the fully resolved timing-path evidence as well as the selector
+    # collections above.  A collection can be non-empty while matching an
+    # unintended sibling cone; these reports expose the actual startpoint /
+    # endpoint arcs selected by the active setup and hold exceptions.  One
+    # unique path per endpoint is enough to review scope without duplicating
+    # reconvergent alternatives; the deliberately high group limit prevents a
+    # silently truncated endpoint set on this design.
+    if {$through_variable ne "" && $endpoint_variable ne ""} {
+        set through_collection [set $through_variable]
+        set endpoint_collection [set $endpoint_variable]
+        emit "MCP_ARC_REPORT|$id|max"
+        report_checks -path_delay max -through $through_collection -to $endpoint_collection \
+            -unique_paths_to_endpoint -group_path_count 100000 -endpoint_path_count 1 -format json
+        emit "MCP_ARC_REPORT|$id|min"
+        report_checks -path_delay min -through $through_collection -to $endpoint_collection \
+            -unique_paths_to_endpoint -group_path_count 100000 -endpoint_path_count 1 -format json
+    } elseif {$through_variable ne ""} {
+        set through_collection [set $through_variable]
+        emit "MCP_ARC_REPORT|$id|max"
+        report_checks -path_delay max -through $through_collection \
+            -unique_paths_to_endpoint -group_path_count 100000 -endpoint_path_count 1 -format json
+        emit "MCP_ARC_REPORT|$id|min"
+        report_checks -path_delay min -through $through_collection \
+            -unique_paths_to_endpoint -group_path_count 100000 -endpoint_path_count 1 -format json
+    } else {
+        set endpoint_collection [set $endpoint_variable]
+        emit "MCP_ARC_REPORT|$id|max"
+        report_checks -path_delay max -to $endpoint_collection \
+            -unique_paths_to_endpoint -group_path_count 100000 -endpoint_path_count 1 -format json
+        emit "MCP_ARC_REPORT|$id|min"
+        report_checks -path_delay min -to $endpoint_collection \
+            -unique_paths_to_endpoint -group_path_count 100000 -endpoint_path_count 1 -format json
+    }
 }
 close $fp

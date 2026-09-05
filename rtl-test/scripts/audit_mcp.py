@@ -23,6 +23,8 @@ def parse_evidence(path):
                 group.update(setup=int(fields[2]), hold=int(fields[3]), through=int(fields[4]), endpoint=int(fields[5]))
             elif fields[:1] == ["MCP_OBJECT"] and len(fields) == 4:
                 result["groups"].setdefault(fields[1], {"objects": {"through": [], "endpoint": []}})["objects"][fields[2]].append(fields[3])
+            elif fields[:1] == ["MCP_ARC_REPORT"] and len(fields) == 3:
+                result["groups"].setdefault(fields[1], {"objects": {"through": [], "endpoint": []}}).setdefault("arc_reports", set()).add(fields[2])
     return result
 
 
@@ -64,11 +66,39 @@ def main():
         for kind in ("through", "endpoint"):
             if len(group["objects"][kind]) != group[kind]:
                 failures.append(f"{name}: {kind} object list/count mismatch")
+        if group.get("arc_reports", set()) != {"max", "min"}:
+            failures.append(f"{name}: missing max/min resolved timing-path report")
     for log in args.log:
         text = pathlib.Path(log).read_text(encoding="utf-8", errors="replace")
         for needle in ("STA-0361", "STA-0472", "no valid objects"):
             if needle in text:
                 failures.append(f"{log}: contains {needle}")
+        # `mcp_audit.tcl` emits the marker into both the evidence file and
+        # OpenROAD log immediately before each JSON report_checks result.
+        # A marker alone only proves the command was attempted; require at
+        # least one resolved startpoint/endpoint path before accepting an MCP
+        # group as non-vacuous timing-path evidence.
+        markers = []
+        for raw in text.splitlines():
+            if raw.startswith("MCP_ARC_REPORT|"):
+                fields = raw.split("|")
+                if len(fields) == 3:
+                    markers.append((fields[1], fields[2]))
+        for name in expected:
+            for phase in ("max", "min"):
+                try:
+                    start = markers.index((name, phase))
+                except ValueError:
+                    failures.append(f"{log}: {name} lacks {phase} timing-path report")
+                    continue
+                marker = f"MCP_ARC_REPORT|{name}|{phase}"
+                begin = text.find(marker)
+                following = [text.find(f"MCP_ARC_REPORT|{n}|{p}", begin + len(marker))
+                             for n, p in markers]
+                following = [offset for offset in following if offset >= 0]
+                section = text[begin:min(following) if following else len(text)]
+                if '"startpoint"' not in section or '"endpoint"' not in section:
+                    failures.append(f"{log}: {name} {phase} report contains no resolved path")
 
     baseline_path = pathlib.Path(args.baseline)
     baseline = load_json(baseline_path)

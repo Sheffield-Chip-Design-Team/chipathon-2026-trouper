@@ -14,7 +14,10 @@ ROOT=$(git rev-parse --show-toplevel)
 SGE_USER=${SGE_USER:-timothyn-dev}
 DESIGNS="/srv/eda/designs/$SGE_USER/lora-mimo"
 STAGE= NETLIST= LIBERTY= SPEF=
-SDC=rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6.sdc
+# Default to the SDC actually named by src/config/trouper_top.json's
+# SIGNOFF_SDC_FILE. The legacy rtl-test copy is not the active P&R constraint
+# set and must be selected explicitly only for historical reproductions.
+SDC=src/config/pnr_32m_scoped_v25_b6_signoff.sdc
 UPDATE=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -27,10 +30,10 @@ while [ $# -gt 0 ]; do
         *) echo "unknown argument: $1" >&2; exit 2;;
     esac
 done
-# --sdc: repo-relative path to the SDC to audit. Defaults to the P&R SDC.
-# Signoff-only MCP groups (tacc_accumulate / iq_samp_cnt / pcfsm_tick_decrement)
-# live ONLY in pnr_32m_scoped_v25_b6_signoff.sdc, so audit those with
-#   --sdc rtl-test/ol_trouper_top/pnr_32m_scoped_v25_b6_signoff.sdc
+# --sdc: repo-relative path to the SDC to audit. Defaults to the active
+# signoff SDC. Signoff-only MCP groups (tacc_accumulate / iq_samp_cnt /
+# pcfsm_tick_decrement) live only there; pass a different SDC solely for an
+# intentional historical or P&R-SDC comparison.
 SDC_BASE=$(basename "$SDC")
 [ "$STAGE" = synth ] || [ "$STAGE" = route ] || { echo "--stage synth|route required" >&2; exit 2; }
 [ -n "$NETLIST" ] && [ -n "$LIBERTY" ] || { echo "--netlist and --liberty required" >&2; exit 2; }

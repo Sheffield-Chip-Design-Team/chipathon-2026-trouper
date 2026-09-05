@@ -437,6 +437,10 @@ set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 set_false_path -from [get_ports RESETB]
 set_false_path -from [get_ports HOST_CS]
 
+# ARRAY_ACQ_N_IN: asynchronous open-drain array-sync wire, 2-FF synchronised in
+# u_array_acq_sync (acq_meta -> acq_sync). No timing relationship to IQ_CLK.
+set_false_path -from [get_ports ARRAY_ACQ_N_IN]
+
 # --- Scoped multicycle: ONLY the four paced DSP blocks get 3 cycles ----------
 # Net names retain hierarchy ('.' separator) after flatten; cell names do not.
 # packet_ctrl_fsm (u_pcfsm) is scoped separately above via -from/-to registered

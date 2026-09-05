@@ -14,10 +14,12 @@ Run the audit on the synthesized netlist and then the final routed netlist:
 
 ```bash
 rtl-test/scripts/run_mcp_audit.sh --stage synth --netlist <synth-netlist> \
+  --sdc src/config/pnr_32m_scoped_v25_b6_signoff.sdc \
   --liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ss_125C_3v00.lib
 
 rtl-test/scripts/run_mcp_audit.sh --stage route --netlist <final-netlist> \
   --spef <final-max-spef> \
+  --sdc src/config/pnr_32m_scoped_v25_b6_signoff.sdc \
   --liberty /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__ss_125C_3v00.lib
 ```
 
@@ -27,7 +29,12 @@ same command with `--update-baseline`.  Subsequent runs
 fail if the resolved object set changes, an SDC selector becomes empty, or the
 OpenROAD log contains `STA-0361`, `STA-0472`, or `no valid objects`.
 
+The audit evidence names every resolved selector object and the paired OpenROAD
+log retains JSON `report_checks` paths for each group: max/setup and min/hold,
+with a resolved startpoint and endpoint required in each report. This exposes a
+fast-changing sibling accidentally swept in by a broad `-through` scope.
+
 The reports identify timing coverage; they do not prove that the RTL hold
-protocol is correct.  The `proof` field in the manifest names the required
-formal/assertion evidence for each group.  No MCP-based signoff is complete
+protocol is correct. The `proof` field in the manifest names the required
+formal/assertion evidence for each group. No MCP-based signoff is complete
 until that evidence and this audit both pass.
