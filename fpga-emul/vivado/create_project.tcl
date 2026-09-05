@@ -62,6 +62,8 @@ set asic_srcs [list \
     "$asic_rtl/control/packet_ctrl_fsm.v"     \
     "$asic_rtl/combiner/mrc_combiner.v"       \
     "$asic_rtl/remod/sd_remod.v"              \
+    "$asic_rtl/remod/sd_remod_multiplierless.v" \
+    "$asic_rtl/debug/bringup_src.v"           \
     "$asic_rtl/control/spi_slave.v"           \
     "$asic_rtl/control/reg_bank.v"            \
 ]

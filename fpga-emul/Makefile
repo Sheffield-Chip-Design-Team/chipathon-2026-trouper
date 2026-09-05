@@ -20,12 +20,17 @@
 #   /srv/eda/logs/timothyjabez/job-<ID>.o
 
 HLAB_SGE_URL  = http://nas.home:4783
-NFS_DESIGN    = /srv/eda/designs/timothyjabez/lora-mimo
+NFS_DESIGN    = /srv/eda/designs/timothyn-dev/lora-mimo
 
 VERILATOR   = verilator
+# --Wno-PINMISSING: trouper_top.v carries ~130 A40 padframe pad-control ports
+# (PU/PD/CS/SL/PDRV0/PDRV1/OE/IE per pad) that have no meaning on an Arty FPGA.
+# fpga_dsp_wrap.v connects every real signal port and explicitly ties every
+# trouper_top *input* pad; the unconnected pad-control *outputs* are the only
+# thing this suppresses.
 VFLAGS      = --binary --timing -Wall --Wno-UNUSED --Wno-DECLFILENAME \
               --Wno-WIDTHTRUNC --Wno-WIDTHEXPAND --Wno-BLKSEQ \
-              --Wno-SYNCASYNCNET --Wno-PINCONNECTEMPTY \
+              --Wno-SYNCASYNCNET --Wno-PINCONNECTEMPTY --Wno-PINMISSING \
               --Wno-UNOPTFLAT -sv
 
 RTL         = rtl
@@ -43,6 +48,8 @@ ASIC_SRCS   = $(ASIC_RTL)/top/trouper_top.v             \
               $(ASIC_RTL)/control/packet_ctrl_fsm.v    \
               $(ASIC_RTL)/combiner/mrc_combiner.v      \
               $(ASIC_RTL)/remod/sd_remod.v             \
+              $(ASIC_RTL)/remod/sd_remod_multiplierless.v \
+              $(ASIC_RTL)/debug/bringup_src.v          \
               $(ASIC_RTL)/control/spi_slave.v          \
               $(ASIC_RTL)/control/reg_bank.v
 

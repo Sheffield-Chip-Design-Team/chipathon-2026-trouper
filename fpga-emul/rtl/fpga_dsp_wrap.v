@@ -172,38 +172,61 @@ module fpga_dsp_wrap #(
     assign irq          = irq_w;    // to internal AXI GPIO
     assign ext_irq      = irq_w;    // to external IRQ pin
 
+    // trouper_top is the A40 padframe top level: every functional signal sits
+    // on a bidirectional pad broken out as <PAD>_IN / <PAD>_OUT / <PAD>_OE plus
+    // ~130 pad-control tie-off outputs (PU/PD/CS/SL/PDRV0/PDRV1/IE). None of the
+    // pad-control ports mean anything on an Arty FPGA, so only the real signal
+    // ports are wired here; the unconnected pad-control *outputs* are covered by
+    // --Wno-PINMISSING (see Makefile). Every trouper_top *input* pad is tied off
+    // explicitly below so nothing floats.
     trouper_top u_top (
         .IQ_CLK        (clk),
         .RESETB        (rst_n),
-                .IQ_DATA_I_0 (muxed_iq_i[0]),
-        .IQ_DATA_I_1 (muxed_iq_i[1]),
-        .IQ_DATA_I_2 (muxed_iq_i[2]),
-        .IQ_DATA_I_3 (muxed_iq_i[3]),
-                .IQ_DATA_Q_0 (muxed_iq_q[0]),
-        .IQ_DATA_Q_1 (muxed_iq_q[1]),
-        .IQ_DATA_Q_2 (muxed_iq_q[2]),
-        .IQ_DATA_Q_3 (muxed_iq_q[3]),
+        .IQ_DATA_I_0   (muxed_iq_i[0]),
+        .IQ_DATA_I_1   (muxed_iq_i[1]),
+        .IQ_DATA_I_2   (muxed_iq_i[2]),
+        .IQ_DATA_I_3   (muxed_iq_i[3]),
+        .IQ_DATA_Q_0   (muxed_iq_q[0]),
+        .IQ_DATA_Q_1   (muxed_iq_q[1]),
+        .IQ_DATA_Q_2   (muxed_iq_q[2]),
+        .IQ_DATA_Q_3   (muxed_iq_q[3]),
+
         .REMOD_A_I_OUT     (remod_i),
         .REMOD_A_Q_OUT     (remod_q),
+        .REMOD_A_I_IN      (1'b0),
+        .REMOD_A_Q_IN      (1'b0),
+
         .PSRAM_SCK_OUT     (ps_sck),
+        .PSRAM_SCK_IN      (1'b0),
         .PSRAM_CE_N_OUT    (ps_ce_n),
-                .PSRAM_SIO_0_OUT (ps_sio_out[0]),
+        .PSRAM_CE_N_IN     (1'b0),
+        .PSRAM_SIO_0_OUT (ps_sio_out[0]),
         .PSRAM_SIO_1_OUT (ps_sio_out[1]),
         .PSRAM_SIO_2_OUT (ps_sio_out[2]),
         .PSRAM_SIO_3_OUT (ps_sio_out[3]),
-                .PSRAM_SIO_0_IN (ps_sio_in[0]),
+        .PSRAM_SIO_0_IN (ps_sio_in[0]),
         .PSRAM_SIO_1_IN (ps_sio_in[1]),
         .PSRAM_SIO_2_IN (ps_sio_in[2]),
         .PSRAM_SIO_3_IN (ps_sio_in[3]),
-                .PSRAM_SIO_0_OE (ps_sio_oe[0]),
+        .PSRAM_SIO_0_OE (ps_sio_oe[0]),
         .PSRAM_SIO_1_OE (ps_sio_oe[1]),
         .PSRAM_SIO_2_OE (ps_sio_oe[2]),
         .PSRAM_SIO_3_OE (ps_sio_oe[3]),
+
         .HOST_CS       (sel_host_cs),
         .SPI_SCK       (sel_spi_sck),
         .SPI_MOSI      (sel_spi_mosi),
-        .SPI_MISO_OUT      (miso_w),
-        .IRQ_OUT_OUT       (irq_w)
+        .SPI_MISO_OUT  (miso_w),
+        .SPI_MISO_IN   (1'b0),
+
+        .IRQ_OUT_OUT   (irq_w),
+        .IRQ_OUT_IN    (1'b0),
+
+        .DBG0_IN       (1'b0),
+
+        // Array-acquisition sync: idle high, as the mandatory external pull-up
+        // holds it when no chip is asserting (planning/array-acquisition-sync.md).
+        .ARRAY_ACQ_N_IN (1'b1)
     );
 
     // =========================================================================
