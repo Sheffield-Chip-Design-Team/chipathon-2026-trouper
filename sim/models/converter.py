@@ -13,25 +13,35 @@ class ADCModel:
 
 class SigmaDeltaRemodulator:
     """
-    Stage 8 — CIFF ΣΔ re-modulator. `order=3` (default) matches sd_remod.v exactly.
+    Stage 8 — CIFF ΣΔ re-modulator reference. STALE as of 2026-09-04: this class's
+    cascade propagates each integrator stage's just-updated value within the same
+    sample (zero extra loop delay) -- not physically realizable in a real clocked
+    circuit, where the quantizer decision must be registered (see sd_remod.v
+    header for the full "excess loop delay" derivation). Deployed RTL is now a
+    4th-order loop with real coefficients A1..A4 = 377/106/-8/-8 (Q8), re-derived
+    specifically for that mandatory extra delay -- NOT expressible as a
+    same-sample-cascade order-4 entry here without reproducing the same
+    structural mismatch this class already had at order=3. Treat order=3 below
+    as an idealized reference only, not a model of deployed RTL; see
+    planning/ss-timing-closure-exploration-2026-09-04.md for the real derivation
+    and cross-check numbers (bit-exact RTL vs this model).
 
     Architecture: Cascade of Integrators, Feed-Forward (CIFF).
       N saturating integrators; Q8 weighted feed-forward summer; sign quantizer.
       Coefficients from synthesizeNTF(order, OSR=64, H_inf=1.5) via python-deltasigma.
-      order=3 matches SX1257 datasheet §6.2.3 Figure 6-3 / deployed RTL.
       order=2 is the B3 area-cut candidate (planning/area-reduction-roadmap.md §7) —
       NOT deployed in RTL; coefficients derived the same way for a fair comparison.
 
     Normalised convention: input |x| <= 1.0, feedback = ±1.0.
     Integrators saturate at ±CLIP (= 32767/127, matching int16/int8 ratio in RTL).
-    Input must be < −3 dBFS (|x| < 0.708) for 3rd-order stability (RTL header).
+    Input must be < −3 dBFS (|x| < 0.708) for stability (RTL header).
     """
 
     # Q8 feed-forward coefficients, round(synthesizeNTF(order, OSR=64, H_inf=1.5) * 256) / 256.
-    # order=3 verified to reproduce the deployed RTL constants (sd_remod.v A1/A2/A3 = 205/74/11).
+    # NOTE: no longer matches deployed RTL at any order -- see class docstring.
     _COEFFS = {
         2: (198 / 256, 55 / 256),          # 0.7734, 0.2148 — B3 candidate, not in RTL
-        3: (205 / 256, 74 / 256, 11 / 256),  # 0.800, 0.289, 0.043 — matches sd_remod.v
+        3: (205 / 256, 74 / 256, 11 / 256),  # 0.800, 0.289, 0.043 — idealized reference only
     }
     CLIP = 32767 / 127  # integrator saturation limit in normalised units (~258)
 

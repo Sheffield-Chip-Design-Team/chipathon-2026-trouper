@@ -349,11 +349,11 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 
 ### 4.9 ΣΔ Re-modulator (`sd_remod.v`) — TRPR-RMD
 
-Third-order ΣΔ modulator. Converts int8 combined output back to 1-bit I+Q streams for SX1302.
+4th-order CIFF ΣΔ modulator (not SX1257 Figure 6-3's 3rd order — see `sd_remod.v` header; the SX1302 receive-side interface it actually drives does not encode a modulator order). Converts int8 combined output back to 1-bit I+Q streams for SX1302.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 3rd-order ΣΔ modulator, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. | T |
+| TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 4th-order CIFF ΣΔ modulator, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. (Was 3rd order; raised 2026-09-04 to compensate the loop's real one-sample excess loop delay — a 3rd-order loop filter cannot meet TRPR-RMD-005/006/007 once that delay is accounted for, see `sd_remod.v` header.) | T |
 | TRPR-RMD-002 | C | F | The re-modulator SHALL operate at 32 MS/s output rate with OSR=64 (int8 at 500 kS/s → 1-bit at 32 MS/s). | T |
 | TRPR-RMD-003 | C | F | All integrators SHALL use saturating arithmetic. Wrap-around addition is prohibited; a wrapped integrator will cause permanent instability. | T |
 | TRPR-RMD-004 | C | P | Input amplitude SHALL be constrained to strictly < −3 dBFS (< 90 counts int8) by AGC (TRPR-MRC-009) plus `REMOD_BACKOFF_SHIFT`. No on-chip over-range flag exists and none is feasible: integrator states sit near-rail even in healthy operation, so they are not a valid instability signal (see `cocotb`/`test_remod_backoff.py`). | T |
