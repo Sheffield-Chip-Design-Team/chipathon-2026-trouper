@@ -109,6 +109,26 @@ The firmware must be able to write:
 
 ### Primary firmware inputs
 
+> **Read coherency (mandatory):** the host SPI read tap is combinational with
+> **no synchroniser**, and `SPI_SCK` is async to the core, so volatile status
+> fields (`PACKET_STATUS`, `TRAINING_STATUS`, `PSRAM_STATUS`, `WGT_CTRL` RO
+> bits, `IRQ_STATUS`, `SC_STAT`/`SC_DBG_FLAGS`, `DBG_BUSY`, …) can return a torn
+> or momentarily-metastable byte on a single read. Before acting on one,
+> firmware SHALL **confirm-read**: issue **two independent command-plus-data
+> transactions to the same address, deasserting `HOST_CS` between them**, and
+> accept the value only if both complete bytes agree (bounded retry, then treat
+> as a bus error). Two consecutive bytes of one CS-low burst do *not* count —
+> burst mode auto-increments the address. Read the frozen banks — `Z`/`Zdiag`
+> (`0x40`–`0x6F`) and the final `N_ACC` — only after `TRAINING_DONE` is
+> confirm-read set; that bulk read is then a single coherent transaction.
+> **Mid-window `N_ACC` is not recoverable** (it counts faster than a read
+> completes) — treat it as an approximate progress indicator only. This is a
+> **probabilistic mitigation, not a hardware guarantee** — do not use a
+> volatile field as the sole input to a correctness-critical decision. Full
+> rules and the per-register
+> classification: `planning/Register Map.md` § *Host SPI read coherency —
+> firmware contract* (spec TRPR-SPS-012, Open Risk #38).
+
 The firmware must be able to read:
 - `PACKET_STATUS`
 - `ACTIVE_MODE`

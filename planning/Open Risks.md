@@ -981,7 +981,7 @@ and add shared SPI/AHB debug-port tests.
 **See:** item 16 and `planning/Grouper PSRAM CSR Exploration.md`.
 **Found:** 2026-08-28, post-implementation review of `095ae2e`.
 
-### 38. Host SPI CDC/pad timing is not fully signed off — write-event CDC low risk; volatile-read CDC remains open
+### 38. Host SPI CDC/pad timing is not fully signed off — write-event CDC low risk; volatile-read CDC accepted via firmware contract (Route 2, documented 2026-09-05); mailbox/pad-timing review still open
 
 **Partially fixed 2026-07-12:** the persistent toggle/event CDC (commits
 `2b6af0f`, `fef30de`) closes Open Risk #15 outright and makes completed writes
@@ -1053,11 +1053,34 @@ CS-to-SCK timing, replace zero-delay MOSI/MISO assumptions with Raspberry Pi +
 PCB + GF180-pad numbers, and run all-corner setup/hold plus an unconstrained-
 endpoint/CDC review.
 
-**See:** Open Risk #15; `src/control/spi_slave.v`;
-`src/config/pnr_32m_scoped_v25_b6.sdc`;
-`planning/spi-slave-cdc-and-10mhz-timing-plan.md`.
+**2026-09-05 — Route 2 chosen and documented for this revision.** The
+firmware two-transaction confirm-read contract is now normative: spec
+`TRPR-SPS-012`, `planning/Register Map.md` § *Host SPI read coherency —
+firmware contract* (per-register volatile/static/frozen classification + the
+confirm-read rules), `planning/Firmware Spec.md` § Primary firmware inputs.
+**It is a probabilistic mitigation, not a hardware coherency guarantee** —
+the MISO register directly samples the async multi-bit core value with no
+synchroniser; two agreeing *independent* reads (separate command+data
+transactions, `HOST_CS` toggled between) lower the odds of accepting a torn
+byte but cannot prove coherency or remove metastability. Residual CDC risk on
+volatile reads stays under this item. It is genuinely coherent only for
+**frozen** registers read with a stable address after their completion flag
+(nothing in the core is changing). Route 1 (on-chip core-domain read snapshot,
+a real guarantee) was prototyped and set aside: it regressed the
+`spi_cdc`/`spi_slave` suites with a one-byte MISO pipeline shift and, done
+naively, pulls the wide `reg_bank` peek mux onto a 31.25 ns IQ_CLK arc at the
+SS corner — a timing-safe version needs a new CE-gated MCP group in the audited
+signoff SDC. Left as a post-tapeout option. **Still open under this item:** the
+bundled-mailbox settling constraint, synchronizer placement intent,
+`HOST_CS`/CS-to-SCK board timing, real pad/PCB MOSI/MISO numbers, and the
+all-corner/CDC review — Route 2 does not close those.
+
+**See:** Open Risk #15; #54 (GLS/SDF); #61 (`spi_slave` formal BMC failure);
+`src/control/spi_slave.v`; `src/config/pnr_32m_scoped_v25_b6.sdc`;
+`planning/spi-slave-cdc-and-10mhz-timing-plan.md`;
+spec `TRPR-SPS-012` / `TRPR-WGN-002`.
 **Found:** 2026-07-11; re-scoped to 2 MHz on 2026-08-29; CDC risk split reviewed
-2026-09-05.
+2026-09-05; Route 2 contract documented 2026-09-05.
 
 ### 54. Host-SPI post-route GLS/SDF check is missing
 

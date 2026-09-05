@@ -305,17 +305,18 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 
 ## Clocking, timing tiers, and asynchronous boundaries
 
-**There are no internal clock domains and no CDC inside the core.** The single 32 MHz external reference (`IQ_CLK`, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins) drives every flop on one clock net. The tiers below are *constraint* tiers, not clock domains — they differ in how many IQ_CLK cycles a path is allowed, not in which clock it runs on. Normative source: spec §3.1 and TRPR-SYS-003.
+**The core has one clock and one clock-domain crossing: the host SPI interface.** The single 32 MHz external reference (`IQ_CLK`, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins) drives every core flop on one clock net. The **one** CDC is the asynchronous, RPi-driven `SPI_SCK` (≤2 MHz): `spi_slave` runs a serial engine in the `SPI_SCK` domain and crosses completed register events into `IQ_CLK` on a persistent-toggle + bundled-data mailbox synchroniser (writes), while volatile-status *reads* over MISO are mitigated by the TRPR-SPS-012 firmware contract (probabilistic; residual risk under Open Risk #38). No other CDC or synchroniser exists in the core. The tiers below are *constraint* tiers on the `IQ_CLK` domain, not separate clock domains. Normative source: spec §3.1 and TRPR-SYS-003.
 
 | Tier | Mechanism | Effective budget | Blocks |
 |---|---|---|---|
-| Full-rate | single-cycle | 31.25 ns | decimator CIC integrators, `sd_remod`, `psram_buf_ctrl` QPI FSM |
+| Full-rate | single-cycle | 31.25 ns | decimator CIC integrators, `sd_remod`, `psram_buf_ctrl` QPI FSM, `spi_slave` IQ_CLK-domain synchroniser/mailbox |
 | Paced TDM | RTL hold counters + scoped MCP=3 | 93.75 ns | HB MACs (`sd_decimator_poly`), `sc_detector` TDM + serial eval, `training_acc` walk, `mrc_combiner` states 1–10 |
-| CE-gated | `ce_16m` clock-enable + scoped MCP=2 | 62.5 ns | `reg_bank` (incl. interrupt aggregation), `spi_slave`, `packet_ctrl_fsm` |
+| Strobe-paced | advanced by valid strobe (`iq_tick`/`dcr_valid`/…) + scoped MCP where honest | strobe-rate | `packet_ctrl_fsm`, `dc_removal`, `training_acc` |
+| CE-gated | `ce_16m` clock-enable + scoped MCP=2 | 62.5 ns | `reg_bank` (incl. interrupt aggregation) |
 
-`dc_removal` and `training_acc` update only on their valid strobes. All handshakes are CE-aligned by construction on the single clock net.
+`spi_slave` also carries a serial engine in the asynchronous `SPI_SCK` domain (the one CDC, above); the P&R SDC omits `SPI_SCK` to suppress its CTS tree, the signoff SDC restores it at 2 MHz async.
 
-**Superseded:** the former `CLK_16M` scheme — a top-level registered divide-by-2 distributed as a second clock tree — no longer exists, and neither does the former single-cycle `sc_detector` TDM limitation that motivated pipelining its accumulator. The control plane is clock-enable-gated (see `planning/ce-gated-quasi-static-retimer-experiment.md`) and every TDM/MAC cone is paced in RTL so its multicycle constraint is honest. The residual SS/3.0 V gap is a library limitation tracked under TRPR-PHY-008, not a clocking problem.
+**Superseded:** the former `CLK_16M` scheme — a top-level registered divide-by-2 distributed as a second clock tree — no longer exists, and neither does the former single-cycle `sc_detector` TDM limitation that motivated pipelining its accumulator. `reg_bank` is clock-enable-gated (see `planning/ce-gated-quasi-static-retimer-experiment.md`), the rest of the control plane is strobe-paced, and every TDM/MAC cone is paced in RTL so its multicycle constraint is honest. The residual SS/3.0 V gap is a library limitation tracked under TRPR-PHY-008, not a clocking problem.
 
 ### SDC contract
 
@@ -324,7 +325,8 @@ TRPR-PHY-014 is normative and **forbids generated clocks**. The PNR and signoff 
 ```
 create_clock -period 31.25 [get_ports IQ_CLK]
 # plus scoped set_multicycle_path: MCP=3 on paced TDM cones,
-#                                  MCP=2 on the ce_16m-gated control plane
+#                                  MCP=2 on the ce_16m-gated reg_bank write bus,
+#                                  scoped MCP on the strobe-paced pcfsm arcs
 ```
 
 No `create_generated_clock`, and no blanket MCP override. Every MCP arc must be honest — the RTL has to guarantee the multi-cycle stability the constraint claims (see Open Risks #39/#40 for the history of arcs that did not).

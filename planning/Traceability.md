@@ -52,15 +52,15 @@ Map.md` agreed with each other throughout; only the spec text lagged.
 
 **Checked clean** (address citations that do match the current register map,
 included for completeness since they were part of the same sweep, no edits
-needed): SPS-002, SPS-006 (`CHIP_ID` 0x00), SPS-010/011 (`PSRAM_DBG_DATA` 0x76,
-`0x7F` reserved), REG-004, REG-006 (`TACC_NOISE_TRIG` 0x1F, `WGT_CTRL.W_COMMIT`
+needed): SPS-002, SPS-006 (`CHIP_ID` 0x00), SPS-010/011 (`PSRAM_DBG_DATA` 0x76
+**and `PSRAM_DBG_WDATA` 0x79** — both burst-exempt; `0x7F` reserved), REG-004, REG-006 (`TACC_NOISE_TRIG` 0x1F, `WGT_CTRL.W_COMMIT`
 0x1E, `RX_GAIN_CTRL.RX_GAIN_COMMIT` 0x18, `PSRAM_CTRL.PSRAM_CLR_ERR` 0x70,
 `PSRAM_DBG_CTRL.RD_TRIG` 0x75),
 REG-007/IRQ-001/002/006 (`IRQ_STATUS` 0x02, `IRQ_CLEAR` 0x03), AGC-003
 (`RX_GAIN_SHADOW`/`ACTIVE` 0x10–0x17), AGC-004 (`TACC_NOISE_TRIG` 0x1F), INT-002/009
 (0x00–0x7F range, W shadow 0x30–0x3F, `WGT_CTRL` 0x1E), TAC-002/003/004/007
 (Z pairs 0x40–0x63, `N_ACC` 0x21–0x23, `TACC_WINDOW_SYMS` 0x27), PSR-006/007/
-009/010/017/020 (`PSRAM_STATUS` 0x71, `PSRAM_CTRL` 0x70, `PSRAM_DBG_*` 0x72–0x76),
+009/010/017/020 (`PSRAM_STATUS` 0x71, `PSRAM_CTRL` 0x70, `PSRAM_DBG_*` 0x72–0x76, `0x79`),
 SCD-010/011/012, WGN-003/007.
 
 **Two distinct classes of finding, kept separate in the edits applied:**
@@ -122,7 +122,7 @@ embedded in a full-DSP-chain testbench (`tb_dsp_chain*.v`, `tb_trouper_top.v`,
 | TRPR-SCD-006 | RTL operates on antenna branch 0 only (by design) | I | — | ℹ️ Not a testable requirement — it's a documented design limitation. Tracked as a deferred risk (Open Risks §Deferred item 9): `planning/sc-detector-ant0-fading-risk.md` (ant0 deep-fade SPOF, no 4-branch pooling before lock). |
 | TRPR-SCD-007 | `SC_THR_HI/LO` (0x0C/0x0D) writable, RTL consumes low 12 bits, reset default `0x01CC` | I | `tb_trouper_top.v`, `test_trouper_top.py` (write `SC_THR_HI/LO` over SPI); `cocotb/reg_reset_sweep` | ✅ `reg_reset_sweep` reads `0x0C=0x01` and `0x0D=0xCC` immediately after reset, then dirties both bytes and verifies reset restores `0x01CC`. |
 | TRPR-SCD-008 | `SC_HITS_REQ` configurable via register **0x0E**; locks after encoded value + 1 hits | T | `test_trouper_top.py`, `tb_trouper_top.v` (write via SPI) | ✅ Address fixed 2026-07-05 (was `0x1B`); semantics clarified 2026-07-26: values 1–3 are normal 2–4-hit settings and raw 0 is diagnostic-only one-hit mode. RTL and both tests use 0x0E. |
-| TRPR-SCD-009 | `SC_STAT_HI/LO` (0x24–0x25) exposes `\|C[s]\|²` telemetry | I | `cocotb/tests/test_sc_dbg_flags.py` (job 3307) | ✅ Closed 2026-07-06: read over SPI at both addresses — zero before any symbol evaluation exists (pre-PSRAM-init baseline), nonzero after lock (frozen at the last pre-lock symbol's telemetry). |
+| TRPR-SCD-009 | `SC_STAT_HI/LO` (0x24–0x25) exposes `\|C[s]\|²` telemetry | I | `cocotb/tests/test_sc_dbg_flags.py` (job 3307) | ✅ Closed 2026-07-06: read over SPI at both addresses — zero before any symbol evaluation exists (pre-PSRAM-init baseline), nonzero after lock. The "frozen at the last pre-lock symbol" behaviour seen in that scenario is **not guaranteed** — `sc_stat` tracks live detector state, so `planning/Register Map.md` § *Host SPI read coherency* classifies it **volatile** (confirm-read), not frozen. |
 | TRPR-SCD-010 | Debug regs `SC_DBG_FLAGS` (0x26), `SC_FIRST_HIT` (0x28–0x2B), `SC_LOCK_SNAP` (0x2C–0x2F) | T | `cocotb/tests/test_sc_dbg_flags.py` (job 3307) | ✅ Closed 2026-07-06, with two RTL fixes found in the process: (1) `SC_DBG_FLAGS.SC_HIT` was the 1-cycle `sc_hit_dbg` pulse wired to combinational readback — firmware-invisible, same class as the W_MISSED_PACKET bug — fixed with held `sc_hit_hold` (Open Risks #35); (2) the snapshot delta check (`SC_LOCK_SNAP == SC_FIRST_HIT + M` at `SC_HITS_REQ=1`) exposed the sc_detector `sample_count` double-count (Open Risks #36). All three registers now read and value-checked over SPI, plus an all-zero pre-evaluation baseline. |
 | TRPR-SCD-011 | *(REMOVED — former `CORR_MAG_n` addresses reallocated to `Z_02`/`Z_03` readback)* | — | — | ✅ Superseded 2026-07-26: `0x48–0x4F` are live `Z_02`/`Z_03` bytes (TRPR-TAC-004), not tied-zero telemetry. |
 | TRPR-SCD-012 | *(REMOVED — former `C_POOL_I/Q` addresses reallocated to `ZDIAG` readback)* | — | — | ✅ Superseded 2026-07-26: `0x64–0x67` are live `ZDIAG_0`/`ZDIAG_1` bytes (TRPR-TAC-005), not tied-zero telemetry. |
@@ -423,10 +423,11 @@ contract. (`CLAUDE.md`'s block list still names a `weight_gen.v` — stale.)
 | TRPR-SPS-007 | ~~Grouper priority; pending SPI write; colliding-read retry~~ | — | ~~`tb_trouper_grp_arb.v`~~ (bench deleted 2026-09-01) | ⛔ VOID 2026-09-01 — Grouper not taping out; interface removed from `trouper_top.v`; was ✅ job 3863 |
 | TRPR-SPS-008 | Dedicated `SPI_MISO` drives low while CS high | T | `tb_trouper_spi.v` (idle and post-read release checks) | ✅ job 3863 |
 | TRPR-SPS-009 | Read-data timing (addr latched on 8th SCK edge) | T | `tb_trouper_spi.v` (the 2026-06-12 one-byte-late bug's regression) | ✅ |
-| TRPR-SPS-010 | Burst auto-increment mod 128; `0x76` exception | T | `tb_trouper_spi.v` (16-byte burst + 0x7E→0x00 wrap) | ⚠️ Auto-increment fully tested. The `0x76` no-increment *exception* is proven only via repeated single-transaction reads (`test_psram_ops.py` drains 8 bytes that way, job 3313) — never inside one continuous CS-low burst. |
+| TRPR-SPS-010 | Burst auto-increment mod 128; `0x76` **and `0x79`** exceptions | T | `tb_trouper_spi.v` (16-byte burst + 0x7E→0x00 wrap); `formal/spi_slave_formal.sv` (both `NO_INC_RD_ADDR`/`NO_INC_WR_ADDR` held) | ⚠️ Auto-increment fully tested. The `0x76` no-increment *exception* is proven only via repeated single-transaction reads (`test_psram_ops.py` drains 8 bytes that way, job 3313) — never inside one continuous CS-low burst. `0x79` (`PSRAM_DBG_WDATA`) is now covered by the formal check but has no in-burst directed sim either. |
 | TRPR-SPS-011 | `0x7F` reserved (protocol escape) | I | `tb_trouper_spi.v` | ✅ |
+| TRPR-SPS-012 | Volatile-read firmware contract (Open Risk #38, Route 2): two-transaction confirm-read of volatile status (`HOST_CS` toggled between), frozen Z/Zdiag read only after `TRAINING_DONE` confirm-read | A | `planning/Register Map.md` § Host SPI read coherency; `planning/Firmware Spec.md` § Primary firmware inputs | ⚠️ **Documented, not yet a firmware/HW test — and a probabilistic mitigation, not a HW coherency guarantee** (no synchroniser on the MISO read path; residual CDC risk stays under #38). Host-software obligation, so RTL/cocotb cannot verify it — closure is the written contract plus a firmware review that the weight-transfer and bring-up drivers issue two independent transactions per volatile field + bounded retry. Genuinely coherent only for frozen registers with a stable address. Residual mailbox/pad-timing items stay under Open Risk #38. RTL alternative (Route 1, a real guarantee) prototyped and deferred post-tapeout (regressed `spi_cdc`; needs a CE-gated MCP in the signoff SDC). |
 
-**Open item:** SPS-010 in-burst 0x76 case.
+**Open item:** SPS-010 in-burst 0x76 *and* 0x79 non-increment cases (directed sim); SPS-012 firmware-review sign-off.
 
 ---
 
@@ -551,5 +552,5 @@ All four rows **DELETED** in the spec (no TAP, no GPIO in RTL); nothing to trace
 1. ~~Two false/stale documentation claims~~ — **RESOLVED 2026-07-06**: REG-005 reworded to the deliberate custom-RTL + map-as-source-of-truth discipline; WGN-008's `DBG_MISSED_PKTS` clarified as a firmware variable; `CLAUDE.md` block list corrected.
 2. ~~DCR-015's "open RTL gap" is stale~~ — **RESOLVED 2026-07-06**: spec reworded to the warm-up-provided hold-off.
 3. ~~FBC-002 and INT-006 describe plumbing that doesn't exist~~ — **RESOLVED 2026-07-06**: both reworded to the shipped plumbing (`sc_lock`-latched pointer; single-clock + CE). `buf_freeze` itself was deleted from the RTL 2026-07-26 (Open Risks #25).
-4. **Cheap remaining test add:** in-burst 0x76 non-increment (SPS-010). Pin-level `IRQ_OUT` assertion/clear behavior closed 2026-08-29 by `cocotb/irq_pins` (the `IRQ_GROUPER` half was removed 2026-09-01). (MISO deselected-low coverage for SPS-008 closed in job 3863; full reset register sweep for REG-001 closed 2026-07-06.)
+4. **Cheap remaining test add:** in-burst non-increment for both 0x76 and 0x79 (SPS-010). Pin-level `IRQ_OUT` assertion/clear behavior closed 2026-08-29 by `cocotb/irq_pins` (the `IRQ_GROUPER` half was removed 2026-09-01). (MISO deselected-low coverage for SPS-008 closed in job 3863; full reset register sweep for REG-001 closed 2026-07-06.)
 5. **Stale standalone tbs:** `tb_sqnr*.v` predate the HB migration (DEC-003) — regenerate against `sd_decimator_poly` or retire in favor of the migration-record analysis.

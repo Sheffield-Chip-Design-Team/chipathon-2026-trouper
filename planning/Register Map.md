@@ -23,6 +23,86 @@ The host SPI frame carries the register address in a single command byte: **bit 
 
 ---
 
+## Host SPI read coherency — firmware contract
+
+`SPI_SCK` is asynchronous to the 32 MHz core clock. `spi_slave` loads the MISO
+byte by **directly sampling** the combinational `reg_bank` read tap on the
+falling `SPI_SCK` edge that precedes each data byte (`src/control/spi_slave.v`,
+MISO load; TRPR-SPS-009) — there is **no synchroniser on the read path**. A
+register field whose value can change in the 32 MHz domain may therefore
+transition inside that sampling aperture, so a single SPI read of such a field
+can return a torn byte, and any bit can go momentarily metastable.
+
+**This is a probabilistic mitigation, not a hardware coherency guarantee.**
+The rules below reduce the probability of *accepting* a bad byte; they do not
+make the crossing coherent and do not eliminate metastability. Residual CDC
+risk remains and is carried under Open Risk #38 ("Route 2" — accepted for this
+revision). An on-chip core-domain read snapshot ("Route 1") that would give a
+real hardware guarantee is a post-tapeout option. Consequently:
+
+- Do not use a volatile field as the sole input to a safety- or
+  correctness-critical decision. Where possible, poll for a **stable
+  condition** (a level that, once reached, does not change until firmware acts
+  — e.g. `TRAINING_DONE`, `DBG_BUSY` clear) rather than sampling a transient.
+- A **frozen** register (below) read with a stable address after its
+  completion flag is genuinely coherent — nothing in the core domain is
+  changing, so there is no CDC hazard on that read. The probabilistic caveat
+  applies only to the **volatile** class.
+
+The write path is **not** affected — completed writes cross into the core on a
+persistent toggle + bundled-data mailbox (Open Risk #15, closed) — and neither
+is `PSRAM_DBG_DATA` (`0x76`), a handshaked FIFO pop gated by `DBG_BUSY`.
+
+### Which reads are safe as-is
+
+| Class | Registers | Rule |
+| --- | --- | --- |
+| **Static** — value only changes when the host itself writes it | Fixed IDs `0x00`/`0x01`; the *storage* bits of the `R/W` config registers (`0x04`–`0x0F`, `0x18`, `0x1B`, `0x27`, `0x30`–`0x3F`, `0x70[0]`/`0x70[3]`, `0x72`–`0x74`, `0x77`–`0x78`) | Single read is coherent. **Excludes the self-clearing W1P bits** `SC_FORCE_LOCK` 0x19[0], `WGT_CTRL.W_COMMIT` 0x1E[0], `TACC_NOISE_TRIG` 0x1F[0], `PSRAM_CTRL.PSRAM_CLR_ERR` 0x70[1], `PSRAM_DBG_CTRL.RD_TRIG`/`WR_TRIG` 0x75[0]/[2] — hardware drives these back to 0 one CE period after the write, so a readback is meaningless, not a data source. |
+| **Frozen result** — hardware writes the value once, then holds it | `Z_kl` / `ZDIAG_k` (`0x40`–`0x6F`); **final** `N_ACC` (`0x21`–`0x23`); `SC_FIRST_HIT` (`0x28`–`0x2B`); `SC_LOCK_SNAP` (`0x2C`–`0x2F`) | Single read is coherent **only after** the matching completion flag has been *confirm-read* set — `PACKET_STATUS.TRAINING_DONE` 0x1C[4] (or `IRQ_STATUS.NOISE_READY`) for the `Z`/`Zdiag`/`N_ACC` set, `sc_lock`/`SC_FIRST_HIT` non-zero for the SC snapshots. The training accumulator stops at window close and holds until the next arm (`sc_lock` or a `TACC_NOISE_TRIG` write); the SC snapshots hold until the next lock/first-hit. Complete the read within that gap. |
+| **Volatile** — a hardware event can change the field between any two SCK edges | `IRQ_STATUS` (`0x02`); `PACKET_STATUS` (`0x1C`); `ACTIVE_STATUS` (`0x1D`); `WGT_CTRL` RO bits (`0x1E[5:1]`); `TRAINING_STATUS` (`0x20`); `SC_STAT` (`0x24`–`0x25`) and `SC_DBG_FLAGS` (`0x26`) — re-assigned from live detector state; do not assume frozen after lock; `TACC_NOISE_TRIG` status (`0x1F[1]`); `PSRAM_STATUS` (`0x71`); `PSRAM_DBG_CTRL.DBG_BUSY` (`0x75[7]`) | Confirm-read, see below. |
+| **Not recoverable mid-window (diagnostic only)** | `N_ACC` (`0x21`–`0x23`) *while a training window is running* | `n_acc` increments per accepted `iq_valid` (up to 500 kS/s), i.e. ~8 counts per 3-byte read at 2 MHz — two snapshots will essentially never agree before the window closes. Do **not** confirm-read it mid-window; treat any mid-window value as an approximate progress indicator only. The meaningful read is the frozen final value after `TRAINING_DONE` (row above). |
+
+### Rules for volatile reads (host firmware SHALL)
+
+1. **Never act on a single sample.** Make a control decision (issuing
+   `W_COMMIT`, starting a `Z` read, gating on `DBG_BUSY`, …) only after **two
+   independent reads of the same address return the same byte**.
+2. **"Two independent reads" means two complete command-plus-data
+   transactions.** `HOST_CS` SHALL be deasserted between them. Do *not* rely on
+   two consecutive bytes of one CS-low burst — burst mode auto-increments the
+   address after every data byte, so consecutive bytes normally read
+   *different* registers.
+3. **Multi-byte volatile values** (e.g. `SC_STAT`) SHALL be read in full in
+   each of the two transactions and used only when the two complete copies are
+   byte-identical. A value that changes faster than a read takes will never
+   confirm — see the *not recoverable mid-window* class (`N_ACC` during a
+   training window): do not retry it, treat it as diagnostic only.
+4. **Bound the retry.** If N attempts (recommended cap: 4) fail to produce two
+   agreeing copies, treat it as a bus error, not as data — do not spin past a
+   `W_COMMIT` deadline (TRPR-WGN-004) waiting for convergence.
+5. **Frozen banks:** read `Z_kl`/`ZDIAG_k` (`0x40`–`0x6F`) and the final
+   `N_ACC` (`0x21`–`0x23`) only after `TRAINING_DONE` has been confirm-read set
+   (rules 1–2), completing the burst before the next `sc_lock`/`TACC_NOISE_TRIG`
+   re-arms the window; read `SC_FIRST_HIT` (`0x28`–`0x2B`) / `SC_LOCK_SNAP`
+   (`0x2C`–`0x2F`) after the corresponding lock/first-hit and before the next
+   one. Within that gap a single burst read of the frozen bank is coherent
+   (frozen data, stable address — no CDC hazard); e.g. the 49-byte
+   `0x40`–`0x6F` `Z`/`Zdiag` burst.
+6. **Bursts** that span a mix of static and volatile addresses inherit the
+   volatile rule for the whole transaction.
+
+**Cost.** One register read = command byte + data byte = 16 SCK cycles ≈ **8 µs
+at 2 MHz** (plus `HOST_CS` setup/hold and the inter-transaction gap). A
+confirmed volatile read is a second full transaction, so **≈ +8 µs per
+confirmed field** (≈ 16 µs total), not one extra byte. Over the handful of
+status polls in a weight-transfer sequence this is on the order of tens of µs —
+still negligible against the eigenvector kernel (~2.08–2.28 ms, TRPR-WGN-004)
+plus ~0.4 ms of `Z` read + `W` write traffic — and it applies equally at every
+SF (the SF7/SF8 replay-delay margin already dominates, TRPR-WGN-004). The
+frozen `Z`/`Zdiag` bulk read is a single transaction (rule 5), unaffected.
+
+---
+
 ## Address map
 
 | Address | Name | R/W | Reset | Block | Description |
@@ -352,6 +432,10 @@ happened to have spare bits under the same write gate. `BW_CFG` now carries
 
 ### `0x1C` — PACKET_STATUS (read-only)
 
+**Volatile** — every field here can change on any 32 MHz edge. Apply the
+confirm-read rule from *Host SPI read coherency — firmware contract* before
+acting on it (e.g. gating a `W_COMMIT` decision on `PACKET_PHASE`/`W_PENDING`).
+
 | Bits | Field | Description |
 | --- | --- | --- |
 | [0] | `PACKET_ACTIVE` | Packet FSM is not idle |
@@ -410,11 +494,26 @@ Training-window bookkeeping: arm/done flags and the accumulated sample count `n_
 `0x22` = `[15:8]`, `0x23` = `[7:0]`). The training window is controlled by
 `TACC_WINDOW_SYMS` (`0x27`) and spans from `sc_lock` until `timing_ref + TACC_WINDOW_SYMS × M - 1` in live mode. With the 4-bit maximum of 15 symbols, the SF12/BW125 maximum is `15 × 2^(12+2) = 245760` samples, which still fits in 18 bits.
 
+> **Read coherency:** `TRAINING_STATUS` (`0x20`) is **volatile** (confirm-read).
+> `N_ACC` (`0x21`–`0x23`) is **frozen and single-read-coherent only after
+> `TRAINING_DONE`**; *during* a window it increments per `iq_valid` (up to
+> 500 kS/s), far faster than a 3-byte read completes, so a mid-window value
+> cannot be confirmed by re-reading — treat it as an approximate progress
+> indicator only, never as data. See *Host SPI read coherency — firmware
+> contract*.
+
 ---
 
 ### `0x24`–`0x25` — SC_STAT (read-only)
 
 Current Schmidl-Cox metric numerator telemetry from the detector. This is the exposed `|C[s]|^2` snapshot (`sym_mag_sc[27:13]` plus a zero LSB), not a normalised `Lambda^2[s]` value.
+
+> **Read coherency:** treat as **volatile**, not frozen. `sc_stat` is
+> re-assigned continuously from the live detector metric (`sc_detector.v`);
+> whether that metric keeps moving after `sc_lock` depends on detector state,
+> so firmware SHALL NOT assume it is frozen post-lock. Confirm-read (two
+> independent transactions) if a value is needed; see *Host SPI read coherency
+> — firmware contract*.
 
 ### `0x27` — TACC_WINDOW_SYMS (read/write)
 
@@ -433,6 +532,14 @@ Optional Schmidl-Cox debug visibility intended primarily for FPGA and first-sili
 
 These registers are debug aids, not part of the normal packet-processing control path.
 
+> **Read coherency:** `SC_DBG_FLAGS` (`0x26`) is **volatile** — it mirrors
+> current/pulsed detector state (`sc_lock_dbg`, hit counter, held `sc_hit_dbg`).
+> `SC_FIRST_HIT` (`0x28`–`0x2B`) and `SC_LOCK_SNAP` (`0x2C`–`0x2F`) are
+> **frozen** once their capture event (first qualifying hit / `sc_lock`) has
+> occurred, and hold until the next such event — a single 4-byte burst read of
+> either, taken after `sc_lock`, is coherent. See *Host SPI read coherency —
+> firmware contract*.
+
 ---
 
 ### `0x30`–`0x3F` — W vector (read/write)
@@ -448,6 +555,15 @@ A 17-byte SPI burst (command byte + 16 data bytes starting at `0x30`) loads the 
 ### `0x40`–`0x63` — Z_kl pair readback, 24-bit (read-only)
 
 All C(4,2)=6 branch-pair cross-correlations from the training accumulator. Each value exposes the **top 24 bits `[31:8]` of the signed int32 accumulator**, big-endian, 3 bytes per component (I then Q), 6 bytes per pair.
+
+> **Read coherency:** a single burst read of `0x40`–`0x6F` is coherent **only
+> after** `PACKET_STATUS.TRAINING_DONE` (0x1C[4]) — or `IRQ_STATUS.NOISE_READY`
+> for a noise window — has been *confirm-read* set (two independent
+> command+data transactions to that address, `HOST_CS` toggled between,
+> returning the same byte). The
+> accumulators stop at window close and hold until the next `sc_lock` /
+> `TACC_NOISE_TRIG`; complete the burst before that re-arm. Reading mid-window
+> is undefined. See *Host SPI read coherency — firmware contract*.
 
 > **Precision note:** bits [7:0] of each accumulator are not readable. At realistic operating points the discarded byte is below the statistical noise of the Z estimate itself (training windows of 1k–32k samples); firmware treats the 24-bit value as `Z_kl >> 8`. This cut saves 12 register slots versus full 32-bit readback under the 128-register constraint.
 
@@ -491,6 +607,12 @@ In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 ---
 
 ### `0x70` — PSRAM_CTRL (read/write)
+
+> **Read coherency:** bits [0] `PSRAM_EN` and [3] `QSPI_OWNER` are stable
+> host-written storage (single read coherent). Bit [1] `PSRAM_CLR_ERR` is a
+> self-clearing W1P — hardware drives it back to 0 one CE period after the
+> write, so its readback is not a data source (see the Static-class caveat in
+> *Host SPI read coherency — firmware contract*).
 
 | Bits | Field | Description |
 | --- | --- | --- |
