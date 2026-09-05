@@ -34,6 +34,7 @@ VERILOG_SOURCES = \
     $(SRC)/control/spi_slave.v           \
     $(SRC)/control/reg_bank.v            \
     $(SRC)/remod/sd_remod.v              \
+    $(SRC)/remod/sd_remod_multiplierless.v \
     $(HDL)/psram_model.v                 \
     $(HDL)/tb_array_pair.v
 
