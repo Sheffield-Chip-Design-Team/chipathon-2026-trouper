@@ -327,11 +327,12 @@ apply_bd_automation -rule xilinx.com:bd_rule:axi4 \
 connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_quad_spi_1/ext_spi_clk]
 
 # --- fpga_dsp_wrap (plain Verilog, not AXI) — instantiates trouper_top.v ----
-# USE_EXT_PSRAM=1: drive the real external APS6404L on the daughterboard (JA)
-# via the wrapper's IOBUFs, instead of the internal BRAM model. The QPI pads
-# are exposed as top-level ports and constrained in arty_dsp_emul.xdc below.
+# The hardware build drives the real APS6404L on the daughterboard (JA). The
+# BENCH_CLK build is specifically for no-AFE replay, so select the wrapper's
+# BRAM-backed PSRAM model as well as the MMCM DSP clock; otherwise the SC
+# delay line has no memory and acquisition can never lock.
 set dsp_wrap [create_bd_cell -type module -reference fpga_dsp_wrap fpga_dsp_wrap_0]
-set_property CONFIG.USE_EXT_PSRAM {1} [get_bd_cells fpga_dsp_wrap_0]
+set_property CONFIG.USE_EXT_PSRAM [expr {$bench_clk ? 0 : 1}] [get_bd_cells fpga_dsp_wrap_0]
 connect_bd_net $dsp_clk [get_bd_pins fpga_dsp_wrap_0/clk]
 connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
                [get_bd_pins fpga_dsp_wrap_0/rst_n]
@@ -388,6 +389,27 @@ connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i2] [get_bd_pins fpga_dsp_wrap_0/
 connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q2] [get_bd_pins fpga_dsp_wrap_0/inj_q2]
 connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_i3] [get_bd_pins fpga_dsp_wrap_0/inj_i3]
 connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_q3] [get_bd_pins fpga_dsp_wrap_0/inj_q3]
+
+# --- Digital-debug trace ----------------------------------------------------
+# The receive-only PCB has no routed DBG0 test point, while DBG1 shares IRQ.
+# Keep the ASIC mux semantics intact and observe both final pad values with an
+# on-chip ILA.  probe2 is the replay/live injector sample strobe, letting a
+# hardware capture be triggered and time-aligned to the replay stream.
+set dbg_ila [create_bd_cell -type ip -vlnv xilinx.com:ip:ila:6.2 ila_debug_pins]
+# Three 1-bit probes fit in one RAMB36 at 4096 samples.  The bench image
+# already consumes 134/135 RAMB36 sites, so 16k samples (two RAMB36s)
+# over-utilises the Arty A7-100T by one block.
+set_property -dict [list \
+    CONFIG.C_DATA_DEPTH {4096} \
+    CONFIG.C_NUM_OF_PROBES {3} \
+    CONFIG.C_PROBE0_WIDTH {1} \
+    CONFIG.C_PROBE1_WIDTH {1} \
+    CONFIG.C_PROBE2_WIDTH {1} \
+] $dbg_ila
+connect_bd_net $dsp_clk [get_bd_pins ila_debug_pins/clk]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/dbg0] [get_bd_pins ila_debug_pins/probe0]
+connect_bd_net [get_bd_pins fpga_dsp_wrap_0/dbg1] [get_bd_pins ila_debug_pins/probe1]
+connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_valid] [get_bd_pins ila_debug_pins/probe2]
 
 # --- axi_clk_sync_mon (CLK_OUT phase-lock measurement, 32 MHz DSP domain) ---
 # De-risks the single-clock ASIC: the DSP domain is clocked from one SX1257

@@ -127,7 +127,13 @@ module fpga_dsp_wrap #(
     // signal on a pin for a real external host.
     // -----------------------------------------------------------------------
     output wire        irq,
-    output wire        ext_irq
+    output wire        ext_irq,
+
+    // The ASIC's two digital debug-pad values.  These are deliberately kept
+    // as internal FPGA nets (the receive-only daughterboard has no spare
+    // physical debug routing); create_project.tcl connects them to an ILA.
+    output wire        dbg0,
+    output wire        dbg1
 );
 
     // QPI pad nets between trouper_top's psram_buf_ctrl and the selected
@@ -223,11 +229,17 @@ module fpga_dsp_wrap #(
         .IRQ_OUT_IN    (1'b0),
 
         .DBG0_IN       (1'b0),
+        .DBG0_OUT      (dbg0),
 
         // Array-acquisition sync: idle high, as the mandatory external pull-up
         // holds it when no chip is asserting (planning/array-acquisition-sync.md).
         .ARRAY_ACQ_N_IN (1'b1)
     );
+
+    // IRQ_OUT_OUT is the shared debug/IRQ pad: with DBG_CTRL1.EN it carries
+    // the DBG1 column, otherwise it remains the sticky IRQ.  Export the exact
+    // pad value so the trace reproduces what silicon exposes.
+    assign dbg1 = irq_w;
 
     // =========================================================================
     // PSRAM back-end select.

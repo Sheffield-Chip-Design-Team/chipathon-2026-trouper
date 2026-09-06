@@ -107,3 +107,9 @@ lora-capture/captures
 cocotb/*/sim_build/
 cocotb/*/results.xml
 cocotb/*/dump.vcd
+
+# fpga-emul: replay sweep outputs (regenerate via fpga-emul/tools/run_replay_sweep.py)
+fpga-emul/replay_*.csv
+# fpga-emul: dated .bak copies of build handoffs (base *.xsa/*.elf already ignored above)
+fpga-emul/sw/*.xsa.*.bak
+fpga-emul/sw/*.elf.*.bak
