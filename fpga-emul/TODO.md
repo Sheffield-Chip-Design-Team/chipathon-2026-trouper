@@ -10,6 +10,70 @@ rework.
 The MISO front-end test board (AFE) design is at
 <https://gitlab.com/m0rtal/miso_frontend>.
 
+## No-AFE measured-replay bring-up — validated 2026-09-06
+
+The `BENCH_CLK=1` image is now a self-contained hardware path for measured
+capture replay: Ethernet uploads a complex int8 window to BRAM, the FPGA
+locally paces it at 500 ksample/s, `sd_remod` reconstructs the four 1-bit
+32 MS/s inputs, and the unmodified `trouper_top` decimator/SC/PSRAM/combiner
+path processes it.  The ordinary UDP sample-injection example is preserved;
+this replay mode is an additive test path.
+
+- [x] **Replay/channel emulator.** `rtl/axi_inj_ctrl.v` stores up to 16,384
+  complex samples and applies per-branch Q1.15 gain/phase plus deterministic
+  noise. `tools/run_replay_sweep.py` uploads a capture, configures a condition,
+  starts replay, and writes post-run status CSV. The local pace was confirmed
+  in hardware at exactly one `inj_valid` pulse per 64 DSP clocks (500 ksample/s).
+- [x] **Two-pin trace.** `DBG0_OUT` and the shared IRQ/DBG1 pad are exported by
+  `fpga_dsp_wrap` to a 4,096-sample, 32 MHz ILA. This is 128 us of trace and
+  costs one RAMB36; a 16,384-sample ILA over-utilised the A7-100T by one RAMB36
+  site. UDP control command 11 sets both debug selectors; the replay script
+  exposes it as `--debug0`/`--debug1`. Confirmed on hardware with raw I/Q
+  (`0x90`,`0x90`): both probe outputs toggle during replay.
+- [x] **Firmware receive bring-up contract.** The initial Ethernet replay
+  failed with no `sc_hit`/`sc_lock`. Root cause: `RX_HOLD` resets asserted and
+  `PSRAM_EN` resets deasserted; `sw/main.c` configured neither, whereas the
+  cocotb measured-capture flow explicitly enables/waits for PSRAM and clears
+  `RX_HOLD`. Firmware now writes `PSRAM_CTRL.PSRAM_EN`, waits for
+  `PSRAM_STATUS.INIT_DONE`, then writes `RX_HOLD=0` after static configuration.
+- [x] **Hardware result.** On the attached Arty, replaying
+  `lora_20260621_092907_SF7-BW250-Pre8.npy` (2 MS/s source, resampled to
+  500 ksample/s; 8,192 samples; start index 138500; flat branches; seed 1)
+  reports `SC_DBG_FLAGS=0x0D` (hit + lock), `IRQ_STATUS=0x01` (CORR_LOCK), and
+  `PACKET_STATUS=0x77`. An ILA trigger on DBG0=SC-hit captured the pulse.
+- [x] **Initial envelope result.** The 1,200-condition gain/phase/noise sweep
+  (`3` gain mismatches × `4` phase offsets × `5` nominal SNR values × `20`
+  deterministic seeds) completed with no replay timeouts. 1,199/1,200 trials
+  asserted SC lock and entered the packet path. The only miss was 3 dB / 0° /
+  0 dB / seed 7; replay completed normally but had no SC event. Raw rows:
+  `replay_sf7_bw250_envelope_post_bringup.csv`. Treat the RTL noise scale as a
+  deterministic stress knob, not calibrated RF SNR, until it is tied to a
+  measured input-power reference. The exact purported miss was subsequently
+  repeated 20/20 with lock (`replay_seed7_repeat.csv`), so it is not a
+  reproducible channel/noise failure; treat the original row as a likely
+  completion-status/re-arm reporting race pending a dedicated status-path test.
+- [x] **Negative-noise extension.** `run_replay_sweep.py --snr-db` accepts an
+  explicit comma-separated list, including negative values. The initial −5 dB
+  (noise scale 57) and −10 dB (101) runs each locked 240/240 trials across the
+  same gain/phase/seed envelope; rows are in
+  `replay_sf7_bw250_negative_snr.csv`. Values below about −18 dB saturate the
+  uint8 noise scale at 255, so they are not distinct stress points without a
+  wider noise representation.
+
+Reproduce the no-AFE test:
+
+```bash
+make -C fpga-emul bench_bitstream
+make -C fpga-emul run_eth_fw
+python3 fpga-emul/tools/run_replay_sweep.py \
+  /srv/eda/shared/lora-mimo-captures/captures/lora_20260621_092907_SF7-BW250-Pre8.npy \
+  --source-rate 2000000 --capture-start 138500 --samples 8192 \
+  --max-conditions 1 --debug0 0xB0 --debug1 0xB0
+```
+
+`0xB0` selects SC group / antenna 0 / selector 0: DBG0 is `sc_hit`, DBG1 is
+`sc_lock`. For the raw injected ΣΔ I/Q proof use `0x90` for both selectors.
+
 ## Automatic MRC benchmark (WIP 2026-07-11)
 
 - [x] Enable MicroBlaze hardware MUL, DIV, and barrel shift; keep FPU/caches off.

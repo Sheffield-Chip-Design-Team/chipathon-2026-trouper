@@ -39,7 +39,9 @@
  * UDP control packet (port 5008, host -> FPGA):
  *   [0..3]  magic = 0x43544C52 ("CTLR")
  *   [4]     cmd: 1=set_sf, 2=set_sc_thr, 3=set_bw,
- *                4=load_fw_weights, 5=commit_fw_weights, 6=set_inj_en
+ *                4=load_fw_weights, 5=commit_fw_weights, 6=set_inj_en,
+ *                7=replay_upload, 8=replay_config, 9=replay_start,
+ *                10=replay_abort, 11=set_debug
  *   [5..]   cmd-specific payload (see handle_control_pkt())
  */
 
@@ -109,6 +111,14 @@ static void uart_boot_init(void) {
 #define INJ_LO      (INJ_BASE + 0x08)
 #define INJ_HI      (INJ_BASE + 0x0C)
 #define INJ_PERIOD  (INJ_BASE + 0x10)
+#define INJ_CAP_ADDR    (INJ_BASE + 0x14)
+#define INJ_CAP_DATA    (INJ_BASE + 0x18)
+#define INJ_CAP_LENGTH  (INJ_BASE + 0x1C)
+#define INJ_REPLAY_CTRL (INJ_BASE + 0x20)
+#define INJ_REPLAY_STAT (INJ_BASE + 0x24)
+#define INJ_COEFF(n)    (INJ_BASE + 0x30 + 4u*(n))
+#define INJ_NOISE(n)    (INJ_BASE + 0x40 + 4u*(n))
+#define INJ_NOISE_SEED  (INJ_BASE + 0x50)
 
 #define INJ_STATUS_FIFO_EMPTY (1u << 0)
 #define INJ_STATUS_FIFO_FULL  (1u << 1)
@@ -162,6 +172,8 @@ static void uart_boot_init(void) {
 #define REG_CHIP_REV          0x01u
 #define REG_IRQ_STATUS        0x02u
 #define REG_IRQ_CLEAR         0x03u
+#define REG_DBG_CTRL0         0x04u
+#define REG_DBG_CTRL1         0x06u
 #define REG_MIMO_CTRL         0x08u
 #define REG_SF_CFG            0x09u
 #define REG_BW_CFG            0x0Au
@@ -179,6 +191,9 @@ static void uart_boot_init(void) {
 #define REG_N_ACC_MID         0x22u
 #define REG_N_ACC_LO          0x23u
 #define REG_SC_DBG_FLAGS      0x26u
+#define REG_PSRAM_CTRL         0x70u
+#define REG_PSRAM_STATUS       0x71u
+#define REG_RX_HOLD            0x1Au
 #define REG_W_BANK_BASE       0x30u   /* 16 bytes: 4 branches x {re_hi,re_lo,im_hi,im_lo} */
 #define REG_Z_BASE             0x40u   /* 36 bytes: 6 complex int24 off-diagonal pairs */
 #define REG_ZDIAG_BASE        0x64u   /* 12 bytes: 4 branches x 3-byte [31:8] */
@@ -218,6 +233,9 @@ static void uart_boot_init(void) {
 #define SC_DBG_HIT            (1u << 0)
 #define SC_DBG_LOCK           (1u << 3)
 
+/* PSRAM_STATUS bits */
+#define PSRAM_INIT_DONE        (1u << 3)
+
 /* Defaults (match reg_bank reset values, see Register Map.md) */
 #define DEFAULT_SF          7u
 #define DEFAULT_BW_SEL      0u    /* 0 = 250 kHz */
@@ -240,6 +258,11 @@ static void uart_boot_init(void) {
 #define CMD_LOAD_FW_WEIGHTS    4u
 #define CMD_COMMIT_FW_WEIGHTS  5u
 #define CMD_SET_INJ_EN         6u
+#define CMD_REPLAY_UPLOAD       7u
+#define CMD_REPLAY_CONFIG       8u
+#define CMD_REPLAY_START        9u
+#define CMD_REPLAY_ABORT        10u
+#define CMD_SET_DEBUG           11u
 
 /* -----------------------------------------------------------------------
  * Ethernet helpers (identical to AFE eval firmware)
@@ -594,6 +617,8 @@ typedef struct {
     u8  reserved;
     u8  w_bank[W_BANK_LEN];   /* 0x30-0x3F, raw big-endian int16 pairs */
     u8  zdiag[ZDIAG_LEN];     /* 0x64-0x6F, 4 x 24-bit big-endian */
+    u32 inj_status;
+    u32 replay_status;
 } dsp_status_t;
 
 static void send_status_pkt(void) {
@@ -605,6 +630,8 @@ static void send_status_pkt(void) {
     s.reserved      = 0;
     reg_read_burst(REG_W_BANK_BASE, s.w_bank, W_BANK_LEN);
     reg_read_burst(REG_ZDIAG_BASE,  s.zdiag,  ZDIAG_LEN);
+    s.inj_status     = INJ_RD(INJ_STATUS);
+    s.replay_status  = INJ_RD(INJ_REPLAY_STAT);
 
     /* Ack any sticky IRQ bits we just observed */
     if (s.irq_status) reg_write(REG_IRQ_CLEAR, s.irq_status);
@@ -668,7 +695,7 @@ static void handle_inject_pkt(const u8 *payload, unsigned plen) {
  * ----------------------------------------------------------------------- */
 static void handle_control_pkt(const u8 *payload, unsigned plen) {
     u8 cmd;
-    if (plen < 6) return;
+    if (plen < 5) return;
     if (be32r(payload) != MAGIC_CONTROL) return;
     cmd = payload[4];
 
@@ -722,6 +749,60 @@ static void handle_control_pkt(const u8 *payload, unsigned plen) {
                    en ? "injected samples -> hw_iq" : "real SX1257 pins -> hw_iq");
         break;
     }
+
+    case CMD_REPLAY_UPLOAD: {
+        /* [5..6] start address, [7] count, [8..] repeated signed {I,Q}.
+         * This preloads BRAM before a run; it is intentionally not a
+         * real-time sample-streaming interface. */
+        u32 addr, n, i;
+        if (plen < 8u) return;
+        addr = be16r(payload + 5);
+        n = payload[7];
+        if (n == 0u || n > 128u || plen < 8u + 2u*n) return;
+        INJ_WR(INJ_CAP_ADDR, addr);
+        for (i = 0; i < n; ++i)
+            INJ_WR(INJ_CAP_DATA, ((u32)payload[8u+2u*i] << 8) | payload[9u+2u*i]);
+        break;
+    }
+
+    case CMD_REPLAY_CONFIG: {
+        /* [5..6] length, [7..8] seed, 4x {I,Q} Q1.15 BE, 4 noise bytes. */
+        u32 i;
+        if (plen < 29u) return;
+        INJ_WR(INJ_CAP_LENGTH, be16r(payload + 5));
+        INJ_WR(INJ_NOISE_SEED, be16r(payload + 7));
+        for (i = 0; i < 4; ++i) {
+            u32 off = 9u + 4u*i;
+            INJ_WR(INJ_COEFF(i), ((u32)be16r(payload + off) << 16) |
+                                      be16r(payload + off + 2));
+            INJ_WR(INJ_NOISE(i), payload[25u+i]);
+        }
+        xil_printf("CTRL: replay configured len=%u\r\n", (unsigned)be16r(payload+5));
+        break;
+    }
+
+    case CMD_REPLAY_START:
+        INJ_WR(INJ_CTRL, 0u);  /* exclusive with the preserved live-FIFO mode */
+        INJ_WR(INJ_REPLAY_CTRL, 1u);
+        xil_printf("CTRL: replay start\r\n");
+        break;
+
+    case CMD_REPLAY_ABORT:
+        INJ_WR(INJ_REPLAY_CTRL, 2u);
+        xil_printf("CTRL: replay abort\r\n");
+        break;
+
+    case CMD_SET_DEBUG:
+        /* [5] DBG_CTRL0 -> dedicated DBG0, [6] DBG_CTRL1 -> shared DBG1/IRQ.
+         * Each is {EN,GROUP[2:0],ANT[1:0],SEL[1:0]}; see debug_probe_mux.
+         * The core rejects these writes only while packet_active, so this is
+         * safe during acquisition/replay bring-up. */
+        if (plen < 7u) return;
+        reg_write(REG_DBG_CTRL0, payload[5]);
+        reg_write(REG_DBG_CTRL1, payload[6]);
+        xil_printf("CTRL: debug ctrl0=0x%02X ctrl1=0x%02X\r\n",
+                   (unsigned)payload[5], (unsigned)payload[6]);
+        break;
 
     default:
         xil_printf("CTRL: unknown cmd %u\r\n", (unsigned)cmd);
@@ -935,6 +1016,23 @@ int main(void) {
     reg_write(REG_SC_HITS_REQ, DEFAULT_SC_HITS);
     /* COMB_CFG left at its reset default (0x10). */
 
+    /* Match the receiver bring-up contract exercised by the measured-capture
+     * cocotb test.  RX_HOLD resets asserted so the structural configuration
+     * above is accepted; the detector cannot produce SC hit/lock until it is
+     * explicitly released.  Likewise PSRAM buffering is opt-in at reset and
+     * must be initialized before acquisition starts. */
+    {
+        u32 spins = 0;
+        reg_write(REG_PSRAM_CTRL, 0x01u);       /* PSRAM_EN */
+        while (!(reg_read(REG_PSRAM_STATUS) & PSRAM_INIT_DONE) &&
+               ++spins < 10000u)
+            usleep(10);
+        xil_printf("PSRAM: %s (status=0x%02X)\r\n",
+                   (spins < 10000u) ? "INIT_DONE" : "INIT_TIMEOUT",
+                   (unsigned)reg_read(REG_PSRAM_STATUS));
+        reg_write(REG_RX_HOLD, 0x00u);          /* detector may acquire */
+    }
+
 #if MRC_BENCH_SELF_TRIGGER || defined(NO_SX1257)
     xil_printf("NO_SX1257: SX1257 init skipped (register-link bring-up only)\r\n");
 #else
@@ -960,6 +1058,7 @@ int main(void) {
      * Main loop — poll Ethernet, periodically snapshot registers over SPI
      * ========================================================================= */
     u32 loop_cnt = 0;
+    u32 replay_stat_prev = 0u;
 
     while (1) {
         /* Poll the sticky training IRQ every pass. The CSR path is the same
@@ -970,6 +1069,16 @@ int main(void) {
         unsigned rlen = XEmacLite_Recv(&EmacInst, RxBuf);
         if (rlen) process_rx(rlen);
 #endif
+
+        /* A completion snapshot makes the host sweep self-contained: every
+         * replay condition gets the post-run lock/training/weight state rather
+         * than relying on the coarse periodic-report cadence. */
+        {
+            u32 replay_stat = INJ_RD(INJ_REPLAY_STAT);
+            if ((replay_stat & 2u) && !(replay_stat_prev & 2u))
+                send_status_pkt();
+            replay_stat_prev = replay_stat;
+        }
 
         /* Send a status snapshot roughly every ~50k loop iterations */
         loop_cnt++;

@@ -64,7 +64,7 @@ FPGA_SRCS   = $(RTL)/sync_fifo.v    \
 # ============================================================================
 
 .PHONY: sge_sim_spi_reg sge_sim_dsp_chain sge_sim_all \
-        sim_spi_reg sim_dsp_chain sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
+        sim_spi_reg sim_inj_replay sim_dsp_chain sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
         test_fw run_test_fw eth_fw run_eth_fw
 
 sge_sim_spi_reg:
@@ -93,6 +93,13 @@ sge_sim_all: sge_sim_spi_reg sge_sim_dsp_chain
 # against trouper_top.v directly)
 sim_spi_reg: obj_dir_spi_reg/Vtb_fpga_spi_reg
 	$<
+
+sim_inj_replay: obj_dir_inj_replay/Vtb_axi_inj_replay
+	$<
+
+obj_dir_inj_replay/Vtb_axi_inj_replay: tb/tb_axi_inj_replay.v $(RTL)/sync_fifo.v $(RTL)/axi_inj_ctrl.v
+	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_inj_replay \
+	    --top-module tb_axi_inj_replay $^
 
 obj_dir_spi_reg/Vtb_fpga_spi_reg: tb/tb_fpga_spi_reg.v $(FPGA_SRCS) $(ASIC_SRCS)
 	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_spi_reg \
@@ -212,6 +219,6 @@ run_eth_fw: $(SW)/lora_mimo_fw.elf
 # Clean
 # ============================================================================
 clean:
-	rm -rf obj_dir_spi_reg obj_dir_psram obj_dir_dsp_chain *.vcd
+	rm -rf obj_dir_spi_reg obj_dir_inj_replay obj_dir_psram obj_dir_dsp_chain *.vcd
 	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map
 	rm -f $(SW)/lora_mimo_fw.elf

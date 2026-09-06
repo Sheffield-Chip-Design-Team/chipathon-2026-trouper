@@ -106,6 +106,29 @@ module tb_fpga_spi_reg;
         end
     endtask
 
+    // Exercise an actual contiguous register window, rather than only one
+    // directed register.  0x30--0x3f is the 16-byte W shadow bank: every byte
+    // is ordinary R/W storage at reset (no W1P, status, or packet-state side
+    // effects), so it is safe to use for a transport-integrity sweep.
+    task check_rw_range(input [6:0] first, input integer count);
+        integer i;
+        reg [6:0] a;
+        reg [7:0] expected;
+        begin
+            for (i = 0; i < count; i = i + 1) begin
+                a = first + i;
+                expected = 8'hA5 ^ {1'b0, a};
+                spi_write(a, expected);
+            end
+            for (i = 0; i < count; i = i + 1) begin
+                a = first + i;
+                expected = 8'hA5 ^ {1'b0, a};
+                spi_read(a, rd);
+                check("W shadow range", rd, expected);
+            end
+        end
+    endtask
+
     reg [7:0] rd;
 
     initial begin
@@ -121,6 +144,9 @@ module tb_fpga_spi_reg;
         spi_write(7'h09, 8'h0A);
         spi_read (7'h09, rd); check("SF_CFG wr/rd", rd, 8'h0A);
         spi_write(7'h09, 8'h07);   // restore
+
+        // Full 16-byte contiguous R/W window through the same SPI transport.
+        check_rw_range(7'h30, 16);
 
         if (errors == 0) $display("\nTB PASS — fpga_dsp_wrap SPI pass-through OK");
         else             $display("\nTB FAIL — %0d error(s)", errors);

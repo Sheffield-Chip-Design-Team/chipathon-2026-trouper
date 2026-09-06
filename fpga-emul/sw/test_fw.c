@@ -100,6 +100,33 @@ int main(void) {
     uart_puthex(chip_id);
     uart_puts(chip_id == 0xA7 ? "  PASS\r\n" : "  FAIL\r\n");
 
+    /* Transport-integrity sweep of the 16-byte W shadow window (0x30-0x3f).
+     * These are plain R/W bytes while W_VALID=0 after reset, so unlike status
+     * or W1P control registers, this test has no packet-engine side effects. */
+    {
+        unsigned int addr, expected, readback, errors = 0;
+        for (addr = 0x30; addr <= 0x3F; ++addr) {
+            expected = 0xA5U ^ addr;
+            (void)spi_xfer2(addr, expected);
+        }
+        for (addr = 0x30; addr <= 0x3F; ++addr) {
+            expected = 0xA5U ^ addr;
+            readback = spi_xfer2(0x80U | addr, 0x00U) & 0xFFU;
+            if (readback != expected) {
+                ++errors;
+                uart_puts("SPI mismatch @ ");
+                uart_puthex(addr);
+                uart_puts(": got ");
+                uart_puthex(readback);
+                uart_puts(" expected ");
+                uart_puthex(expected);
+                uart_puts("\r\n");
+            }
+        }
+        uart_puts("W_SHADOW[0x30..0x3F]: ");
+        uart_puts(errors == 0 ? "PASS\r\n" : "FAIL\r\n");
+    }
+
     uart_puts("=== done ===\r\n");
 
     while (1);
