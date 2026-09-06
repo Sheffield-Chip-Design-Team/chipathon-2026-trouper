@@ -56,6 +56,34 @@ proc collection_object_names {variable_name} {
     return [lsort $result]
 }
 
+# A resolved endpoint cell name alone is not reviewable after synthesis: the
+# names are usually anonymous and may be renumbered between otherwise similar
+# netlists.  Preserve every pin-to-net attachment for each selected endpoint
+# so a collection delta can be traced back to its surviving RTL net(s), or
+# explicitly identified as an optimisation-created sibling cone.  This is
+# evidence only; it must not affect the SDC collections being audited.
+proc emit_endpoint_provenance {id variable_name} {
+    if {$variable_name eq ""} { return }
+    upvar #0 $variable_name endpoint_collection
+    if {![info exists endpoint_collection]} {
+        error "MCP audit endpoint collection '$variable_name' was not defined by SDC"
+    }
+    foreach cell $endpoint_collection {
+        set cell_name [get_full_name $cell]
+        foreach pin [get_pins -of_objects $cell] {
+            set pin_name [get_full_name $pin]
+            set nets [get_nets -of_objects $pin]
+            if {[llength $nets] == 0} {
+                emit "MCP_ENDPOINT_PIN|$id|$cell_name|$pin_name|"
+            } else {
+                foreach net $nets {
+                    emit "MCP_ENDPOINT_PIN|$id|$cell_name|$pin_name|[get_full_name $net]"
+                }
+            }
+        }
+    }
+}
+
 emit "MCP_AUDIT|stage|$stage"
 foreach group $mcp_audit_groups {
     lassign $group id setup hold through_variable endpoint_variable
@@ -68,6 +96,7 @@ foreach group $mcp_audit_groups {
     foreach object_name [collection_object_names $endpoint_variable] {
         emit "MCP_OBJECT|$id|endpoint|$object_name"
     }
+    emit_endpoint_provenance $id $endpoint_variable
 
     # Retain the fully resolved timing-path evidence as well as the selector
     # collections above.  A collection can be non-empty while matching an

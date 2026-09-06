@@ -21,7 +21,8 @@
 // exactly like u_psram_formal / u_pcfsm_formal.
 //
 // Property groups:
-//   A. Legal 7-bit address progression (command capture / +1 wrap / 0x76 hold)
+//   A. Legal 7-bit address progression (command capture / +1 wrap /
+//      0x76 and 0x79 hold)
 //   B. CS frame reset clears only transaction-local frame state, never the
 //      persistent toggle/mailbox event storage (the 2026-07 CDC redesign's
 //      central architectural claim)
@@ -87,7 +88,11 @@ module spi_slave_formal (
     input  wire        reg_we_p
 );
 
-    localparam [6:0] NO_INC_ADDR = 7'h76;
+    // Keep these in lock-step with spi_slave.v.  Both exceptions are checked
+    // here because the frame engine applies the hold based on address alone;
+    // transaction direction does not alter cur_addr progression.
+    localparam [6:0] NO_INC_RD_ADDR = 7'h76;
+    localparam [6:0] NO_INC_WR_ADDR = 7'h79;
 
     // -----------------------------------------------------------------------
     // Reset modeling — see psram_buf_ctrl_formal.sv for the rationale: force
@@ -206,8 +211,9 @@ module spi_slave_formal (
             if (spi_bit_cnt_q == 3'd7) begin
                 if (!have_cmd_q)
                     a_addr_cmd_capture: assert (cur_addr == byte_now_chk[6:0]);
-                else if (cur_addr_q == NO_INC_ADDR)
-                    a_addr_hold_0x76: assert (cur_addr == cur_addr_q);
+                else if (cur_addr_q == NO_INC_RD_ADDR ||
+                         cur_addr_q == NO_INC_WR_ADDR)
+                    a_addr_hold_noinc: assert (cur_addr == cur_addr_q);
                 else
                     // 7-bit reg wraps mod 128 for free at 0x7F -> 0x00.
                     a_addr_incr_wrap: assert (cur_addr == cur_addr_q + 7'd1);
@@ -408,7 +414,9 @@ module spi_slave_formal (
     always @(posedge SPI_SCK) begin
         if (!spi_frame_arst) begin
             c_addr_wrap: cover (cur_addr_q == 7'h7F && cur_addr == 7'h00);
-            c_addr_hold_0x76_cov: cover (cur_addr_q == NO_INC_ADDR && cur_addr == NO_INC_ADDR &&
+            c_addr_hold_0x76_cov: cover (cur_addr_q == NO_INC_RD_ADDR && cur_addr == NO_INC_RD_ADDR &&
+                                          spi_bit_cnt_q == 3'd7 && have_cmd_q);
+            c_addr_hold_0x79_cov: cover (cur_addr_q == NO_INC_WR_ADDR && cur_addr == NO_INC_WR_ADDR &&
                                           spi_bit_cnt_q == 3'd7 && have_cmd_q);
             c_cs_deassert_after_write: cover (spi_we_toggle != we_tog_sck_q);
         end

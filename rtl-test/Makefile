@@ -252,25 +252,24 @@ tb_compare_decimators.vvp: $(TB)/tb_compare_decimators.v \
 # changes since), and packet_ctrl_fsm.v/psram_buf_ctrl.v/reg_bank.v below
 # have also diverged -- these targets test an architecture that no longer
 # matches tapeout source and are NOT safe to repoint blindly (port interfaces
-# changed). cocotb/ is the canonical, current integration coverage for
-# trouper_top (see [[project_bypass_e2e_closed]]) -- use sim_trouper_cocotb
-# or the cocotb/ suites directly, not these targets, for real regression
-# signal. Left as-is rather than force-repointed; a real fix here means
-# updating tb_trouper_top.v etc. to the current port list, not just paths.
+# changed). The benches have been refreshed for the current port/map contract;
+# compile the tapeout source of truth, never the historical rtl-test/rtl
+# mirrors. See Open Risks #60.
 # -----------------------------------------------------------------------
 TROUPER_TOP_SRCS = \
-    $(RTL)/trouper_top.v \
-    $(RTL)/sd_decimator_poly.v \
-    $(RTL)/dc_removal.v \
-    $(RTL)/sc_detector.v \
-    $(RTL)/training_acc.v \
-    $(RTL)/packet_ctrl_fsm.v \
-    $(RTL)/psram_buf_ctrl.v \
-    $(RTL)/mrc_combiner.v \
-    $(RTL)/sd_remod.v \
-    $(RTL)/sd_remod_multiplierless.v \
-    $(RTL)/spi_slave.v \
-    $(RTL)/reg_bank.v \
+    $(SRC)/top/trouper_top.v \
+    $(SRC)/decimator/sd_decimator_poly.v \
+    $(SRC)/frontend/dc_removal.v \
+    $(SRC)/frontend/sc_detector.v \
+    $(SRC)/combiner/training_acc.v \
+    $(SRC)/control/packet_ctrl_fsm.v \
+    $(SRC)/control/psram_buf_ctrl.v \
+    $(SRC)/combiner/mrc_combiner.v \
+    $(SRC)/remod/sd_remod.v \
+    $(SRC)/remod/sd_remod_multiplierless.v \
+    $(SRC)/control/spi_slave.v \
+    $(SRC)/control/reg_bank.v \
+    $(SRC)/debug/bringup_src.v \
     ../fpga-emul/rtl/psram_model.v
 
 .PHONY: sim_trouper_top
