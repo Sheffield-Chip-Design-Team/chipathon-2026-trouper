@@ -44,6 +44,40 @@ if { [info exists ::env(PDN_KEEPOUT_REGION)] } {
     }
 }
 
+# Routing-only keepouts over the post-flow A40 PDN bridge landing zones
+# (tools/build_a40_pdn_bridges.py). The bridges are inserted into the GDS by
+# fixed absolute coordinates with no awareness of the router's result; on
+# job 5650 the router ran two long high-fanout SIGNAL nets (_20360_ 3-pin,
+# _20338_ 12-pin) along the sparse top edge, straight through the north VDD
+# fingers' M3 via-enclosure band -> 12x M3.2a + 4x V2.1 in the guarded
+# 63-table KLayout DRC (job 5653). These obstructions keep the router (signal
+# + PG) out of the bridge footprints on Metal2..Metal5 so the fixed bridge
+# geometry lands clean. Metal1 is deliberately NOT blocked -- followpin rails
+# must still form for any cell the routability-driven placer puts in the edge
+# strips; cell placement itself is not blocked (create_obstruction is
+# routing-only). West VSS box included as insurance -- it landed clean on
+# job 5650 by luck, same coordinate-blind bridge logic, and a re-route that
+# avoids the north channel can push toward the west edge.
+#
+# Hardcoded (not a config var): LibreLane 2.x drops unrecognised config keys
+# before the step env, so an env-var hook is unreliable. Guarded on DIE_AREA
+# (a recognised key) so it fires only on the A40 ACV 1675 x 1110 die and stays
+# inert for the L-shape / 1117sq / other trouper floorplans that share this
+# file. Boxes are finger x-span + margin; re-verify against the next guarded
+# KLayout DRC and shrink to the minimum that clears. "x1 y1 x2 y2" in microns.
+if { [info exists ::env(DIE_AREA)] && [string match "*1675*1110*" $::env(DIE_AREA)] } {
+    set a40_bridge_keepouts {
+        {1330 1094 1405 1110}
+        {0 4 8 82}
+    }
+    foreach a40_bridge_keepout $a40_bridge_keepouts {
+        foreach a40_bridge_keepout_layer {Metal2 Metal3 Metal4 Metal5} {
+            create_obstruction -region $a40_bridge_keepout -layer $a40_bridge_keepout_layer
+        }
+        puts "PDN: A40 bridge keepout on M2-M5 over ($a40_bridge_keepout) um"
+    }
+}
+
 if { $::env(PDN_MULTILAYER) == 1 } {
     set arg_list [list]
     if { $::env(PDN_ENABLE_PINS) } {
