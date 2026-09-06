@@ -129,6 +129,17 @@ def _comb_cfg_outputs(dut, p):
     _eq(dut, "remod_backoff_shift", (p >> 4) & 0x3, 0x0F, p)
 
 
+def _bringup_ctrl_outputs(dut, p):
+    # reg_bank.v: bringup_ctrl <= {5'h0, wdata[2:0]} -- [0]=EN, [2:1]=MODE.
+    _eq(dut, "bringup_ctrl", p & 0x07, 0x10, p)
+
+
+def _bringup_ampl_outputs(dut, p):
+    # reg_bank.v: bringup_ampl <= wdata (signed [7:0], no reserved bits).
+    # Compare the raw bit pattern, as _eq reads .value unsigned.
+    _eq(dut, "bringup_ampl", p, 0x11, p)
+
+
 def _w_shadow_field(byte_index):
     addr = 0x30 + byte_index
     shift = 120 - 8 * byte_index
@@ -173,7 +184,8 @@ def _replay_delay_hi_outputs(dut, p):
 
 
 # Plain (non-W1P, non-gated-in-this-sweep) RW fields. Gated fields (0x09,
-# 0x0A, 0x1B, 0x77, 0x78) are included here with packet_active held low -- the
+# 0x0A, 0x10, 0x11, 0x1B, 0x77, 0x78) are included here with packet_active held
+# low and rx_hold set from reset (cfg_wr_ok = rx_hold && !packet_active) -- the
 # {gate x packet_active 0/1} matrix itself belongs to row #8; a light
 # gate-blocked smoke check lives in test_reg_bank_rw_map.py.
 GENERIC_RW_FIELDS = (
@@ -183,6 +195,8 @@ GENERIC_RW_FIELDS = (
         RegField(0x0A, "BW_CFG", lambda p: p & 0x01, _bw_cfg_outputs),
         RegField(0x04, "DBG_CTRL0", lambda p: p, _dbg_ctrl0_outputs),
         RegField(0x06, "DBG_CTRL1", lambda p: p, _dbg_ctrl1_outputs),
+        RegField(0x10, "BRINGUP_CTRL", lambda p: p & 0x07, _bringup_ctrl_outputs),
+        RegField(0x11, "BRINGUP_AMPL", lambda p: p, _bringup_ampl_outputs),
         RegField(0x18, "ARRAY_SYNC_CTRL", lambda p: p & 0x01, _array_sync_ctrl_outputs),
         RegField(0x0B, "PKT_TIMEOUT_SYMS", lambda p: p, _pkt_timeout_outputs),
         RegField(0x0C, "SC_THR_HI", lambda p: p, _sc_thr_hi_outputs),

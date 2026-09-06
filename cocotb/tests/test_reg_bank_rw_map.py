@@ -390,8 +390,8 @@ async def test_packet_active_gate_smoke(dut):
 
     await _blocked(0x09, "sf_cfg")
     await _blocked(0x0A, "bw_sel")
-    await _blocked(0x06, "bringup_ctrl")
-    await _blocked(0x07, "bringup_ampl")
+    await _blocked(0x10, "bringup_ctrl")
+    await _blocked(0x11, "bringup_ampl")
     await _blocked(0x77, "replay_delay_samples")
     await _blocked(0x78, "replay_delay_samples")
 
@@ -442,9 +442,10 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         0x0D: ('RW', 0xFF),  # SC_THR_LO
         0x0E: ('RW', 0x03),  # SC_HITS_REQ: [1:0]; [7:2] reserved
         0x0F: ('RW', 0x37),  # COMB_CFG: [2:0]=POST_GAIN, [5:4]=REMOD; [3],[7:6] reserved
-        # Reserved (former RX gain)
-        0x10: ('reserved', 0x00),
-        0x11: ('reserved', 0x00),
+        # Reserved (former RX gain). 0x10/0x11 are NO LONGER reserved -- they
+        # became BRINGUP_CTRL/BRINGUP_AMPL on the main rebase and are defined
+        # as ('RW', ...) above; do not re-add them here or the later key wins
+        # and the sweep silently tests them as reserved.
         0x12: ('reserved', 0x00),
         0x13: ('reserved', 0x00),
         0x14: ('reserved', 0x00),

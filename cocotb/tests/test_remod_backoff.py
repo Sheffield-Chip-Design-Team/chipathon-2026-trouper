@@ -140,12 +140,16 @@ async def _monitor_remod(dut, cycles):
     out_i_bits, out_q_bits = [], []
     for _ in range(cycles):
         await RisingEdge(dut.IQ_CLK)
-        s1i.append(int(dut.u_dut.u_remod.s1_i.value.signed_integer))
-        s2i.append(int(dut.u_dut.u_remod.s2_i.value.signed_integer))
-        s3i.append(int(dut.u_dut.u_remod.s3_i.value.signed_integer))
-        s1q.append(int(dut.u_dut.u_remod.s1_q.value.signed_integer))
-        s2q.append(int(dut.u_dut.u_remod.s2_q.value.signed_integer))
-        s3q.append(int(dut.u_dut.u_remod.s3_q.value.signed_integer))
+        # The CIFF integrators moved from sd_remod down into its
+        # sd_remod_multiplierless child (u_remod) when the multiplierless core
+        # was promoted to canonical (commit 7f64c88): path is now
+        # u_dut.u_remod (sd_remod) . u_remod (sd_remod_multiplierless) . s*.
+        s1i.append(int(dut.u_dut.u_remod.u_remod.s1_i.value.signed_integer))
+        s2i.append(int(dut.u_dut.u_remod.u_remod.s2_i.value.signed_integer))
+        s3i.append(int(dut.u_dut.u_remod.u_remod.s3_i.value.signed_integer))
+        s1q.append(int(dut.u_dut.u_remod.u_remod.s1_q.value.signed_integer))
+        s2q.append(int(dut.u_dut.u_remod.u_remod.s2_q.value.signed_integer))
+        s3q.append(int(dut.u_dut.u_remod.u_remod.s3_q.value.signed_integer))
         yv = dut.u_dut.comb_y_valid.value
         if yv.is_resolvable and int(yv):
             comb_peak.append(abs(int(dut.u_dut.comb_y_i.value.signed_integer)))

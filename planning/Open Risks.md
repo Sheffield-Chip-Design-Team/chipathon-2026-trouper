@@ -550,9 +550,9 @@ signoff evidence.)
   the implemented register map uses the low 7 address bits. The remaining
   `{rb_we, rb_addr[6:0], rb_wdata[7:0]}` set is the intended CE-latched bus.
 - `sc_quasi_static` retained its six config source nets and grew from 253 to
-  289 endpoints, consistent with the additional high bits of the four widened
-  SC accumulators. This is an intentional same-cone endpoint expansion, but
-  still needs the normal source-to-endpoint review before acceptance.
+  289 endpoints. The #61 accumulator widening accounts for 32 of those
+  additional bits; the provenance review below resolves the complete 289-cell
+  candidate population and accepts it as the intentional same-cone scope.
 - `paced_dsp` excludes the six Open Risk #68 `u_tacc.win_epoch`, `tdm_epoch`,
   and `acc_epoch` bits in signoff SDC v33. They are window-control tags, not
   self-evidently 3-cycle paced datapath operands, so they now remain honestly
@@ -576,14 +576,23 @@ record names durable scheduler evidence rather than local output.
 
 **Remaining before closure (2026-09-05):**
 
-1. **`sc_quasi_static` endpoint review.** The collection grew 253 → 289
-   endpoints between the last reviewed baseline and this candidate (the four
-   widened SC accumulators' high bits). The automated audit only checks that
-   the collection resolves and matches the *newly written* baseline — it does
-   **not** review why it grew. Someone must walk the added `sc_quasi_static`
-   startpoint→endpoint arcs and confirm every one is genuinely the same
-   quasi-static cone, not a real single-cycle path pulled in by the wildcard.
-   Until that review is signed off, the group is audited-but-not-accepted.
+1. **`sc_quasi_static` endpoint review — CLOSED 2026-09-05 (job 5649).** The
+   collection grew 253 → 289 endpoints between the last reviewed baseline.
+   The provenance-aware re-audit of job 5630's final routed netlist emits the
+   selected endpoint cell's Q net (plus D/clock/reset attachments) for every
+   group member. All 289 `sc_quasi_static` endpoints resolve exclusively to
+   the intentional `sc_boundary_regs` population: `sym_cnt[14:0]`, the four
+   13-bit `eval_*` operands, `eval_{mag,e}_acc[27:0]`,
+   `eval_sample_mark[31:0]`, `eval_step[3:0]`, `eval_busy`, `mul_start`, and
+   all four `acc_*[31:0]` accumulators. There is no wildcard-selected sibling
+   cone or unrelated fast-changing endpoint. The 32 newly exposed accumulator
+   high bits are expected from Open Risk #61's 24→32-bit widening; the older
+   253-object evidence did not retain per-endpoint RTL provenance, so the
+   remaining four-object historical difference cannot be apportioned further,
+   but the complete candidate population is now directly reviewed and
+   accepted. Evidence: `mcp_audit_route.evidence` from SGE job 5649; audit
+   script `mcp_audit.tcl` now retains `MCP_ENDPOINT_PIN` records for future
+   deltas.
 2. **Re-run on the actual tapeout netlist.** All 2026-09-05 evidence is against
    SGE job 5630, which is *not* the final candidate: a fresh guarded KLayout
    DRC (#58) is owed and a remodulator / SS-waiver re-run may change the
@@ -938,11 +947,12 @@ Trouper has no on-chip analogue AGC target/guard registers, and (as of
 2026-07-28) no on-chip gain-shadow/commit register either — `RX_GAIN_SHADOW_0..3`/
 `RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` were removed since Trouper has no
 SX1257 SPI/control outputs to apply them to. Gain is entirely an
-external-SX1257 policy: Grouper/board firmware programs each SX1257 directly
+external-SX1257 policy: external board-controller firmware programs each SX1257 directly
 at a packet-safe boundary, while fixed programmed gain remains the supported
 fallback. Calibration, persistently bad-branch policy, and
 strong-blocker/near-far behaviour are unverified on the real board; gain
-changes are deliberately prohibited mid-packet.
+changes are deliberately prohibited mid-packet. Grouper is not being taped out
+alongside Trouper and is not a required part of this control path.
 
 **Risk:** deployment-time AGC misbehavior with no bench coverage.
 **See:** `planning/blocks/AGC.md` (Open calibration items).
@@ -1516,7 +1526,7 @@ locally patched `layers_def.drc` until the PDK is fixed upstream — the bug mak
 `mslot` unrunnable for any gf180mcuD design, so it is worth reporting there. See
 `planning/pdn-thickening-and-core-ring-2026-09.md` §6-§7.
 
-### 60. The Grouper/AHB removal has never been functionally simulated
+### 60. The Grouper/AHB removal had no current-source Icarus legality gate — CLOSED 2026-09-05
 
 The 2026-09-01 removal of the `GRP_*` bus, the AHB-Lite `H*` endpoint and
 `IRQ_GROUPER` from `src/top/trouper_top.v` has been proven to **synthesise,
@@ -1568,6 +1578,20 @@ the `pinout/dbg1-shared-irq-pad-27` work — a stale reserved-address list, not 
 Grouper-removal regression (tracked as a follow-up: update the reserved set in
 `cocotb/tests/test_reg_bank_rw_map.py`). **Still owed:** the Icarus
 `sim_trouper_all` Verilog-legality pass.
+
+**CLOSED 2026-09-05 — current-source Icarus pass.** `rtl-test/Makefile`'s
+`TROUPER_TOP_SRCS` was found to name stale `rtl-test/rtl/` mirrors rather than
+the tapeout `src/` tree, so it could not close this risk. It now compiles all
+current top, control, DSP, re-modulator, and `bringup_src` sources. The first
+compile exposed the missing `bringup_src` dependency; adding it completed
+elaboration. In the pinned `hpretl/iic-osic-tools:chipathon26` container, all
+three members of `make sim_trouper_all` passed against that source list:
+`sim_trouper_top` (8 checks), `sim_trouper_two_packet` (10 checks), and
+`sim_trouper_spi` (all SPI register/control-plane checks). The SPI bench was
+refreshed for the current map (`BW_CFG[0]`, live `PACKET_STATUS`,
+`BRINGUP_AMPL` at `0x11`, and `ARRAY_SYNC_CTRL` at `0x18`); those were stale
+expectations, not RTL defects. This satisfies the missing Icarus
+Verilog-legality and functional gate for the post-removal design.
 
 **Found:** 2026-09-03, while assessing PR #51 for merge.
 
@@ -1904,7 +1928,7 @@ signoff-clean; SS setup carries a bounded, understood, non-blocking
 regression on debug + psram cones. Ready to merge on that basis; the SS
 output-delay exception is a follow-up if/when the SS corner is revisited.
 
-### 70. SX1257 IQ clock/data phase contract is undefined — capture edge and clock source both unpinned
+### 70. SX1257 cross-device I/Q phase skew is uncharacterized — **ACCEPTED FREEZE RISK 2026-09-05**
 
 `sd_decimator_poly.v` samples the raw `iq_in_i/q` 1-bit streams directly in
 its `always @(posedge clk_32m)` block (line 265). The signoff SDC assumes
@@ -1974,9 +1998,37 @@ stage adds no datapath functional regression. SS setup WNS regressed
 −10.77→−14.20 — full analysis under #69 (a `buf_active`→debug-pad cone, not
 the IQ path; SS is #1/#40).
 
-**Stays OPEN** pending: (1) the PCB-test decision above + the
-`System Architecture.md` / `Pinout.md` reconciliation; (2) the shared
-SS-regression follow-up tracked under #69.
+**Freeze decision (2026-09-05):** The topology is now fixed: the 32 MHz TCXO
+fanout drives all four SX1257 `XTB` inputs on length-matched routes, while
+SX1257_1 pin 10 `CLK_OUT` drives both Trouper `IQ_CLK` and SX1302 pin 43
+`RADIO_A_CLK_I` on one controlled fanout. SX1257_2–4 `CLK_OUT` are NC. The
+Pinout, System Architecture, and integration guide are updated to match.
+
+**Residual risk accepted for GDS freeze:** the datasheet does not bound the
+fixed phase offset from each SX1257's XTB reference to its I/Q output relative
+to SX1257_1 `CLK_OUT`. Device-to-device clock-path variation, TCXO-fanout skew,
+and PCB trace mismatch can reduce the nominal 15.625 ns rising-to-falling-edge
+capture interval for antennas 1–3. This is a source-synchronous input timing
+risk, not a CDC or accumulated sampling-rate error. The SDC's
+`set_input_delay -max 6.0 / -min 0.0` remains a zero-board-measurement
+baseline.
+
+**Mitigation / acceptance:** preserve matched XTB routing and the controlled
+`CLK_OUT` fanout; do not tie clock outputs together. When the FPGA fixture
+arrives, measure each I/Q eye against `IQ_CLK` and verify setup/hold margin.
+Each SX1257 must use the 32 MHz `RxAdcTrim` setting. A failure would require a
+board clock-routing correction or a new capture implementation, neither of
+which is a post-GDS RTL fix.
+
+**Electrical-load assumption accepted with this freeze:** the direct
+SX1257_1 `CLK_OUT` fanout drives only Trouper `IQ_CLK` and SX1302
+`RADIO_A_CLK_I`. Each receiver input is assumed to be below 5 pF, before board
+trace/package capacitance. The supplied SX1257/SX1302 datasheets do not specify
+the respective driver/load limits, so this is an engineering assumption rather
+than a characterized guarantee; no additional clock buffer is inserted before
+GDS freeze. At 32 MHz, 5 pF charged through a 3.3 V swing corresponds to only
+about 0.53 mA average dynamic current per sink (`C·V·f`), but peak edge current
+and signal integrity remain board-dependent and must be checked at bring-up.
 
 ## Moderate
 
@@ -2171,19 +2223,25 @@ TRPR-SPS-007 now explicitly rejects a read byte whose MISO snapshot overlaps
 `GRP_RE=1`; the host retries the complete read frame. Directed cases 3a/3b/4a
 in `tb_trouper_grp_arb.v` cover priority, write preservation, and read recovery.
 
-### 42. Packet-control FSM misses directed coverage for late weight commit and training timeout
+### 42. Packet-control FSM misses directed coverage for late weight commit and training timeout — **CLOSED 2026-09-05**
 
-The current verification matrix explicitly leaves two functional cases
-uncovered: `W_COMMIT` during `PAYLOAD_ACTIVE` must enable combining only for
-the remainder of the packet, and a missing `training_done` must let `acq_cnt`
-enter bypass payload with `W_MISSED_PACKET` set. The existing miss test
-withholds `W_COMMIT` entirely, so it does not establish either behaviour.
+`cocotb/w_missed` now covers both formerly missing transitions:
 
-**Risk:** an untested packet-control transition can escape regression despite
-the documented implementation. **Action:** add directed cocotb cases for both
-rows, including observable combiner/bypass behaviour and sticky-status
-readback. **See:** `planning/blocks/Packet Control FSM.md` (Verification
-table); `planning/Trouper Chip Specification.md` TRPR-PCF-007/010.
+- `test_w_missed_on_acq_timeout` holds packet-mode `training_done` low and
+  directly observes `ST_PREAMBLE_ACQ → ST_PAYLOAD_ACTIVE` through the
+  `acq_cnt==0` timeout branch, with a one-cycle `W_missed_packet` pulse,
+  sticky readback, bypass output, packet completion, and re-arm.
+- `test_w_commit_late_during_payload` first reaches bypass payload through the
+  W-pending miss path, then commits weights mid-payload. It proves the sticky
+  miss remains historical, `W_VALID` asserts, and the combiner makes exactly
+  one burst-boundary bypass-to-MRC transition; only post-commit samples differ
+  from the bypass antenna.
+
+The focused current-RTL rerun passed 3/3 on 2026-09-05 (`make SIM=verilator`
+in `cocotb/w_missed`), including these two tests and the original W-pending
+timeout case. Prior SGE evidence is jobs 3893 and 3895. See
+`planning/verification-plan/packet-ctrl-fsm-verification-plan.md` rows 7–8;
+`planning/Trouper Chip Specification.md` TRPR-PCF-001/005/010.
 
 ### 7. Eigenvector power-iteration firmware timing does not fit SF7/SF8 (live mode) — MITIGATED, downgraded from High 2026-07-12
 
@@ -2783,6 +2841,48 @@ job 5491 did not carry over) → `trouper_top.json` stays 65/65. **CLOSED.**
 
 
 ## Low
+
+### 71. `sd_remod` `!en` is not a bit-exact reset, and TRPR-RMD-005's floor is stricter than the characterized worst case
+
+Two small reconciliation items left by the 4th-order / multiplierless remod
+rework (`32745c3`, `7f64c88`), neither with silicon impact:
+
+1. **`!en` re-enable ≠ fresh reset.** `sd_remod` and `sd_remod_multiplierless`
+   clear every loop-filter and interpolator register in the `!en` branch
+   *except* `in_i_lat`/`in_q_lat` (cleared only on `!rst_n`). A disable that
+   spans an `in_valid` pulse therefore leaves a stale held sample and
+   re-enable is not bit-identical to a fresh reset. Pre-existing (present in
+   the original RTL import, unchanged by the rework). **Zero functional
+   impact: `trouper_top.v` ties `sd_remod.en` to `1'b1`**, so `en` never
+   deasserts on-chip — the `en` port exists only for unit benches and
+   possible future integrations. `cocotb/tests/test_remod_en.py::{test_reenable_equals_fresh_start,
+   test_boundary_reenable_equals_fresh_start}` are marked `expect_fail`
+   pending the two-line RTL fix (add `in_i_lat <= 0; in_q_lat <= 0;` to the
+   `!en` branch of `sd_remod_multiplierless.v`), only needed if `en` ever
+   becomes a live control. A third test,
+   `test_in_valid_holds_sample_and_retains_dither`, is also `expect_fail`: it
+   white-box-asserts `in_i_lat` equals the raw driven input, which the new
+   interpolator front-end breaks (`in_i_lat` holds an interpolated sample,
+   tracking the input only after the 11-tap history fills). Its
+   invalid-cycle-hold intent is already covered black-box by the
+   `retain_dither` sweeps; drop `expect_fail` when it is reworked with a
+   multi-sample warmup.
+2. **SQNR floor vs. characterization.** `planning/sd-remod-4th-order-fix-2026-09-04.md`
+   characterizes the deployed loop at **min 39.75 dB** over a 300-trial
+   `amp[0.3,0.708] × f[1k,125k]` sweep ("natural low-amp/band-edge weak
+   point, not a cliff", mean 44.58 dB). `test_remod_sqnr.py`'s single hard
+   `assert > 40.0` (TRPR-RMD-005) at the `amp=40` (~−10 dBFS) / 40 kHz stress
+   point measures ~39.5 dB and fails. That one case now floors at 39.0 dB
+   (still catches a real break — wrong scale, dead channel, ~15–20 dB
+   collapse); the 40 dB contract stands at the −6 dBFS spec point. If TRPR-RMD-005
+   is meant to hold at all realistic amplitudes, the loop-filter coefficients
+   need another grid-search pass — otherwise the spec text should name the
+   −6 dBFS operating point explicitly.
+
+**Found:** 2026-09-06, whole-chip regression (SGE job 5657) during the job-5650
+`final/` promote — remod suites red on stale white-box probe paths (fixed:
+integrators moved into the `u_remod` child at `7f64c88`) plus the two items
+above.
 
 ### 61. `formal/run_formal_both.sh` was broken and under-scoped — every proof silently unrun — FIXED 2026-09-03, one failure exposed
 
