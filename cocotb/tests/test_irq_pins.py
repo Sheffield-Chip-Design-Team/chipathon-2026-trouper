@@ -62,6 +62,20 @@ async def test_irq_pins_sticky_clear(dut):
     assert (status & 0x12) == 0x12, f"{tag}: expected DONE+NOISE_READY, got 0x{status:02X}"
     await _assert_pins(dut, 1, f"{tag}: both sticky sources set")
 
+    # IRQ_OUT shares its pad with DBG1.  A real pending interrupt must remain
+    # sticky while the debug selector owns the pad, then reappear as soon as
+    # DBG_CTRL1.EN returns low.  GROUP=000 deliberately drives debug value 0,
+    # making an accidentally unmuxed IRQ_OUT visible here.
+    await spi_write(dut, 0x06, 0x80)    # DBG_CTRL1: EN=1, reserved/off group
+    await Timer(4 * CLK_NS, unit="ns")
+    assert (await spi_read(dut, 0x02)) & 0x12 == 0x12, \
+        f"{tag}: debug override changed pending IRQ_STATUS"
+    await _assert_pins(dut, 0, f"{tag}: DBG1 overrides asserted IRQ")
+
+    await spi_write(dut, 0x06, 0x00)    # EN=0: hand shared pad back to IRQ
+    await Timer(4 * CLK_NS, unit="ns")
+    await _assert_pins(dut, 1, f"{tag}: pending IRQ returns after DBG1 release")
+
     # Clearing only one source must leave both pins asserted due to the other.
     await spi_write(dut, 0x03, 0x10)
     status = await spi_read(dut, 0x02)

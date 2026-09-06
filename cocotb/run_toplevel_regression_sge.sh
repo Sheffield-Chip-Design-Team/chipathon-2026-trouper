@@ -51,7 +51,7 @@ mcp_mrc_settle mcp_pcfsm_settle mcp_psram_bshift_settle mcp_sc_settle \
 mcp_tacc_settle \
 w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow sc_acc_overflow"
 
-SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
+SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow mrc_absent_branch trouper_capture"
 
 # Directed benches for open RTL risks (planning/Open Risks.md). Each asserts the
 # INTENDED contract; while the risk is open the asserting testcase FAILS (that
@@ -73,8 +73,9 @@ suite_args() {
     trouper_capture)
         echo "CAPTURE_NPY=$SHARED/lora-mimo-captures/captures/lora_20260621_092430_SF7-BW125-Pre8.npy \
 CAPTURE_SF=7 CAPTURE_BW=125 CAPTURE_START=360482 CAPTURE_NSAMP=49152" ;;
-    # capture_two_packet and weight_gen_spi_flow carry their own shared-mount
-    # defaults (file + window) in the test module; nothing to add here.
+    # capture_two_packet, weight_gen_spi_flow and mrc_absent_branch carry their
+    # own shared-mount defaults (file + window) in the test module; nothing to
+    # add here.
     *) echo "" ;;
     esac
 }
