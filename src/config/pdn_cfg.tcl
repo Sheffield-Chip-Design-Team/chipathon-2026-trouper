@@ -44,37 +44,46 @@ if { [info exists ::env(PDN_KEEPOUT_REGION)] } {
     }
 }
 
-# Routing-only keepouts over the post-flow A40 PDN bridge landing zones
+# SIGNAL-only keepouts over the post-flow A40 PDN bridge landing zones
 # (tools/build_a40_pdn_bridges.py). The bridges are inserted into the GDS by
 # fixed absolute coordinates with no awareness of the router's result; on
-# job 5650 the router ran two long high-fanout SIGNAL nets (_20360_ 3-pin,
-# _20338_ 12-pin) along the sparse top edge, straight through the north VDD
-# fingers' M3 via-enclosure band -> 12x M3.2a + 4x V2.1 in the guarded
-# 63-table KLayout DRC (job 5653). These obstructions keep the router (signal
-# + PG) out of the bridge footprints on Metal2..Metal5 so the fixed bridge
-# geometry lands clean. Metal1 is deliberately NOT blocked -- followpin rails
-# must still form for any cell the routability-driven placer puts in the edge
-# strips; cell placement itself is not blocked (create_obstruction is
-# routing-only). West VSS box included as insurance -- it landed clean on
-# job 5650 by luck, same coordinate-blind bridge logic, and a re-route that
-# avoids the north channel can push toward the west edge.
+# job 5650 the router ran three SIGNAL nets (_20360_ 3-pin, _20338_ 12-pin,
+# _18690_) straight through the north VDD fingers' M3 via-enclosure / via2
+# band -> 12x M3.2a + 4x V2.1 in the guarded 63-table KLayout DRC (job 5653).
 #
-# Hardcoded (not a config var): LibreLane 2.x drops unrecognised config keys
-# before the step env, so an env-var hook is unreliable. Guarded on DIE_AREA
-# (a recognised key) so it fires only on the A40 ACV 1675 x 1110 die and stays
-# inert for the L-shape / 1117sq / other trouper floorplans that share this
-# file. Boxes are finger x-span + margin; re-verify against the next guarded
-# KLayout DRC and shrink to the minimum that clears. "x1 y1 x2 y2" in microns.
+# METAL2 + METAL3 ONLY. Two earlier attempts failed:
+#   - plain create_obstruction on M2..M5 (job 5674): blocks PG routing too,
+#     which severs Trouper's own PDN where the bridges tap in -- the VDD M5
+#     north ring got cut x[1329.5,1405.5] and the VSS M4 west ring y[4,82.3],
+#     leaving the post-flow bridges floating (LVS runs on the base streamout,
+#     not the bridged GDS, so it never catches this).
+#   - the same M2..M5 boxes WITH -except_pg (job 5681): the signal router
+#     honours except-pg, but the PDN generator (add_pdn_ring / add_pdn_stripe)
+#     carves around ANY obstruction regardless of the flag -- ring still cut.
+# The 16 job-5653 DRC violations are all Metal3 (M3.2a x12) and Via2 (V2.1 x4,
+# needs an M2+M3 landing), all on SIGNAL nets (_20360_/_20338_/_18690_,
+# verified per-net). The Trouper core ring is on Metal5 (VDD) / Metal4 (VSS),
+# and job 5650's keepout-free DRC had ZERO M4/M5 violations in the bridge
+# zones. So blocking only M2+M3 evicts the offending signal routing while
+# leaving M4/M5 clear for the ring -> bridges reconnect. -except_pg kept for
+# intent (no-op here: M2/M3 carry no PDN in these edge strips, only signal).
+#
+# Metal1 is NOT blocked (followpin rails); cell placement is not blocked (the
+# strips have zero cell rows / pins -- verified in job 5650's DEF). Hardcoded
+# (LibreLane 2.x drops unrecognised config keys before the step env), guarded
+# on DIE_AREA so it fires only on the A40 ACV die. Re-verify against the next
+# guarded KLayout DRC AND confirm VDD-M5 / VSS-M4 ring continuity through the
+# zones. "x1 y1 x2 y2" in microns.
 if { [info exists ::env(DIE_AREA)] && [string match "*1675*1110*" $::env(DIE_AREA)] } {
     set a40_bridge_keepouts {
         {1330 1094 1405 1110}
         {0 4 8 82}
     }
     foreach a40_bridge_keepout $a40_bridge_keepouts {
-        foreach a40_bridge_keepout_layer {Metal2 Metal3 Metal4 Metal5} {
-            create_obstruction -region $a40_bridge_keepout -layer $a40_bridge_keepout_layer
+        foreach a40_bridge_keepout_layer {Metal2 Metal3} {
+            create_obstruction -region $a40_bridge_keepout -layer $a40_bridge_keepout_layer -except_pg
         }
-        puts "PDN: A40 bridge keepout on M2-M5 over ($a40_bridge_keepout) um"
+        puts "PDN: A40 bridge SIGNAL keepout (M2/M3, -except_pg) over ($a40_bridge_keepout) um"
     }
 }
 
