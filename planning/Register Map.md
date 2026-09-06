@@ -381,9 +381,9 @@ Reset values are conservative. Firmware/host may adjust after observing output h
 
 ### `0x10`–`0x18` — reserved (former RX gain shadow/active/commit control)
 
-Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by Grouper/board logic, and these registers only mirrored software-written values internally, with no hardware consumer. Removed; see "Removed registers" below. All eight addresses now read `0x00` and ignore writes.
+Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by board-controller logic, and these registers only mirrored software-written values internally, with no hardware consumer. Grouper is not taped out alongside Trouper. Removed; see "Removed registers" below. All eight addresses now read `0x00` and ignore writes.
 
-**AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
+**AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (external board-controller constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
 
 **Noise EMA (separate from AGC):** Between packets (`PACKET_ACTIVE=0`), software arms a noise accumulation window via `TACC_NOISE_TRIG` (`0x1F`[0]=1). After `IRQ_TRAINING_DONE` fires in noise mode, `ZDIAG_k ≈ σ²_k × n_acc`. Software maintains σ²_ema[k] ← (1−α)·σ²_ema[k] + α·(ZDIAG_k/n_acc); this supplies optional noise-weighted MRC, which scales each conventional MRC weight by `1/σ²_ema[k]`. For NT=1 diagonal noise, this is the diagonal-MMSE special case—not a full ALMMSE/multi-user detector.
 
@@ -668,7 +668,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 
 | Former address(es) | Name | Reason removed |
 | --- | --- | --- |
-| `0x10`–`0x13`, `0x14`–`0x17`, `0x18`[0] | `RX_GAIN_SHADOW_0..3`, `RX_GAIN_ACTIVE_0..3`, `RX_GAIN_CTRL.RX_GAIN_COMMIT` | Removed 2026-07-28: Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by Grouper/board logic, and these registers only mirrored software-written values internally (shadow→active latch in `trouper_top.v`, no SX1257-facing consumer). This is the one exception above: these *did* have live `reg_bank`/`trouper_top` hardware before removal, unlike the rest of this table. |
+| `0x10`–`0x13`, `0x14`–`0x17`, `0x18`[0] | `RX_GAIN_SHADOW_0..3`, `RX_GAIN_ACTIVE_0..3`, `RX_GAIN_CTRL.RX_GAIN_COMMIT` | Removed 2026-07-28: Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by board-controller logic, and these registers only mirrored software-written values internally (shadow→active latch in `trouper_top.v`, no SX1257-facing consumer). Grouper is not taped out alongside Trouper. This is the one exception above: these *did* have live `reg_bank`/`trouper_top` hardware before removal, unlike the rest of this table. |
 | `0x02`, `0x07`–`0x08` | `CPU_RESET`, `CPU_SRAM_CTRL/STATUS` | No PicoRV32 / CPU SRAM in Trouper |
 | `0x0A` | `LOW_BAT_THR` | No hardware; never implemented in RTL. Address `0x0A` is now reused for `BW_CFG` (see active map). |
 | `0x13`–`0x15` | `FRONTEND_CFG/STATUS`, `BUF_WR_PTR` | frontend_buf_ctrl and on-chip frontend SRAMs removed (PSRAM delay line replaces them) |

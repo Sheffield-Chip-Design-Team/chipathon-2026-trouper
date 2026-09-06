@@ -134,7 +134,7 @@ Blocks / notes:
 
 Subblocks:
 - W computation for `NT=1` (MRC, EGC) using RV32IM hardware MUL
-- AGC loop managing SX1257 gains via SPI slave (host assist or Grouper)
+- AGC loop managing SX1257 gains through the external board-level SPI master (host controller; Grouper is a development prototype, not a co-taped-out component)
 - SX1257 initialization and mode control
 - branch enable / disable policy
 - IRQ handling from Trouper events

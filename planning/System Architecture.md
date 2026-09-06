@@ -76,9 +76,10 @@ peripherals"]
     GROUPER <-->|"On-chip AHB-Lite"| CHIP
     GROUPER --- OTHER_PER
     CLKBUF["PCB Clock Buffer
-TCXO 32 MHz · 1→5 fan-out"] -->|"32 MHz IQ_CLK"| CHIP
-    CLKBUF -->|"32 MHz XTB ×4
+TCXO 32 MHz · 1→4 fan-out"] -->|"32 MHz XTB ×4
 (1.8 V pk-pk max)"| SX1 & SX2 & SX3 & SX4
+    SX1 -->|"CLK_OUT 32 MHz"| CHIP
+    SX1 -->|"CLK_OUT 32 MHz"| SX1302
 
     subgraph rf_fe["RF Front-End ×4"]
         direction LR
@@ -199,7 +200,7 @@ decimated IQ capture + replay buffer"]
 | Interface | From | To | Signal | Rate |
 | --- | --- | --- | --- | --- |
 | RX I/Q ×4 | SX1257_1–4 ΣΔ ADC | ASIC decimators | 1-bit I+Q sigma-delta | 32 MS/s per antenna |
-| RX CLK | PCB Clock Buffer | ASIC (shared) | 32 MHz clock | — |
+| RX CLK | SX1257_1 `CLK_OUT` | ASIC + SX1302 Radio A | 32 MHz source-synchronous clock | — |
 | AFE control / config | External board or companion-system logic | SX1257_1–4 | Reset, mode, frequency, gain programming outside Trouper RTL | board-defined |
 | ΣΔ re-mod A | ASIC | SX1302 Radio A | 1-bit I+Q sigma-delta | 32 MS/s |
 | PSRAM QSPI | Trouper `psram_buf_ctrl` or a future firmware-managed external-memory mode | APS6404L (ext.) | replay buffer or firmware-managed off-chip RAM | 32 MHz QPI |
@@ -212,7 +213,7 @@ decimated IQ capture + replay buffer"]
 | --- | --- | --- |
 | `IQ_DATA_I[n]` | SX1257_n → ASIC | 1-bit RX I sigma-delta stream |
 | `IQ_DATA_Q[n]` | SX1257_n → ASIC | 1-bit RX Q sigma-delta stream |
-| `IQ_CLK` | PCB Buffer → ASIC | 32 MHz shared clock from central TCXO buffer |
+| `IQ_CLK` | SX1257_1 `CLK_OUT` → ASIC | 32 MHz source-synchronous clock; the four SX1257 XTB inputs remain driven from the common TCXO fanout |
 
 ### ASIC → SX1302 (ΣΔ re-mod output)
 
@@ -220,7 +221,7 @@ decimated IQ capture + replay buffer"]
 | --- | --- | --- |
 | `REMOD_A_I` / `REMOD_A_Q` | ASIC → SX1302 Radio A | MRC combined stream |
 
-> **SX1302 clock:** SX1302 CLK_IN is driven by SX1257_1 CLK_OUT (pin 10) directly on the PCB — no ASIC pad required. Per §3.5.2 SX1257 CLK_OUT outputs the buffered XTB reference (32 MHz); SX1257_2–4 CLK_OUT left NC.
+> **Frozen clock topology:** SX1257_1 `CLK_OUT` (pin 10) drives both Trouper `IQ_CLK` and SX1302 pin 43 `RADIO_A_CLK_I` on one controlled fanout net. The TCXO fanout drives only the four SX1257 XTB inputs. SX1257_2–4 `CLK_OUT` are left NC. This avoids a separate-buffer phase uncertainty on the Radio-A data path; Open Risk #70 records the remaining fixed phase-skew assumption for antennas 1–3.
 
 ### Host SPI interface to `trouper_top`
 
@@ -242,7 +243,7 @@ The following SX1257 pins require a PCB-level decision; none connect to ASIC pad
 | XTA (pin 6) | All 4 devices: leave open (float) | When using XTB as TCXO/external clock input (§3.3.1), XTA must be left open. |
 | XTB (pin 8) | All 4 devices: receive 32 MHz from central clock buffer via 100 pF AC-cap | **CRITICAL ELECTRICAL LIMIT:** Max amplitude **1.8 V pk-pk** (§3.3.1). If central buffer is 3.3V, a voltage divider or 1.8V buffer is mandatory. This pin is the reference for both RX and TX PLLs, ensuring system-wide frequency alignment. |
 | CLK_IN (pin 11) | All 4 devices: leave NC | **Design Decision:** Using internal clock mode (§3.5.2) to save ASIC pads. Frequency lock is maintained via shared XTB reference. |
-| CLK_OUT (pin 10) | SX1257_1: CLK_OUT → SX1302 CLK_IN (PCB trace). SX1257_2–4: leave NC | SX1257_1 CLK_OUT provides the 32 MHz clock for SX1302 data sync (§3.5.2). No ASIC pad required. |
+| CLK_OUT (pin 10) | SX1257_1: CLK_OUT → Trouper `IQ_CLK` and SX1302 `RADIO_A_CLK_I` on one controlled fanout; SX1257_2–4: leave NC | Frozen topology. Verify SX1257_1 output loading or use one low-skew fanout buffer after `CLK_OUT`; never create separate uncontrolled clock paths. |
 
 > SX1257 electrical constraints (XTB voltage limit, LDO decoupling, I_IN/Q_IN pull-downs, DIO NC disposition) are documented in [Pinout](Pinout.md).
 
@@ -287,7 +288,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 | --- | --- | --- |
 | SX1257 DATA_I ×4 | 4 | |
 | SX1257 DATA_Q ×4 | 4 | |
-| IQ_CLK | 1 | ASIC core clock = TCXO buffer output; same reference driven to SX1257 XTB on PCB |
+| IQ_CLK | 1 | ASIC core clock = SX1257_1 `CLK_OUT`; all SX1257 XTB inputs use the common TCXO fanout reference |
 | SX1302 Radio A I+Q | 2 | ΣΔ re-mod stream (MRC output) |
 | SPI MOSI / MISO / SCK | 3 | Host↔ASIC SPI slave interface |
 | HOST_CS | 1 | RPi SPI0 CS1 for the Trouper host SPI slave |
@@ -305,7 +306,7 @@ The RX signal path relies on precise scaling and saturation logic to maintain si
 
 ## Clocking, timing tiers, and asynchronous boundaries
 
-**The core has one clock and one clock-domain crossing: the host SPI interface.** The single 32 MHz external reference (`IQ_CLK`, sourced from the central PCB TCXO buffer — the same reference driven to all four SX1257 XTB pins) drives every core flop on one clock net. The **one** CDC is the asynchronous, RPi-driven `SPI_SCK` (≤2 MHz): `spi_slave` runs a serial engine in the `SPI_SCK` domain and crosses completed register events into `IQ_CLK` on a persistent-toggle + bundled-data mailbox synchroniser (writes), while volatile-status *reads* over MISO are mitigated by the TRPR-SPS-012 firmware contract (probabilistic; residual risk under Open Risk #38). No other CDC or synchroniser exists in the core. The tiers below are *constraint* tiers on the `IQ_CLK` domain, not separate clock domains. Normative source: spec §3.1 and TRPR-SYS-003.
+**The core has one clock and one clock-domain crossing: the host SPI interface.** The single 32 MHz external core clock (`IQ_CLK`) is sourced from SX1257_1 `CLK_OUT`; that same controlled fanout drives SX1302 Radio-A clock input. A TCXO fanout separately drives the XTB reference of all four SX1257s. The **one** CDC is the asynchronous, RPi-driven `SPI_SCK` (≤2 MHz): `spi_slave` runs a serial engine in the `SPI_SCK` domain and crosses completed register events into `IQ_CLK` on a persistent-toggle + bundled-data mailbox synchroniser (writes), while volatile-status *reads* over MISO are mitigated by the TRPR-SPS-012 firmware contract (probabilistic; residual risk under Open Risk #38). The fixed cross-device SX1257 phase skew is a source-synchronous input-timing risk, not a CDC (Open Risk #70). The tiers below are *constraint* tiers on the `IQ_CLK` domain, not separate clock domains. Normative source: spec §3.1 and TRPR-SYS-003.
 
 | Tier | Mechanism | Effective budget | Blocks |
 |---|---|---|---|
@@ -343,7 +344,7 @@ The host SPI interface is the **only** asynchronous boundary in the design:
 
 The former IQ_CLK↔CLK_16M rows are deleted along with the generated clock itself. Paths between full-rate, paced, and CE-gated logic are same-clock paths constrained by the scoped MCPs above (TRPR-SYS-003/015/016) — they are not crossings and need no synchroniser.
 
-**SX1257 I/Q bitstreams are NOT a CDC boundary.** All four SX1257s receive the 32 MHz reference on their **XTB** pins (sourced from a shared TCXO via a clock buffer), so their `I_OUT`/`Q_OUT` signals change on the falling edge of the same clock the ASIC uses. This is a timing-constraint problem (board-level setup/hold on pad inputs), not a metastability problem. **Note: Using CLK_IN (pin 11) is incorrect as it only feeds the TX DAC.**
+**SX1257 I/Q bitstreams are NOT a CDC boundary.** All four SX1257s receive the 32 MHz reference on their **XTB** pins from a shared, length-matched TCXO fanout; Trouper captures their I/Q pads on `IQ_CLK`'s falling edge, between rising-edge data updates. SX1257_1's `CLK_OUT` is that `IQ_CLK`; the other three streams rely on the bounded fixed phase skew of the shared-reference distribution and SX1257 clock paths (Open Risk #70). This is a timing-constraint problem, not a metastability problem. **Note: Using CLK_IN (pin 11) is incorrect as it only feeds the TX DAC.**
 
 **SX1257 DIO pins — not connected.** With 0 spare ASIC pads, DIO0–DIO3 from each SX1257 are not routed to ASIC pads. PLL lock is polled via `RegModeStatus` (0x11) over SPI instead. No CDC treatment required.
 
@@ -422,4 +423,4 @@ Software and verification deliverables:
 
 - `System simulation and algorithm models` owns the Python-first ladder: behavioral model, algorithm selection, threshold tuning, and fallback policy.
 - `Verification (cocotb)` owns RTL-to-Python comparison, packet-level regression, register behavior, and block/integration testbenches.
-- `PicoRV32 firmware + algorithms` owns the firmware-side control loop, AGC, W computation, and in-the-loop behavior once the RTL model is stable.
+- `External board-controller firmware + algorithms` owns the firmware-side control loop, AGC, W computation, and in-the-loop behavior once the RTL model is stable. Grouper is an integration/development vehicle and is not taped out alongside Trouper.

@@ -28,7 +28,7 @@ any specific timing/behavior claim here for a real bring-up session.
 | SX1302 LoRa baseband | 1 | 1-bit ΣΔ IQ out (`REMOD_A_I/Q`) | Produces the MRC-combined (or bypass) re-modulated stream; Trouper never talks to SX1302 over SPI |
 | APS6404L PSRAM | 1 | QPI (`PSRAM_SCK`/`PSRAM_CE_N`/`PSRAM_SIO[3:0]`) | Owns and sequences the PSRAM protocol itself (`psram_buf_ctrl`) — firmware only flips `PSRAM_CTRL.PSRAM_EN` and polls `INIT_DONE`, it never speaks QPI directly |
 | Host RPi | 1 | Dedicated SPI slave (`HOST_CS`/`SPI_SCK`/`SPI_MOSI`/`SPI_MISO`), `IRQ_OUT` | Primary bring-up and register-access path; this guide's SPI recipes assume the host is the RPi |
-| PCB clock buffer | 1 | `IQ_CLK` (to Trouper) + `XTB` ×4 (to each SX1257) | Single 32 MHz TCXO reference fanned out to Trouper and all 4 SX1257s — **not** optional or per-device; all clocks must trace to the same buffer output for the CDC-free clock architecture to hold |
+| PCB clocking | 1 | TCXO fanout → `XTB` ×4; SX1257_1 `CLK_OUT` → Trouper `IQ_CLK` + SX1302 | Frozen source-synchronous topology: the TCXO reference frequency-locks all four front-ends, while SX1257_1 `CLK_OUT` clocks the ASIC and SX1302 Radio A |
 
 Full pad-by-pad list, direction, and electrical notes: [Pinout](../planning/Pinout.md).
 
@@ -63,11 +63,12 @@ Full pad-by-pad list, direction, and electrical notes: [Pinout](../planning/Pino
 
 ## 3. Clock architecture (what you need to know to wire it, not why)
 
-- One external reference: `IQ_CLK`, 32 MHz, from the shared PCB TCXO buffer.
-  The same buffer output also drives all 4 SX1257 `XTB` pins (**max 1.8 V
-  pk-pk** on that path — see [Pinout](../planning/Pinout.md) if inserting a buffer/divider).
-- SX1302's clock is **not** driven by Trouper — it comes from SX1257_1's
-  `CLK_OUT` pin directly on the PCB (System Architecture §"ASIC → SX1302").
+- The 32 MHz TCXO fanout drives all four SX1257 `XTB` pins (**max 1.8 V
+  pk-pk** on that path — see [Pinout](../planning/Pinout.md) if inserting a
+  buffer/divider). It does not directly drive Trouper `IQ_CLK`.
+- SX1257_1 `CLK_OUT` drives both Trouper `IQ_CLK` and SX1302 pin 43
+  `RADIO_A_CLK_I` on one controlled fanout. SX1257_2–4 `CLK_OUT` are NC;
+  never tie clock outputs together. This is the frozen board clock topology.
 - Internally Trouper derives a `ce_16m` clock-enable (not a second clock
   tree) for the control-plane blocks; this is invisible from the outside —
   nothing to wire, mentioned only so you don't go looking for a `CLK_16M`
