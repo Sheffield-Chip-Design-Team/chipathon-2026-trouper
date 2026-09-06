@@ -36,13 +36,15 @@ module tb_psram_model;
         .clk_32m (clk), .rst_n (rst_n),
         .psram_en (1'b1), .init_start (1'b1), .qspi_owner (1'b0),
         .sf (SF[3:0]), .sample_shift (SAMPLE_SHIFT[1:0]),
+        .sc_ant_sel (2'd0),                     // SC path follows branch 0
         .iq_i0 (iq_i0), .iq_i1 (8'sd0), .iq_i2 (8'sd0), .iq_i3 (8'sd0),
         .iq_q0 (iq_q0), .iq_q1 (8'sd0), .iq_q2 (8'sd0), .iq_q3 (8'sd0),
         .iq_valid (iq_valid),
         .sc_lock (1'b0), .timing_ref (32'd0), .iq_sample_cnt (32'd0),
+        .training_done (1'b0), .replay_delay_samples (16'd0),
         .W_commit (1'b0), .packet_end (1'b0), .packet_active (1'b0),
         .clr_err (1'b0),
-        .sck (sck), .ce_n (ce_n), .sio_out (sio_out),
+        .sck (sck), .sck_en_o (), .ce_n (ce_n), .sio_out (sio_out),
         .sio_in (sio_in), .sio_oe (sio_oe),
         .cur_i0 (cur_i0), .cur_q0 (cur_q0),
         .del_i0 (del_i0), .del_q0 (del_q0), .del_valid (del_valid),
@@ -50,10 +52,13 @@ module tb_psram_model;
         .rpl_q0 (), .rpl_q1 (), .rpl_q2 (), .rpl_q3 (),
         .rpl_valid (),
         .buf_active (), .replay_active (),
-        .qe_init_done (), .replay_missed (), .overflow (), .sample_skip (),
+        .qe_init_done (), .replay_missed (), .w_commit_late (),
+        .overflow (), .sample_skip (),
         .state_dbg (),
+        .del_rdy_dbg (),
         .dbg_addr (23'd0), .dbg_auto_inc (1'b0), .dbg_rd_trig (1'b0),
-        .dbg_data_pop (1'b0), .dbg_busy (), .dbg_data ()
+        .dbg_data_pop (1'b0), .dbg_busy (), .dbg_data (),
+        .dbg_wdata (8'd0), .dbg_wdata_push (1'b0), .dbg_wr_trig (1'b0)
     );
 
     // ---- Model: BRAM-backed PSRAM ----

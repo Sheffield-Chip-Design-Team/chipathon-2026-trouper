@@ -49,11 +49,21 @@ REPLAY_DELAY = 64      # output samples after training_done before REPLAY engage
                        # (reset default is 1500 ~= 3 ms, far longer than this test
                        # needs to wait; see the 0x77/0x78 write in the config block)
 SAT_FLOOR = 100        # comb_y peak must reach at least this to call it "saturated"
-STUCK_HEALTHY = 100    # output stuck-run below this = still dithering. Calibrated from job
-                       # 3293: healthy low-amplitude runs (both shifts) measured 43-50 cycles;
-                       # shift=1 at forced near-full-scale measured 66-68 -- comfortable margin.
-STUCK_DEGRADED = 120   # shift=0 at forced near-full-scale measured 167 -- clearly above the
-                       # healthy ceiling, a real (if not "frozen forever") degradation signature.
+# Recalibrated 2026-09-04 for the sd_remod 4th-order excess-loop-delay fix (see
+# planning/ss-timing-closure-exploration-2026-09-04.md). The old 3-tap loop was
+# only marginally stable near full scale; the new 4th-order loop is properly
+# designed and dithers far better everywhere, so the absolute stuck-run numbers
+# dropped by ~3x even in the "degraded" case -- the old thresholds (100/120),
+# calibrated against job 3293's 3-tap numbers, no longer distinguish anything.
+# Job 5572 (post-fix) measured: low-amplitude sanity (both shifts) = 3-4 cycles;
+# shift=1 at forced near-full-scale = 5 cycles; shift=0 at forced near-full-scale
+# = 54 cycles -- backoff still clearly helps (~10x), just at a smaller absolute
+# scale now that the modulator itself doesn't need it as urgently.
+STUCK_HEALTHY = 20     # output stuck-run below this = still dithering (~4x margin
+                       # above the measured 3-5 cycle healthy ceiling, well below
+                       # the 54-cycle degraded case).
+STUCK_DEGRADED = 35    # shift=0 at forced near-full-scale measured 54 -- clearly
+                       # above STUCK_HEALTHY with margin in both directions.
 
 
 async def _set_comb_cfg(dut, shift, pgs=7):
@@ -130,12 +140,16 @@ async def _monitor_remod(dut, cycles):
     out_i_bits, out_q_bits = [], []
     for _ in range(cycles):
         await RisingEdge(dut.IQ_CLK)
-        s1i.append(int(dut.u_dut.u_remod.s1_i.value.signed_integer))
-        s2i.append(int(dut.u_dut.u_remod.s2_i.value.signed_integer))
-        s3i.append(int(dut.u_dut.u_remod.s3_i.value.signed_integer))
-        s1q.append(int(dut.u_dut.u_remod.s1_q.value.signed_integer))
-        s2q.append(int(dut.u_dut.u_remod.s2_q.value.signed_integer))
-        s3q.append(int(dut.u_dut.u_remod.s3_q.value.signed_integer))
+        # The CIFF integrators moved from sd_remod down into its
+        # sd_remod_multiplierless child (u_remod) when the multiplierless core
+        # was promoted to canonical (commit 7f64c88): path is now
+        # u_dut.u_remod (sd_remod) . u_remod (sd_remod_multiplierless) . s*.
+        s1i.append(int(dut.u_dut.u_remod.u_remod.s1_i.value.signed_integer))
+        s2i.append(int(dut.u_dut.u_remod.u_remod.s2_i.value.signed_integer))
+        s3i.append(int(dut.u_dut.u_remod.u_remod.s3_i.value.signed_integer))
+        s1q.append(int(dut.u_dut.u_remod.u_remod.s1_q.value.signed_integer))
+        s2q.append(int(dut.u_dut.u_remod.u_remod.s2_q.value.signed_integer))
+        s3q.append(int(dut.u_dut.u_remod.u_remod.s3_q.value.signed_integer))
         yv = dut.u_dut.comb_y_valid.value
         if yv.is_resolvable and int(yv):
             comb_peak.append(abs(int(dut.u_dut.comb_y_i.value.signed_integer)))

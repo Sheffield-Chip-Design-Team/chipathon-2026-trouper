@@ -42,7 +42,8 @@ byte-for-byte over the SPI firmware-load path.
   and pulses `WGT_CTRL.W_COMMIT` (`0x1E`).
 
 Reference model: `sim/models/eigvec_fw.py`. AGC and noise-EMA policy are
-host/Grouper-side (see `planning/Register Map.md` `0x1F` / `0x64`–`0x6F`).
+external-board-controller-side (see `planning/Register Map.md` `0x1F` /
+`0x64`–`0x6F`); Grouper is not taped out alongside Trouper.
 
 ### Timing (cycle-accurate, PicoRV32 @16 MHz)
 

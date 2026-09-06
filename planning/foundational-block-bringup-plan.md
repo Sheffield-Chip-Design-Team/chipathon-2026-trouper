@@ -31,22 +31,243 @@ The two debug pads are observability aids, not a high-bandwidth trace port. They
 
 This sequence already gives a useful failure partition: a failing early stage does not obscure SPI, PSRAM service, packet control, or board I/O evidence.
 
-## Candidate shared internal stimulus source — decision not taken
+## Shared internal stimulus source — option (c) chosen 2026-09-03, at the re-modulator input
+
+> **Status 2026-09-02 — SUPERSEDED by the 2026-09-03 decision further down;
+> kept because the MRC and P&R findings it records are what drove that decision.**
+>
+> Implemented on `feat/bringup-src` at the **combiner input**, as
+> `src/debug/bringup_src.v` plus `BRINGUP_CTRL` (`0x06`) / `BRINGUP_AMPL` (`0x07`).
+> The combiner insertion point was chosen because `mrc_combiner` is a bit-exact
+> passthrough in bypass, so one generator proves **both** blocks with no loss of
+> `sd_remod` isolation: the programmed sample arrives unmodified, and a bad 1-bit
+> output stream is unambiguously `sd_remod`'s fault. The doc's stated cost of that
+> choice — "needs a four-branch source" — turned out to conflate the generator with
+> the mux: one complex generator is fanned out to all four branches, so the extra
+> silicon over the re-modulator tap is mux width, not arithmetic.
+>
+> **Requirement 4 is now measured, and it does not clear the bar as written.**
+> Job 5404 (feature) against job 5379 (baseline), same `src/config/trouper_top.json`:
+>
+> | Metric | Baseline 5379 | With BRINGUP_SRC 5404 | Delta |
+> | --- | --- | --- | --- |
+> | SS WNS `max_ss_125C_3v00` | −10.130 ns | −10.916 ns | **−0.787 ns** |
+> | SS TNS | −383.5 ns | −699.3 ns | **−315.8 ns (1.82×)** |
+> | Stdcell area | 1,171,490 µm² | 1,180,280 µm² | +8,790 (+0.750%) |
+> | Stdcell count | 48,926 | 49,275 | +349 |
+> | Sequential cells | 5,228 | 5,273 | +45 |
+> | Stdcell utilisation | 66.07% | 66.57% | +0.50 pt |
+> | Magic DRC / antenna / XOR / LVS | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 | clean |
+>
+> **On the utilisation line specifically:** 66.57% is measured
+> `design__instance__utilization__stdcell`, not a target. The config sets
+> `PL_TARGET_DENSITY_PCT: 65`, and its own `_comment_density` records that this
+> figure is *load-bearing for routability, not area* — 78% and 72% both hit
+> DRT-0073/DRT-1231 on this 1675×1110 die, 65% is what cleared it, and every clean
+> signoff since (5198/5214/5279/5284/5286) has run at 65%. So the +0.50 pt this
+> feature costs is not spare room being consumed: it spends the same budget that
+> buys pin access for the `IQ_CLK` clock tree and the antenna diodes. Recovering it
+> by raising density "requires re-proving routing, not just timing". That is a
+> second, independent reason the timing delta below should not be waved through —
+> the design is at 66.57% against a 65% target that exists because routing fails
+> above it.
+>
+> The area cost is small and the physical checks are clean. The timing cost is not
+> small: this requirement says the source "is not justified if it worsens current
+> timing or routing risk beyond an agreed budget", and no budget was ever agreed.
+> A near-doubled TNS on a design that already misses SS is the finding, not the
+> −0.787 ns WNS — WNS on this design is a known repair lottery, so a single pair
+> cannot separate 0.8 ns from run-to-run scatter, whereas a 1.82× TNS cannot
+> plausibly be scatter. (That "repair lottery" behaviour was first observed on the
+> older, denser B4+B6 floorplan at ~88% utilisation. It is recorded here because the
+> scatter caveat still applies, but the 88% figure does **not**: this A40 die runs at
+> 66.57%. Do not carry the density number across builds.)
+>
+> **Requirement 3 is now met, and requirement 2's coverage found a limitation that
+> changes what the feature buys.** `cocotb/bringup_src` is 20/20 (job 5419).
+> Requirement 3 — "compare captured 1-bit outputs after external/Python decimation
+> with the programmed DC/tone reference" — had no coverage at all until now: every
+> test stopped at the *combiner input*, which proves the mux, not the signature a
+> bring-up engineer would actually compare against. Two tests close it, both
+> reading `REMOD_A_I/Q` at the pads:
+>
+> - `test_dc_signature_at_the_remod_output` — the ±1 output density equals
+>   `level/127` for levels 16/32/48, on I and Q independently. Needs no filter and
+>   no phase alignment: computable on the bench from a bit count alone.
+> - `test_tone_signature_at_the_remod_output` — R=64 brickwall reconstruction (the
+>   same decimation `sim.tests.remod_order_sweep` uses) matched against
+>   `A/127·exp(+jπn/2)` in amplitude *and rotation direction*, which is what tests
+>   I and Q **together**: a swapped or inverted rail leaves both per-rail densities
+>   untouched and shows up only as the conjugate tone. Whole-band SQNR measured
+>   18.2 dB.
+>
+> Also added: the exact 500 kS/s cadence, a golden-LFSR compare for PRBS (liveness
+> was all that was checked before), `psram_silence` held low across the capture,
+> precedence over a *live* decimator arm (every other test runs with the IQ pads
+> tied low, so a mux with inverted priority would have passed all of them), and
+> mid-burst disarm.
+>
+> **The limitation: MRC mode is structurally unreachable while the source is
+> armed.** `W_valid` is cleared on every clock where `!packet_active`
+> (`trouper_top.v:761-765`) and `bringup_en_q` requires `!packet_active`
+> (`trouper_top.v:885`), so the two are mutually exclusive — a committed W survives
+> at most the single clock after `W_valid_set`, and `mrc_combiner` latches
+> `use_mrc_r` only at a burst start, one clock in 64. **BRINGUP_SRC can prove the
+> combiner's bypass passthrough only**; the MAC, the `acc >>> (8 - pgs)` output
+> shift, saturation, and per-branch weight application stay dark. `bringup_src.v`'s
+> header claimed all four; that claim has been corrected in the RTL, and the
+> behaviour is now pinned by `test_mrc_mode_is_unreachable_while_armed` plus
+> `test_combiner_degrades_to_bypass_not_to_zero` (the fallback is bypass, not
+> silence — silence would be indistinguishable from a dead re-modulator, the exact
+> diagnosis this feature exists to enable).
+>
+> This feeds the decision gate directly: option (c) below — moving the source to the
+> re-modulator input — was costed as "giving up combiner coverage". The combiner
+> coverage actually on offer is the bypass passthrough, which is a wire. The gap
+> between (c) and the implemented option is therefore much smaller than the plan
+> assumed, while the measured cost is 1.82× TNS.
+>
+> **Decision owed to the first-silicon team**, in the plan's own terms below: does
+> proving the combiner and re-modulator without a working frontend/PSRAM chain
+> outweigh this? Options, cheapest first: (a) accept, on the grounds that SS is
+> already missed and the fix is voltage, not slack; (b) re-run the pair two or
+> three times to bound the scatter before deciding; (c) move the source to the
+> re-modulator input, giving up combiner coverage for a smaller mux; (d) drop it
+> and rely on the FPGA IQ stimulus baseline. Do not treat the existence of this
+> RTL as approval.
+
+---
+
+### DECISION 2026-09-03: option (c). Source moved to the re-modulator input.
+
+Taken once the coverage work showed option (c)'s stated cost — "giving up
+combiner coverage" — was not a cost at all. The MRC exclusion above means the
+only combiner behaviour the source could ever reach was the bypass passthrough,
+which is a wire. Option (c) proves the same thing for a smaller mux and
+diagnoses better: at the combiner input a bad 1-bit stream implicated `sd_remod`
+**or** the bypass path with no way to tell which from the pads; at the
+re-modulator input it implicates `sd_remod` alone. That isolation argument, not
+the cell count, is the reason to prefer it.
+
+**Implemented** (commit `9b36e6d`, branch `feat/bringup-src`):
+
+- The `BRINGUP_SRC` arm is removed from the combiner input mux, which returns to
+  a two-way `replay_active ? rpl : dcr` select. The generator is muxed into
+  `remod_in_i/remod_in_q/remod_in_valid` instead: 3 mux points rather than 9
+  (4 branches × 2 rails + valid).
+- The armed source takes **absolute priority** at that mux, ahead of both
+  `psram_silence` and `REMOD_BACKOFF_SHIFT`. `psram_silence` would let a buffer
+  state zero the stimulus, and silence at the pads is indistinguishable from a
+  dead re-modulator — the exact diagnosis this source exists to enable. The
+  backoff would make the pad signature depend on `COMB_CFG` rather than on the
+  programmed value. Skipping the backoff is safe because the generator clamps to
+  ±64 (−6 dBFS), already inside `sd_remod`'s −3 dBFS stability bound.
+- `BRINGUP_CTRL` (`0x06`) / `BRINGUP_AMPL` (`0x07`) are unchanged, so the
+  register map, firmware header and reset/RW sweeps need no revision.
+- Side effect worth knowing at the bench: the two-pin debug probe's COMB group
+  taps `remod_in_i/q`, which is now downstream of the mux, so an armed source is
+  visible on `DBG0`/`DBG1` as well as on `REMOD_A_I/Q` — a second, byte-level
+  view of the stimulus with no radio attached.
+
+**Requirement 2 evidence — `cocotb/bringup_src` 23/23 (job 5427), core
+regression 42/42 (job 5423).** Beyond the requirement-3 work recorded above, the
+move added: samples reach `remod_in` unmodified, the combiner is demonstrably out
+of the path, the backoff and `psram_silence` overrides, precedence over a *live*
+receive path, clean hand-back on disarm (no stuck DC, no stalled valid), and the
+debug-probe group. The arming gate's third term is also now covered: raising
+`RX_HOLD` mid-packet does **not** end the packet (`packet_ctrl_fsm` never sees
+`rx_hold`), but `reg_bank`'s `cfg_wr_ok = rx_hold && !packet_active` refuses the
+write; the level term in `trouper_top.v` is a second, independent barrier and is
+exercised by forcing the register past the write gate.
+
+**Formal — `formal/bringup_src.sby`, PASS prove + cover (job 5438).** The
+generator carried three `` `ifdef FORMAL `` assertions from the day it was
+written and nothing ever ran them: no `.sby`, no harness. Running them found one
+was **wrong**, not merely unrun — `if (!rst_n || !en) assert(!src_valid)` is
+false in the cycle `en` falls, because `src_valid` is registered. Induction
+caught a second off-by-one: `mode` is sampled at the tick, so a mode change takes
+effect at the *next* tick, not the current one. An unrun assertion is an
+unchecked claim, not a weak check.
+
+Two formal-infrastructure defects surfaced on the way, both fixed here:
+
+1. `formal/run_formal_both.sh` has been broken since `/foss/designs` went
+   read-only (NFS `manage_gids`, 2026-07-27/28): `sby` creates its work
+   directory in the CWD, so **every** proof died with `OSError: Read-only file
+   system`. It now stages into `$RUN_DIR`.
+2. The runner iterated two of the four `.sby` files; `spi_slave` was already
+   missing before `bringup_src` existed. Now it iterates all four — which
+   surfaces a **pre-existing `spi_slave` BMC failure** (`a_addr_incr_wrap`,
+   `spi_slave_formal.sv:213`, step 33). Untouched here; it needs its own
+   triage and does not belong to this feature.
+
+**Requirement 4 — NOT yet met at the re-modulator input. The netlist does not
+route.** Jobs 5425 and 5436 both fail detailed routing with the same error:
+
+```
+[DRT-0073] No access point for clkbuf_2_2_0_IQ_CLK_regs/I
+           (gf180mcu_fd_sc_mcu7t5v0__clkbuf_16)
+```
+
+Deterministic — same cell, twice. **And the failing netlist is smaller than the
+combiner-insertion variant that routed clean:**
+
+| stage | baseline 5379 | combiner 5404 (clean) | remod 5436 (DRT-0073) |
+| --- | --- | --- | --- |
+| yosys synthesis | 35,300 | 35,597 | **35,436** |
+| openroad CTS | — | 49,020 | **48,900** |
+| global routing | — | 49,137 | **49,022** |
+| sta midpnr | — | 49,263 | **49,183** |
+
+That contradicts `src/config/trouper_top.json`'s `_comment_density`, which
+frames this failure class as "sensitive to netlist size". It is not: a netlist
+161 cells *smaller* at synthesis fails where the larger one passed. The
+mechanism is **placement perturbation around the `IQ_CLK` clock tree**, and the
+practical consequence is that a smaller mux is not a reason to expect a design
+to route. Do not carry "fewer cells" into a routability argument on this die.
+
+Probes, in order (do not re-run the rejected ones):
+
+- `DPL_CELL_PADDING` 2 → 3 (`trouper_top_dpl3_probe.json`) — the placement-room
+  lever for a pin-access failure. Started as job 5439, cancelled to free the
+  node; **not yet evaluated.**
+- `PL_TARGET_DENSITY_PCT` 65 → 64 (`trouper_top_d64_probe.json`, job 5440) — a
+  perturbation probe, *not* a density theory, for the reason above. 64 is
+  untried; 63 and 60 were probed and rejected on the older dbgpins netlist, and
+  72/78 hit DRT-0073. **Result pending.**
+
+If a probe clears it, that is a single sample against a knob whose current value
+is load-bearing: `_comment_density` records that every clean signoff since job
+5198 has run at 65. A one-off pass at 64 needs a confirming re-run, or a
+deliberate decision to move the signoff density — it must not be folded in
+silently. If no cheap perturbation clears it, option (c) costs a routing fix,
+and that belongs in the comparison against option (d) rather than being absorbed
+as a detail.
 
 If lab risk warrants a downstream path independent of frontend, detector, and PSRAM replay, add one small deterministic complex-sample generator at the combiner/re-modulator boundary. It is explicitly preferred over separate per-block BIST engines.
 
+As built (2026-09-03), the insertion point is the re-modulator input:
+
 ```text
-normal replayed sample ────────────────┐
-                                      mux ──> combiner / sd_remod ──> REMOD_A_I/Q
-BRINGUP_SRC (500 kS/s complex sample) ─┘
+decimator IQ ──┐
+               mux ──> mrc_combiner ──> backoff >>> ──┐
+PSRAM replay ──┘                                      │
+                                                     mux ──> sd_remod ──> REMOD_A_I/Q
+BRINGUP_SRC (500 kS/s complex sample) ───────────────┘        │
+                                                              └──> DBG0/DBG1 (COMB group)
 ```
+
+Everything left of the second mux — decimator, DC removal, Schmidl-Cox,
+`training_acc`, PSRAM, and the combiner — is bypassed while the source is armed
+and cannot be stimulated by it. Those blocks keep the independent evidence paths
+in the table at the top of this document.
 
 The exact insertion point must be selected during microarchitecture review:
 
 - **At the re-modulator input:** proves `sd_remod` and its output pads with the least logic and least disturbance to timing; it does not prove the combiner.
 - **At the combiner input:** can prove deterministic bypass and fixed-weight combiner behavior as well as `sd_remod`; it needs a four-branch source and an explicit valid cadence.
 
-For either choice, the source SHALL be enabled only when `RX_HOLD=1` and `PACKET_ACTIVE=0`; reset SHALL select the normal path. Test-source controls SHALL be ignored or rejected outside that safe state, with a readable sticky status indication. The test source SHALL not alter PSRAM ownership, SC state, training state, weights, interrupts, or normal packet behavior.
+The combiner input was selected. For either choice, the source SHALL be enabled only when `RX_HOLD=1` and `PACKET_ACTIVE=0`; reset SHALL select the normal path. Test-source controls SHALL be ignored or rejected outside that safe state, with a readable sticky status indication. The test source SHALL not alter PSRAM ownership, SC state, training state, weights, interrupts, or normal packet behavior.
 
 Minimum deterministic modes are:
 

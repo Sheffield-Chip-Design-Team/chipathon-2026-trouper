@@ -28,6 +28,7 @@ VERILOG_SOURCES = \
     $(RTL)/psram_buf_ctrl.v       \
     $(RTL)/mrc_combiner.v         \
     $(RTL)/sd_remod.v             \
+    $(RTL)/sd_remod_multiplierless.v \
     $(RTL)/spi_slave.v            \
     $(RTL)/reg_bank.v             \
     $(FPGA)/psram_model.v         \

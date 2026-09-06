@@ -23,6 +23,86 @@ The host SPI frame carries the register address in a single command byte: **bit 
 
 ---
 
+## Host SPI read coherency — firmware contract
+
+`SPI_SCK` is asynchronous to the 32 MHz core clock. `spi_slave` loads the MISO
+byte by **directly sampling** the combinational `reg_bank` read tap on the
+falling `SPI_SCK` edge that precedes each data byte (`src/control/spi_slave.v`,
+MISO load; TRPR-SPS-009) — there is **no synchroniser on the read path**. A
+register field whose value can change in the 32 MHz domain may therefore
+transition inside that sampling aperture, so a single SPI read of such a field
+can return a torn byte, and any bit can go momentarily metastable.
+
+**This is a probabilistic mitigation, not a hardware coherency guarantee.**
+The rules below reduce the probability of *accepting* a bad byte; they do not
+make the crossing coherent and do not eliminate metastability. Residual CDC
+risk remains and is carried under Open Risk #38 ("Route 2" — accepted for this
+revision). An on-chip core-domain read snapshot ("Route 1") that would give a
+real hardware guarantee is a post-tapeout option. Consequently:
+
+- Do not use a volatile field as the sole input to a safety- or
+  correctness-critical decision. Where possible, poll for a **stable
+  condition** (a level that, once reached, does not change until firmware acts
+  — e.g. `TRAINING_DONE`, `DBG_BUSY` clear) rather than sampling a transient.
+- A **frozen** register (below) read with a stable address after its
+  completion flag is genuinely coherent — nothing in the core domain is
+  changing, so there is no CDC hazard on that read. The probabilistic caveat
+  applies only to the **volatile** class.
+
+The write path is **not** affected — completed writes cross into the core on a
+persistent toggle + bundled-data mailbox (Open Risk #15, closed) — and neither
+is `PSRAM_DBG_DATA` (`0x76`), a handshaked FIFO pop gated by `DBG_BUSY`.
+
+### Which reads are safe as-is
+
+| Class | Registers | Rule |
+| --- | --- | --- |
+| **Static** — value only changes when the host itself writes it | Fixed IDs `0x00`/`0x01`; the *storage* bits of the `R/W` config registers (`0x04`–`0x0F`, `0x18`, `0x1B`, `0x27`, `0x30`–`0x3F`, `0x70[0]`/`0x70[3]`, `0x72`–`0x74`, `0x77`–`0x78`) | Single read is coherent. **Excludes the self-clearing W1P bits** `SC_FORCE_LOCK` 0x19[0], `WGT_CTRL.W_COMMIT` 0x1E[0], `TACC_NOISE_TRIG` 0x1F[0], `PSRAM_CTRL.PSRAM_CLR_ERR` 0x70[1], `PSRAM_DBG_CTRL.RD_TRIG`/`WR_TRIG` 0x75[0]/[2] — hardware drives these back to 0 one CE period after the write, so a readback is meaningless, not a data source. |
+| **Frozen result** — hardware writes the value once, then holds it | `Z_kl` / `ZDIAG_k` (`0x40`–`0x6F`); **final** `N_ACC` (`0x21`–`0x23`); `SC_FIRST_HIT` (`0x28`–`0x2B`); `SC_LOCK_SNAP` (`0x2C`–`0x2F`) | Single read is coherent **only after** the matching completion flag has been *confirm-read* set — `PACKET_STATUS.TRAINING_DONE` 0x1C[4] (or `IRQ_STATUS.NOISE_READY`) for the `Z`/`Zdiag`/`N_ACC` set, `sc_lock`/`SC_FIRST_HIT` non-zero for the SC snapshots. The training accumulator stops at window close and holds until the next arm (`sc_lock` or a `TACC_NOISE_TRIG` write); the SC snapshots hold until the next lock/first-hit. Complete the read within that gap. |
+| **Volatile** — a hardware event can change the field between any two SCK edges | `IRQ_STATUS` (`0x02`); `PACKET_STATUS` (`0x1C`); `ACTIVE_STATUS` (`0x1D`); `WGT_CTRL` RO bits (`0x1E[5:1]`); `TRAINING_STATUS` (`0x20`); `SC_STAT` (`0x24`–`0x25`) and `SC_DBG_FLAGS` (`0x26`) — re-assigned from live detector state; do not assume frozen after lock; `TACC_NOISE_TRIG` status (`0x1F[1]`); `PSRAM_STATUS` (`0x71`); `PSRAM_DBG_CTRL.DBG_BUSY` (`0x75[7]`) | Confirm-read, see below. |
+| **Not recoverable mid-window (diagnostic only)** | `N_ACC` (`0x21`–`0x23`) *while a training window is running* | `n_acc` increments per accepted `iq_valid` (up to 500 kS/s), i.e. ~8 counts per 3-byte read at 2 MHz — two snapshots will essentially never agree before the window closes. Do **not** confirm-read it mid-window; treat any mid-window value as an approximate progress indicator only. The meaningful read is the frozen final value after `TRAINING_DONE` (row above). |
+
+### Rules for volatile reads (host firmware SHALL)
+
+1. **Never act on a single sample.** Make a control decision (issuing
+   `W_COMMIT`, starting a `Z` read, gating on `DBG_BUSY`, …) only after **two
+   independent reads of the same address return the same byte**.
+2. **"Two independent reads" means two complete command-plus-data
+   transactions.** `HOST_CS` SHALL be deasserted between them. Do *not* rely on
+   two consecutive bytes of one CS-low burst — burst mode auto-increments the
+   address after every data byte, so consecutive bytes normally read
+   *different* registers.
+3. **Multi-byte volatile values** (e.g. `SC_STAT`) SHALL be read in full in
+   each of the two transactions and used only when the two complete copies are
+   byte-identical. A value that changes faster than a read takes will never
+   confirm — see the *not recoverable mid-window* class (`N_ACC` during a
+   training window): do not retry it, treat it as diagnostic only.
+4. **Bound the retry.** If N attempts (recommended cap: 4) fail to produce two
+   agreeing copies, treat it as a bus error, not as data — do not spin past a
+   `W_COMMIT` deadline (TRPR-WGN-004) waiting for convergence.
+5. **Frozen banks:** read `Z_kl`/`ZDIAG_k` (`0x40`–`0x6F`) and the final
+   `N_ACC` (`0x21`–`0x23`) only after `TRAINING_DONE` has been confirm-read set
+   (rules 1–2), completing the burst before the next `sc_lock`/`TACC_NOISE_TRIG`
+   re-arms the window; read `SC_FIRST_HIT` (`0x28`–`0x2B`) / `SC_LOCK_SNAP`
+   (`0x2C`–`0x2F`) after the corresponding lock/first-hit and before the next
+   one. Within that gap a single burst read of the frozen bank is coherent
+   (frozen data, stable address — no CDC hazard); e.g. the 49-byte
+   `0x40`–`0x6F` `Z`/`Zdiag` burst.
+6. **Bursts** that span a mix of static and volatile addresses inherit the
+   volatile rule for the whole transaction.
+
+**Cost.** One register read = command byte + data byte = 16 SCK cycles ≈ **8 µs
+at 2 MHz** (plus `HOST_CS` setup/hold and the inter-transaction gap). A
+confirmed volatile read is a second full transaction, so **≈ +8 µs per
+confirmed field** (≈ 16 µs total), not one extra byte. Over the handful of
+status polls in a weight-transfer sequence this is on the order of tens of µs —
+still negligible against the eigenvector kernel (~2.08–2.28 ms, TRPR-WGN-004)
+plus ~0.4 ms of `Z` read + `W` write traffic — and it applies equally at every
+SF (the SF7/SF8 replay-delay margin already dominates, TRPR-WGN-004). The
+frozen `Z`/`Zdiag` bulk read is a single transaction (rule 5), unaffected.
+
+---
+
 ## Address map
 
 | Address | Name | R/W | Reset | Block | Description |
@@ -40,13 +120,16 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x08` | `MIMO_CTRL` | R/W | `0xF0` | Control | [0] `MODE` (0=MRC, 1=passthrough); [7:4] `ANTENNA_EN` |
 | `0x09` | `SF_CFG` | R/W | `0x07` | Packet timing | [3:0] spreading factor, direct-coded (7–12, firmware-enforced — not clamped in HW); write ignored while `PACKET_ACTIVE` |
 | `0x0A` | `BW_CFG` | R/W | `0x00` | ΣΔ Decimator | [0] `bw_sel` LoRa bandwidth (0 = 250 kHz, 1 = 125 kHz); [7:1] reserved; write gated by `RX_HOLD` + `!PACKET_ACTIVE` |
-| `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Packet timeout in LoRa symbols |
+| `0x0B` | `PKT_TIMEOUT_SYMS` | R/W | `0x50` | Packet Control FSM | Payload-phase timeout in LoRa symbols (not a global packet watchdog — see 0x0B detail) |
 | `0x0C` | `SC_THR_HI` | R/W | `0x01` | Schmidl-Cox | Detection threshold [15:8]. RTL consumes bits [11:0] only — values ≥ `0x1000` are unsupported. |
 | `0x0D` | `SC_THR_LO` | R/W | `0xCC` | Schmidl-Cox | Detection threshold [7:0] |
 | `0x0E` | `SC_HITS_REQ` | R/W | `0x02` | Schmidl-Cox | Locks after encoded value + 1 hits. Values 1–3 are normal operation (2–4 hits); 0 is diagnostic-only one-hit mode. |
 | `0x0F` | `COMB_CFG` | R/W | `0x10` | MRC Combiner / Re-mod | [2:0] `COMB_POST_GAIN_SHIFT`; [5:4] `REMOD_BACKOFF_SHIFT` (reset 1); [3], [7:6] reserved |
-| **Reserved** (`0x10`–`0x17`) | | | | | |
-| `0x10`–`0x17` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL`; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below. `0x18`, the last of that block, is now `ARRAY_SYNC_CTRL`) |
+| **Bring-up source** (`0x10`–`0x11`) | | | | | |
+| `0x10` | `BRINGUP_CTRL` | R/W | `0x00` | Bring-up source | [0] `EN`: arm the deterministic test source at the **re-modulator input**; [2:1] `MODE` (0 = zero, 1 = signed DC, 2 = fs/4 complex tone, 3 = PRBS); [7:3] 0. **Resets to 0** — the normal datapath is selected out of reset. Gated: write ignored unless `RX_HOLD=1` and `PACKET_ACTIVE=0`, rejection latched in `RX_HOLD.CFG_WR_REJECTED`. The qualified enable also drops continuously if `RX_HOLD` is released. See `planning/foundational-block-bringup-plan.md` (Open Risks #59) |
+| `0x11` | `BRINGUP_AMPL` | R/W | `0x00` | Bring-up source | [7:0] signed sample amplitude. The magnitude is clamped to `±64` in hardware — `sd_remod`'s 3rd-order NTF is permanently unstable on input wrap-around, so the bound is functional, not advisory. Same gate as `0x10` |
+| **Reserved** (`0x12`–`0x17`) | | | | | |
+| `0x12`–`0x17` | — | — | `0x00` | — | Reserved (former `RX_GAIN_SHADOW`/`RX_GAIN_ACTIVE`/`RX_GAIN_CTRL` block; Trouper has no SX1257 SPI/control outputs, so these registers only mirrored software-written values internally — removed, see "Removed registers" below. `0x10`/`0x11` in this former block are now `BRINGUP_CTRL`/`BRINGUP_AMPL`; `0x18`, the last slot, is `ARRAY_SYNC_CTRL`) |
 | `0x18` | `ARRAY_SYNC_CTRL` | R/W | `0x00` | Array acquisition sync | [0] `ARRAY_SYNC_EN`: arm the shared `ARRAY_ACQ_N` link. **Resets to 0** — the pin is inert in both directions until firmware opts in, so an unused/unpopulated pad cannot start the receiver. [7:1] reserved. Gated: write ignored unless `RX_HOLD=1` and `PACKET_ACTIVE=0`. See `planning/array-acquisition-sync.md` |
 | `0x19` | `SC_FORCE_LOCK` | W | `0x00` | Schmidl-Cox | [0] W1P: manually assert `sc_lock`, bypassing the correlator's hit-count logic. Write ignored while `PACKET_ACTIVE` (same gate as `SF_CFG`/`BW_CFG`/`SC_ANT_SEL`) |
 | `0x1A` | `RX_HOLD` | R/W | `0x01` | Schmidl-Cox / config interlock | [0] `RX_HOLD` (level): 1 = SC detector held disabled (ORed into `sc_clr`) and the gated config registers are writable; 0 = detector may lock and those writes are refused. **Set out of reset — firmware must configure, then clear it to receive.** [1] `CFG_WR_REJECTED` RO sticky, W1C: a gated config write was dropped |
@@ -111,7 +194,7 @@ The host SPI frame carries the register address in a single command byte: **bit 
 | `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 113 implemented + 15 reserved = 128. (Updated 2026-09-03: `DBG_CTRL1` `0x06` implemented — the second selector for the split-selector debug mux after `DBG1` was merged onto the `IRQ_OUT` pad (27-pad budget); one address moved from reserved to implemented, so the reserved slots are now `0x07`, `0x10`–`0x17`, `0x7A`–`0x7E` and `0x7F`. Updated 2026-08-30: `DBG_CTRL` (now `DBG_CTRL0`) `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. Two addresses moved from reserved to implemented. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before either change was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. (Reserved-slot list as of 2026-09-03: `0x07`, `0x10`–`0x17`, `0x7A`–`0x7E`, `0x7F` — 15 slots.))
+**Occupancy:** 115 implemented + 13 reserved = 128. (Updated 2026-09-04: `BRINGUP_CTRL`/`BRINGUP_AMPL` implemented at `0x10`/`0x11` (Open Risks #59) — relocated from `0x06`/`0x07` on the rebase onto `main`, because `0x06` is now `DBG_CTRL1` and `0x07` stays reserved; two addresses moved from the former `RX_GAIN` reserved block to implemented, so the reserved slots are now `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E` and `0x7F`. Updated 2026-09-03: `DBG_CTRL1` `0x06` implemented — the second selector for the split-selector debug mux after `DBG1` was merged onto the `IRQ_OUT` pad (27-pad budget). Updated 2026-08-30: `DBG_CTRL` (now `DBG_CTRL0`) `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before those changes was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. (Reserved-slot list as of 2026-09-04: `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E`, `0x7F` — 13 slots.))
 
 ---
 
@@ -161,11 +244,35 @@ Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchan
 `0x04`/`0x05` were reclaimed 2026-08-30 as `DBG_CTRL`/`DBG_STATUS` for the digital debug
 probe. `0x06` was reclaimed 2026-09-03 as `DBG_CTRL1`, the second independent selector,
 after `DBG1` was merged onto the `IRQ_OUT` pad to hold the pin count at 27 — see
-`planning/two-pin-digital-debug-plan.md`. `DBG_CTRL` is now `DBG_CTRL0`.
+`planning/two-pin-digital-debug-plan.md`. `DBG_CTRL` is now `DBG_CTRL0`. `0x07` stays
+reserved.
+
+### `0x10`–`0x11` — BRINGUP_CTRL / BRINGUP_AMPL (former `RX_GAIN` block)
+
+Reclaimed 2026-09-04 for `BRINGUP_SRC`, the deterministic first-silicon sample source (Open Risks #59) — see `planning/foundational-block-bringup-plan.md`. The feature was originally at `0x06`/`0x07` on branch `feat/bringup-src`; it moved to `0x10`/`0x11` (first two slots of the former `RX_GAIN` reserved block) when rebased onto `main`, where `0x06` is `DBG_CTRL1` and `0x07` stays reserved.
+
+`BRINGUP_SRC` injects a known 500 kS/s complex sample stream at the **re-modulator input** so that `sd_remod` can be proven without a working frontend, Schmidl-Cox acquisition, PSRAM replay path, or combiner. A bad 1-bit output stream is then unambiguously `sd_remod`'s fault.
+
+The insertion point is the re-modulator input, not the combiner input: the combiner point had been chosen so one generator would prove both blocks, but MRC mode turned out to be unreachable while the source is armed — `W_valid` is held only during a packet and the armed source requires there be none — leaving the bypass passthrough, a wire, as the entire combiner surface on offer. See `planning/foundational-block-bringup-plan.md` for the full argument and the routing cost that is still open.
+
+**What the source can and cannot reach.** Everything upstream of the injection point is bypassed: the decimator, DC removal, Schmidl-Cox, `training_acc`, PSRAM and `mrc_combiner` are *not* stimulated by it and keep their own independent evidence paths. The armed source takes absolute priority at the mux, ahead of `psram_silence`, `REMOD_BACKOFF_SHIFT` and the `comb_use_mrc` bypass select — a buffer state must never be able to produce silence at the pads (indistinguishable from a dead re-modulator), and the pad signature must be the value written to `BRINGUP_AMPL`, not that value scaled by `COMB_CFG` / `W_valid`. Skipping the backoff is safe because the ±64 clamp already sits inside `sd_remod`'s −3 dBFS stability bound.
+
+The two-pin debug probe's COMB group taps the same node (`remod_in_i/q`), so an armed source is also visible on `DBG0`/`DBG1` — a second, byte-level view of the stimulus with no radio attached.
+
+The generator owns its own 64-clock valid cadence — the whole point is to run with the IQ pads dead — and restarts deterministically from reset in every mode, so a captured stream can be compared against a precomputed reference.
+
+**Board procedure:** set `RX_HOLD` (`0x1A[0]`, already set out of reset), write `BRINGUP_AMPL` (`0x11`) then `BRINGUP_CTRL` (`0x10`), capture `REMOD_A_I`/`REMOD_A_Q` against the shared `IQ_CLK` reference, decimate externally and compare with the known signature, then clear `BRINGUP_CTRL` before releasing `RX_HOLD`.
+
+Two signatures, in increasing order of what they prove:
+
+- **DC** (`MODE=1`): the mean of the ±1 output stream is `BRINGUP_AMPL / 127`. Needs no filter and no phase alignment — computable from a bit count on a logic-analyser capture. Checks I and Q independently.
+- **fs/4 tone** (`MODE=2`): decimate by 64 and fit against `A/127·exp(+jπn/2)`. Check the **rotation direction**, not just the magnitude: a swapped or inverted rail leaves both per-rail densities untouched and shows up only as the conjugate tone. This is the check that tests I and Q together.
+
+`MODE=3` (PRBS) is long-run switching stress only; a failed PRBS transfer is hard to diagnose and does not establish modulation fidelity, so DC and tone remain the primary diagnostics. Both are regression-checked against the RTL in `cocotb/tests/test_bringup_src.py`.
 
 JTAG and GPIO were removed from Trouper. There is no JTAG TAP in the RTL, and the
 former GPIO direction/output/input path was never wired out of the macro boundary.
-These four addresses are now unimplemented: reads return `0x00`, writes are ignored.
+The remaining former JTAG/GPIO addresses are unimplemented: reads return `0x00`, writes are ignored.
 
 The four pads formerly described as `TCK_IRQ`/`TMS_GPIO0`/`TDI_GPIO1`/`TDO_GPIO2`
 now carry only `PSRAM_SIO[3:0]` on four dedicated pads; `IRQ_OUT` has its own
@@ -197,7 +304,7 @@ step 1.
 | Register(s) | Mid-packet policy | Result / firmware rule |
 | --- | --- | --- |
 | `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
-| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `ARRAY_SYNC_CTRL`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x18`, `0x1B`, `0x27`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
+| `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `ARRAY_SYNC_CTRL`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS`, `BRINGUP_CTRL`, `BRINGUP_AMPL` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x18`, `0x1B`, `0x27`, `0x06`, `0x07`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
 | `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
 | W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
 | `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
@@ -234,7 +341,16 @@ while `PACKET_ACTIVE = 1`; a BW (or SF) change re-arms decimator/delay warm-up.
 
 ### `0x0B` — PKT_TIMEOUT_SYMS (read/write)
 
-Maximum packet duration in LoRa symbols before the Packet Control FSM forces a return to `IDLE`.
+Maximum duration of the **payload phase** (`PAYLOAD_ACTIVE`), in LoRa symbols,
+before the Packet Control FSM forces a return to `IDLE` and asserts the
+`PACKET_DONE` IRQ.
+
+It does **not** bound the acquisition (`PREAMBLE_ACQ`) or weight-pending
+(`W_PENDING`) phases — those have independent deadlines derived from
+`TACC_WINDOW_SYMS` — so `PKT_TIMEOUT_SYMS` is not a global packet watchdog and
+cannot abort a false lock early. Worst-case `packet_active` time is the sum of
+the acquisition, weight-pending, and this payload window; it is finite for every
+legal value. (Open Risks #64.)
 
 ### `0x0C`–`0x0D` — SC_THR (read/write)
 
@@ -265,9 +381,9 @@ Reset values are conservative. Firmware/host may adjust after observing output h
 
 ### `0x10`–`0x18` — reserved (former RX gain shadow/active/commit control)
 
-Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by Grouper/board logic, and these registers only mirrored software-written values internally, with no hardware consumer. Removed; see "Removed registers" below. All eight addresses now read `0x00` and ignore writes.
+Formerly `RX_GAIN_SHADOW_0..3` / `RX_GAIN_ACTIVE_0..3` / `RX_GAIN_CTRL`. Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by board-controller logic, and these registers only mirrored software-written values internally, with no hardware consumer. Grouper is not taped out alongside Trouper. Removed; see "Removed registers" below. All eight addresses now read `0x00` and ignore writes.
 
-**AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (host- or Grouper-side constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
+**AGC policy (software-owned):** After `IRQ_TRAINING_DONE`, controlling software reads per-antenna preamble power from `ZDIAG_k` (`0x64`–`0x6F`) divided by `n_acc` and compares against its own gain-down / saturation thresholds (external board-controller constants — there are no on-chip AGC threshold registers). One SX1257 LNA gain step per packet, per antenna independently.
 
 **Noise EMA (separate from AGC):** Between packets (`PACKET_ACTIVE=0`), software arms a noise accumulation window via `TACC_NOISE_TRIG` (`0x1F`[0]=1). After `IRQ_TRAINING_DONE` fires in noise mode, `ZDIAG_k ≈ σ²_k × n_acc`. Software maintains σ²_ema[k] ← (1−α)·σ²_ema[k] + α·(ZDIAG_k/n_acc); this supplies optional noise-weighted MRC, which scales each conventional MRC weight by `1/σ²_ema[k]`. For NT=1 diagonal noise, this is the diagonal-MMSE special case—not a full ALMMSE/multi-user detector.
 
@@ -315,6 +431,10 @@ happened to have spare bits under the same write gate. `BW_CFG` now carries
 ---
 
 ### `0x1C` — PACKET_STATUS (read-only)
+
+**Volatile** — every field here can change on any 32 MHz edge. Apply the
+confirm-read rule from *Host SPI read coherency — firmware contract* before
+acting on it (e.g. gating a `W_COMMIT` decision on `PACKET_PHASE`/`W_PENDING`).
 
 | Bits | Field | Description |
 | --- | --- | --- |
@@ -374,11 +494,26 @@ Training-window bookkeeping: arm/done flags and the accumulated sample count `n_
 `0x22` = `[15:8]`, `0x23` = `[7:0]`). The training window is controlled by
 `TACC_WINDOW_SYMS` (`0x27`) and spans from `sc_lock` until `timing_ref + TACC_WINDOW_SYMS × M - 1` in live mode. With the 4-bit maximum of 15 symbols, the SF12/BW125 maximum is `15 × 2^(12+2) = 245760` samples, which still fits in 18 bits.
 
+> **Read coherency:** `TRAINING_STATUS` (`0x20`) is **volatile** (confirm-read).
+> `N_ACC` (`0x21`–`0x23`) is **frozen and single-read-coherent only after
+> `TRAINING_DONE`**; *during* a window it increments per `iq_valid` (up to
+> 500 kS/s), far faster than a 3-byte read completes, so a mid-window value
+> cannot be confirmed by re-reading — treat it as an approximate progress
+> indicator only, never as data. See *Host SPI read coherency — firmware
+> contract*.
+
 ---
 
 ### `0x24`–`0x25` — SC_STAT (read-only)
 
 Current Schmidl-Cox metric numerator telemetry from the detector. This is the exposed `|C[s]|^2` snapshot (`sym_mag_sc[27:13]` plus a zero LSB), not a normalised `Lambda^2[s]` value.
+
+> **Read coherency:** treat as **volatile**, not frozen. `sc_stat` is
+> re-assigned continuously from the live detector metric (`sc_detector.v`);
+> whether that metric keeps moving after `sc_lock` depends on detector state,
+> so firmware SHALL NOT assume it is frozen post-lock. Confirm-read (two
+> independent transactions) if a value is needed; see *Host SPI read coherency
+> — firmware contract*.
 
 ### `0x27` — TACC_WINDOW_SYMS (read/write)
 
@@ -397,6 +532,14 @@ Optional Schmidl-Cox debug visibility intended primarily for FPGA and first-sili
 
 These registers are debug aids, not part of the normal packet-processing control path.
 
+> **Read coherency:** `SC_DBG_FLAGS` (`0x26`) is **volatile** — it mirrors
+> current/pulsed detector state (`sc_lock_dbg`, hit counter, held `sc_hit_dbg`).
+> `SC_FIRST_HIT` (`0x28`–`0x2B`) and `SC_LOCK_SNAP` (`0x2C`–`0x2F`) are
+> **frozen** once their capture event (first qualifying hit / `sc_lock`) has
+> occurred, and hold until the next such event — a single 4-byte burst read of
+> either, taken after `sc_lock`, is coherent. See *Host SPI read coherency —
+> firmware contract*.
+
 ---
 
 ### `0x30`–`0x3F` — W vector (read/write)
@@ -412,6 +555,15 @@ A 17-byte SPI burst (command byte + 16 data bytes starting at `0x30`) loads the 
 ### `0x40`–`0x63` — Z_kl pair readback, 24-bit (read-only)
 
 All C(4,2)=6 branch-pair cross-correlations from the training accumulator. Each value exposes the **top 24 bits `[31:8]` of the signed int32 accumulator**, big-endian, 3 bytes per component (I then Q), 6 bytes per pair.
+
+> **Read coherency:** a single burst read of `0x40`–`0x6F` is coherent **only
+> after** `PACKET_STATUS.TRAINING_DONE` (0x1C[4]) — or `IRQ_STATUS.NOISE_READY`
+> for a noise window — has been *confirm-read* set (two independent
+> command+data transactions to that address, `HOST_CS` toggled between,
+> returning the same byte). The
+> accumulators stop at window close and hold until the next `sc_lock` /
+> `TACC_NOISE_TRIG`; complete the burst before that re-arm. Reading mid-window
+> is undefined. See *Host SPI read coherency — firmware contract*.
 
 > **Precision note:** bits [7:0] of each accumulator are not readable. At realistic operating points the discarded byte is below the statistical noise of the Z estimate itself (training windows of 1k–32k samples); firmware treats the 24-bit value as `Z_kl >> 8`. This cut saves 12 register slots versus full 32-bit readback under the 128-register constraint.
 
@@ -455,6 +607,12 @@ In noise mode (triggered by `TACC_NOISE_TRIG`): `ZDIAG_k ≈ σ²_k · n_acc`.
 ---
 
 ### `0x70` — PSRAM_CTRL (read/write)
+
+> **Read coherency:** bits [0] `PSRAM_EN` and [3] `QSPI_OWNER` are stable
+> host-written storage (single read coherent). Bit [1] `PSRAM_CLR_ERR` is a
+> self-clearing W1P — hardware drives it back to 0 one CE period after the
+> write, so its readback is not a data source (see the Static-class caveat in
+> *Host SPI read coherency — firmware contract*).
 
 | Bits | Field | Description |
 | --- | --- | --- |
@@ -510,7 +668,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 
 | Former address(es) | Name | Reason removed |
 | --- | --- | --- |
-| `0x10`–`0x13`, `0x14`–`0x17`, `0x18`[0] | `RX_GAIN_SHADOW_0..3`, `RX_GAIN_ACTIVE_0..3`, `RX_GAIN_CTRL.RX_GAIN_COMMIT` | Removed 2026-07-28: Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by Grouper/board logic, and these registers only mirrored software-written values internally (shadow→active latch in `trouper_top.v`, no SX1257-facing consumer). This is the one exception above: these *did* have live `reg_bank`/`trouper_top` hardware before removal, unlike the rest of this table. |
+| `0x10`–`0x13`, `0x14`–`0x17`, `0x18`[0] | `RX_GAIN_SHADOW_0..3`, `RX_GAIN_ACTIVE_0..3`, `RX_GAIN_CTRL.RX_GAIN_COMMIT` | Removed 2026-07-28: Trouper has no SX1257 SPI/control outputs — gain programming is performed externally by board-controller logic, and these registers only mirrored software-written values internally (shadow→active latch in `trouper_top.v`, no SX1257-facing consumer). Grouper is not taped out alongside Trouper. This is the one exception above: these *did* have live `reg_bank`/`trouper_top` hardware before removal, unlike the rest of this table. |
 | `0x02`, `0x07`–`0x08` | `CPU_RESET`, `CPU_SRAM_CTRL/STATUS` | No PicoRV32 / CPU SRAM in Trouper |
 | `0x0A` | `LOW_BAT_THR` | No hardware; never implemented in RTL. Address `0x0A` is now reused for `BW_CFG` (see active map). |
 | `0x13`–`0x15` | `FRONTEND_CFG/STATUS`, `BUF_WR_PTR` | frontend_buf_ctrl and on-chip frontend SRAMs removed (PSRAM delay line replaces them) |
@@ -527,7 +685,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed. `0x04`/`0x05`/`0x06` now `DBG_CTRL0`/`DBG_STATUS`/`DBG_CTRL1` (debug probe); `0x07` reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x18`, `0x1A`–`0x1B`, `0x7A`–`0x7E`). Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x17`, `0x7A`–`0x7F`). Corrected 2026-09-02: this line previously listed `0x18` and `0x1A`–`0x1B`, all three of which are live (`ARRAY_SYNC_CTRL`, `RX_HOLD`, `SC_ANT_SEL`), and omitted `0x7F`. Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -537,7 +695,7 @@ If a future revision reinstates any of these features, allocate addresses from t
 | --- | --- |
 | `0x00`–`0x07` | Global / IRQ (`0x04`–`0x06` debug probe; `0x07` reserved) |
 | `0x08`–`0x0F` | RX / modem configuration |
-| `0x10`–`0x1B` | `0x10`–`0x18` reserved (former gain/AGC/SX1257 live RX control, removed); `0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A`–`0x1B` reserved |
+| `0x10`–`0x1B` | `0x10`–`0x17` reserved (former gain/AGC/SX1257 live RX control, removed); `0x18` is `ARRAY_SYNC_CTRL`; `0x19` is `SC_FORCE_LOCK`, Schmidl-Cox; `0x1A` is `RX_HOLD`; `0x1B` is `SC_ANT_SEL` |
 | `0x1C`–`0x23` | Packet / weight-path / training control |
 | `0x24`–`0x2F` | SC status, `TACC_WINDOW_SYMS`, and bring-up debug |
 | `0x30`–`0x3F` | W shadow bank |

@@ -8,15 +8,20 @@ Per-antenna automatic gain control for the four SX1257 receive chains.
 
 ## Ownership and where AGC runs
 
-AGC is entirely a **firmware** function, running on Grouper's PicoRV32 (Trouper itself has no CPU). It:
+AGC is entirely an **external board-controller firmware** function. Trouper
+has no CPU, no SPI master, and no SX1257 control outputs. Grouper is a
+development/integration vehicle only and is **not being taped out alongside
+Trouper**; it is not a required part of the deployed AGC architecture. The
+production board host/controller performs the following functions (a Grouper
+prototype may perform them during development):
 
-- reads Trouper's training-accumulator registers over `GRP_*`/SPI to measure per-antenna preamble power
-- programs each SX1257's `RegRxAnaGain` directly over Grouper's own SPI master (board-level, external to Trouper — TRPR-SPM-001)
+- reads Trouper's training-accumulator registers over host SPI to measure per-antenna preamble power
+- programs each SX1257's `RegRxAnaGain` directly through the board-level SX1257 SPI master (external to Trouper — TRPR-SPM-001)
 - keeps all gain state (current LNA/BB setting per antenna, thresholds, hysteresis) in its own firmware memory
 
 Trouper has **no on-chip gain register of any kind**. `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` existed at `0x10`–`0x18` in earlier revisions of the register map but were removed (2026-07-28): they only mirrored software-written values back to software, with no SX1257-facing hardware behind them, so they added silicon area and register-map surface without doing anything a firmware variable couldn't do. See `planning/Register Map.md` ("Removed registers") and `planning/Trouper Chip Specification.md` (TRPR-AGC-003, REMOVED).
 
-If PicoRV32 is not operational, AGC is simply absent rather than blocking RX. The supported fallback is fixed gain: whatever the SX1257s were last programmed to (at power-on, or by a one-time bring-up script) stays in force. This means AGC is an optimisation and robustness feature, not a correctness dependency for baseline reception.
+If the external controller is not running its AGC service, AGC is simply absent rather than blocking RX. The supported fallback is fixed gain: whatever the SX1257s were last programmed to (at power-on, or by a one-time bring-up script) stays in force. This means AGC is an optimisation and robustness feature, not a correctness dependency for baseline reception.
 
 ---
 
@@ -33,7 +38,7 @@ Reasons:
 The result is:
 
 - SX1302 remains the downstream LoRa demodulator
-- Grouper firmware owns RX gain policy for `SX1257_0..3`
+- external board-controller firmware owns RX gain policy for `SX1257_0..3`
 - without a functioning firmware loop, gain remains fixed at whatever was last programmed
 
 ---
@@ -96,7 +101,7 @@ Notes:
 - LNA steps are non-uniform: 6 dB for `G1..G3`, 12 dB for `G3..G6`
 - usable total range is about 70 dB; nominal register range is 78 dB
 
-Firmware is the sole owner of both the desired and applied gain state (`lna_gain[4]`/`bb_gain[4]` in DMEM, per [PicoRV32 Integration](./PicoRV32%20Integration.md)). There is no shadow/active split, no commit pulse, and no pending/error status — the write to the SX1257 either completes over Grouper's SPI master or it doesn't, and firmware's own SPI-transaction error handling is the only failure path.
+Controller firmware is the sole owner of both the desired and applied gain state. There is no shadow/active split, no commit pulse, and no pending/error status in Trouper — the write to the SX1257 either completes through the board-level SPI master or it does not, and the controller's SPI-transaction error handling is the only failure path.
 
 ---
 
@@ -184,7 +189,7 @@ Rationale:
 
 ## Firmware behavior
 
-Current AGC update shape (see [PicoRV32 Integration](./PicoRV32%20Integration.md) for the fuller worked example):
+Recommended controller update shape:
 
 ```c
 if (packet_status_active()) return;  // enforce "no mid-packet gain change" in firmware
@@ -292,6 +297,17 @@ Useful additional checks:
 - effect of gain change on EMA reset behavior
 - false-lock plus AGC mis-adjustment interaction
 
+`sim/tests/test_agc_recovery.py` is the executable **external-controller
+model** check for the deep-fade → high-signal-return corner: it models SX1257
+gain, frontend int8 clipping, packet-boundary-only gain updates, and both
+remod ingress selections. It confirms that the reset MRC backoff contains the
+first clipped return and that the next packet is below the −3 dBFS limit after
+the saturation correction. It also explicitly exposes the current bypass-path
+gap: bypass has no remod backoff, so a clipped first-return packet can present
+127 counts to `sd_remod`, above its 90-count stability limit. This model does
+not validate physical SX1257 gain settling, the board SPI transaction, or
+silicon-calibrated thresholds.
+
 None of this is testable in RTL/cocotb — Trouper has no gain hardware to exercise. This is exclusively firmware/board-level verification (see TRPR-AGC-002/005 in `planning/Traceability.md`, tracked as untested firmware under Open Risks #8).
 
 ---
@@ -309,7 +325,7 @@ Earlier revisions of this document described an architecture that does not match
 
 ## Related docs
 
-- [PicoRV32 Integration](./PicoRV32%20Integration.md)
+- Board-controller firmware (implementation-specific; no co-taped-out Grouper dependency)
 - [Register Map](../Register%20Map.md)
 - [SPI Master](./SPI%20Master.md)
 - [Trouper Chip Specification](../Trouper%20Chip%20Specification.md) — §4.15 TRPR-AGC

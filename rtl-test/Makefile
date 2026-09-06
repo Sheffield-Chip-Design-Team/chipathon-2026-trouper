@@ -12,11 +12,24 @@ IFLAGS    = -g2012
 # Source files for the DSP chain (no PicoRV32)
 RTL = rtl
 TB  = tb
+SRC = ../src
 
-DSP_SRCS  = $(RTL)/dc_removal.v $(RTL)/frontend_buf_ctrl.v \
-            $(RTL)/sc_detector.v $(RTL)/training_acc.v \
-            $(RTL)/mrc_combiner.v $(RTL)/sd_remod.v
-DSP_SRCS_SD = $(DSP_SRCS) $(RTL)/sd_decimator_cic_only.v
+# DSP_SRCS pulls the actively-maintained blocks straight from src/ (the source
+# of truth) rather than the rtl-test/rtl/ copies, which drift silently and
+# previously let regressions here pass against different hardware than
+# tapeout source (dc_removal/sc_detector/training_acc/mrc_combiner/sd_remod
+# all have current src/ equivalents; frontend_buf_ctrl.v does not -- it was
+# replaced architecturally by psram_buf_ctrl.v and only survives in the
+# legacy-standalone targets below that still instantiate it directly).
+DSP_SRCS  = $(SRC)/frontend/dc_removal.v \
+            $(SRC)/frontend/sc_detector.v $(SRC)/combiner/training_acc.v \
+            $(SRC)/combiner/mrc_combiner.v $(SRC)/remod/sd_remod.v \
+            $(SRC)/remod/sd_remod_multiplierless.v
+# Legacy-standalone targets (tb_dsp_chain_real*.v, tb_dsp_chain_loopback_probe.v)
+# instantiate frontend_buf_ctrl.v directly; it has no current src/ replacement
+# (superseded by psram_buf_ctrl.v, a different interface/architecture), so it
+# stays sourced from the rtl-test/rtl/ legacy copy.
+DSP_SRCS_SD = $(DSP_SRCS) $(RTL)/sd_decimator_cic_only.v $(RTL)/frontend_buf_ctrl.v
 
 # -----------------------------------------------------------------------
 # DSP chain end-to-end testbench (Verilator)
@@ -74,7 +87,8 @@ obj_dir_dsp_chain_real_probe_osr256/Vtb_dsp_chain_real: $(TB)/tb_dsp_chain_real_
 sim_remod_decim_const: obj_dir_const/Vtb_remod_decim_const
 	$<
 
-obj_dir_const/Vtb_remod_decim_const: $(TB)/tb_remod_decim_const.v $(RTL)/sd_remod.v $(RTL)/sd_decimator_cic_only.v
+obj_dir_const/Vtb_remod_decim_const: $(TB)/tb_remod_decim_const.v $(SRC)/remod/sd_remod.v \
+                                      $(SRC)/remod/sd_remod_multiplierless.v $(RTL)/sd_decimator_cic_only.v
 	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_const \
 	    --top-module tb_remod_decim_const $^
 
@@ -112,7 +126,7 @@ tb_sqnr.vvp: $(TB)/tb_sqnr.v $(RTL)/sd_decimator_cic_only.v
 sim_mrc_combiner: obj_dir_mrc_combiner/Vtb_mrc_combiner
 	$<
 
-obj_dir_mrc_combiner/Vtb_mrc_combiner: $(TB)/tb_mrc_combiner.v $(RTL)/mrc_combiner.v
+obj_dir_mrc_combiner/Vtb_mrc_combiner: $(TB)/tb_mrc_combiner.v $(SRC)/combiner/mrc_combiner.v
 	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_mrc_combiner \
 	    --top-module tb_mrc_combiner $^
 
@@ -125,7 +139,7 @@ obj_dir_mrc_combiner/Vtb_mrc_combiner: $(TB)/tb_mrc_combiner.v $(RTL)/mrc_combin
 sim_mrc_fw_precision: obj_dir_mrc_fw_precision/Vtb_mrc_fw_precision
 	$<
 
-obj_dir_mrc_fw_precision/Vtb_mrc_fw_precision: $(TB)/tb_mrc_fw_precision.v $(RTL)/mrc_combiner.v
+obj_dir_mrc_fw_precision/Vtb_mrc_fw_precision: $(TB)/tb_mrc_fw_precision.v $(SRC)/combiner/mrc_combiner.v
 	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_mrc_fw_precision \
 	    --top-module tb_mrc_fw_precision $^
 
@@ -138,7 +152,7 @@ obj_dir_mrc_fw_precision/Vtb_mrc_fw_precision: $(TB)/tb_mrc_fw_precision.v $(RTL
 sim_mrc_fw_rand: obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand
 	$< +seed=42
 
-obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand: $(TB)/tb_mrc_fw_rand.v $(RTL)/mrc_combiner.v
+obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand: $(TB)/tb_mrc_fw_rand.v $(SRC)/combiner/mrc_combiner.v
 	$(VERILATOR) $(VFLAGS) --Mdir obj_dir_mrc_fw_rand \
 	    --top-module tb_mrc_fw_rand $^
 
@@ -146,8 +160,9 @@ obj_dir_mrc_fw_rand/Vtb_mrc_fw_rand: $(TB)/tb_mrc_fw_rand.v $(RTL)/mrc_combiner.
 # Randomised DSP chain end-to-end testbench (Verilator)
 # 20 random A_k/phase cases; +seed=<N> plusarg overrides default seed
 # -----------------------------------------------------------------------
-DSP_SRCS_RAND = $(RTL)/dc_removal.v $(RTL)/sc_detector.v \
-                $(RTL)/training_acc.v $(RTL)/mrc_combiner.v $(RTL)/sd_remod.v
+DSP_SRCS_RAND = $(SRC)/frontend/dc_removal.v $(SRC)/frontend/sc_detector.v \
+                $(SRC)/combiner/training_acc.v $(SRC)/combiner/mrc_combiner.v $(SRC)/remod/sd_remod.v \
+                $(SRC)/remod/sd_remod_multiplierless.v
 
 .PHONY: sim_dsp_chain_rand
 
@@ -176,7 +191,27 @@ obj_dir_dsp_chain_sf/Vtb_dsp_chain_sf: $(TB)/tb_dsp_chain_sf.v $(DSP_SRCS_RAND)
 sim_sd_remod: tb_sd_remod.vvp
 	$(VVP) $<
 
-tb_sd_remod.vvp: $(TB)/tb_sd_remod.v $(RTL)/sd_remod.v
+tb_sd_remod.vvp: $(TB)/tb_sd_remod.v $(SRC)/remod/sd_remod.v $(SRC)/remod/sd_remod_multiplierless.v
+	$(IVERILOG) $(IFLAGS) -o $@ $^
+
+# -----------------------------------------------------------------------
+# sd_remod_multiplierless vs the frozen pre-promotion core, bit-exact
+# equivalence check (iverilog). This was the promotion gate for the
+# 2026-09-05 sd_remod.v canonicalization (see sd_remod.v's header) --
+# checks against the PRESERVED pre-promotion reference
+# (sd_remod_pre_multiplierless_reference.v), not the current
+# src/remod/sd_remod.v (which is now the interpolator-wrapped promoted
+# module and would compare the wrong thing).
+# PASS: 0 mismatches across directed extremes + dense random + paced random.
+# -----------------------------------------------------------------------
+.PHONY: sim_sd_remod_multiplierless_equiv
+
+sim_sd_remod_multiplierless_equiv: tb_sd_remod_multiplierless_equiv.vvp
+	$(VVP) $<
+
+tb_sd_remod_multiplierless_equiv.vvp: $(TB)/tb_sd_remod_multiplierless_equiv.v \
+                                       $(RTL)/sd_remod_pre_multiplierless_reference.v \
+                                       $(RTL)/sd_remod_multiplierless.v
 	$(IVERILOG) $(IFLAGS) -o $@ $^
 
 # -----------------------------------------------------------------------
@@ -211,19 +246,30 @@ tb_compare_decimators.vvp: $(TB)/tb_compare_decimators.v \
 # trouper_top integration testbench (iverilog)
 # Exercises the full signal path: SDM IQ → decimator → PSRAM SC delay →
 # sc_detector → training_acc → MRC weights (via SPI) → mrc_combiner → sd_remod.
+#
+# SUPERSEDED: trouper_top.v itself has drifted 400+ diff lines from
+# src/top/trouper_top.v (Grouper-boundary removal, BRINGUP_SRC, pin/port
+# changes since), and packet_ctrl_fsm.v/psram_buf_ctrl.v/reg_bank.v below
+# have also diverged -- these targets test an architecture that no longer
+# matches tapeout source and are NOT safe to repoint blindly (port interfaces
+# changed). The benches have been refreshed for the current port/map contract;
+# compile the tapeout source of truth, never the historical rtl-test/rtl
+# mirrors. See Open Risks #60.
 # -----------------------------------------------------------------------
 TROUPER_TOP_SRCS = \
-    $(RTL)/trouper_top.v \
-    $(RTL)/sd_decimator_poly.v \
-    $(RTL)/dc_removal.v \
-    $(RTL)/sc_detector.v \
-    $(RTL)/training_acc.v \
-    $(RTL)/packet_ctrl_fsm.v \
-    $(RTL)/psram_buf_ctrl.v \
-    $(RTL)/mrc_combiner.v \
-    $(RTL)/sd_remod.v \
-    $(RTL)/spi_slave.v \
-    $(RTL)/reg_bank.v \
+    $(SRC)/top/trouper_top.v \
+    $(SRC)/decimator/sd_decimator_poly.v \
+    $(SRC)/frontend/dc_removal.v \
+    $(SRC)/frontend/sc_detector.v \
+    $(SRC)/combiner/training_acc.v \
+    $(SRC)/control/packet_ctrl_fsm.v \
+    $(SRC)/control/psram_buf_ctrl.v \
+    $(SRC)/combiner/mrc_combiner.v \
+    $(SRC)/remod/sd_remod.v \
+    $(SRC)/remod/sd_remod_multiplierless.v \
+    $(SRC)/control/spi_slave.v \
+    $(SRC)/control/reg_bank.v \
+    $(SRC)/debug/bringup_src.v \
     ../fpga-emul/rtl/psram_model.v
 
 .PHONY: sim_trouper_top

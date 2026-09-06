@@ -59,6 +59,7 @@ module psram_buf_ctrl_formal (
     input  wire [22:0] rd_ptr,
     input  wire [22:0] buf_base,
     input  wire        buf_base_valid,
+    input  wire        bufbase_pending,
     input  wire        wait_armed,
     input  wire [15:0] wait_cnt,
 
@@ -178,7 +179,7 @@ module psram_buf_ctrl_formal (
     // Shared "previous value" trackers used across groups
     // -----------------------------------------------------------------------
     reg [2:0]  state_q;
-    reg        packet_end_q, buf_base_valid_q, clr_err_q, qpi_busy_q, psram_en_q;
+    reg        packet_end_q, buf_base_valid_q, buf_active_q, clr_err_q, qpi_busy_q, psram_en_q;
     reg        qe_init_done_q, qspi_owner_q, W_commit_q, replay_active_q;
     reg        wait_armed_q;
     reg [15:0] wait_cnt_q;
@@ -195,6 +196,7 @@ module psram_buf_ctrl_formal (
             state_q           <= S_UNINIT;
             packet_end_q      <= 1'b0;
             buf_base_valid_q  <= 1'b0;
+            buf_active_q      <= 1'b0;
             clr_err_q         <= 1'b0;
             qpi_busy_q        <= 1'b0;
             psram_en_q        <= 1'b0;
@@ -213,6 +215,7 @@ module psram_buf_ctrl_formal (
             state_q           <= state;
             packet_end_q      <= packet_end;
             buf_base_valid_q  <= buf_base_valid;
+            buf_active_q      <= buf_active;
             clr_err_q         <= clr_err;
             qpi_busy_q        <= qpi_busy;
             psram_en_q        <= psram_en;
@@ -244,15 +247,20 @@ module psram_buf_ctrl_formal (
 
     // -----------------------------------------------------------------------
     // RPV-F2. Margin-wait scope: wait_armed exists only inside an S_WRITE
-    // packet window (armed at the training_done edge with buf_base_valid,
+    // packet window (armed at the training_done edge with buf_active,
     // cleared by S_REPLAY entry and by packet_end — a same-cycle packet_end
     // wins over a same-cycle arm because the packet_end block is textually
     // after the arm block and nonblocking last-write-wins). It can therefore
     // never survive into the idle period or into S_REPLAY.
+    //
+    // 2026-09-04: keyed on buf_active, not buf_base_valid — the RTL arm gate
+    // itself was moved to buf_active (see psram_buf_ctrl.v) because
+    // buf_base_valid now lags buf_active by one cycle post buf_base-retiming,
+    // and asserting buf_base_valid here would fail on that same cycle.
     // -----------------------------------------------------------------------
     always @(posedge clk_32m)
         if (rst_n && wait_armed)
-            a_wait_armed_scope: assert (state == S_WRITE && buf_base_valid);
+            a_wait_armed_scope: assert (state == S_WRITE && buf_active);
 
     always @(posedge clk_32m)
         if (rst_n && packet_end_q)
@@ -382,13 +390,20 @@ module psram_buf_ctrl_formal (
     // B. Sticky-flag correctness (RPV-F6 carry-over; replay_missed semantics
     // updated: it now means "packet ended before the margin was ever met" —
     // structurally the same trigger as before (packet_end in S_WRITE with
-    // buf_base_valid still outstanding), so the property shape is unchanged.
+    // a lock still outstanding), so the property shape is unchanged.
     // Must gate on state_q == S_WRITE: packet_end is also handled in S_REPLAY
     // (normal successful-replay teardown) without touching replay_missed
     // (2026-07-05 counterexample).
+    //
+    // 2026-09-04: keyed on buf_active_q, not buf_base_valid_q — the RTL's own
+    // REPLAY_MISSED cause was moved to buf_active for the same reason as
+    // a_wait_armed_scope above (buf_base_valid now lags buf_active by one
+    // cycle post buf_base-retiming; a packet_end landing in that one-cycle
+    // bufbase_pending window is a genuine "locked, replay never started"
+    // case that buf_base_valid alone would miss).
     // -----------------------------------------------------------------------
     always @(posedge clk_32m)
-        if (rst_n && state_q == S_WRITE && packet_end_q && buf_base_valid_q && !clr_err_q)
+        if (rst_n && state_q == S_WRITE && packet_end_q && buf_active_q && !clr_err_q)
             a_replay_missed_cause: assert (replay_missed);
 
     reg replay_missed_q;
@@ -413,10 +428,24 @@ module psram_buf_ctrl_formal (
             a_sample_skip_cause: assert (qpi_busy_q && psram_en_q && qe_init_done_q && !qspi_owner_q);
 
     // -----------------------------------------------------------------------
-    // C. Status-window correctness (RPV-F6 carry-over, plus the new
-    // buf_base_valid == buf_active lockstep the continuous-delay RTL
-    // maintains: both set on the S_WRITE lock edge, both cleared together on
-    // packet_end in either state).
+    // C. Status-window correctness (RPV-F6 carry-over, plus the
+    // buf_base_valid/buf_active relationship the continuous-delay RTL
+    // maintains: both cleared together on packet_end in either state).
+    //
+    // 2026-09-04: buf_active and buf_base_valid are NO LONGER same-cycle.
+    // buf_active still sets on the S_WRITE lock edge (unchanged -- it must,
+    // see a_buf_active_needs_en below: packet_ctrl_fsm.v raises
+    // packet_active on that identical edge, and delaying buf_active behind
+    // it opened a real BMC counterexample through the
+    // m_buf_active_implies_packet_active/m_psram_en_stable_in_packet
+    // assumption pair). buf_base_valid now lags it by one cycle -- the
+    // buf_base write arc (timing_ref -> u_psram.buf_base, SS worst path
+    // -14.49 ns) is a 2-stage pipeline: stage 1 (the lock edge) snapshots
+    // wr_ptr/timing_ref/iq_sample_cnt and sets buf_active + bufbase_pending;
+    // stage 2 (next cycle) computes buf_base from the frozen snapshots and
+    // sets buf_base_valid, clearing bufbase_pending. So whenever buf_active
+    // is high, EITHER the compute is still in flight (bufbase_pending) OR it
+    // has completed (buf_base_valid) -- never neither.
     // -----------------------------------------------------------------------
     always @(posedge clk_32m)
         if (rst_n && buf_active)
@@ -428,7 +457,7 @@ module psram_buf_ctrl_formal (
 
     always @(posedge clk_32m)
         if (rst_n)
-            a_buf_base_valid_matches_active: assert (buf_base_valid == buf_active);
+            a_buf_base_valid_matches_active: assert (buf_active == (buf_base_valid || bufbase_pending));
 
     always @(posedge clk_32m)
         if (rst_n && packet_end_q)
@@ -514,12 +543,31 @@ module psram_buf_ctrl_formal (
             a_del_cnt_bounded: assert (del_rdy || del_cnt < del_n_r);
 
     // -----------------------------------------------------------------------
-    // H. back_bytes truncation safety (RPV-F6 carry-over, unchanged — the
-    // buf_base computation at the lock edge is identical in the continuous-
-    // delay design). BOUND = 2^17 = 2× sc_detector.v's documented worst-case
-    // SC-detection latency (sc_off ≤ 4×16384 = 65536), generous margin for
-    // the inter-module pipeline delta. If sc_detector.v's SC_HITS_REQ width
-    // or the max supported SF/sample_shift ever change, revisit this bound.
+    // H. back_bytes truncation safety (RPV-F6 carry-over). BOUND = 2^17 =
+    // 2x sc_detector.v's documented worst-case SC-detection latency
+    // (sc_off <= 4x16384 = 65536), generous margin for the inter-module
+    // pipeline delta. If sc_detector.v's SC_HITS_REQ width or the max
+    // supported SF/sample_shift ever change, revisit this bound.
+    //
+    // 2026-09-04: buf_base's write arc is now a 2-stage pipeline (SS timing
+    // fix for the -14.49 ns timing_ref -> u_psram.buf_base path, jobs
+    // 5539/5541) -- stage 1 snapshots wr_ptr/timing_ref/iq_sample_cnt on the
+    // arm edge (the SAME instant this reference model already captures
+    // wr_ptr_at_arm_q/full_back_bytes_at_arm_q below, so the reference value
+    // itself is unchanged), stage 2 computes buf_base from those frozen
+    // snapshots one cycle later.
+    //
+    // Trigger the check off bufbase_pending_q (a plain one-cycle-delayed copy
+    // of the REAL RTL bufbase_pending signal) rather than reconstructing a
+    // separate arm-plus-two-cycles timer: a first attempt at the latter
+    // didn't know about packet_end aborting stage 2 mid-flight (the RTL's own
+    // bufbase_pending gets cleared by packet_end, same as buf_active/
+    // buf_base_valid), so it kept expecting a value that was never computed
+    // and produced a real counterexample. Tying the check to bufbase_pending
+    // itself inherits the abort for free -- if packet_end cancels the
+    // computation, bufbase_pending never stays high long enough for
+    // bufbase_pending_q to fire, so the check is (correctly) skipped instead
+    // of comparing against a stale buf_base.
     // -----------------------------------------------------------------------
     localparam [31:0] BACK_BYTES_DELTA_BOUND = 32'd131072; // 2^17
 
@@ -527,7 +575,7 @@ module psram_buf_ctrl_formal (
     wire [31:0] full_back_bytes     = tacc_delta << 3; // untruncated, 32-bit
     reg  [22:0] wr_ptr_at_arm_q;
     reg  [31:0] full_back_bytes_at_arm_q;
-    reg         arm_pending_q;
+    reg         bufbase_pending_q;
 
     always @(posedge clk_32m)
         if (rst_n && state == S_WRITE && sc_lock && !sc_lock_prev && psram_en)
@@ -541,9 +589,9 @@ module psram_buf_ctrl_formal (
         if (!rst_n) begin
             wr_ptr_at_arm_q          <= 23'd0;
             full_back_bytes_at_arm_q <= 32'd0;
-            arm_pending_q            <= 1'b0;
+            bufbase_pending_q        <= 1'b0;
         end else begin
-            arm_pending_q <= (state == S_WRITE && sc_lock && !sc_lock_prev && psram_en);
+            bufbase_pending_q <= bufbase_pending;
             if (state == S_WRITE && sc_lock && !sc_lock_prev && psram_en) begin
                 wr_ptr_at_arm_q          <= wr_ptr;
                 full_back_bytes_at_arm_q <= full_back_bytes;
@@ -552,7 +600,7 @@ module psram_buf_ctrl_formal (
     end
 
     always @(posedge clk_32m)
-        if (rst_n && arm_pending_q)
+        if (rst_n && bufbase_pending_q)
             a_buf_base_matches_full_precision: assert (
                 buf_base == ((wr_ptr_at_arm_q - full_back_bytes_at_arm_q[22:0]) & 23'h7FFFFF)
             );

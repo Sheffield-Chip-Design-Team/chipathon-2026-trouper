@@ -437,6 +437,10 @@ set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 set_false_path -from [get_ports RESETB]
 set_false_path -from [get_ports HOST_CS]
 
+# ARRAY_ACQ_N_IN: asynchronous open-drain array-sync wire, 2-FF synchronised in
+# u_array_acq_sync (acq_meta -> acq_sync). No timing relationship to IQ_CLK.
+set_false_path -from [get_ports ARRAY_ACQ_N_IN]
+
 # --- Scoped multicycle: ONLY the four paced DSP blocks get 3 cycles ----------
 # Net names retain hierarchy ('.' separator) after flatten; cell names do not.
 # packet_ctrl_fsm (u_pcfsm) is scoped separately above via -from/-to registered
@@ -444,6 +448,17 @@ set_false_path -from [get_ports HOST_CS]
 # its violating cone doesn't survive synthesis as a named net (see v21 header).
 # Same reason u_tacc.acc_start/acc_end and u_sc's timing_ref write arc get
 # their own -from/-to blocks above instead of relying on this wildcard.
+#
+# KNOWN DIVERGENCE (v32, 2026-09-04, signoff-only so far): the `u_dec.*` member
+# here also covers the CIC integrator recurrence (int_i1/i2/i3/q1/q2/q3,
+# sd_decimator_poly.v:286-289), which updates unconditionally every clk_32m
+# edge -- a genuine single-cycle arc, not gated like the HB1/HB2 MAC busy/wait
+# states the rest of u_dec.* legitimately relies on for its 3-cycle budget.
+# The _signoff.sdc excludes those six nets from paced_nets (see its header at
+# the same wildcard) following the v28-v31 precedent of landing new honest-
+# narrowing MCP changes signoff-only first, to avoid re-perturbing the placed/
+# routed netlist (DRT-0073, job 5112). Promote this exclusion into the P&R SDC
+# once a routed run confirms it doesn't move the clock tree / trip DRT-0073.
 set paced_nets [get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]
 
 set_multicycle_path 3 -setup -through $paced_nets

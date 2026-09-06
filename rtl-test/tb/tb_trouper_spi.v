@@ -177,7 +177,7 @@ module tb_trouper_spi;
     endtask
 
     // ---- Test sequence ----
-    reg [7:0] rd, dump;
+    reg [7:0] rd, dump, pkt_status_before;
     integer i;
 
     initial begin
@@ -294,7 +294,7 @@ module tb_trouper_spi;
         spi_write(7'h09, 8'h07);                                  // restore
         spi_write(7'h08, 8'hFF); spi_read(7'h08, rd); check("mask MIMO_CTRL",rd, 8'hF1);
         spi_write(7'h08, 8'hF0);                                  // restore
-        spi_write(7'h0A, 8'hFF); spi_read(7'h0A, rd); check("mask BW_CFG",   rd, 8'h07);
+        spi_write(7'h0A, 8'hFF); spi_read(7'h0A, rd); check("mask BW_CFG",   rd, 8'h01);
         spi_write(7'h0A, 8'h00);                                  // restore
         spi_write(7'h0E, 8'hFF); spi_read(7'h0E, rd); check("mask SC_HITS",  rd, 8'h03);
         spi_write(7'h0E, 8'h00);                                  // restore
@@ -306,7 +306,8 @@ module tb_trouper_spi;
         // 11. Read-only registers ignore writes (write 0xFF, value unchanged)
         spi_write(7'h00, 8'hFF); spi_read(7'h00, rd); check("RO CHIP_ID",    rd, 8'hA7);
         spi_write(7'h01, 8'hFF); spi_read(7'h01, rd); check("RO CHIP_REV",   rd, 8'h01);
-        spi_write(7'h1C, 8'hFF); spi_read(7'h1C, rd); check("RO PKT_STATUS", rd, 8'h00);
+        spi_read (7'h1C, pkt_status_before);
+        spi_write(7'h1C, 8'hFF); spi_read(7'h1C, rd); check("RO PKT_STATUS", rd, pkt_status_before);
         spi_write(7'h20, 8'hFF); spi_read(7'h20, rd); check("RO TRAIN_STAT", rd, 8'h00);
         spi_write(7'h21, 8'hFF); spi_read(7'h21, rd); check("RO N_ACC_HI",   rd, 8'h00);
         // Training-accumulator result inputs are intentionally resetless and
@@ -320,10 +321,10 @@ module tb_trouper_spi;
         spi_read (7'h75, rd); check("DBG_CTRL RD_TRIG self-clr", rd & 8'h01, 8'h00);
         spi_write(7'h75, 8'h00);                       // restore
 
-        // 13. 0x10-0x18 reserved (former gain shadow/active/commit block, removed):
-        //     writes ignored, reads always 0
-        spi_write(7'h11, 8'hFF); spi_read(7'h11, rd); check("rsvd 0x11 ignores wr", rd, 8'h00);
-        spi_write(7'h18, 8'hFF); spi_read(7'h18, rd); check("rsvd 0x18 ignores wr", rd, 8'h00);
+        // 13. Current map: 0x11 is BRINGUP_AMPL (full signed RW byte) and
+        //     0x18 is ARRAY_SYNC_CTRL (bit 0 RW; all upper bits reserved).
+        spi_write(7'h11, 8'hFF); spi_read(7'h11, rd); check("BRINGUP_AMPL RW", rd, 8'hFF);
+        spi_write(7'h18, 8'hFF); spi_read(7'h18, rd); check("ARRAY_SYNC mask", rd, 8'h01);
 
         // 14. PSRAM_CTRL masking: reserved bit2 ignores writes and reads zero;
         //     CLR_ERR (bit1) is W1P and self-clears.

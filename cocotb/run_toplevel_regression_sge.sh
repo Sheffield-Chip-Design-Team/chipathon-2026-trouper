@@ -40,18 +40,18 @@ export DESIGN_ROOT SHARED_DIR="$SHARED" RUN_DIR="$RUN_OUT"
 # Ordered longest-first within each group so a parallel run finishes sooner and
 # a sequential one surfaces the slow failures early.
 SUITES_CORE="trouper_top replay_data replay_delay reg_bank spi_cdc remod_en \
-array_sync dbg_probe \
+array_sync dbg_probe bringup_src \
 packet_ctrl_fsm spi_slave w_missed warmup_rearm bypass_e2e bypass_antenna \
 noise_trig w_shadow_lock sc_force_lock sc_ant_sel sc_dbg reg_reset_sweep \
 psram_ops psram_en_glitch qspi_owner dbg_write dbg_write_collision \
 dbg_amask_wrap host_only_e2e pad_tieoffs io_cell_controls irq_pins \
-dc_removal comb_remod_transfer remod_backoff tacc_window_clamp \
+dc_removal comb_remod_transfer remod_backoff remod_sqnr tacc_window_clamp \
 mcp_cfg_hold_settle mcp_decimator_settle mcp_iq_samp_cnt_settle \
 mcp_mrc_settle mcp_pcfsm_settle mcp_psram_bshift_settle mcp_sc_settle \
 mcp_tacc_settle \
 w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow sc_acc_overflow"
 
-SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow trouper_capture"
+SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow mrc_absent_branch trouper_capture"
 
 # Directed benches for open RTL risks (planning/Open Risks.md). Each asserts the
 # INTENDED contract; while the risk is open the asserting testcase FAILS (that
@@ -73,8 +73,9 @@ suite_args() {
     trouper_capture)
         echo "CAPTURE_NPY=$SHARED/lora-mimo-captures/captures/lora_20260621_092430_SF7-BW125-Pre8.npy \
 CAPTURE_SF=7 CAPTURE_BW=125 CAPTURE_START=360482 CAPTURE_NSAMP=49152" ;;
-    # capture_two_packet and weight_gen_spi_flow carry their own shared-mount
-    # defaults (file + window) in the test module; nothing to add here.
+    # capture_two_packet, weight_gen_spi_flow and mrc_absent_branch carry their
+    # own shared-mount defaults (file + window) in the test module; nothing to
+    # add here.
     *) echo "" ;;
     esac
 }

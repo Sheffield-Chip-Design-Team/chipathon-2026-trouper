@@ -123,9 +123,17 @@ using the encoding table.
   sources are selectable. The fifth stays readable over SPI at `IRQ_STATUS`
   (`0x02`). Widening `SEL` would have cost a `DBG_CTRL` bit for one probe
   position; not judged worth it.
-- **`qpi_busy` is derived, not a dedicated signal.** It is `|state_dbg` from
-  `psram_buf_ctrl` — true whenever the QPI FSM is out of its idle state, which
-  is what the plan's bring-up use asks for.
+- **`qpi_busy` is derived, not a dedicated signal, and it is coarse.** It is
+  `|state_dbg` from `psram_buf_ctrl` — asserted whenever the QPI FSM is out of
+  its idle state. The steady-state post-init states (`S_QE_INIT`, `S_WRITE`,
+  `S_REPLAY`) are all non-zero, so **after PSRAM initialisation this bit reads
+  continuously high** and does not pulse per QPI transaction. Read it as a
+  "PSRAM initialised / active-state" indicator, not a transaction-busy strobe.
+  For per-transaction visibility during bring-up use `101`/`SEL=1`
+  (`buf_active`/`replay_active`) or `101`/`SEL=2` (`sample_skip`/`replay_missed`).
+  (Open Risks #67 — accepted as documented behaviour 2026-09-04, no RTL change;
+  exporting the real transaction-busy level was judged not worth the debug-pin
+  cone perturbation.)
 - **Three small observability exports were added** so the mux taps real
   registered state rather than re-deriving it: `sc_tdm_busy_dbg` (`sc_detector`),
   `del_rdy_dbg` (`psram_buf_ctrl`) and `irq_status_dbg` (`reg_bank`). All are
@@ -161,7 +169,7 @@ below is just the table layout, not a hardware constraint.
 | `100` packet / weights | `0` | `packet_active` | `training_done` | Packet lifecycle. |
 |  | `1` | `w_pending` | `w_valid` | Weight-compute and commit timing. |
 |  | `2` | `packet_phase[0]` | `packet_phase[1]` | State decoding; use SPI `PACKET_STATUS` for the third state bit. |
-| `101` PSRAM | `0` | `psram_init_done` | `qpi_busy` | Power-up / QPI activity. |
+| `101` PSRAM | `0` | `psram_init_done` | `qpi_busy` (coarse `\|state_dbg`) | Power-up + PSRAM active/idle state. Reads continuously high after init — **not** a per-transaction strobe; use `SEL=1`/`SEL=2` for that. See note above. |
 |  | `1` | `buf_active` | `replay_active` | Capture-to-replay handoff. |
 |  | `2` | `sample_skip` | `replay_missed` | Immediate fault visibility. |
 |  | `3` | `dbg_busy` | `qspi_owner` | Service/debug ownership only. |

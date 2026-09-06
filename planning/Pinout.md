@@ -74,7 +74,7 @@ See "Board wiring — I/Q orientation through the RX chain" below for the pin-le
 
 | Pad name | Dir | Connected to | Description |
 |---|---|---|---|
-| `IQ_CLK` | in | PCB TCXO buffer | 32 MHz master clock shared by ASIC and SX1257 receivers |
+| `IQ_CLK` | in | SX1257_1 `CLK_OUT` (pin 10) | 32 MHz source-synchronous clock for Trouper; SX1257_1 `CLK_OUT` is also routed to SX1302 `RADIO_A_CLK_I` |
 | `RESETB` | in | PCB reset / host | Active-low global reset |
 
 ### ΣΔ re-mod outputs to SX1302 (2 pads, output)
@@ -198,7 +198,7 @@ non-adjacency and erratum notes.
 | Q, antenna 3 | 14 `Q_OUT` | `IQ_DATA_Q_3` (W20) | — |
 | Combined I | — | `REMOD_A_I` (N01) | 41 `RADIO_A_IQ[3]` |
 | Combined Q | — | `REMOD_A_Q` (N02) | 44 `RADIO_A_IQ[0]` |
-| 32 MHz clock | 10 `CLK_OUT` | `IQ_CLK` (W21) | 43 `RADIO_A_CLK_I` |
+| 32 MHz clock | SX1257_1 pin 10 `CLK_OUT` | `IQ_CLK` (W21) | 43 `RADIO_A_CLK_I` |
 
 Name-based wiring reproduces Semtech's own reference topology: the SX1302
 datasheet's Table 2-1 peer column maps `RADIO_A_IQ[3]` ← SX125x `DIO4`/`I_OUT`
@@ -261,13 +261,21 @@ which is the case that actually costs diversity. The mitigation is the bring-up
 
 ### Clock note
 
-`IQ_CLK` (W21), SX1302 pin 43 and the SX1257s all need the same 32 MHz. That is a
-multi-load net, and `IQ_CLK` is `input_cmos` with no hysteresis precisely because
-the duty-cycle budget has no margin (see "Pad cell type selection" below) — so
-this net wants the fanout buffer (`resources/DS_5PB12xx_ClockBuffer.pdf`) rather
-than a daisy chain. Separately **to be confirmed**: the SX1257 pin table calls
-`CLK_OUT` a "36 MHz digital clock output" while the whole design assumes 32 MHz;
-check this against the XTAL/TCXO plan, not against the datasheet line.
+The frozen clock topology is deliberately two-stage. A 32 MHz TCXO fanout buffer
+drives the four SX1257 `XTB` inputs with length-matched routes (and never exceeds
+the XTB 1.8 V pk-pk limit). SX1257_1 `CLK_OUT` then drives the controlled,
+point-to-point clock net to both Trouper `IQ_CLK` (W21) and SX1302 pin 43.
+SX1257_2–4 `CLK_OUT` are left NC; never tie clock outputs together. This makes
+Trouper's falling-edge I/Q capture source-synchronous to antenna 0 and its
+re-modulated output synchronous to the SX1302 Radio-A clock.
+
+The other three SX1257 streams are frequency-locked by their common,
+length-matched XTB reference. Their fixed device/PCB phase skew is a recorded
+bring-up risk (Open Risk #70), not a CDC: the RTL captures all I/Q pads on the
+falling edge, halfway between their rising-edge updates. Confirm the available
+eye on hardware when the FPGA fixture arrives. Although the SX1257 pin table
+labels `CLK_OUT` as 36 MHz, 32 MHz is a supported reference configuration and
+the front ends must be programmed for the 32 MHz `RxAdcTrim` setting.
 
 ---
 

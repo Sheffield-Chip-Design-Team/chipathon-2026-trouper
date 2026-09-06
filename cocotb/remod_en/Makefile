@@ -17,7 +17,7 @@ DESIGN_ROOT   ?= /foss/designs/lora-mimo
 SRC            = $(DESIGN_ROOT)/src
 TESTS          = $(DESIGN_ROOT)/cocotb/tests
 
-REMOD_SOURCE ?= $(SRC)/remod/sd_remod.v
+REMOD_SOURCE ?= $(SRC)/remod/sd_remod.v $(SRC)/remod/sd_remod_multiplierless.v
 VERILOG_SOURCES = $(REMOD_SOURCE)
 
 EXTRA_ARGS += --timing -Wno-fatal --public-flat-rw

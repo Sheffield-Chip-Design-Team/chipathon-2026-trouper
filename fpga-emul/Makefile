@@ -20,12 +20,17 @@
 #   /srv/eda/logs/timothyjabez/job-<ID>.o
 
 HLAB_SGE_URL  = http://nas.home:4783
-NFS_DESIGN    = /srv/eda/designs/timothyjabez/lora-mimo
+NFS_DESIGN    = /srv/eda/designs/timothyn-dev/lora-mimo
 
 VERILATOR   = verilator
+# --Wno-PINMISSING: trouper_top.v carries ~130 A40 padframe pad-control ports
+# (PU/PD/CS/SL/PDRV0/PDRV1/OE/IE per pad) that have no meaning on an Arty FPGA.
+# fpga_dsp_wrap.v connects every real signal port and explicitly ties every
+# trouper_top *input* pad; the unconnected pad-control *outputs* are the only
+# thing this suppresses.
 VFLAGS      = --binary --timing -Wall --Wno-UNUSED --Wno-DECLFILENAME \
               --Wno-WIDTHTRUNC --Wno-WIDTHEXPAND --Wno-BLKSEQ \
-              --Wno-SYNCASYNCNET --Wno-PINCONNECTEMPTY \
+              --Wno-SYNCASYNCNET --Wno-PINCONNECTEMPTY --Wno-PINMISSING \
               --Wno-UNOPTFLAT -sv
 
 RTL         = rtl
@@ -43,6 +48,8 @@ ASIC_SRCS   = $(ASIC_RTL)/top/trouper_top.v             \
               $(ASIC_RTL)/control/packet_ctrl_fsm.v    \
               $(ASIC_RTL)/combiner/mrc_combiner.v      \
               $(ASIC_RTL)/remod/sd_remod.v             \
+              $(ASIC_RTL)/remod/sd_remod_multiplierless.v \
+              $(ASIC_RTL)/debug/bringup_src.v          \
               $(ASIC_RTL)/control/spi_slave.v          \
               $(ASIC_RTL)/control/reg_bank.v
 
@@ -56,8 +63,8 @@ FPGA_SRCS   = $(RTL)/sync_fifo.v    \
 # Scripts in sge/ run inside the chipathon26 container on the NFS-mounted tree.
 # ============================================================================
 
-.PHONY: sge_sim_spi_reg sge_sim_all \
-        sim_spi_reg sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
+.PHONY: sge_sim_spi_reg sge_sim_dsp_chain sge_sim_all \
+        sim_spi_reg sim_dsp_chain sim_all sim_psram sim_clksync clean vivado_project vivado_synth \
         test_fw run_test_fw eth_fw run_eth_fw
 
 sge_sim_spi_reg:
@@ -67,7 +74,15 @@ sge_sim_spi_reg:
 	    --mem 8G \
 	    $(NFS_DESIGN)/fpga-emul/sge/sim_spi_reg.sh
 
-sge_sim_all: sge_sim_spi_reg
+sge_sim_dsp_chain:
+	HLAB_SGE_URL=$(HLAB_SGE_URL) hqsub \
+	    --name fpga-sim-dsp-chain \
+	    --cpus 4 \
+	    --mem 8G \
+	    --project lora-mimo \
+	    $(NFS_DESIGN)/fpga-emul/sge/sim_dsp_chain.sh
+
+sge_sim_all: sge_sim_spi_reg sge_sim_dsp_chain
 
 # ============================================================================
 # Local Verilator targets (run inside chipathon26 container)
@@ -83,7 +98,19 @@ obj_dir_spi_reg/Vtb_fpga_spi_reg: tb/tb_fpga_spi_reg.v $(FPGA_SRCS) $(ASIC_SRCS)
 	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_spi_reg \
 	    --top-module tb_fpga_spi_reg $^
 
-sim_all: sim_spi_reg
+# Functional end-to-end sim THROUGH fpga_dsp_wrap: injection path -> 4x sd_remod
+# -> trouper_top full DSP chain -> internal psram_model -> combiner -> output
+# sd_remod. Drives a correlated in-band tone into inj_i/q, configures the chip
+# over the wrapper's host-SPI port, and checks sc_lock (IRQ_STATUS[0]) plus a
+# live MRC ΣΔ output. This is the deep counterpart to sim_spi_reg's wiring test.
+sim_dsp_chain: obj_dir_dsp_chain/Vtb_fpga_dsp_chain
+	$<
+
+obj_dir_dsp_chain/Vtb_fpga_dsp_chain: tb/tb_fpga_dsp_chain.v $(FPGA_SRCS) $(ASIC_SRCS)
+	$(VERILATOR) $(VFLAGS) --Wno-PROCASSINIT --Mdir obj_dir_dsp_chain \
+	    --top-module tb_fpga_dsp_chain $^
+
+sim_all: sim_spi_reg sim_dsp_chain
 
 # PSRAM model cosim: psram_buf_ctrl ⇄ psram_model, checks the SC delay path
 sim_psram: obj_dir_psram/Vtb_psram_model
@@ -113,6 +140,21 @@ vivado_project:
 
 vivado_synth:
 	$(VIVADO) -mode batch -source vivado/run_synth.tcl 2>&1 | tee vivado_synth.log
+
+# Bench bitstream: DSP domain clocked from the on-board MMCM 32 MHz instead of
+# the SX1257 CLK_OUT (F4), so trouper_top + the injection->DSP->combiner->remod
+# chain run with NO AFE board attached. NOT silicon-accurate -- bring-up/smoke
+# only. Regenerates the project with BENCH_CLK set, runs synth->impl->bitstream,
+# and saves the result as arty_dsp_emul_bench.bit alongside the default .bit.
+.PHONY: vivado_project_bench bench_bitstream
+vivado_project_bench:
+	BENCH_CLK=1 $(VIVADO) -mode batch -source vivado/create_project.tcl 2>&1 | tee vivado_create.log
+
+bench_bitstream: vivado_project_bench vivado_synth
+	cp -f arty_dsp_emul.bit arty_dsp_emul_bench.bit
+	@echo "Bench bitstream -> fpga-emul/arty_dsp_emul_bench.bit (DSP on MMCM 32 MHz, no AFE)"
+	@echo "NOTE: arty_dsp_emul.bit now holds the BENCH build. Rebuild the"
+	@echo "      silicon-accurate default with: make vivado_project && make vivado_synth"
 
 # ============================================================================
 # Bare-metal MicroBlaze test firmware (sw/test_fw.c)
@@ -170,6 +212,6 @@ run_eth_fw: $(SW)/lora_mimo_fw.elf
 # Clean
 # ============================================================================
 clean:
-	rm -rf obj_dir_spi_reg obj_dir_psram *.vcd
+	rm -rf obj_dir_spi_reg obj_dir_psram obj_dir_dsp_chain *.vcd
 	rm -f $(SW)/test_fw.elf $(SW)/test_fw.map
 	rm -f $(SW)/lora_mimo_fw.elf

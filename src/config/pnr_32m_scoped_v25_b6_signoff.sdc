@@ -1,19 +1,33 @@
 # pnr_32m_scoped_v25_b6_signoff.sdc
 # ============================================================================
-# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus two
-# marked signoff-only additions:
+# SIGNOFF-ONLY SDC.  This is pnr_32m_scoped_v25_b6.sdc (the P&R SDC) plus the
+# marked signoff-only additions v28..v33:
 #   v28 (2026-08-27) -- the `tacc_accumulate` exception group.
-#   v29 (2026-09-03) -- PSRAM QPI source-synchronous output timing (Open Risk
-#        #69): a PSRAM_SCK generated clock + CE#/SIO output delays + read-data
-#        input delays, and exclusion of those pads from the generic core-output
-#        rule.
+#   v29 (2026-08-27) -- dcr_valid -> iq_samp_cnt[*] and (2026-09-03) PSRAM QPI
+#        source-synchronous output timing (Open Risk #69): a PSRAM_SCK generated
+#        clock + CE#/SIO output delays + read-data input delays, and exclusion
+#        of those pads from the generic core-output rule.
+#   v30 (2026-08-27) -- pcfsm B6 down-counter load + tick-decrement paced MCP.
+#   v31 (2026-09-04) -- set_false_path on the two-pin digital debug-probe pad
+#        paths (DBG0_OUT wholesale; the debug side of the shared IRQ_OUT/DBG1
+#        pad), which the generic core-output rule otherwise leaves as the SS
+#        worst path in the design.
+#   v32 (2026-09-04) -- narrow the `paced_dsp` -through wildcard: exclude the six
+#        u_dec.int_i1/i2/i3/q1/q2/q3 CIC integrator recurrences (updated every
+#        clk_32m edge, real separation 1 cycle) from the 3-cycle budget. See the
+#        block comment at the paced_nets definition below.
+#   v33 (2026-09-05) -- narrow it again: exclude the Open Risk #68 window-epoch
+#        control tags (u_tacc.win_epoch/tdm_epoch/acc_epoch) -- window-control
+#        state, not multiply/accumulate state, so they stay single-cycle timed.
+#        Post-route STA backstop: SGE job 5648, all six nets MET at MCP=1,
+#        worst setup slack +15.73 ns.
 # It is used as SIGNOFF_SDC_FILE only; PNR_SDC_FILE stays the plain
 # pnr_32m_scoped_v25_b6.sdc so the placed/routed netlist is bit-for-bit the
 # job-5105 flow (adding tacc_accumulate to the P&R SDC strands the IQ_CLK root
 # clkbuf with no routing access point -- DRT-0073, job 5112; the PSRAM
 # generated clock is kept out of the P&R SDC for the same class of reason
 # until a routed run clears it).
-# Keep everything except the marked v28 / v29 blocks identical to the P&R SDC.
+# Keep everything except the marked v28..v33 blocks identical to the P&R SDC.
 # ============================================================================
 #
 # pnr_32m_scoped_v25_b6.sdc
@@ -552,6 +566,10 @@ set_output_delay -min 0.0 -clock IQ_CLK $core_output_ports
 set_false_path -from [get_ports RESETB]
 set_false_path -from [get_ports HOST_CS]
 
+# ARRAY_ACQ_N_IN: asynchronous open-drain array-sync wire, 2-FF synchronised in
+# u_array_acq_sync (acq_meta -> acq_sync). No timing relationship to IQ_CLK.
+set_false_path -from [get_ports ARRAY_ACQ_N_IN]
+
 # --- Scoped multicycle: ONLY the four paced DSP blocks get 3 cycles ----------
 # Net names retain hierarchy ('.' separator) after flatten; cell names do not.
 # packet_ctrl_fsm (u_pcfsm) is scoped separately above via -from/-to registered
@@ -559,7 +577,50 @@ set_false_path -from [get_ports HOST_CS]
 # its violating cone doesn't survive synthesis as a named net (see v21 header).
 # Same reason u_tacc.acc_start/acc_end and u_sc's timing_ref write arc get
 # their own -from/-to blocks above instead of relying on this wildcard.
-set paced_nets [get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]
+#
+# v32 (2026-09-04): the blanket `u_dec.*` member of this wildcard is NOT honest
+# for the whole submodule -- it also swept up the CIC integrator recurrence
+# (sd_decimator_poly.v:286-289):
+#   int_i1[ch]<=int_i1[ch]+/-1; int_i2[ch]<=int_i2[ch]+int_i1[ch]; int_i3[ch]<=...
+#   int_q1/q2/q3 mirror the I path.
+# Unlike the HB1/HB2 MAC states (gated by hb1_busy/hb2_busy/hb1_wait/hb2_wait,
+# genuinely held for 3 clocks -- the v9/v10 "honest for all four DSP blocks"
+# claim above) these six accumulators update UNCONDITIONALLY every clk_32m
+# edge with no busy/wait gate, so the real launch->capture separation on that
+# arc is ONE cycle. Handing it a 3-cycle setup budget under the same wildcard
+# that legitimately paces the HB MACs can mask a real single-cycle SS
+# violation on the integrator recurrence itself. test_mcp_decimator_settle.py
+# (mcp_audit_manifest.json "paced_dsp" proof, SGE job 4083) exercises the HB
+# MAC settle behaviour, not this recurrence, so it was never actually proven
+# honest for these six nets.
+#
+# Fix: exclude int_i1/i2/i3/q1/q2/q3 from the u_dec.* member so they stay at
+# the default single-cycle budget, matching what they actually are. OpenSTA
+# has no remove_from_collection (see the core_output_ports filter above), so
+# subtract by name the same way. u_sc.*/u_tacc.*/u_comb.* are unaffected --
+# sc_detector's TDM/eval engines (tdm_wait==TDM_WAIT gate, sc_detector.v:402-
+# 481) and mrc_combiner's MAC_WAIT states are genuinely held every cycle they
+# touch, so no equivalent always-running recurrence was found there. This was
+# narrowed again in v33 below: `u_tacc.*` also contains the Open Risk #68
+# window-epoch control tags, which are not multiply/accumulate state and must
+# not inherit a three-cycle budget merely because they sit in this module.
+set paced_nets_raw [get_nets -hierarchical {u_dec.* u_sc.* u_tacc.* u_comb.*}]
+set dec_integrator_pats {u_dec.int_i1* u_dec.int_i2* u_dec.int_i3* \
+                         u_dec.int_q1* u_dec.int_q2* u_dec.int_q3*}
+set tacc_epoch_pats {u_tacc.win_epoch* u_tacc.tdm_epoch* u_tacc.acc_epoch*}
+set paced_nets {}
+foreach n $paced_nets_raw {
+    set full [get_full_name $n]
+    set is_integrator 0
+    foreach pat $dec_integrator_pats {
+        if {[string match $pat $full]} { set is_integrator 1; break }
+    }
+    set is_epoch_control 0
+    foreach pat $tacc_epoch_pats {
+        if {[string match $pat $full]} { set is_epoch_control 1; break }
+    }
+    if {!$is_integrator && !$is_epoch_control} { lappend paced_nets $n }
+}
 
 set_multicycle_path 3 -setup -through $paced_nets
 set_multicycle_path 2 -hold  -through $paced_nets
@@ -606,3 +667,72 @@ set mcp_audit_groups {
 set dbg_nets [get_nets -hierarchical {u_psram.dbg_addr_cur[*] u_psram.dbg_buf[*] \
               u_psram.dbg_idx[*] u_psram.dbg_fetch_busy u_psram.dbg_mode u_psram.dbg_pend}]
 set_false_path -through $dbg_nets
+
+# ==== v31 (2026-09-04) -- SIGNOFF-ONLY: two-pin digital debug-probe pads =========
+# u_dbg (debug_probe_mux) is feed-forward observability ONLY: it drives DBG0_OUT
+# and -- while DBG_CTRL1.EN=1 -- the shared IRQ_OUT/DBG1 pad, from taps that are
+# already registered upstream, selected by the quasi-static rb_dbg_ctrl0/1 config
+# bytes (0x04 / 0x06).  Nothing on-chip reads either pad and the off-chip
+# consumer is a logic analyser, so no path depends on them meeting the 31.25 ns
+# IQ_CLK budget the generic core-output rule (core_output_ports, above) pins them
+# to.  Post-DRV the SS worst path in the ENTIRE design is
+#   rb_remod_backoff_shift[1] -> u_dbg group-110 combiner tap -> IRQ_OUT_OUT
+#   (-14.44 ns, job 5527, main@78b4a33),
+# with a -6.31 ns sibling into DBG0_OUT -- both debug-only.  See
+# planning/drv-margin-sweep-2026-09-03.md (2026-09-04 re-verification section).
+#
+# DBG0_OUT is a dedicated debug pad -- false-path it wholesale.
+set_false_path -to [get_ports DBG0_OUT]
+#
+# IRQ_OUT_OUT also carries the functional rb_irq_out_sticky level interrupt, so
+# scope the exception to the DEBUG side only and anchor it at the port: the
+# sticky arc (rb_irq_out_sticky -> IRQ_OUT_OUT, no debug net on it) stays timed.
+# rb_irq_out_sticky / dbg1_en_w / sc_tdm_busy_dbg do NOT survive synthesis as
+# named nets (job 5527 netlist), so the surviving quasi-static handles
+# rb_dbg_ctrl1* (the DBG1 pad selector) and rb_remod_backoff_shift* (the config
+# operand on the current worst debug arc) are used instead -- same "scope by
+# what survives" discipline as v21 / v28.  A path through rb_remod_backoff_shift*
+# that does NOT end at IRQ_OUT_OUT (e.g. the real comb_y >>> shift into sd_remod)
+# is untouched by the -to anchor.
+#
+# 2026-09-04 update: BRINGUP_SRC (Open Risk #59) merged in and sits at the
+# re-modulator input, upstream of u_dbg's group-110 comb_i/comb_q tap -- so
+# its config registers now also reach the shared pad through the debug mux.
+# Confirmed the new worst path (job 5539, post-merge P&R): rb_bringup_ctrl[0]
+# -> u_dbg -> IRQ_OUT_OUT, -12.24 ns. rb_bringup_ctrl*/rb_bringup_ampl* added
+# to the same -through list, same justification (quasi-static reg_bank config,
+# survives synthesis) and same -to IRQ_OUT_OUT anchor, so the real
+# rb_bringup_* -> sd_remod input arc stays timed.
+#
+# 2026-09-04, second pass: rb_rx_hold gates BRINGUP_SRC's own enable
+# (bringup_en_q = BRINGUP_CTRL[0] && RX_HOLD && !PACKET_ACTIVE), so it also
+# reaches the debug mux the same way. Recurred as the worst IRQ_OUT_OUT path
+# on two different netlists (job 5541 canonical, -10.96 ns; job 5547 with
+# SYNTH_STRATEGY DELAY 2, -13.02 ns -- the actual design-wide SS worst path
+# there). Same quasi-static reg_bank justification and -to anchor as the
+# other three; RX_HOLD's real functional uses elsewhere (SC hold, W-commit
+# gating, etc.) are untouched since the anchor only silences paths that also
+# end at IRQ_OUT_OUT.
+#
+# 2026-09-04, third pass -- SUPERSEDED the scoped -through list above with a
+# wholesale false-path. Job 5550 (DELAY 2 + the rb_rx_hold-extended scope)
+# immediately surfaced a SIXTH distinct debug-mux source as the new worst
+# IRQ_OUT_OUT path: psram_buf_active (-11.34 ns) -- a group-101 PSRAM tap,
+# not even reg_bank config-register class like the other five. u_dbg fans in
+# ~30 signals across 8 groups (raw RX, decimated IQ, SC, packet/weights,
+# PSRAM, combiner, IRQ status, bringup) with no register between the final
+# mux and the pad, so enumerating sources one at a time is provably unbounded
+# -- confirmed by finding a new one on 3 different netlists in one session
+# (rb_dbg_ctrl1/rb_remod_backoff_shift -> rb_bringup_ctrl/rb_bringup_ampl ->
+# rb_rx_hold -> psram_buf_active). The scoped list above is KEPT for the
+# mechanism history but is no longer the active constraint.
+#
+# Falling back to the wholesale path is the correct call on its own merits,
+# not just as a way to stop the chase: IRQ_OUT_OUT is a STICKY LEVEL signal
+# (irq_out sticky bit, cleared by an explicit host write, trouper_top.v/
+# reg_bank.v) read by the host's interrupt controller or polled over SPI --
+# there is no synchronous IQ_CLK capture on the other end of this pad, so the
+# 31.25 ns core-output budget was never a real requirement for the functional
+# side either, only an artifact of the generic core_output_ports rule.
+set_false_path -to [get_ports IRQ_OUT_OUT]
+# ==== end v31 signoff-only block ================================================

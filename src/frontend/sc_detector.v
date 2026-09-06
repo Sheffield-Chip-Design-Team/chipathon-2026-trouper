@@ -540,7 +540,18 @@ module sc_detector (
                         end
                         c_i0 <= sym_ci0;   // Open Risk #61: sym_ci0/cq0 now 32-bit
                         c_q0 <= sym_cq0;
-                        sc_first_hit_dbg <= first_hit_sample;
+                        // One-hit mode (sc_hits_req==0): hit_count==0 and
+                        // hit_count==sc_hits_req are the same edge, so
+                        // first_hit_sample is updated (line above) on this
+                        // exact cycle -- reading it here would capture the
+                        // OLD (pre-update) value via nonblocking-assignment
+                        // semantics, not this hit's own sample mark. Take
+                        // eval_sample_mark directly in that case; normal
+                        // multi-hit locking (first_hit_sample latched on an
+                        // earlier cycle, read here on a later one) is
+                        // unaffected and still uses the register.
+                        sc_first_hit_dbg <= (hit_count == 2'd0) ? eval_sample_mark
+                                                                 : first_hit_sample;
                         hit_count <= 2'd0;
                     end else begin
                         hit_count <= hit_count + 2'd1;
