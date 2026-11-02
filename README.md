@@ -9,6 +9,17 @@ Designed to work with Grouper SOC #99 for additional software features or as a s
 
 ![System Diagram of "Trouper" project](reports/Trouper_System_Diagram.drawio.png)
 
+## Layout
+
+![Trouper final layout (trouper_top, GF180MCU, A40 slot)](final/render/trouper_top.png)
+
+Signed-off layout, GDS and reports are in [final/](final/README.md).
+
+## Test Plans
+
+- [Post-Silicon Test Plan](planning/Post-Silicon%20Test%20Plan.md) — bring-up and characterisation once silicon is back
+- [Pre-Silicon Verification Plan](planning/Test%20Plan.md) — RTL simulation, formal and P&R signoff coverage
+
 ## Repository Layout
 
 ```
