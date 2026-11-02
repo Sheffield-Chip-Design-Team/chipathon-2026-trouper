@@ -17,6 +17,11 @@ project:
   discord: "newmantimothyj"                 # Optional: Discord username (for support / communication)
   description: "DSP Hardware implementation of MRC for LoRa standard"  # Short one-line description
   lvs_config: "lvs_config.json"
+  gf_def_ready: true            # pin list ready for DEF generation with the GF (A40) pad frame
+  ws_def_ready: false           # not targeting the wafer.space pad frame
+  drc_ready: true               # final/ (P&R job 5682) signed off against this pin list
+  lvs_ready: true
+  export_control: "docs/Export_Control_GF_Rev8.2.docx"   # GF export control form
 
 # ======================================================
 # Pin definitions (see planning/Pinout.md for the authoritative
