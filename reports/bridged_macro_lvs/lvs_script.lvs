@@ -1,0 +1,5 @@
+set circuit1 [readnet spice /foss/runs/trouper_top_bridged.spice]
+set circuit2 [readnet verilog /dev/null]
+readnet spice /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/spice/gf180mcu_fd_sc_mcu7t5v0.spice $circuit2
+readnet verilog /foss/designs/pd/bridged_lvs/trouper_top.pnl.v $circuit2
+lvs "$circuit1 trouper_top" "$circuit2 trouper_top" /usr/local/lib/python3.12/dist-packages/librelane/scripts/netgen/setup.tcl /foss/runs/reports/lvs.netgen.rpt -blackbox -json /foss/runs/reports/lvs.netgen.json
