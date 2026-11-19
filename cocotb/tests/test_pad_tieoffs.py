@@ -2,8 +2,8 @@
 
 The A40 (ACV) workshop padring has no output-only cell: every functional output
 sits on a bidirectional pad whose full control interface (`_OE/_IE/_CS/_SL/
-_PU/_PD/_PDRV0/_PDRV1`) is driven from `trouper_top` itself.  That is 96
-constant tie-offs plus 4 dynamic `PSRAM_SIO_n_IE` lanes.
+_PU/_PD/_PDRV0/_PDRV1`) is driven from `trouper_top` itself.  That is 111
+constant tie-offs plus 5 dynamic drivers (4 `PSRAM_SIO_n_IE`, `ARRAY_ACQ_N_OE`).
 
 Until this test none of them were read by any simulation: an inverted `_IE`
 polarity, a swapped `_PU`/`_PD`, or a wrong `_PDRV` code would pass every
@@ -19,6 +19,12 @@ Covered here:
     wired to a real signal is caught;
   * `PSRAM_SIO_n_IE == ~PSRAM_SIO_n_OE` per clock, and the GF180-disallowed
     `IE=OE=1` state never occurs on any lane.
+
+Companion: `sim/tests/test_padring_connectivity.py` checks the other half --
+that the A40 padring netlist (`A40_ACV_padring.v` / `A40_ACV_interface.yaml`)
+actually exposes these pins, on the mapped cell, with the right direction.
+This file checks documented *intent*; that one checks the netlist *realizes*
+it.
 """
 
 import cocotb
@@ -60,6 +66,18 @@ _OUTPUT_PADS = {
 # dynamically, so only the constant members appear here.
 _SIO_CONST = dict(CS=0, SL=0, PU=0, PD=0, PDRV0=1, PDRV1=1)
 
+# Neither an input pad nor an implicit-OE=1 output pad, so they get their own
+# group (Pinout.md "A40 pad-control tie-offs"):
+#   ARRAY_ACQ_N -- bi_t emulating open drain: _OE is dynamic (the drive-low
+#     request) and excluded; the rest are constant.  _IE=1 and _PU=1 are unique
+#     to this pad (a long shared board net the chip may sense).
+#   DBG0 -- output on bi_t, fast CMOS, 8 mA; _IE=0 (never a receiver on a pin
+#     nothing drives).
+_MISC_OUTPUT_PADS = {
+    "ARRAY_ACQ_N": dict(IE=1, CS=1, SL=1, PU=1, PD=0, PDRV0=0, PDRV1=0),
+    "DBG0":        dict(OE=1, IE=0, CS=0, SL=0, PU=0, PD=0, PDRV0=1, PDRV1=0),
+}
+
 
 def _expected_table():
     """Flatten the documented groups into {port_name: expected_value}."""
@@ -68,6 +86,9 @@ def _expected_table():
         exp[f"{pad}_PU"] = 0
         exp[f"{pad}_PD"] = 0
     for pad, ctrls in _OUTPUT_PADS.items():
+        for ctrl, val in ctrls.items():
+            exp[f"{pad}_{ctrl}"] = val
+    for pad, ctrls in _MISC_OUTPUT_PADS.items():
         for ctrl, val in ctrls.items():
             exp[f"{pad}_{ctrl}"] = val
     for n in range(4):
@@ -110,7 +131,7 @@ def _check_sio_ie(dut, where):
 
 @cocotb.test()
 async def test_pad_tieoffs_match_pinout(dut):
-    """All 96 constant tie-offs hold their documented value out of reset."""
+    """All 111 constant tie-offs hold their documented value out of reset."""
     tag = "pad_tieoffs"
     cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
     dut.HOST_CS.value   = 1
@@ -132,9 +153,11 @@ async def test_pad_tieoffs_match_pinout(dut):
     _check_sio_ie(dut, f"{tag}: out of reset")
 
     # Guard against the table silently drifting out of sync with the RTL port
-    # list: Pinout.md documents exactly 96 constant tie-offs.
-    assert len(EXPECTED) == 96, \
-        f"{tag}: expected-value table has {len(EXPECTED)} entries, want 96"
+    # list: Pinout.md documents exactly 111 constant tie-offs (13 input pads x2,
+    # + PSRAM_CE_N/REMOD x2/SPI_MISO/IRQ_OUT (8 each) + PSRAM_SCK (6)
+    # + ARRAY_ACQ_N (7, _OE dynamic) + DBG0 (8) + PSRAM_SIO x4 (6 each)).
+    assert len(EXPECTED) == 111, \
+        f"{tag}: expected-value table has {len(EXPECTED)} entries, want 111"
 
 
 @cocotb.test()
