@@ -315,14 +315,15 @@ module trouper_chip #(
         .PSRAM_SCK_PD        ()
     );
 
-    psram_model #(.ADDR_BITS(PSRAM_ADDR_BITS), .RD_LAUNCH_SKIP(3)) u_psram (
+    psram_model #(.ADDR_BITS(PSRAM_ADDR_BITS), .RD_LAUNCH_SKIP(5)) u_psram (
         .clk_32m (clk),
         .rst_n   (rst_n),
         .ce_n    (psram_ce_n),
         .sio_out (psram_sio_out),
         .sio_oe  (psram_sio_oe),
         .sio_in  (psram_sio_drive),
-        .sck     (psram_sck)
+        .sck     (psram_sck),
+        .sck_en  (u_dut.psram_sck_en_q)
     );
 endmodule
 `default_nettype wire

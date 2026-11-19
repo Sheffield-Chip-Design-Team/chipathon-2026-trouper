@@ -329,14 +329,25 @@ module tb_trouper_cocotb #(
     assign psram_sio_in = psram_sio_drive;
 `endif
 
-    psram_model #(.ADDR_BITS(PSRAM_ADDR_BITS), .RD_LAUNCH_SKIP(3)) u_psram (
+    psram_model #(.ADDR_BITS(PSRAM_ADDR_BITS), .RD_LAUNCH_SKIP(5)) u_psram (
         .clk_32m (IQ_CLK),
         .rst_n   (RESETB),
         .ce_n    (psram_ce_n),
         .sio_out (psram_sio_out),
         .sio_oe  (psram_sio_oe),
         .sio_in  (psram_sio_drive),
-        .sck     (psram_sck)
+        .sck     (psram_sck),
+        // 2026-09-14 fix (Open Risks #72): `psram_sck` is a live
+        // `sck_en_q & clk` signal derived combinationally from the exact
+        // same clock this model's own logic triggers on -- a
+        // self-referential gated-clock race that made Icarus never see it
+        // go high inside the model, silently breaking every debug/del/
+        // replay QPI transaction (writes/reads never touched mem[]).
+        // Feed the model trouper_top's internal, plain-registered enable
+        // instead (hierarchical testbench-only peek; not a DUT port
+        // change) for its main transaction logic -- race-free since it
+        // isn't derived from the clock it's sampled against.
+        .sck_en  (u_dut.psram_sck_en_q)
     );
 
     // The GF180 bi_t cell leaves IE=OE=1 uncharacterized.  Keep this

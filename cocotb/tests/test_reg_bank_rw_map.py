@@ -394,6 +394,7 @@ async def test_packet_active_gate_smoke(dut):
     await _blocked(0x11, "bringup_ampl")
     await _blocked(0x77, "replay_delay_samples")
     await _blocked(0x78, "replay_delay_samples")
+    await _blocked(0x7B, "replay_backdate_syms")
 
     # SC_FORCE_LOCK and PSRAM_CTRL.PSRAM_EN are already exercised as part
     # of their own dedicated tests above.
@@ -523,10 +524,10 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
         0x76: ('RO', 0xFF),  # PSRAM_DBG_DATA
         0x77: ('RW', 0xFF),  # REPLAY_DELAY_LO
         0x78: ('RW', 0xFF),  # REPLAY_DELAY_HI
+        0x7A: ('RW', 0x0F),  # PSRAM_RD_TRIM [3:0]; [7:4] reserved (2026-09-13)
+        0x7B: ('RW', 0x03),  # REPLAY_BACKDATE_SYMS [1:0]; [7:2] reserved (Open Risk #81)
         # Reserved (future growth)
         0x79: ('reserved', 0x00),
-        0x7A: ('reserved', 0x00),
-        0x7B: ('reserved', 0x00),
         0x7C: ('reserved', 0x00),
         0x7D: ('reserved', 0x00),
         0x7E: ('reserved', 0x00),
@@ -644,7 +645,7 @@ async def test_exhaustive_address_permission_mask_sweep(dut):
 
 @cocotb.test()
 async def test_reserved_addresses_zero_and_ignored(dut):
-    """Verify all 14 reserved addresses read zero and writes are ignored.
+    """Verify all 13 reserved addresses read zero and writes are ignored.
 
     Closes verification-plan row #3: "Fixed IDs and all reserved addresses
     read zero/write ignored" (TRPR-REG-004). Exhaustively verifies the
@@ -669,23 +670,33 @@ async def test_reserved_addresses_zero_and_ignored(dut):
     slots of the former RX_GAIN block) on the main rebase -- originally
     0x06/0x07 on feat/bringup-src, moved because 0x06 is DBG_CTRL1 and 0x07
     stays reserved. Excluded here. 14 reserved addresses remain.
+
+    UPDATE 2026-09-13: 0x7A became PSRAM_RD_TRIM (QPI read-capture bring-up
+    trim, see planning/Register Map.md). Excluded here. 13 reserved addresses
+    remain.
+
+    UPDATE 2026-10-03: 0x7B became REPLAY_BACKDATE_SYMS (Open Risks #81).
+    Excluded here. 12 reserved addresses remain.
     """
     await _bring_up(dut)
 
-    # 14 reserved slots. Former-reserved addresses that are now real registers
+    # 12 reserved slots. Former-reserved addresses that are now real registers
     # are excluded: 0x1A is RX_HOLD (see NOTE above), 0x1B became SC_ANT_SEL,
     # 0x18 -- the last of the former RX_GAIN block -- became ARRAY_SYNC_CTRL,
     # 0x04/0x05 became DBG_CTRL0/DBG_STATUS (2026-08-30), 0x06 became
     # DBG_CTRL1 -- the shared IRQ_OUT/DBG1 pad selector (pinout cut to 27 pads,
-    # 2026-09) -- and 0x10/0x11 became BRINGUP_CTRL/BRINGUP_AMPL (2026-09-04).
+    # 2026-09) -- 0x10/0x11 became BRINGUP_CTRL/BRINGUP_AMPL (2026-09-04), and
+    # 0x7A became PSRAM_RD_TRIM (2026-09-13), and 0x7B became
+    # REPLAY_BACKDATE_SYMS (2026-10-03).
     reserved_addrs = [
         0x07,                                          # former DEBUG_GPIO
         0x12, 0x13, 0x14, 0x15, 0x16, 0x17,             # former RX_GAIN_* (0x10/0x11 now BRINGUP)
-        0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,             # reserved for future
+        0x79,                                            # PSRAM_DBG_WDATA, top-level-only decode
+        0x7C, 0x7D, 0x7E,                                # reserved for future
         0x7F,                                            # protocol escape
     ]
 
-    assert len(reserved_addrs) == 14, f"Expected 14 reserved addresses, got {len(reserved_addrs)}"
+    assert len(reserved_addrs) == 12, f"Expected 12 reserved addresses, got {len(reserved_addrs)}"
 
     # Test each reserved address with multiple patterns
     patterns = [0x00, 0xFF, 0xAA, 0x55, 0xA5, 0x5A]

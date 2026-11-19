@@ -64,7 +64,12 @@ from test_trouper_top import CLK_NS, spi_read, spi_write
 
 MODEL_ADDR_BITS = 16
 MODEL_MASK = (1 << MODEL_ADDR_BITS) - 1
-FETCH_SUBCYCLES = 31
+# 2026-09-14 (Open Risks #72): the debug-read burst's final state (capture +
+# CE# deassert combined, zero hold-margin cycles) was split into two states
+# so the last nibble gets the same one-cycle margin the write burst already
+# had -- see src/control/psram_buf_ctrl.v. That adds one sub-cycle to every
+# debug fetch (empirically 33, not 31).
+FETCH_SUBCYCLES = 33
 
 ADDR_PRE_WRAP = 0x7FFFF8    # last 8-byte-aligned sample below the 8 MB boundary
 ADDR_POST_WRAP = 0x000000   # AUTO_INC target: (ADDR_PRE_WRAP + 8) & AMASK

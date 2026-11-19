@@ -114,7 +114,7 @@ async def sdm_driver_multi(dut, amps=ANT_AMPS):
 
 
 async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
-                          replay_delay=32):
+                          replay_delay=32, replay_backdate=None):
     """Reset, configure (MIMO_CTRL before lock so the FSM latches it),
     bring up PSRAM, and poll to sc_lock. Returns sym_ns.
 
@@ -128,7 +128,10 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
     (continuous-delay redesign -- replay is no longer W_COMMIT-triggered).
     Default 32 keeps the silicon default's ~1500-sample wait out of these
     tests' polling windows; pass 0xFFFF to hold a packet in the silence
-    phase for its whole (shortened) duration."""
+    phase for its whole (shortened) duration.
+
+    replay_backdate, if given, is written to REPLAY_BACKDATE_SYMS (0x7B)
+    before lock; None leaves the reset value (1 symbol, Open Risk #81)."""
     sf, bw_khz = 7, 250
     sample_shift = 1
     M = 1 << (sf + sample_shift)
@@ -180,6 +183,8 @@ async def _reset_and_lock(dut, *, mode, ant_mask, tag, pkt_timeout_syms=None,
     # Replay margin (must land before lock: write-gated !packet_active)
     await spi_write(dut, 0x77, replay_delay & 0xFF)
     await spi_write(dut, 0x78, (replay_delay >> 8) & 0xFF)
+    if replay_backdate is not None:
+        await spi_write(dut, 0x7B, replay_backdate & 0x03)
 
     # PSRAM up (required: it is the SC detector's delay line)
     await spi_write(dut, 0x70, 0x01)

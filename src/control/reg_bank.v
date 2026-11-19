@@ -101,6 +101,11 @@ module reg_bank (
                                           // (payload byte port 0x79 is fed to
                                           //  psram_buf_ctrl directly from the
                                           //  SPI slave, like the 0x76 read pop)
+    output reg [3:0]   psram_rd_trim,     // 0x7A: extra QPI-read wait cycles,
+                                          // all 3 read sub-FSMs (see
+                                          // psram_buf_ctrl.v rd_wait_trim port
+                                          // comment). Default 0 = unchanged
+                                          // datasheet-exact timing.
     // Manual SC lock override (bring-up / catastrophic-detector-failure escape hatch)
     // Digital debug probe (planning/two-pin-digital-debug-plan.md), split
     // selector: dbg_ctrl0 drives the dedicated DBG0 pad, dbg_ctrl1 the shared
@@ -133,6 +138,9 @@ module reg_bank (
     // Same-packet replay margin: samples to wait after training_done before the
     // PSRAM delay-line replay starts (bounds host response only; SF-independent)
     output reg [15:0]  replay_delay_samples, // 0x77 LO / 0x78 HI
+    // Whole symbols to start the replay BEFORE timing_ref (Open Risk #81:
+    // timing_ref is structurally late). Training window is unaffected.
+    output reg [1:0]   replay_backdate_syms, // 0x7B[1:0]
     // Aggregated sticky interrupt output (mirrors IRQ_STATUS OR)
     output wire        irq_out
 );
@@ -186,9 +194,10 @@ module reg_bank (
             // Set bits from hardware (irq_set pulses are 2-cycle-stretched so
             // this every-other-cycle sample never misses them)
             irq_status <= (irq_status | irq_set);
-            // Clear bits when host writes 1 to 0x03 (IRQ_CLEAR)
+            // Clear bits when host writes 1 to 0x03 (IRQ_CLEAR). A set landing
+            // on the same edge wins, so a new event is never lost to a clear.
             if (we && addr == 8'h03)
-                irq_status <= (irq_status | irq_set) & ~wdata;
+                irq_status <= (irq_status & ~wdata) | irq_set;
         end
     end
 
@@ -237,6 +246,7 @@ module reg_bank (
             psram_ctrl       <= 4'h0;
             psram_dbg_addr   <= 23'h0;
             psram_dbg_auto_inc <= 1'b0;
+            psram_rd_trim    <= 4'h0;
             psram_dbg_rd_trig <= 1'b0;
             psram_dbg_wr_trig <= 1'b0;
             sc_force_lock    <= 1'b0;
@@ -249,6 +259,7 @@ module reg_bank (
             noise_trig       <= 1'b0;
             tacc_window_syms <= 4'd8;
             replay_delay_samples <= 16'd1500; // ≈3 ms: measured Grouper rv32emc
+            replay_backdate_syms <= 2'd1;     // covers the high-SNR late offset (<= ~1.9 sym)
                                               // 8-it compute (~1140) + readout/IRQ
             for (i = 0; i < 16; i = i + 1) w_shadow_r[i] <= 8'h00;
             w_wr_rejected    <= 1'b0;
@@ -385,6 +396,8 @@ module reg_bank (
                            end
                     8'h77: if (!packet_active) replay_delay_samples[7:0]  <= wdata; // blocked during active packet
                     8'h78: if (!packet_active) replay_delay_samples[15:8] <= wdata; // blocked during active packet
+                    8'h7A: psram_rd_trim <= wdata[3:0]; // not packet-gated: bring-up trim, not RF timing
+                    8'h7B: if (!packet_active) replay_backdate_syms <= wdata[1:0]; // blocked during active packet
                     default: ;
                 endcase
                 if (addr[7:4] == 4'h3 && !w_valid_rb)
@@ -545,7 +558,12 @@ module reg_bank (
             8'h76: rdata_next = psram_dbg_busy ? 8'h00 : psram_dbg_data;
             8'h77: rdata_next = replay_delay_samples[7:0];
             8'h78: rdata_next = replay_delay_samples[15:8];
-            // 0x79–0x7E reserved; 0x7F permanently reserved (protocol escape)
+            8'h7A: rdata_next = {4'h0, psram_rd_trim};
+            8'h7B: rdata_next = {6'h0, replay_backdate_syms};
+            // 0x79 handled directly in trouper_top.v (SPI-bus snoop, not stored
+            // here). 0x7A = PSRAM_RD_TRIM, 0x7B = REPLAY_BACKDATE_SYMS (above).
+            // 0x7C–0x7E reserved; 0x7F
+            // permanently reserved (protocol escape)
             default: rdata_next = 8'h00;
         endcase
     end

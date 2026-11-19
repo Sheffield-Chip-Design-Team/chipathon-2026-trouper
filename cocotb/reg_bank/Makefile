@@ -33,7 +33,7 @@
 SIM                 ?= icarus
 TOPLEVEL_LANG        = verilog
 TOPLEVEL             = reg_bank
-COCOTB_TEST_MODULES  = test_reg_bank_rw_map,test_reg_bank_rx_hold,test_reg_bank_ro_status,test_reg_bank_clamp_and_gates,test_reg_bank_w1p_precedence
+COCOTB_TEST_MODULES  = test_reg_bank_rw_map,test_reg_bank_rx_hold,test_reg_bank_ro_status,test_reg_bank_clamp_and_gates,test_reg_bank_w1p_precedence,test_reg_bank_irq
 
 DESIGN_ROOT ?= /foss/designs/lora-mimo
 SRC          = $(DESIGN_ROOT)/src

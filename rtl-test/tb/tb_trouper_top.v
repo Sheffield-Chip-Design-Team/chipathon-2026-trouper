@@ -127,13 +127,15 @@ module tb_trouper_top;
     // -----------------------------------------------------------------------
     // PSRAM behavioral model (APS6404L QPI subset)
     // -----------------------------------------------------------------------
-    psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(3)) u_psram (
+    psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(5)) u_psram (
         .clk_32m (clk),
         .rst_n   (resetb),
         .ce_n    (psram_ce_n),
         .sio_out (psram_sio_out),
         .sio_oe  (psram_sio_oe),
-        .sio_in  (psram_sio_in)
+        .sio_in  (psram_sio_in),
+        .sck     (dut.psram_sck_en_q & clk),
+        .sck_en  (dut.psram_sck_en_q)
     );
 
     // -----------------------------------------------------------------------

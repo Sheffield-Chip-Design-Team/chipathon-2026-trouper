@@ -48,6 +48,21 @@ test_dbg_readback_multisample_stream (verif plan #18, deepens #7):
   psram_buf_ctrl.v); this confirms the refetch path is stable under
   repetition -- a latent off-by-one in `dbg_addr_cur`/`dbg_idx` re-arming
   would only surface on the 2nd or 3rd wrap, not necessarily the 1st.
+
+test_dbg_write_readback_roundtrip (2026-09-13 hardware follow-up):
+  Reproduces, in zero-cable-delay behavioural sim, the exact host sequence
+  run on the real Arty A7 + APS6404L breakout: DBG_ADDR -> WR_TRIG (8 pushes
+  via 0x79) -> poll DBG_BUSY -> DBG_ADDR -> RD_TRIG -> poll DBG_BUSY -> 8
+  reads of 0x76, with NO throwaway pop before collecting. On hardware this
+  came back shifted right by exactly one byte (byte 0 stale/garbage, real
+  bytes 0-6 landing in slots 1-7, real byte 7 never read). Static analysis
+  of the sub-FSM found nothing wrong: dbg_idx resets to 0 both at reset and
+  at every fetch completion (psram_buf_ctrl.v:898), and the debug-read wait-
+  cycle count (sub8-13, 6 cycles) matches the APS6404L datasheet's QPI Fast
+  Quad Read timing (Figure 14) exactly. This test is the deterministic,
+  zero-propagation-delay control: if it comes back bit-exact here, the
+  hardware shift is a cable/timing-margin artifact, not an RTL bug in
+  psram_buf_ctrl.v.
 """
 
 import cocotb
@@ -283,3 +298,88 @@ async def test_dbg_readback_multisample_stream(dut):
                   f"back-to-back over a single RD_TRIG+AUTO_INC arm, "
                   f"{NSAMP - 1} consecutive dbg_idx==7 refetch wraparounds all "
                   f"bit-exact vs stored PSRAM content")
+
+
+@cocotb.test()
+async def test_dbg_write_readback_roundtrip(dut):
+    """Deterministic, zero-cable-delay reproduction of the hardware
+    write-then-read-back sequence (see module docstring). No throwaway pop
+    before collecting -- this is exactly what the JTAG/SPI test on the real
+    board did the first time, which came back shifted by one byte."""
+    tag = "dbg_wr_rb"
+    sf = 7
+    clk_per_iq = 64
+
+    cocotb.start_soon(Clock(dut.IQ_CLK, CLK_NS, unit="ns").start())
+    dut.HOST_CS.value   = 1
+    dut.SPI_MOSI.value  = 0
+    dut.SPI_SCK.value   = 0
+    dut.IQ_DATA_I.value = 0
+    dut.IQ_DATA_Q.value = 0
+    dut.RESETB.value    = 0
+    await Timer(4 * CLK_NS, unit="ns")
+    dut.RESETB.value = 1
+    await Timer(8 * CLK_NS, unit="ns")
+
+    # Same free-running low-amplitude noise as test_dbg_readback_content, so
+    # capture writes are interleaving with our debug ops exactly as they were
+    # on the real bench (BENCH_CLK build, DSP domain free-running).
+    mode = _StimMode()
+    cocotb.start_soon(_noise_or_cw_driver(dut, mode, sigma=8.0))
+
+    await spi_read(dut, 0x00)
+    await spi_read(dut, 0x09)
+    await spi_write(dut, 0x09, sf & 0x0F)
+    await spi_write(dut, 0x0A, 0)
+    await release_rx_hold(dut)
+
+    await spi_write(dut, 0x70, 0x01)
+    init_ok = False
+    for _ in range(500):
+        await Timer(8 * CLK_NS, unit="ns")
+        if (await spi_read(dut, 0x71)) & 0x08:
+            init_ok = True
+            break
+    assert init_ok, f"{tag}: PSRAM INIT_DONE never set"
+
+    await Timer(200 * clk_per_iq * CLK_NS, unit="ns")
+
+    base = 96 * 8   # distinct address, well clear of the other two tests'
+
+    # ---- DEBUG WRITE: DBG_ADDR -> 8x WDATA push -> WR_TRIG -> poll busy ----
+    pattern = [0xA5, 0x5A, 0xDE, 0xAD, 0xBE, 0xEF, 0x10, 0x27]
+    await spi_write(dut, 0x72, base & 0xFF)
+    await spi_write(dut, 0x73, (base >> 8) & 0xFF)
+    await spi_write(dut, 0x74, (base >> 16) & 0x7F)
+    for b in pattern:
+        await spi_write(dut, 0x79, b)
+    await spi_write(dut, 0x75, 0x04)   # WR_TRIG
+
+    for _ in range(100):
+        if not ((await spi_read(dut, 0x75)) & 0x80):
+            break
+    else:
+        assert False, f"{tag}: DBG_BUSY never cleared after WR_TRIG"
+
+    # ---- DEBUG READ: DBG_ADDR -> RD_TRIG -> poll busy -> 8x pop 0x76 -------
+    await spi_write(dut, 0x72, base & 0xFF)
+    await spi_write(dut, 0x73, (base >> 8) & 0xFF)
+    await spi_write(dut, 0x74, (base >> 16) & 0x7F)
+    await spi_write(dut, 0x75, 0x01)   # RD_TRIG, no AUTO_INC
+
+    for _ in range(100):
+        if not ((await spi_read(dut, 0x75)) & 0x80):
+            break
+    else:
+        assert False, f"{tag}: DBG_BUSY never cleared after RD_TRIG"
+
+    got = [await spi_read(dut, 0x76) for _ in range(8)]
+
+    dut._log.info(f"{tag}: wrote  {[hex(b) for b in pattern]}")
+    dut._log.info(f"{tag}: read   {[hex(b) for b in got]}")
+
+    assert got == pattern, \
+        f"{tag}: write/read-back MISMATCH @0x{base:06X}: wrote {pattern}, " \
+        f"read {got} -- {'reproduces the one-byte hardware shift in sim (RTL bug)' if got[1:] == pattern[:-1] else 'different failure shape than hardware'}"
+
+    dut._log.info(f"{tag}: PASS -- 8-byte debug write/read-back bit-exact in sim")

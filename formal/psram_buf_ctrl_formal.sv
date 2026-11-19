@@ -44,6 +44,7 @@ module psram_buf_ctrl_formal (
     input  wire        packet_active,
     input  wire [3:0]  sf,
     input  wire [1:0]  sample_shift,
+    input  wire [1:0]  replay_backdate_syms,   // 0x7B, Open Risk #81 (free input)
     input  wire        iq_valid,
     input  wire        clr_err,
     input  wire        W_commit,
@@ -278,14 +279,15 @@ module psram_buf_ctrl_formal (
     // -----------------------------------------------------------------------
     // RPV-F3. rd_ptr frame: rd_ptr changes exactly twice per life-cycle —
     // the buf_base load on the S_WRITE→S_REPLAY transition, and the +8
-    // advance at replay-read-done (sub==55 dispatch). This is the mechanised
+    // advance at replay-read-done (sub==58 dispatch since the 2026-09-14
+    // Open Risks #72 schedule; was 55). This is the mechanised
     // "delay line never rewinds" claim of TRPR-RMD-009.
     // -----------------------------------------------------------------------
     always @(posedge clk_32m)
         if (rst_n && rd_ptr != rd_ptr_q)
             a_rd_ptr_frame: assert (
                 (state == S_REPLAY && state_q == S_WRITE && rd_ptr == buf_base) ||
-                (state_q == S_REPLAY && qpi_busy_q && sub_q == 6'd55 &&
+                (state_q == S_REPLAY && qpi_busy_q && sub_q == 6'd58 &&
                  rd_ptr == ((rd_ptr_q + 23'd8) & 23'h7FFFFF))
             );
 
@@ -316,17 +318,20 @@ module psram_buf_ctrl_formal (
     // proof splits each transaction into its two pointer phases, with
     // explicit sub-range legality so induction cannot start from an
     // unreachable sub value:
-    //   phase 1 (idle, or sub<=24: before the write advance): gap == G
-    //   phase 2 (sub 25..55: wr advanced, rd not yet):          gap == G+8
+    //   phase 1 (idle, or sub<=25: before the write advance): gap == G
+    //   phase 2 (sub 26..58 or 63: wr advanced, rd not yet):    gap == G+8
+    // (Open Risks #72 schedule, 2026-09-14: wr_ptr +8 at the sub==25
+    // dispatch, rd_ptr +8 at sub==58, rd_wait_trim parks in sub 63.)
     // with G ∈ [8, MAXG] pinned by the entry assumption below. rd_ptr ==
-    // wr_ptr at the sub==55 dispatch (the RTL's overflow set condition)
+    // wr_ptr at the sub==58 dispatch (the RTL's overflow set condition)
     // would need gap == 0 in phase 2 — excluded by the [16, MAXG+8] bound.
     //
     // MAXG = 2^22 (4 MB): generous cover for the true worst-case entry gap =
     // SC-latency backlog (≤ 2^20 bytes, group H bound) + training window
     // (≤ 15 syms × 16384 samples × 8 = 1.9 MB, SF12/BW125) + margin
-    // (≤ 65535 samples × 8 = 0.5 MB) ≈ 3.5 MB — still < 2^23−8, which is
-    // all the overflow argument needs.
+    // (≤ 65535 samples × 8 = 0.5 MB) + replay backdate (≤ 3 syms × 16384 ×
+    // 8 = 0.39 MB, REPLAY_BACKDATE_SYMS 0x7B, Open Risk #81) ≈ 3.93 MB —
+    // still < MAXG and < 2^23−8, which is all the overflow argument needs.
     // -----------------------------------------------------------------------
     localparam [22:0] MAXG = 23'd4194304; // 2^22
 
@@ -344,18 +349,19 @@ module psram_buf_ctrl_formal (
         end
 
     // sub legality in S_REPLAY: the engine never runs past the read-done
-    // dispatch. Blocks induction from hypothesizing sub∈[56,63] states whose
+    // dispatch (58), or the rd_wait_trim park state 63. Blocks induction
+    // from hypothesizing sub∈[59,62] states whose
     // default-arm recovery would smear the phase invariants.
     always @(posedge clk_32m)
         if (rst_n && state == S_REPLAY && qpi_busy)
-            a_replay_sub_bound: assert (sub <= 6'd55);
+            a_replay_sub_bound: assert (sub <= 6'd58 || sub == 6'd63);
 
     always @(posedge clk_32m)
-        if (rst_n && state == S_REPLAY && (!qpi_busy || sub <= 6'd24))
+        if (rst_n && state == S_REPLAY && (!qpi_busy || sub <= 6'd25))
             a_replay_gap_phase1: assert (gap_now >= 23'd8 && gap_now <= MAXG);
 
     always @(posedge clk_32m)
-        if (rst_n && state == S_REPLAY && qpi_busy && sub >= 6'd25)
+        if (rst_n && state == S_REPLAY && qpi_busy && sub >= 6'd26)
             a_replay_gap_phase2: assert (gap_now >= 23'd16 && gap_now <= MAXG + 23'd8);
 
     // The payoff: the old sticky can never set (RPV-F5 proper).
@@ -365,8 +371,8 @@ module psram_buf_ctrl_formal (
 
     // Carried over unchanged (still holds — between transactions the gap is
     // constant across the whole S_REPLAY residency). Sampled only when
-    // !qpi_busy: wr_ptr advances at sub==24 but rd_ptr doesn't catch up until
-    // sub==55 within the SAME transaction (2026-07-05 counterexample).
+    // !qpi_busy: wr_ptr advances at sub==25 but rd_ptr doesn't catch up until
+    // sub==58 within the SAME transaction (2026-07-05 counterexample).
     reg [22:0] gap_q;
     reg        gap_valid_q;
 
@@ -517,9 +523,13 @@ module psram_buf_ctrl_formal (
     // F. QPI bus-driving safety (RPV-F6 carry-over). Window shifted +1 from
     // the RTL's dummy-cycle comment: the sub register lags the case dispatch
     // that scheduled sio_oe<=0 by one cycle (2026-07-05 counterexample).
+    // Re-shifted +1 for the 2026-09-14 Open Risks #72 schedule (del-read now
+    // sub 26..46, sio_oe<=0 dispatched at sub 34), plus the rd_wait_trim
+    // extra-dummy state sub 63.
     // -----------------------------------------------------------------------
     always @(posedge clk_32m)
-        if (rst_n && state == S_WRITE && sub >= 6'd34 && sub <= 6'd39)
+        if (rst_n && state == S_WRITE &&
+            ((sub >= 6'd35 && sub <= 6'd40) || sub == 6'd63))
             a_no_drive_during_dummy: assert (sio_oe == 4'd0);
 
     always @(posedge clk_32m)
@@ -572,7 +582,11 @@ module psram_buf_ctrl_formal (
     localparam [31:0] BACK_BYTES_DELTA_BOUND = 32'd131072; // 2^17
 
     wire [31:0] tacc_delta          = iq_sample_cnt - timing_ref;
-    wire [31:0] full_back_bytes     = tacc_delta << 3; // untruncated, 32-bit
+    // Replay backdate (Open Risk #81): whole symbols before timing_ref.
+    // Independent full-precision form: n * 2^(sf+sample_shift) * 8, 32-bit.
+    wire [31:0] backdate_full       = ({30'd0, replay_backdate_syms}
+                                       << ({28'd0, sf} + {30'd0, sample_shift})) << 3;
+    wire [31:0] full_back_bytes     = (tacc_delta << 3) + backdate_full; // untruncated, 32-bit
     reg  [22:0] wr_ptr_at_arm_q;
     reg  [31:0] full_back_bytes_at_arm_q;
     reg         bufbase_pending_q;
