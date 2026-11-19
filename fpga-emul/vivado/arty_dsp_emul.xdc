@@ -262,3 +262,16 @@ set_clock_groups -asynchronous -group [get_clocks ext_spi_sck]
 # Board-level PMOD data timing (hw_iq, SPI, PSRAM) is left unconstrained for
 # bring-up. The previous generic delays were binding against multiple derived
 # clocks and producing critical warnings during implementation.
+
+# RISK72_ILA debug-only capture (create_project.tcl): risk72_trace/risk72_trigger
+# are dsp_clk (clk_out2, 32 MHz) domain signals sampled by an ILA clocked from
+# clk_out1 (100 MHz) to oversample the QPI SCK edge -- a deliberate async probe,
+# not a real synchronous path, and there is no synchronizer on these debug-only
+# nets (none needed: nothing downstream of the ILA feeds back into the design).
+# Without this exception STA reports it as a real clk_out2->clk_out1 setup
+# violation (WNS ~-2 ns) purely from oversampling an unrelated clock's data,
+# which doesn't affect capture usability (only which of two adjacent samples an
+# occasional torn nibble lands in) and shouldn't gate signoff on a debug-only
+# build. Absent nets (RISK72_ILA=0, the normal build) make this a no-op.
+set_false_path -quiet -through [get_nets -quiet -hierarchical {*risk72_trace*}]
+set_false_path -quiet -through [get_nets -quiet -hierarchical {*risk72_trigger*}]

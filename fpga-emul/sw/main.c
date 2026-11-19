@@ -193,6 +193,12 @@ static void uart_boot_init(void) {
 #define REG_SC_DBG_FLAGS      0x26u
 #define REG_PSRAM_CTRL         0x70u
 #define REG_PSRAM_STATUS       0x71u
+#define REG_PSRAM_DBG_ADDR_LO  0x72u
+#define REG_PSRAM_DBG_ADDR_MID 0x73u
+#define REG_PSRAM_DBG_ADDR_HI  0x74u
+#define REG_PSRAM_DBG_CTRL     0x75u   /* [2]=WR_TRIG [0]=RD_TRIG [7]=DBG_BUSY (RO) */
+#define REG_PSRAM_DBG_DATA     0x76u   /* R, pops one byte per read */
+#define REG_PSRAM_DBG_WDATA    0x79u   /* W, pushes one byte per write */
 #define REG_RX_HOLD            0x1Au
 #define REG_W_BANK_BASE       0x30u   /* 16 bytes: 4 branches x {re_hi,re_lo,im_hi,im_lo} */
 #define REG_Z_BASE             0x40u   /* 36 bytes: 6 complex int24 off-diagonal pairs */
@@ -263,6 +269,16 @@ static void uart_boot_init(void) {
 #define CMD_REPLAY_START        9u
 #define CMD_REPLAY_ABORT        10u
 #define CMD_SET_DEBUG           11u
+#define CMD_REG_WRITE           12u  /* [5]=addr [6]=data -- raw reg_write(), bring-up only */
+#define CMD_REG_READ            13u  /* [5]=addr -- raw reg_read(), result on UART, bring-up only */
+#define CMD_REG_WRITE_BURST     14u  /* [5]=addr [6]=n [7..]=n data bytes -- raw reg_write_burst() */
+#define CMD_WRITE_VERIFY_PULSE  15u  /* [5..7]=24-bit base addr (or 0 for default) -- PSRAM debug
+                                      * write+read+compare entirely in C (no UDP/UART round trip,
+                                      * microsecond-fast), pulses rffe_nss_en (J15) high for ~5us
+                                      * on a real detected mismatch. Bring-up only (Open Risks
+                                      * #72/#73): gives the scope/ILA a hardware trigger tied to a
+                                      * *verified* failure instead of guessing at software timing.
+                                      * rffe_nss_en is otherwise idle during no-AFE bench testing. */
 
 /* -----------------------------------------------------------------------
  * Ethernet helpers (identical to AFE eval firmware)
@@ -803,6 +819,124 @@ static void handle_control_pkt(const u8 *payload, unsigned plen) {
         xil_printf("CTRL: debug ctrl0=0x%02X ctrl1=0x%02X\r\n",
                    (unsigned)payload[5], (unsigned)payload[6]);
         break;
+
+    case CMD_REG_WRITE: {
+        /* Bring-up only: raw single-byte reg_write, same driver path (real
+         * axi_quad_spi_1 -> spi_slave -> reg_bank) as every other command
+         * here -- unlike the JTAG-to-AXI register-poke harness used for the
+         * Risk #72 investigation, this goes through firmware's own FIFO
+         * handling. Used to sweep PSRAM_RD_TRIM (0x7A) and exercise the
+         * debug write/read-back port (0x72-0x79) without JTAG. */
+        if (plen < 7u) return;
+        reg_write(payload[5], payload[6]);
+        xil_printf("REGW: 0x%02X <= 0x%02X\r\n",
+                   (unsigned)payload[5], (unsigned)payload[6]);
+        break;
+    }
+
+    case CMD_REG_READ: {
+        u8 v;
+        if (plen < 6u) return;
+        v = reg_read(payload[5]);
+        xil_printf("REGR: 0x%02X => 0x%02X\r\n", (unsigned)payload[5], (unsigned)v);
+        break;
+    }
+
+    case CMD_REG_WRITE_BURST: {
+        u8 n;
+        if (plen < 7u) return;
+        n = payload[6];
+        if (n == 0u || n > 16u || plen < 7u + n) return;
+        reg_write_burst(payload[5], payload + 7, n);
+        xil_printf("REGWB: 0x%02X <= %u bytes\r\n", (unsigned)payload[5], (unsigned)n);
+        break;
+    }
+
+    case CMD_WRITE_VERIFY_PULSE: {
+        static const u8 pattern[8] = {0xA5,0x5A,0xDE,0xAD,0xBE,0xEF,0x10,0x27};
+        u32 base, to, i;
+        u8 got[8], mismatch;
+
+        if (plen < 8u) return;
+        base = ((u32)payload[5] << 16) | ((u32)payload[6] << 8) | payload[7];
+
+        reg_write(REG_PSRAM_DBG_ADDR_LO, (u8)(base & 0xFFu));
+        reg_write(REG_PSRAM_DBG_ADDR_MID, (u8)((base >> 8) & 0xFFu));
+        reg_write(REG_PSRAM_DBG_ADDR_HI, (u8)((base >> 16) & 0x7Fu));
+        /* Corruption in this fast path consistently lands on the LAST byte
+         * pushed -- a targeted hypothesis over the general busy-poll delay
+         * below: a small settle read between pushes, absent in a tight
+         * back-to-back SPI loop but always present in the slow UDP/UART
+         * path, may be needed for each pushed byte to latch before the next
+         * push arrives. */
+        for (i = 0u; i < 8u; i++) {
+            reg_write(REG_PSRAM_DBG_WDATA, pattern[i]);
+            for (to = 0u; to < 500u; to++) { __asm__ volatile (""); }  /* ~5us @ 100MHz */
+        }
+        reg_write(REG_PSRAM_DBG_CTRL, 0x04u);   /* WR_TRIG */
+        /* Settle: this fast all-SPI polling loop (no UDP/UART round trip
+         * between accesses) can race DBG_BUSY's own assertion latency --
+         * the slow python/UDP test never hit this because its UART-confirm
+         * round trip imposed tens of ms between every register access.
+         * A few dummy reads burn enough SPI-transaction time to be safe. */
+        reg_read(REG_PSRAM_DBG_CTRL);
+        reg_read(REG_PSRAM_DBG_CTRL);
+        to = 100000u;
+        while ((reg_read(REG_PSRAM_DBG_CTRL) & 0x80u) && --to) {}
+
+        /* New hypothesis (2026-09-14): near-100% failure here vs ~8% on the
+         * slow UDP/UART path, both issuing the identical register sequence,
+         * points less at an SPI-timing race in this loop and more at the
+         * *chip* needing real settle time after a write before a read of
+         * the SAME address is reliable -- something psram_buf_ctrl inserts
+         * no explicit delay for, and the slow path only avoided by
+         * accident (tens of ms of incidental UART-round-trip gap). Testing
+         * directly with an explicit ~50 us busy-wait between write-done and
+         * read-start (100 MHz AXI clock, 5000 iterations). Not a claimed
+         * fix -- an experiment to see whether the failure rate responds. */
+        for (to = 0u; to < 500000u; to++) { __asm__ volatile (""); }  /* ~5ms @ 100MHz */
+
+        reg_write(REG_PSRAM_DBG_ADDR_LO, (u8)(base & 0xFFu));
+        reg_write(REG_PSRAM_DBG_ADDR_MID, (u8)((base >> 8) & 0xFFu));
+        reg_write(REG_PSRAM_DBG_ADDR_HI, (u8)((base >> 16) & 0x7Fu));
+        reg_write(REG_PSRAM_DBG_CTRL, 0x01u);   /* RD_TRIG, no AUTO_INC */
+        reg_read(REG_PSRAM_DBG_CTRL);
+        reg_read(REG_PSRAM_DBG_CTRL);
+        to = 100000u;
+        while ((reg_read(REG_PSRAM_DBG_CTRL) & 0x80u) && --to) {}
+
+        /* New targeted hypothesis: debug ops are serviced from spare cycles
+         * of the continuous ~2us background S_WRITE/del-read loop (see
+         * psram_buf_ctrl.v comments). If dbg_idx only advances at most once
+         * per background cycle, popping via 0x76 faster than ~2us apart
+         * could read a byte before its predecessor's index-advance has been
+         * serviced, biasing corruption toward the LAST bytes popped -- which
+         * is exactly what's been observed. A bare reg_read() SPI transaction
+         * (~1.3-2.5us at the current C_SCK_RATIO) may already be close to
+         * that boundary; test with an explicit ~5us wait between each pop,
+         * comfortably longer than one background cycle. */
+        mismatch = 0u;
+        for (i = 0u; i < 8u; i++) {
+            got[i] = reg_read(REG_PSRAM_DBG_DATA);
+            for (to = 0u; to < 500u; to++) { __asm__ volatile (""); }  /* ~5us @ 100MHz */
+            if (got[i] != pattern[i]) mismatch = 1u;
+        }
+
+        if (mismatch) {
+            /* rffe_nss_en (J15) idle-low during no-AFE bench testing --
+             * repurposed as a bring-up trigger pulse here. ~2-5 us wide
+             * (a short busy-wait; not calibrated, just wide enough for a
+             * 60 MHz-bandwidth scope / 32 MHz ILA to reliably catch). */
+            Xil_Out32(NSS_EN_DATA, 1u);
+            for (to = 0u; to < 500u; to++) { __asm__ volatile (""); }
+            Xil_Out32(NSS_EN_DATA, 0u);
+            xil_printf("WVP: MISMATCH base=0x%06X got=%02X %02X %02X %02X %02X %02X %02X %02X PULSED\r\n",
+                       (unsigned)base, got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7]);
+        } else {
+            xil_printf("WVP: PASS base=0x%06X\r\n", (unsigned)base);
+        }
+        break;
+    }
 
     default:
         xil_printf("CTRL: unknown cmd %u\r\n", (unsigned)cmd);
