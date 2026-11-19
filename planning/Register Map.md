@@ -179,7 +179,7 @@ frozen `Z`/`Zdiag` bulk read is a single transaction (rule 5), unaffected.
 | `0x67`–`0x69` | `ZDIAG_1` | R | `0x00` | Training Accumulator | Branch 1 diagonal [31:8] |
 | `0x6A`–`0x6C` | `ZDIAG_2` | R | `0x00` | Training Accumulator | Branch 2 diagonal [31:8] |
 | `0x6D`–`0x6F` | `ZDIAG_3` | R | `0x00` | Training Accumulator | Branch 3 diagonal [31:8] |
-| **External Memory (PSRAM)** (`0x70`–`0x79`) | | | | | |
+| **External Memory (PSRAM)** (`0x70`–`0x7B`) | | | | | |
 | `0x70` | `PSRAM_CTRL` | R/W | `0x00` | PSRAM Buffer | [0] `PSRAM_EN`; [1] `PSRAM_CLR_ERR` (W1P); [2] reserved (inert); [3] `QSPI_OWNER`; [7:4] reserved |
 | `0x71` | `PSRAM_STATUS` | R | `0x00` | PSRAM Buffer | [1:0] state; [2] `SAMPLE_SKIP`; [3] `INIT_DONE`; [4] `REPLAY_ACTIVE`; [5] `REPLAY_MISSED`; [6] `OVERFLOW`; [7] `BUF_ACTIVE` |
 | `0x72` | `PSRAM_DBG_ADDR_LO` | R/W | `0x00` | PSRAM Buffer | Debug byte address [7:0] (shared by the read fetch and the write commit) |
@@ -190,11 +190,13 @@ frozen `Z`/`Zdiag` bulk read is a single transaction (rule 5), unaffected.
 | `0x77` | `REPLAY_DELAY_LO` | R/W | `0xDC` | PSRAM Buffer | `REPLAY_DELAY_SAMPLES[7:0]` — samples to wait after `TRAINING_DONE` before the delay-line replay starts; write-gated `!packet_active`. Default 1500 (`0x05DC`) ≈ 3 ms covers the measured Grouper rv32emc 8-iteration weight compute plus readout/IRQ overhead |
 | `0x78` | `REPLAY_DELAY_HI` | R/W | `0x05` | PSRAM Buffer | `REPLAY_DELAY_SAMPLES[15:8]`; write-gated `!packet_active` |
 | `0x79` | `PSRAM_DBG_WDATA` | W | `0x00` | PSRAM Buffer | Debug **write** byte port (bring-up only). Each SPI write pushes one byte into an 8-byte shadow; 8 writes fill one line, same byte order as `0x76` drains (i0,q0,i1,q1,i2,q2,i3,q3). Does **not** auto-increment the SPI burst address (command byte `0x79` + 8 data bytes = 8 pushes). Reads `0x00`. Commit via `PSRAM_DBG_CTRL.WR_TRIG` (`0x75[2]`). Gated by the same `DBG_BUSY` conditions as reads; no write auto-increment — re-write `0x72`–`0x74` per line. |
-| **Reserved** (`0x7A`–`0x7F`) | | | | | |
-| `0x7A`–`0x7E` | — | — | — | — | Reserved for future growth |
+| `0x7A` | `PSRAM_RD_TRIM` | R/W | `0x00` | PSRAM Buffer | [3:0] extra wait cycles (0–15) inserted before the first QPI read capture, on all three read sub-FSMs (debug read, del-read, replay `cur_rd` read). Default 0 = datasheet-exact 6-cycle timing, unchanged. Bring-up trim for real board/cable round-trip delay beyond the APS6404L's own `tACLK` (2–5.5 ns) — added 2026-09-13 after FPGA bring-up measured the datasheet's cycle count alone doesn't cover cable propagation delay; see `psram_buf_ctrl.v` `rd_wait_trim` port comment. Unsigned/extra-only by design — the chip's 6-cycle minimum is a hard floor, so no "sample earlier" direction is meaningful. [7:4] reserved |
+| `0x7B` | `REPLAY_BACKDATE_SYMS` | R/W | `0x01` | PSRAM Buffer | [1:0] whole LoRa symbols (0–3) to start the same-packet replay *before* `timing_ref`: replay base = `timing_ref − n·M`. `sc_detector` evaluates on a free-running symbol grid, so `timing_ref` is never early: it is ≈0.6 symbol late on average at high SNR (≤ ~1.9) and several symbols late at low SNR. Without backdating, the SX1302 gets a shortened preamble (Open Risks #81). Default 1 covers the high-SNR offset. Does **not** move the training window (still anchored on `timing_ref`). Write-gated `!packet_active`; snapshotted at the `sc_lock` edge. [7:2] reserved |
+| **Reserved** (`0x7C`–`0x7F`) | | | | | |
+| `0x7C`–`0x7E` | — | — | — | — | Reserved for future growth |
 | `0x7F` | — | — | — | — | **Permanently reserved** — the `0x7F` command byte is held back as a future SPI protocol-escape code |
 
-**Occupancy:** 115 implemented + 13 reserved = 128. (Updated 2026-09-04: `BRINGUP_CTRL`/`BRINGUP_AMPL` implemented at `0x10`/`0x11` (Open Risks #59) — relocated from `0x06`/`0x07` on the rebase onto `main`, because `0x06` is now `DBG_CTRL1` and `0x07` stays reserved; two addresses moved from the former `RX_GAIN` reserved block to implemented, so the reserved slots are now `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E` and `0x7F`. Updated 2026-09-03: `DBG_CTRL1` `0x06` implemented — the second selector for the split-selector debug mux after `DBG1` was merged onto the `IRQ_OUT` pad (27-pad budget). Updated 2026-08-30: `DBG_CTRL` (now `DBG_CTRL0`) `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before those changes was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. (Reserved-slot list as of 2026-09-04: `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E`, `0x7F` — 13 slots.))
+**Occupancy:** 117 implemented + 11 reserved = 128. (Updated 2026-10-03: `REPLAY_BACKDATE_SYMS` implemented at `0x7B` (Open Risks #81), so the reserved slots are now `0x07`, `0x12`–`0x17`, `0x7C`–`0x7E`, `0x7F`. Updated 2026-09-13: `PSRAM_RD_TRIM` implemented at `0x7A` — QPI read-capture bring-up trim, moving one address from reserved to implemented; reserved slots now `0x07`, `0x12`–`0x17`, `0x7B`–`0x7E`, `0x7F`. Updated 2026-09-04: `BRINGUP_CTRL`/`BRINGUP_AMPL` implemented at `0x10`/`0x11` (Open Risks #59) — relocated from `0x06`/`0x07` on the rebase onto `main`, because `0x06` is now `DBG_CTRL1` and `0x07` stays reserved; two addresses moved from the former `RX_GAIN` reserved block to implemented, so the reserved slots are now `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E` and `0x7F`. Updated 2026-09-03: `DBG_CTRL1` `0x06` implemented — the second selector for the split-selector debug mux after `DBG1` was merged onto the `IRQ_OUT` pad (27-pad budget). Updated 2026-08-30: `DBG_CTRL` (now `DBG_CTRL0`) `0x04` and `DBG_STATUS` `0x05` implemented for the two-pin debug probe, reclaiming two of the former `DEBUG_CTRL`/GPIO slots. Also 2026-08-30, two registers added in the same session from opposite directions — both had independently claimed `0x1B`: `SC_ANT_SEL` at `0x1B`, moved out of `BW_CFG[2:1]` because correlator branch routing is not a bandwidth setting; and `ARRAY_SYNC_CTRL` at `0x18`, the last slot of the former `RX_GAIN` block, arming the shared `ARRAY_ACQ_N` link. This line also previously listed `0x1A` as reserved; it is `RX_HOLD`, a real R/W register, so the reserved count was overstated by one and the implemented count understated by one — the real split before those changes was 108 + 20, not the stated 107 + 21. Updated 2026-08-27: `PSRAM_DBG_WDATA` at `0x79` implemented — the debug-write byte port. Updated 2026-07-28: `RX_GAIN_SHADOW_0..3`/`RX_GAIN_ACTIVE_0..3`/`RX_GAIN_CTRL` at `0x10`–`0x18` removed, moving 9 addresses from implemented to reserved. Previously 115 implemented + 13 reserved, corrected 2026-07-26, audit item 24 — that line read "110 implemented + 18 reserved"; both terms were wrong and only their sum happened to be right. (Reserved-slot list as of 2026-09-04: `0x07`, `0x12`–`0x17`, `0x7A`–`0x7E`, `0x7F` — 13 slots.))
 
 ---
 
@@ -235,7 +237,7 @@ Sticky interrupt source bits.
 
 ### `0x03` — IRQ_CLEAR (write-only)
 
-Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchanged.
+Write 1s to clear corresponding `IRQ_STATUS` bits. Writing 0 leaves a bit unchanged. An event landing on the same clock as the clear wins: the bit stays set.
 
 ---
 
@@ -305,7 +307,7 @@ step 1.
 | --- | --- | --- |
 | `MIMO_CTRL` `0x08` | Accepted into shadow | Mode and antenna mask are latched at the next packet lock; the active packet is unchanged. |
 | `SF_CFG`, `BW_CFG`, `PKT_TIMEOUT_SYMS`, `SC_HITS_REQ`, `ARRAY_SYNC_CTRL`, `SC_ANT_SEL`, `TACC_WINDOW_SYMS`, `BRINGUP_CTRL`, `BRINGUP_AMPL` (`0x09`, `0x0A`, `0x0B`, `0x0E`, `0x18`, `0x1B`, `0x27`, `0x06`, `0x07`) | Rejected unless `RX_HOLD=1` and `PACKET_ACTIVE=0` | Structural timing stays coherent; inspect `CFG_WR_REJECTED` after an attempted update. |
-| `PSRAM_EN`, `REPLAY_DELAY_SAMPLES` (`0x70[0]`, `0x77–0x78`) | Rejected while active | Change only between packets. |
+| `PSRAM_EN`, `REPLAY_DELAY_SAMPLES`, `REPLAY_BACKDATE_SYMS` (`0x70[0]`, `0x77–0x78`, `0x7B`) | Rejected while active | Change only between packets. |
 | W shadow / `W_COMMIT` (`0x30–0x3F`, `0x1E`) | Shadow writes rejected while `W_VALID=1`; commit is defined during a packet | A late commit gives a defined bypass prefix then MRC, never a replay-pointer reset. |
 | `SC_THR` / `COMB_CFG` (`0x0C–0x0D`, `0x0F`) | Live, not shadowed | No control-state corruption, but a threshold change can alter acquisition and gain/backoff changes cause output amplitude steps. Update while idle; never reduce re-modulator backoff without respecting the input-amplitude limit. |
 | `TACC_NOISE_TRIG` (`0x1F`) | Rejected while training or packet-active | Idle-only; `NOISE_TRIG_REJECTED` records an unsafe request. |
@@ -685,7 +687,7 @@ The following registers existed in earlier revisions of this map (which spanned 
 | — | SPI extended frame (`0x7F` escape, firmware load) | No CPU SRAM to load; `0x7F` command byte re-reserved for future protocol escape |
 | `0x04`–`0x07` | `DEBUG_CTRL`/`JTAG_EN`, `GPIO_DIR`/`OUT`/`IN` | JTAG/GPIO removed. `0x04`/`0x05`/`0x06` now `DBG_CTRL0`/`DBG_STATUS`/`DBG_CTRL1` (debug probe); `0x07` reserved |
 
-If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x10`–`0x17`, `0x7A`–`0x7F`). Corrected 2026-09-02: this line previously listed `0x18` and `0x1A`–`0x1B`, all three of which are live (`ARRAY_SYNC_CTRL`, `RX_HOLD`, `SC_ANT_SEL`), and omitted `0x7F`. Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
+If a future revision reinstates any of these features, allocate addresses from the reserved slots (`0x07`, `0x12`–`0x17`, `0x7C`–`0x7F`; corrected 2026-10-03). Corrected 2026-09-02: this line previously listed `0x18` and `0x1A`–`0x1B`, all three of which are live (`ARRAY_SYNC_CTRL`, `RX_HOLD`, `SC_ANT_SEL`), and omitted `0x7F`. Note `0x6C`–`0x6F` — formerly reserved for training-derived metrics — was consumed by the ZDIAG 16-bit→24-bit widening (see active map above).
 
 ---
 
@@ -701,6 +703,6 @@ If a future revision reinstates any of these features, allocate addresses from t
 | `0x30`–`0x3F` | W shadow bank |
 | `0x40`–`0x63` | Z_kl pair readback (24-bit) |
 | `0x64`–`0x6F` | Z_kk diagonal (24-bit) |
-| `0x70`–`0x79` | External memory (PSRAM) control, debug read/write, and replay margin |
-| `0x7A`–`0x7E` | Reserved (future growth) |
+| `0x70`–`0x7B` | External memory (PSRAM) control, debug read/write, replay margin, QPI read-capture trim, and replay backdate |
+| `0x7C`–`0x7E` | Reserved (future growth) |
 | `0x7F` | Permanently reserved (SPI protocol escape) |

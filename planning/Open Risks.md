@@ -1857,6 +1857,30 @@ phase; add a pin-level PSRAM model driven by the real `sck`; add
 
 **See:** `src/control/psram_buf_ctrl.v:282,287`;
 `src/config/pnr_32m_scoped_v25_b6_signoff.sdc`; `cocotb/hdl/psram_model.v`;
+
+**2026-09-13 update — live confirmation on real hardware, at full 32 MHz:**
+this predicted failure mode now has a direct hardware match. Testing the
+`PSRAM_RD_TRIM`/`psram_sio_in_q` fix (Open Risks #72) on the real APS6404L
+breadboard, via a new firmware-driven UDP register-poke path (`sw/main.c`
+`CMD_REG_WRITE`/`CMD_REG_READ`, bypassing the JTAG-to-AXI harness entirely to
+rule it out as the cause) found the debug **write** intermittently fails to
+commit to real silicon: `PSRAM_DBG_CTRL.WR_TRIG` completes normally
+(`DBG_BUSY` asserts and clears on schedule, confirmed over UART) but the
+subsequent read-back comes back all-zero — stable and repeatable on a second
+and third re-read with no re-write, which rules out a read-side capture
+glitch and points at the write itself never reaching the chip. Rate ~6-9%
+over two independent 40/80-iteration runs at trim=0 (5/80, then 1/40); one
+run showed the failures landing at a suspicious period-3 cadence (i=1,4,7,
+10,13) that a second run reproduced at a different phase (i=57,60,63,66,69)
+but did not explain further. This is exactly the write-side data/CE# margin
+this risk already predicted (same-edge launch, ~0 ns nominal setup/hold) —
+not a JTAG-harness artifact, and not the read-capture margin Open Risks #72
+was chasing. STA cannot see it because, as above, there is still no SDC
+constraint on this interface, so the clean +0.9 ns WNS this session's rebuild
+reported bounds nothing here. Root cause not yet confirmed at the waveform
+level — next step is the on-chip ILA (`system_ila_debug_pins_0`, already
+present in the bench BD) capturing `ce_n`/`sck_en`/`sio_out` across a live
+failing `WR_TRIG`, not further Ethernet/UART-side testing.
 Open Risks #14, #38 (same class, Host SPI port).
 **Found:** 2026-09-03 interface-timing review (applies equally to
 `pinout/dbg1-shared-irq-pad-27` — the interface files are byte-identical).
@@ -1927,6 +1951,22 @@ vs baseline. The remaining SS gap is the #1/#40 voltage problem regardless.
 signoff-clean; SS setup carries a bounded, understood, non-blocking
 regression on debug + psram cones. Ready to merge on that basis; the SS
 output-delay exception is a follow-up if/when the SS corner is revisited.
+
+**2026-09-13 real-hardware evidence for the "zero pad/PCB-flight baselines"
+gap above:** FPGA bring-up (Arty A7 + real APS6404L breakout on JA) measured
+a genuine read-capture timing failure that scales with cable length/clock
+period — not an RTL bug (cleared by a zero-delay-sim control,
+`cocotb/psram_ops::test_dbg_write_readback_roundtrip`). Bounds the round-trip
+delay on that rig at ~125–200 ns, well over the datasheet's own `tACLK`
+(2–5.5 ns) — confirms this class of failure is real and PCB-flight-time-
+dominated, exactly as this item predicted, though a bring-up rig's flying
+leads are not a stand-in for real (much shorter) PCB traces. Mitigated with
+a new firmware trim, `PSRAM_RD_TRIM` (`0x7A`, see `planning/Register Map.md`
+and `planning/psram-external-hardware-bringup-2026-09-13.md`), rather than
+closing the STA action above — that action (measured trace-delay SDC
+baseline) is still open.
+
+**2026-09-28 — new check owed:** the APS6404L requires SCK rise/fall (tKHKL, 20–80 %) ≤ 1.5 ns into ≤ 15 pF; bench failures in #72 trace to a 3–6 ns SCK edge, so the GF180 `PSRAM_SCK` pad's drive/slew into the PCB load must be verified against this.
 
 ### 70. SX1257 cross-device I/Q phase skew is uncharacterized — **ACCEPTED FREEZE RISK 2026-09-05**
 
@@ -2030,7 +2070,34 @@ GDS freeze. At 32 MHz, 5 pF charged through a 3.3 V swing corresponds to only
 about 0.53 mA average dynamic current per sink (`C·V·f`), but peak edge current
 and signal integrity remain board-dependent and must be checked at bring-up.
 
+### 74. `sc_clr` drops a pending `sample_count` increment — `timing_ref` drifts one sample per hit, cumulative over the session
+
+`sc_detector.v:637` clears `iq_inc_pending` on `sc_clr`; the SC TDM burst
+(del-read ~+47 + 24 clocks) overlaps the next `iq_valid` at +64, so a
+`packet_done_pulse`/RX_HOLD edge in that ~9/64 window loses one count vs
+`iq_samp_cnt`, shifting `buf_base`, the training window and pcfsm deadlines
+— same failure class as closed #36. Fix: don't clear `iq_inc_pending` in the
+`sc_clr` branch.
+
+**Found:** 2026-10-01 `src/` RTL review (code inspection, not yet reproduced in sim).
+
 ## Moderate
+
+### 82. nom_tt max-slew/max-cap regressed to 4/3 on the `reg_bank` read-mux → MISO path (job 5861)
+
+Job 5842 was nom_tt DRV-clean (0/0); after the 2026-10-10 `reg_bank`/`dc_removal`
+edits, job 5861 has 4/3 at nom_tt and max_ff, 9/5 at SS: `nor4_1` read-mux drivers
+on long wires into `u_spi.miso_shreg[*]`. Low functional risk (2 MHz path), but
+breaks the nom_tt DRV-clean bar. Wire-length sweep 350–650 µm does not fix it; the
+flow has no post-route repair. Fix candidates (post-route ECO upsize first):
+`planning/wirelength-sweep-2026-10-11.md`.
+
+**Found:** 2026-10-11, job 5861 + sweep 5862–5865.
+
+
+### 81. SC `timing_ref` is always late, so the PSRAM replay gave the SX1302 a shortened preamble — mitigated by `REPLAY_BACKDATE_SYMS` (0x7B), SX1302 tolerance unconfirmed
+
+`sc_detector` back-calculates `timing_ref` to the first hit's `cur` window, which can't start before the preamble. It is ≈0.6 symbol late at high SNR (max ≈1.9) and up to 4–5 symbols at low SNR, and never early (RTL-verified against `sim/models/sc_rtl.py`, `cocotb/sc_timing_golden`, job 5810). The replay used to start there. 0x7B (reset 1) now backdates the replay by n·M; the training window is unchanged. **Open:** the SX1302 minimum preamble is unmeasured, which decides whether n=1 is enough at low SNR, and P&R timing of the extra `buf_base` add has not been run. Detail: `planning/sc-timing-ref-replay-backdate-2026-10-03.md`.
 
 ### 59. Downstream foundational-block demonstration lacks an independent on-chip stimulus source
 
@@ -2418,15 +2485,41 @@ local SC lock wins over a same-cycle peer edge; and a receiver ignores peer
 events while `packet_active`.  These reduce protocol risk but are not
 substitutes for the electrical review.
 
-**No run in this project has ever checked a pad cell.** `trouper_top`
+**No Trouper run has ever checked a pad cell.** `trouper_top`
 instantiates zero `gf180mcu_fd_io__*` cells, so the macro's LVS netlist and
 layout contain none — verified on job 5279 (0 IO cells in the netlist, 0
-`gf180mcu_fd_io` hits in the LVS report). Every "DRC/LVS clean" result to date,
-including the runs that carry this pad, is a statement about the **Trouper macro
-only**. The electrical questions below are therefore entirely open, not
-partially covered. SPICE-level LVS/DRC and the specific simulations that would
-close them are planned in `planning/pad-cell-signoff-plan.md`, gated on the
-integrator confirming the padframe.
+`gf180mcu_fd_io` hits in the LVS report). Every "DRC/LVS clean" result from a
+Trouper run is a statement about the **Trouper macro only**.
+
+*Update 2026-09.* Two of the gaps are now addressed:
+- **Connectivity through the pad cells** — `sim/tests/test_padring_connectivity.py`
+  (static, terminal-for-terminal vs. `A40_ACV_padring.v` + the integrator YAML
+  contract) plus `cocotb/padring_integration/` (trouper_top run end-to-end
+  through the real cell models). Logic-level, but they close the wrong-terminal
+  tie-off class in the *source* contract.
+- **Layout LVS across the pad boundary is integrator-owned** — the integrator
+  runs the assembled-die LVS (core macro + padring). Trouper's obligation is to
+  hand over a correct boundary contract (done: `A40_ACV_rtlnames.def`,
+  `A40_ACV_pad_map.yaml`) and to confirm the integrator's LVS covers the A40
+  slot arc once its report exists.
+  *Pre-integration self-check 2026-09-06/07 to de-risk the handoff:* the bridged
+  A40 (job 5682, the shipped `final/gds`) swapped into the v6 `SSCS_2026_01`
+  tile GDS. **Phase 1 — KLayout connectivity trace of the A40 ↔ padring power
+  seam (job 5719) — PASSES**: no bridge-introduced short or open, all 12 bridge
+  stacks integral M2→M5/M4, swap perturbs nothing outside A40 (XOR). This is the
+  bridge shorts/opens answer. Phase 2 (full device LVS of an A40-only tile) infra
+  is built and runs in ~25 s but does not reach a clean match — the failure is
+  structural noise (verilog-literal SPICE source vs canonicalised extraction:
+  top-pin discovery, IO-cell pin order, fills, pruned-slot dangles), not seam
+  findings — so it's parked as integrator scope. **Separately, the bridged
+  `trouper_top` *macro* now has its own Netgen LVS (job 5732, `final/reports/bridged_macro_lvs/`):
+  `Circuits match uniquely`, 39836 dev / 39823 net both sides — the flow LVS
+  extracts from the DEF so never saw the post-flow bridges; this closes that.**
+  Detail + repro + artifacts: `planning/a40-bridge-tile-lvs-selfcheck.md`.
+
+The **electrical** questions below remain entirely open. SPICE-level checks are
+in `planning/pad-cell-signoff-plan.md` (entry criteria met 2026-09-04; work
+item 1 reassigned to the integrator).
 
 **Added to the pull-up review by the internal pull-up:** the board resistor is
 now in parallel with one internal pull-up per participating chip. Size the
@@ -2839,15 +2932,66 @@ job 5491 did not carry over) → `trouper_top.json` stays 65/65. **CLOSED.**
 **Found:** 2026-09-03 full `src/` RTL review; NBA precedence trace, reproduced by
 `cocotb/noise_window_edge/`.
 
+### 76. `del_rdy` warm-up off-by-one reintroduced by the #72 read-burst split — one garbage delayed sample per warm-up
+
+The uncommitted #72 change moved `del_read_done_now` to `sub==44` but
+`del_valid <= del_rdy` to `sub==46`, so the Nth warm-up transaction's
+unwritten slot −1 read is emitted with `del_valid=1` (after init, SF/BW change,
+or any capture miss) — exactly what the `psram_buf_ctrl.v:565–582` comment
+forbids; formal `a_del_valid_needs_rdy` does not catch it. Fix: anchor on
+`sub==46 && qpi_step`.
+
+**Found:** 2026-10-01 `src/` RTL review.
+
+### 77. `PSRAM_RD_TRIM` (0x7A) is unbounded and not packet-gated — values ≥7 overrun every replay sample
+
+Replay burst = 58 + trim sub-cycles vs a 64-clock sample period, so trim ≥7
+makes every `S_REPLAY` capture a `SAMPLE_SKIP`; capture-mode (46 + trim) eats
+the debug-read margin. The register is writable mid-packet. Fix: clamp in
+`reg_bank` and/or gate on `!packet_active`.
+
+**Found:** 2026-10-01 `src/` RTL review.
+
+### 78. `QPI_CLK_DIV > 1` (FPGA bring-up) breaks warm-up, the SCK-quiet guard, and the capture budget
+
+(a) `del_read_done_now` isn't `qpi_step`-qualified, so `del_cnt` advances DIV×
+per transaction; (b) the one-cycle `sck_stop` expires before the `sub24` step,
+so SCK toggles with CE# low during the "quiet" guard — the #72 hardware
+experiment isn't what runs at DIV>1; (c) DIV≥2 makes every burst >64 clocks,
+`capture_missed_now` re-arms `del_rdy` continuously and SC can never lock.
+DIV>1 is debug-port-only; document that on the parameter.
+
+**Found:** 2026-10-01 `src/` RTL review.
+
+### 79. `psram_sio_in_q` negedge capture samples on the PSRAM's own data-launch edge — hold dependency, unconstrained
+
+APS6404L §11.1: read data is valid tACLK after SCK **falling**; with
+`PSRAM_SCK_OUT = sck_en_q & clk` that is `negedge clk`, the same edge the new
+`trouper_top.v:478` flop samples on. It works only while pad-out + board +
+tACLK(≥2 ns) + pad-in exceeds the flop's clock insertion — needs a min
+input-delay SDC constraint (see #69). The `trouper_top.v:474` comment ("launched
+after SCK rises") and `psram_buf_ctrl.v:206` ("bare pad wire") are wrong.
+
+**Found:** 2026-10-01 `src/` RTL review.
+
+### 80. `src/top/trouper_top_*_experiment.v` are stale against the current `psram_buf_ctrl`
+
+The four experiment tops leave `rd_wait_trim` unconnected (X in sim, `sub`
+FSM goes X) and lack the negedge `sio_in` register, so read capture is
+misaligned under the new sub-cycle schedule; any run via their
+`src/config/*_experiment.json` is silently broken. Fix: delete or regenerate.
+
+**Found:** 2026-10-01 `src/` RTL review.
+
 
 ## Low
 
-### 71. `sd_remod` `!en` is not a bit-exact reset, and TRPR-RMD-005's floor is stricter than the characterized worst case
+### 71. TRPR-RMD-005's SQNR floor is stricter than the characterized worst case (item 1, `!en` re-enable, resolved 2026-10-10)
 
 Two small reconciliation items left by the 4th-order / multiplierless remod
 rework (`32745c3`, `7f64c88`), neither with silicon impact:
 
-1. **`!en` re-enable ≠ fresh reset.** `sd_remod` and `sd_remod_multiplierless`
+1. **`!en` re-enable ≠ fresh reset — RESOLVED 2026-10-10 by narrowing TRPR-RMD-010** (hold-at-reset only; re-enable equivalence not required, `en` tied high). No RTL change; the tests below stay `expect_fail` as documentation. `sd_remod` and `sd_remod_multiplierless`
    clear every loop-filter and interpolator register in the `!en` branch
    *except* `in_i_lat`/`in_q_lat` (cleared only on `!rst_n`). A disable that
    spans an `in_valid` pulse therefore leaves a stale held sample and
@@ -3256,6 +3400,14 @@ rather than an open action.
 ---
 
 ## Closed
+
+### 75. `dc_removal` output wrapped instead of saturating — CLOSED 2026-10-10
+
+`dc_removal.v` now saturates the 9-bit `diff` to int8, matching `DCRemovalRTL`.
+Reproduced first: the pre-fix RTL gave −109 for 127 against a −20 estimate
+(job 5859). Regression: `cocotb/dc_removal` 4/4 incl. a bit-exact model
+differential (job 5858). TRPR-DCR-007 re-worded from "not implemented" to
+"SHALL saturate".
 
 ### 51. `trouper_top` @ 1675×1110 antenna violations — CLOSED 2026-08-29 (`DIODE_PADDING: 4`)
 
@@ -4097,3 +4249,1181 @@ CE#-low ⇒ SCK-enabled invariant through buffering and replay handovers,
 release within 8 clocks, 256-clock hold, DBG_BUSY under owner=1, resume on
 release. `psram_ops` re-passed and the SymbiYosys k-induction proof
 re-proves clean on the modified RTL (same job).
+
+### 72. PSRAM debug-port (0x76/0x79) read-back is unreliable through the real host-SPI/JTAG path on real hardware, for a reason that is not yet found — **RTL cleared, root cause still open**
+
+FPGA bring-up (2026-09-13, Arty A7 + real APS6404L breakout, continuation of
+the #69-adjacent investigation in
+`planning/psram-external-hardware-bringup-2026-09-13.md`) found a small,
+highly repeatable corruption in debug-port write-then-read-back sequences
+driven over real hardware via a JTAG-to-AXI harness talking to
+`axi_quad_spi_1` (the host-SPI master) — e.g. writing
+`A5 5A DE AD BE EF 10 27` reads back `00 A5 5A DE AD BE EF 10` (a clean,
+deterministic one-byte-early shift), reproducible across dozens of trials at
+one given boot, address and pattern, but with the exact shift amount
+differing between back-to-back operations in ways that don't track any
+single variable tested.
+
+**Explicitly ruled out, each with a dedicated experiment:**
+- **The read-capture FSM itself** — a delay-injected Icarus cosim
+  (`tb_psram_delay.v`, driving `psram_buf_ctrl`'s `dbg_*` ports directly, a
+  real symmetric 6-cycle round-trip delay spliced onto the PSRAM pad
+  wiring) found a clean, monotonic, fully predictable relationship:
+  `PSRAM_RD_TRIM = delay_cycles + 2` lands bit-exact, every time.
+- **`reg_bank`/`spi_slave`** — the same experiment repeated through the real
+  `trouper_top` → `reg_bank` → `spi_slave` SPI protocol path (not the direct
+  `dbg_*` ports) at the identical delay and trim value **also** came back
+  bit-exact (Icarus; the Verilator run of the same test hit an unrelated
+  `psram_model.v` guardrail false-positive from the injected-delay
+  testbench, not a real failure — not chased further since Icarus already
+  gave a clean answer).
+- **DRAM refresh collision** (`tCEM` exists because CE# must go high
+  periodically for the APS6404L's internal self-refresh, §8.6/§14.6 of
+  `resources/APS6404L_3SQR.pdf`; `psram_model.v` has no refresh behaviour,
+  so this mechanism is invisible to every simulation-side result above) —
+  spacing operations 0/10/50/200 ms apart on real hardware changed nothing;
+  the dominant corrupted pattern was byte-identical regardless of gap.
+- **SPI burst framing** — the debug-write host-SPI transactions were
+  originally issued as 8 separate `[cmd=0x79, byte]` transfers (CS toggling
+  between each) rather than the documented single-CS-assertion burst
+  (`planning/Register Map.md` `0x79`: "burst-exempt... command byte once,
+  then the data bytes"). Rewriting the harness to do a real single-CS burst,
+  matching the documented protocol, produced a byte-identical result to the
+  broken framing — ruled out.
+- **Host-SPI clock rate margin** — `axi_quad_spi_1`'s `C_SCK_RATIO` is
+  already at its maximum (16, giving ~6.25 MHz off the 100 MHz
+  `ext_spi_clk`) for this IP configuration; cannot be slowed further without
+  a new independent clock domain (`ext_spi_clk` is shared with MicroBlaze/
+  Ethernet). Not tested to completion, but the cycle-count math is a poor
+  fit anyway: ~1.28 µs per host-SPI byte against `reg_bank`'s internal
+  update cadence gives roughly 20 cycles of margin, which is not a
+  plausible near-miss.
+- **Inter-SIO-line skew** — real-hardware scope checks (all four SIO lines,
+  pairwise, both against SCK and against each other, both write- and
+  read-direction) found every line clean and mutually synchronized. Ruled
+  out on direct measurement, not inference.
+
+**What is NOT yet ruled out:** anything specific to the JTAG-to-AXI harness
+itself beyond framing and clock rate (e.g. a genuine difference between how
+`axi_quad_spi_1`'s TX/RX FIFO state machine drives back-to-back transfers on
+real silicon versus how cocotb's Python-driven `spi_write`/`spi_read`
+bit-bang the same protocol in every passing sim above — the one variable
+that differs between "sim always passes" and "hardware sometimes doesn't"
+and was not itself instrumented this session), or some other host-SPI-side
+mechanism not yet hypothesized.
+
+**Risk:** low as a tapeout risk — every simulation-verified path (the actual
+silicon-relevant `psram_buf_ctrl`/`reg_bank`/`spi_slave` RTL, via both direct
+and full-protocol access) is confirmed correct, including `PSRAM_RD_TRIM`'s
+compensation behaviour. This item is scoped to the FPGA bring-up rig's debug
+tooling reliability, not the ASIC's digital design. Moderate as a bring-up
+risk: it blocks trusting this rig's debug-port read-back for further
+work (e.g. the planned injection test) until resolved or worked around.
+
+**Action:** none taken this session beyond the elimination list above — the
+next session should either instrument the harness-vs-cocotb difference
+directly (e.g. capture the actual host-SPI waveform via the on-chip ILA
+already present in the bench BD, `system_ila_debug_pins_0`, retargeted to
+probe `axi_quad_spi_1`'s internal FIFO/state signals) or accept the
+FPGA rig's debug port as unreliable and validate the injection path a
+different way (e.g. firmware-driven UDP injection instead of JTAG register
+pokes, sidestepping this specific harness entirely).
+
+**Found:** 2026-09-13, continuation of the `PSRAM_RD_TRIM` bring-up work
+(TRPR-PSR-025, item #69 above). See
+`planning/psram-external-hardware-bringup-2026-09-13.md` for the full
+session transcript of experiments in order.
+
+**2026-09-13, same day, follow-up — RTL fix retested, JTAG harness cleared as
+a cause, but the symptom turned out to be write-side, not read-side:** the
+`psram_sio_in_q` negedge-domain capture register + `PSRAM_RD_TRIM` RTL
+(landed after the elimination list above) was rebuilt for real hardware
+(`bench_bitstream_extpsram`, current `src/`, WNS +0.946 ns / WHS +0.015 ns,
+all timing met) and retested with a **new** path that bypasses the
+JTAG-to-AXI harness completely: two new firmware UDP commands
+(`CMD_REG_WRITE`/`CMD_REG_READ` in `sw/main.c`) drive the exact same
+`reg_write`/`reg_read` SPI helper functions every other production command
+uses. Result: at `PSRAM_RD_TRIM=0` the debug write/read-back is bit-exact
+the large majority of the time (respectively 55/60 and 75/80 across two
+runs), a large improvement over the pre-fix state — but not fully closed.
+Sweeping `PSRAM_RD_TRIM` up from 0 made it monotonically *worse* (1/2/3/4
+nibble shift growing with trim), which rules out "just needs more read
+margin" and instead means trim=0 already sits at the correct point with
+residual real-hardware marginality on top, not a fixed offset waiting to be
+compensated.
+
+More importantly, re-reading a failing address a second and third time (no
+re-write) returned the **same stable all-zero content** every time — this is
+not read-capture jitter, it is the debug **write never committing to the
+chip**, even though `DBG_BUSY` reports the `WR_TRIG` completed normally. That
+reclassifies this whole finding: it is not the read-margin problem this risk
+was opened to track, it is a live hardware match for the write/CE# launch
+-margin problem **Open Risks #69** already predicted from static analysis
+(same-edge launch, ~0 ns nominal setup/hold, invisible to STA because the
+interface carries no SDC constraint at all). See #69's 2026-09-13 update for
+the full data (failure rate, the period-3 cadence noticed but not explained,
+and the suggested ILA-based next step). The JTAG-to-AXI harness itself is
+now cleared as a cause — the same intermittent failure reproduces over the
+ordinary firmware/SPI path used by every other register access.
+
+**2026-09-13, same day, later still — the suggested ILA capture was done and
+clears the FPGA side too:** a dedicated write-trace ILA (retargeted
+`RISK72_ILA=1` build, `ce_n`/`sck`/`sio_out`/`sio_in`/`sub`/`dbg_mode` at
+100 MHz, needed its own `set_false_path` fix in `arty_dsp_emul.xdc` for a
+pre-existing async-CDC WNS violation on the probe itself) caught a live
+failing write on attempt 59/60. Reconstructing the actual nibble stream
+driven onto the pins gives `02 00 65 00 A5 5A DE AD BE EF 10 27` — command,
+address, and all 8 data bytes bit-exact to what should have been written,
+`ce_n` low throughout, `sck` clean, a textbook-correct 25-state burst.
+**The FPGA generated a perfect write command; the chip still didn't store
+it.** That clears `psram_buf_ctrl`'s FSM and pad relaunch as the cause for
+this failure class — the remaining candidates (APS6404L self-managed
+refresh colliding with the command window, invisible to the host by design;
+or real signal integrity on the breadboard's unterminated flying leads) are
+both outside what any further RTL change can fix. Full account:
+`planning/psram-external-hardware-bringup-2026-09-13.md` Part 4. Next step
+is a physical scope on the SIO/CE# wires during a live failure, or a
+pragmatic write-verify-and-retry layer in bring-up tooling — not a change to
+the ASIC's own datapath, which never does this write pattern to PSRAM.
+
+**2026-09-14 — host-SPI bus itself traced with a new ILA variant; framing is
+clean, ruling out `axi_quad_spi_1`'s FIFO/state machine as the cause of the
+fast-path (`CMD_WRITE_VERIFY_PULSE`, near-100% failure rate) corruption:** a
+new ILA build (`RISK72_SPI_TRACE=1`, `fpga_dsp_wrap.v` `risk72_trace`
+retargeted to `sel_spi_sck`/`sel_spi_mosi`/`miso_w`/`sel_host_cs` +
+`dbg_mode`/`qpi_busy` context bits, sampled at 100 MHz off
+`axi_quad_spi_1`'s own `ext_spi_clk` for ~16x oversampling of the 6.25 MHz
+host SCK) captured the wire-level SPI traffic during a live failing
+`CMD_WRITE_VERIFY_PULSE` (UART confirmed: `got=A5 5A DE AD BE EF 10 20`,
+expected `...10 27` — the same last-byte-corrupted signature seen throughout
+this investigation). Two bring-up notes for future sessions: (1) triggering
+on `~sel_host_cs` (any CS-low) is wrong — it caught unrelated periodic
+background SPI polling (a repeating `0x82`-address transaction every
+~10.6 µs, unrelated to our command) well before our own command's traffic
+ever appeared; triggering on `dbg_mode` (only asserted for a real PSRAM
+debug-engine operation) is the correct condition. (2) The firmware's own
+internal ~5 ms settle delay between the write and read halves of
+`CMD_WRITE_VERIFY_PULSE` is far longer than any practical ILA capture
+window; a temporary firmware-only change (shrinking that delay to ~10 µs,
+downloaded via a lightweight ELF-only redownload that skips reprogramming
+the bitstream) was needed to fit the whole write+read sequence in one
+capture — reverted afterward, see `sw/main.c` diff history. With a
+32768-sample/327.68 µs window and dbg_mode-based triggering, the full
+transaction sequence decodes cleanly: `reg_write(0x75,0x04)` WR_TRIG →
+3 busy-polls (`0x75` read, all `0x00`, i.e. not busy) → the 3 ADDR register
+writes (`0x72=0x00`, `0x73=0xF8`, `0x74=0x00`) → `reg_write(0x75,0x01)`
+RD_TRIG → 3 more busy-polls → all 8 `reg_read(0x76)` DBG_DATA pops. Every
+SPI transaction is byte-perfect framing (correct command byte, clean
+CS/SCK, no missing or extra clock edges, no MOSI/MISO glitches) on **both**
+the write and read sides — this rules out `axi_quad_spi_1`'s FIFO/state
+machine malforming the protocol under tight back-to-back pacing, the
+hypothesis this capture was built to test. The wire-level MISO values for
+the corrupted run's DBG_DATA pops were not decoded byte-by-byte against the
+known-bad pattern before time ran out this session (the capture was
+validated against the *previous* run's mismatch signature via UART, not
+re-correlated sample-by-sample against this exact capture's own UART
+result) — **next step: decode all 8 popped MISO bytes from this capture
+directly against the same run's UART mismatch output, to see whether the
+wrong value is already present on the wire (meaning the corruption happens
+inside `psram_buf_ctrl`/the debug-data FIFO before the SPI transaction even
+starts) or whether the wire shows the correct value and the corruption is
+introduced later in `axi_quad_spi_1`'s RX path or firmware's own byte
+assembly** — that split is the one remaining thing this ILA variant can
+still distinguish and would meaningfully narrow the search. Scripts:
+`fpga-emul/vivado/risk72_spi_capture.tcl` (capture), ad-hoc Python CSV
+decode (not yet saved as a script — reconstructed inline this session from
+`system_i/fpga_dsp_wrap_0_risk72_trace[31:0]`, bit layout `[31]=sck [30]=
+mosi [29]=miso [28]=cs [27]=dbg_mode [26]=qpi_busy`).
+
+**2026-09-14, same day, later still — that split is now resolved: the
+corruption is confirmed to be already on the wire, upstream of
+`axi_quad_spi_1` and firmware entirely.** Two RTL/tooling changes were
+needed to get a usable capture: (1) the ILA trigger was retargeted from
+`~sel_host_cs` to `psram_buf_ctrl`'s own `dbg_mode && !dbg_wr_mode` (i.e.
+specifically the RD_TRIG debug op, exposed as a new `fpga_dsp_wrap.v` wire
+`risk72_dbg_read_active`), since triggering on any CS-low wasted the whole
+window on the (already-proven-clean) write side and unrelated background
+SPI polling; (2) a doubled-depth (32768-sample) ILA attempt to fit the
+whole write+read burst in one shot overflowed the XC7A100T's BRAM budget
+("more instantiated block-RAMs than device capacity") and was reverted —
+16384 samples with the RD_TRIG-specific trigger comfortably covers the
+whole read side instead. With this ILA variant (`RISK72_SPI_TRACE=1`,
+rebuilt bitstream, WNS +0.445 ns / WHS +0.020 ns, all timing met), a live
+failing `CMD_WRITE_VERIFY_PULSE` was captured mid-burst. That run's UART
+output (`WVP: MISMATCH ... got=AA 55 AD EA DB EE F1 02`) is a **different,
+rarer corruption signature** than the usual single-last-byte-wrong pattern
+(most attempts in the same burst still showed the ordinary `...10 20`/
+`...10 22` last-byte-only corruption; this one and two others out of ~20
+rapid-fire attempts showed this more severe whole-sequence garbling) — but
+it is exactly the run the ILA caught, and the first 4 of the 8 popped
+`REG_PSRAM_DBG_DATA` bytes decoded directly off the MISO wire
+(`0xAA, 0x55, 0xAD, 0xEA` — window ran out before the remaining 4) are
+**byte-for-byte identical** to what firmware reported over UART for that
+same run. **The wrong values are already present on the physical SPI wire
+during the read transaction itself** — `axi_quad_spi_1`'s FIFO/state
+machine (already cleared for protocol-framing correctness earlier this
+session) and firmware's byte-assembly code are both conclusively ruled out
+as the corruption's origin. The bug is upstream: inside `psram_buf_ctrl`'s
+debug-read datapath (the `dbg_idx`-driven pop logic docstring-hypothesized
+earlier in `sw/main.c`) or in what is actually being read back from the
+PSRAM chip at that address. This whole-sequence garbling (not just a
+last-byte tear) also does not obviously fit the previously-suspected
+"index races ahead of the background service cycle" hypothesis (which
+predicted last-byte-biased corruption specifically) — it looks more like a
+stale/aliased read, e.g. a rapid repeated `CMD_WRITE_VERIFY_PULSE` burst
+(20 back-to-back UDP triggers, ~0.1s apart, deliberately used to force a
+fast-path failure for this capture) picking up leftover PSRAM/FIFO content
+from a *different* iteration's write, rather than corruption of the
+in-flight one. **Next step:** trace `psram_buf_ctrl`'s internal `dbg_idx`/
+read-pointer and the raw QPI SIO lines (not just the host-SPI bus) during a
+capture of this same failure mode, to see whether the debug engine is
+reading the wrong PSRAM address/offset entirely (consistent with a stale
+read) versus reading the right address but getting wrong data back from
+the chip itself. **Caveat on this specific capture:** the pop-to-pop delay
+was back to its original ~5us value, but the ~5ms write/read mid-delay was
+still shrunk to ~10us (a temporary change made earlier this session to fit
+a capture inside the ILA window) at the time this AA55... capture was
+taken. `sw/main.c` has since been reverted to the stock 500000-iteration
+(~5ms) delay, rebuilt, and redownloaded to the board (ELF-only redownload,
+bitstream/ILA untouched) — the bench is back to stock timing as of the end
+of this session. The structural finding itself (corruption already present
+on the wire, not introduced downstream) should not depend on this delay,
+but the *frequency*/exact byte pattern of corruption is known from earlier
+findings in this risk item to be timing-sensitive, so a follow-up capture
+under stock timing would still be worth taking to confirm this specific
+whole-sequence-garbled signature (as opposed to the more common
+last-byte-only signature) is not an artifact of the shrunk delay.
+
+**2026-09-14, same day, later still — a solid finding, reached only after
+retracting two of my own analysis mistakes in a row; recorded in full
+because the mistakes are as instructive as the result.** A third ILA
+variant traced one layer deeper than the host-SPI wire: `psram_buf_ctrl`'s
+own internal read pointer (`dbg_idx`, `dbg_addr_cur`) plus the raw QPI
+`SIO`/`CE#` pins to the physical PSRAM chip (`RISK72_QPI_TRACE=1`, new
+`fpga_dsp_wrap.v` wires, sampled natively at `dsp_clk`/32 MHz — the same
+domain as `ps_sck`, so no CDC or oversampling needed; WNS +1.252 ns / WHS
++0.028 ns, timing met).
+
+**Mistake #1 (caught by the user asking "are you sure the shift is fixed
+every time?"):** the first write-up of this capture claimed a "one-nibble
+QPI read-sampling race precisely explaining every symptom in this risk
+item," generalized from a single decoded capture. Tallying all 98 `WVP`
+UART lines logged this session showed that claim couldn't be right: 92/98
+(94%) show bytes 0–6 bit-exact with only byte 7's low nibble wrong
+(`0x27`→`0x20`/`0x22`/`0x23`), not a whole-stream shift; only 3/98 (3%)
+showed the whole-sequence-looking pattern (`AA 55 AD EA DB EE F1 02`) the
+claim was built on, and 3/98 were all-zero. A mechanism seen in one capture
+cannot be asserted as the explanation for a dominant, structurally
+different signature it was never tested against.
+
+**Mistake #2 (caught immediately after, by actually going to get that
+missing capture rather than just softening the claim):** a second QPI
+capture was taken, this time landing on the common `...10 23` signature
+(UART confirmed). Decoding it with the same nibble-pairing script used for
+the first capture produced `0A 55 AD EA DB EE F1 02` — the same
+whole-shift-looking pattern as before, for what UART said was the *common*
+failure. That contradiction forced a re-check of the decode script itself,
+which turned up the real bug: the command+address+dummy phase is 7 dummy
+nibbles wide (an odd count), so pairing nibbles into bytes with one fixed
+offset applied uniformly across the whole 32-nibble window silently
+flips which nibbles land in which byte once the data phase starts. Byte
+boundaries have to be anchored explicitly (locate the known `0xEB` command
+opcode at the start, count the actual dummy-nibble region, *then* pair the
+data phase from there) rather than assumed as one constant offset.
+Re-decoding **both** captures this way — including manually re-deriving
+the first capture's bytes from the raw per-sample values already printed
+into this session's transcript, since the first capture's own CSV had by
+then been overwritten by the second — gives the *same* result for both:
+
+```
+cmd+addr (sio_out, both captures): EB 00 F8 00
+data     (sio_in,  both captures): A5 5A DE AD BE EF 10 20
+```
+
+**Both captures show the common signature, correctly decoded.** There was
+no whole-stream shift in either one; the "AA 55.../0A 55..." pattern was
+an artifact of the decoding script, not a hardware phenomenon, both times.
+This also means the earlier claim of having captured the rare 3%
+whole-burst-shift signature was itself wrong — that specific UART-observed
+signature (`AA 55 AD EA DB EE F1 02`, seen 3/98 times, decoded from the
+*host-SPI*-level capture in the previous update, not this QPI one) remains
+real but **unexplained at the QPI level** — no valid QPI capture of it
+exists yet.
+
+**What is now actually established, verified twice with a corrected
+method:** for the dominant (94%) failure signature, `sio_in` — the raw QPI
+data pins on the physical PSRAM chip — already carries the wrong value on
+just byte 7's low nibble; bytes 0–6 arrive bit-exact at the pad. This
+confirms (for this signature specifically) that the corruption is real,
+on-wire, and confined to the very last QPI cycle(s) of the read burst —
+not `psram_buf_ctrl`'s FIFO/`dbg_idx` bookkeeping, not `axi_quad_spi_1`,
+not firmware (all cleared this session). The low nibble's variability
+across attempts (`0x0`/`0x2`/`0x3` in place of `0x7`) rather than one fixed
+wrong value is consistent with a marginal/near-metastable sample right at
+the final QPI clock edge — plausibly the `CE#`-deassertion/`tCPH` boundary
+— but that specific mechanism (as opposed to "corruption confirmed
+present on the wire at that point") is still a hypothesis, not confirmed.
+
+**Next step:** `PSRAM_RD_TRIM` sweeping (per the earlier update) can now be
+pointed at a specific, twice-confirmed target: the last QPI cycle of the
+read burst. The rare whole-burst signature is a separate open thread —
+worth one more QPI-level capture attempt (many retries likely needed,
+given its 3% rate) decoded with the corrected anchor-on-`0xEB` method, to
+find out whether it is a real, distinct wire-level phenomenon or another
+decoding artifact waiting to be found.
+Scripts: `fpga-emul/vivado/risk72_qpi_capture.tcl` (capture, `RD_TRIG`-
+triggered via `dbg_mode && !dbg_wr_mode`, 16384 samples @ 32 MHz = 512 us),
+bit layout on `risk72_trace[31:0]`: `[31]=ps_ce_n [30]=ps_sck (aliases to
+0 when sampled on its own gating clock — a known pitfall, not a capture
+bug, since `sck = sck_en & clk_32m` in `psram_buf_ctrl.v`) [29:26]=
+ps_sio_out[3:0] [25:22]=ps_sio_in[3:0] [21:19]=dbg_idx[2:0] [18:3]=
+dbg_addr_cur[15:0] [2]=dbg_mode [1]=dbg_wr_mode [0]=qpi_busy`. Decoding
+caveat for future sessions: **do not pair nibbles into bytes at a fixed
+offset across the whole window** — anchor on the known `0xEB` opcode at
+the start of the captured burst, then count the actual dummy-cycle region
+explicitly before pairing the data phase.
+
+**2026-09-14, same day, later still — a concrete, systemic RTL hypothesis
+found by static review while the board was unavailable, that precisely
+matches every confirmed symptom above and is not specific to the debug
+port.** With the last-byte-only corruption confirmed on the wire (above),
+`src/control/psram_buf_ctrl.v`'s three QPI read state machines were
+compared directly against its one write state machine, all in the same
+file:
+
+- **Write burst** (`dbg_mode && dbg_wr_mode`, lines 853–895): the last
+  data nibble is driven at `sub==23`; `ce_n` is deasserted at `sub==24` —
+  a **separate, dedicated cycle** after the last drive, giving one full
+  `dsp_clk` period of hold margin before `CE#` rises.
+- **Debug read burst** (lines 896–953): the last data nibble is captured
+  from `sio_in` **and** `ce_n<=1'b1` is asserted in the **same** state,
+  `sub==31` (lines 942–945) — zero dedicated hold cycle.
+- **Production del-read burst** (the real, continuously-running delay-line
+  read that feeds `sc_detector`'s samples, S_WRITE `sub 25..43`): same
+  pattern — the final nibble capture (`del_q0 <= {rd_data[3:0], sio_in}`)
+  and `ce_n <= 1'b1` are both in `sub==44` (lines 1027–1032).
+- **Production replay `cur_rd` read burst** (S_REPLAY): same pattern again
+  — the final nibble capture (`rpl_q3 <= {rd_data[3:0], sio_in}`) and
+  `ce_n <= 1'b1` are both in `sub==56` (lines 1163–1172).
+
+**All three read paths share the identical structural asymmetry against
+the one write path that is proven reliable on real hardware (byte-perfect
+in every ILA capture this investigation has taken).** This one difference
+precisely explains every symptom accumulated in this risk item: it is
+read-only (matches "writes always work, reads sometimes don't"); it is
+confined to the very last nibble of each burst (every earlier nibble is
+captured in its own state with no `ce_n` activity on that same edge); it
+is a marginal, run-to-run-variable failure rather than a deterministic one
+(consistent with a genuine setup/hold race, not a logic bug); and it is
+not fully fixed by `PSRAM_RD_TRIM` sweeping, because trim only adds delay
+*before* the first data sample (`rd_wait_trim`/`rd_extra_cnt`, gating entry
+into the capture states) — it has no effect on the hold margin *after* the
+last sample, which is the specific margin this asymmetry is missing.
+
+**Why no simulation has ever caught this:** `fpga-emul/rtl/psram_model.v`
+(the model behind every cocotb/Icarus PSRAM test in this repo, including
+the very simulations that established `psram_buf_ctrl`'s write/read
+correctness earlier in this investigation) is explicitly a zero-delay,
+fully synchronous model that "tracks the transaction by counting cycles
+from the `ce_n` falling edge" (model header comment) — it has no concept
+of a real chip's finite output-hold-time-after-`CE#` requirement, so a
+same-cycle `CE#`-deassert-and-capture race is structurally invisible to
+it. This is a genuine real-silicon timing gap that only a physical PSRAM
+chip (or a delay-annotated model) could ever expose — consistent with
+this whole risk item only surfacing during real hardware bring-up.
+
+**Relevance to Open Risk #73:** the del-read and replay-read paths above
+are not debug-only tooling — they are the production paths `sc_detector`'s
+delay-line samples and same-packet replay data are read through on real
+silicon. If this asymmetry is real, it would corrupt the last nibble of Q
+data (`del_q0`/`rpl_q3`, both built from `{rd_data[3:0], sio_in}` at the
+same combined state) on some fraction of *every* real PSRAM read during
+actual reception, not just this bring-up debug command — a plausible
+contributor to (not yet confirmed as the cause of) #73's `sc_lock` failure
+over real hardware.
+
+**Proposed fix (not yet applied or verified — a hypothesis, pending
+verification per below):** for each of the three read state machines,
+split the combined final state into two: one state that only performs the
+last `rd_data`/`del_q0`/`rpl_q3`/`dbg_buf` capture (matching the pattern of
+every earlier nibble-capture state), and a new following state that then
+performs the `ce_n<=1'b1`/`sio_oe<=4'd0`/bookkeeping the combined state
+currently does — mirroring the write burst's existing sub23/sub24
+separation. This adds exactly one `dsp_clk` cycle (≈31.25 ns at 32 MHz) to
+each read burst's length; `S_WRITE`'s existing spare-cycle budget (see the
+"25 write + 19 del-read = 44 sub-cycles (20 spare)" header comment) and
+`S_REPLAY`'s ("25 write + 31 rpl-read = 56 sub-cycles (8 spare)") both
+have headroom for this without needing a wider `sub` counter or budget
+rework — worth confirming against the real budget arithmetic before
+implementing, not assumed here.
+
+**Not yet done, and needed before this becomes an accepted root cause:**
+(1) update `psram_model.v` (or write a dedicated delay-annotated variant)
+to model a nonzero, configurable output-hold-time-after-`CE#` requirement
+per the APS6404L datasheet's actual `tCPH`/output-disable-time figures,
+then confirm the *current* RTL fails against that stricter model and the
+*fixed* RTL passes — closing the gap this whole investigation opened
+between "simulation always passes" and "hardware sometimes doesn't";
+(2) apply the proposed fix to all three read FSMs; (3) re-run the full
+`psram_buf_ctrl`/`spi_slave`/`reg_bank`/`trouper_top` regression suite
+(`block-regression` skill) to confirm no other timing budget or format
+assumption breaks; (4) retest on real hardware with the QPI-level ILA
+variant from the previous update, watching specifically whether the
+last-nibble corruption rate drops. This is a static-analysis-only finding
+from a session where the board was unavailable — treat it as a strong,
+well-reasoned hypothesis to verify next, not as closed.
+
+**2026-09-14, same day, later still — step (1) done, and it closed the
+"simulation always passes" gap for the first time in this whole
+investigation.** `psram_model.v` (both copies — `fpga-emul/rtl/` and the
+independently-drifted `cocotb/hdl/` variant actually used by the cocotb
+suites) got a new `CE_HOLD_CYCLES` parameter (default 1): a cycle-counted
+stand-in for a real output-hold-time requirement, tracking whole `clk_32m`
+cycles since the model's last valid read nibble was launched onto `sio_in`,
+and forcing `sio_in` to `X` if `CE#` rises sooner than that. This is
+explicitly *not* a real-nanosecond datasheet model (`#`-delay timing is
+non-synthesizable and this file is shared with FPGA synthesis and
+Verilator, neither of which tolerate it) — it tests only whether the RTL's
+*discrete state-machine sequencing* provides at least one full cycle of
+margin, which is exactly the question the proposed fix answers.
+
+Ran `cocotb/psram_ops` (the suite that compares debug reads bit-exact
+against the model) on the homelab SGE cluster with this change, on
+**unmodified current RTL** (no fix applied). Two results, in order of
+importance:
+
+1. **The violation fires on every single read, every time**, confirmed
+   directly from the simulation log: `PSRAM_MODEL CE_HOLD_CYCLES VIOLATION
+   -- ce_n rose 0 cycle(s) after the last read-data nibble launch (need >=
+   1)`, repeated for every read transaction in the suite. This is the
+   first hard confirmation (previously the finding was reasoned from
+   static RTL comparison alone) that the zero-margin same-cycle pattern is
+   real and universal across this suite's read traffic, not a one-off
+   misreading of the RTL.
+2. **`test_dbg_write_readback_roundtrip` — the suite's test of the exact
+   debug write/read-back operation this whole risk item was opened to
+   track — now fails, reproducing the real-hardware failure shape for the
+   first time in simulation, using the identical test pattern this
+   investigation has used since 2026-09-13:**
+   ```
+   dbg_wr_rb: wrote  ['0xa5', '0x5a', '0xde', '0xad', '0xbe', '0xef', '0x10', '0x27']
+   dbg_wr_rb: read   ['0x0', '0x0', '0x0', '0x0', '0x0', '0x0', '0x0', '0x0']
+   ```
+   (Verilator — the project's default `SIM` — did not show this: Verilator
+   is a 2-state simulator and evidently doesn't propagate the forced `X`
+   the way a real corrupted signal would, which is itself worth knowing —
+   this check needs `SIM=icarus` to be meaningful. The `run_toplevel_regression_sge.sh`
+   default (`SUITE_GROUPS=core`, implicitly Verilator) will report a false
+   PASS for this specific regression until that's addressed — see the
+   open item below.)
+
+**Caveat, stated precisely so this isn't overclaimed the way an earlier
+entry in this same session was:** the *shape* of the simulated corruption
+(all eight bytes read back zero) does not literally match the *shape* of
+any single real-hardware signature captured this session (which was
+either "last byte's low nibble only" or, rarely, a different whole-burst
+pattern) — this cycle-counted model cannot and does not claim to reproduce
+the exact bit pattern real analog metastability would produce, only that a
+structural margin violation exists and that violating it breaks the
+identical functional test in a way that principle "simulation always
+passes" no longer holds. The other two failing tests in this run
+(`test_dbg_readback_content`, `test_dbg_readback_multisample_stream`)
+hit a Python-side `ValueError: Can't convert LogicArray to int` reading
+`dut.u_psram.mem[...]` directly — `X` propagated into the model's own
+memory contents by the time those tests ran, most likely because
+`test_replay_missed_late_commit` (which ran first in the same simulation
+and shares persistent `mem[]` state across tests in this suite) exercises
+the **replay read path**, which has the identical zero-margin pattern
+(confirmed by static review above) and also failed in this run
+(`sc_lock never fired`) — i.e. this is not confined to the debug port:
+every read path sharing the same structural flaw got corrupted in the same
+run, cascading into the SC-lock failure. **This is the first concrete,
+reproducible (in simulation) link found this session between this risk
+item and Open Risk #73** — not proof #73 has the same root cause, but a
+real, no-longer-purely-circumstantial connection worth treating as the
+leading hypothesis there too.
+
+**Next:** (a) fix the false-PASS gap by making the block-regression runner
+(or at minimum this specific suite) use `SIM=icarus` when checking for
+this class of issue, since Verilator silently hides it; (b) apply the
+proposed RTL fix (split each read FSM's combined final state into two,
+mirroring the write burst) to all three read state machines; (c) re-run
+`psram_ops` (and ideally the fuller `psram_buf_ctrl`/`trouper_top`
+regression) with `CE_HOLD_CYCLES=1` still enforced and confirm it goes
+green — that is the actual closing evidence this hypothesis needs, not
+just "the unfixed RTL fails," which is now done; (d) only then retest on
+real hardware. Job history: SGE jobs 5773 (Verilator, false PASS 4/4) and
+5774 (Icarus, real FAIL 4/4, log at
+`/srv/eda/runs/timothyn-dev/lora-mimo/5774/cocotb_psram_ops/run.log` on
+the SGE host) — reproduce with `cd cocotb/psram_ops && make SIM=icarus`.
+
+**2026-09-14, same day, later still — step (b) done (all three read FSMs
+fixed), step (c) partially blocked by a separate, pre-existing bug this
+session did not introduce and did not chase to ground.** The proposed
+split was applied to all three read state machines in
+`src/control/psram_buf_ctrl.v` (debug read: `sub31`→`sub31`+`sub32`;
+del-read: `sub44`→`sub44`+`sub45`; replay read: `sub56`→`sub56`+`sub57`),
+each mirroring the write burst's existing `sub23`/`sub24` split — the
+final data capture and the `CE#` deassert/bookkeeping are now always
+separate states, one full cycle apart. `S_WRITE`'s and `S_REPLAY`'s
+sub-cycle budgets (header comment) were updated accordingly: 44→45 and
+56→57 sub-cycles respectively, still comfortably inside the 64-cycle
+`iq_valid` period (19 and 7 spare cycles, down from 20 and 8).
+
+**Verified structurally correct:** re-running `cocotb/psram_ops` under
+Icarus with `CE_HOLD_CYCLES=1` against the fixed RTL produced **zero**
+`CE_HOLD_CYCLES VIOLATION` log lines (previously logged on every single
+read). The specific race this fix targets is confirmed closed.
+
+**Not yet verified functionally — the suite still fails, but demonstrably
+for an unrelated, pre-existing reason:** `test_dbg_write_readback_roundtrip`
+and two other tests in the same suite still fail (same all-zero readback,
+`sc_lock never fired`) with the fix applied. Before concluding the fix was
+wrong, this was isolated with two controls: (1) reverting the RTL fix back
+to the original combined-state form while keeping `CE_HOLD_CYCLES=0`
+(model check fully disabled) — **still fails, identically**; (2) with the
+fix reverted, also reverting `cocotb/hdl/tb_trouper_cocotb.v`'s
+`RD_LAUNCH_SKIP` parameter from 5 back to 3 (an unrelated, already-
+uncommitted change sitting in the working tree, in case it was mistimed
+against the RTL) — **still fails, identically**. Both controls rule out
+this session's changes (the model's `CE_HOLD_CYCLES` addition and the RTL
+split) as the cause. The failure is real, pre-existing, and independent of
+tonight's work — likely connected to whatever produced the *other*
+uncommitted, already-modified files sitting in this working tree before
+tonight (`cocotb/tests/test_psram_ops.py`, `cocotb/hdl/tb_trouper_cocotb.v`,
+`src/control/reg_bank.v`, `src/top/trouper_top.v` — all `git status`-dirty
+independent of anything in this session). Notably, `test_dbg_write_readback_roundtrip`'s
+own docstring (added 2026-09-13, presumably by the same prior session that
+left these files modified) states its *purpose* is to be the "deterministic,
+zero-propagation-delay control" proving the hardware shift is a cable/
+timing-margin artifact "if it comes back bit-exact here" — implying it was
+written to pass, and something since has broken it independent of the
+`CE_HOLD_CYCLES` work in this update.
+
+**This is now the actual blocker on step (c).** Options for a future
+session: (i) `git diff` / review commit history around
+`src/control/reg_bank.v` and `src/top/trouper_top.v`'s uncommitted state
+for what else changed and might be the real cause (`Can't convert
+LogicArray to int: it contains non-0/1 values` when the *other* two tests
+read `dut.u_psram.mem[...]` directly suggests `X` is leaking into the
+model's own memory during writes too, which is a different symptom than
+anything this session's `CE_HOLD_CYCLES` check should produce — the check
+only ever forces `X` onto `sio_in`, never into `mem[]`); (ii) run
+`cocotb/psram_ops` against a clean `git stash` of every file this session
+didn't touch, to bisect which pre-existing uncommitted change broke it;
+(iii) if the other active/concurrent work on this branch is reachable,
+ask what state that test was last confirmed in. Until one of those lands,
+`psram_ops` cannot be used to confirm this fix is complete — the fix
+itself is structurally verified (zero violations) but not yet functionally
+green.
+
+**2026-09-14, same day, later still — the pre-existing bug found and
+fixed; `psram_ops` and the two directly-affected suites all now pass.**
+Traced with a chain of targeted `$display` probes (all temporary,
+subsequently removed) through the write path: the write launches with the
+correct address and assembled data (`dbg_wbuf=a55adeadbeef1027`), the
+24-cycle write burst completes at the expected time, but
+`tb_trouper_cocotb.u_psram.mem[]` at the target address was **pure `X`**
+immediately afterward — the write never reached the model's memory at
+all, independent of anything in this session (confirmed by reverting the
+`CE_HOLD_CYCLES` fix, `RD_LAUNCH_SKIP` back to 3, and this session's whole
+`psram_buf_ctrl.v` RTL split, one at a time — the failure persisted
+identically through every combination).
+
+Root cause: `cocotb/hdl/tb_trouper_cocotb.v` wires the model's `sck` port
+to `psram_sck` (`trouper_top`'s `PSRAM_SCK_OUT`), which is combinationally
+derived as `psram_sck_en_q & clk` — a signal derived from the *exact same
+clock* the model's own `always @(posedge clk_32m)` block triggers on. This
+is a self-referential gated-clock race (the same *class* of hazard as the
+real-hardware `ps_sck` aliasing this session found via the QPI ILA, but
+manifesting here as a simulator race rather than a real timing violation):
+Icarus was observed, via a direct trace, to never see `sck` go high inside
+the model's block at all — `active` never asserted, so `is_write`/`is_read`
+never latched and neither writes nor reads ever touched `mem[]`, for the
+*entire* debug write burst and (structurally, though not separately
+re-confirmed) every del-read and replay-read burst too. A first attempted
+fix — capturing `sck` on the opposite (negedge) clock edge into a
+registered copy — was itself wrong and didn't help: `clk` is
+deterministically 0 at its own negedge, so `sck_en_q & clk` sampled there
+is *always* 0, not merely racy.
+
+**The real fix:** both `psram_model.v` copies (`cocotb/hdl/` and
+`fpga-emul/rtl/`) gained a new `sck_en` input port, and the main
+transaction-tracking logic (plus `wr_en`/`rd_en` in the `fpga-emul/rtl/`
+copy, which computes them as separate wires) now gates on `sck_en`
+instead of the old `sck`. `cocotb/hdl/tb_trouper_cocotb.v` wires this new
+port to `u_dut.psram_sck_en_q` — a hierarchical, testbench-only peek at
+`trouper_top`'s internal, plain-*registered* enable (not derived from the
+clock it's sampled against, so race-free). The original `sck` port is
+untouched and still feeds the Open Risk #69 same-edge-launch guardrail,
+which genuinely needs the true gated-clock level, not the enable. No DUT
+(`trouper_top.v`) port changed — this is entirely a testbench/model fix.
+
+**Verification:** `cocotb/psram_ops` in isolation (`COCOTB_TESTCASE=
+test_dbg_write_readback_roundtrip`) now shows `mem[]` holding the correct
+pattern immediately after the write, and the full 8-byte read-back is
+bit-exact (`dbg_wr_rb: PASS`). The full 4-test suite passes
+(`TESTS=4 PASS=4 FAIL=0 SKIP=0`) with both this fix and the
+`CE_HOLD_CYCLES` RTL split from the previous update in place together.
+
+**Full regression (`SUITE_GROUPS=core`, all cocotb suites) then run to
+check for wider fallout:** two suites failed as a *direct, expected*
+consequence of the `CE_HOLD_CYCLES` RTL fix legitimately adding one
+sub-cycle to the debug-read burst (32→33 total states) —
+`dbg_write_collision` and `dbg_amask_wrap` both hardcode a
+`FETCH_SUBCYCLES` constant checked against `dbg_end - dbg_start`; updated
+both from 31 to 33 (their own header comments already flagged 31 as "the
+header comment / RTL" value, so this was already meant to track the real
+burst length, not an arbitrary constant) — both suites pass afterward.
+Two more suites failed (`array_sync`: "chip A never acquired — the
+stimulus, not the sync link, is broken"; `remod_backoff`: "output
+stuck-run=51 cycles") — neither references PSRAM debug/read timing,
+`FETCH_SUBCYCLES`, `sck`/`sck_en`, or any signal this session's changes
+touch; not chased further this session, flagged here as apparently
+pre-existing and unrelated rather than fixed or dismissed without
+checking. Final confirmed-passing state: `psram_ops`, `dbg_write_collision`,
+`dbg_amask_wrap`, and every other suite in `SUITE_GROUPS=core` except
+those two.
+
+**Files changed, net of this whole investigation's psram_buf_ctrl.v/#72
+work:** `src/control/psram_buf_ctrl.v` (the three-read-FSM split),
+`cocotb/hdl/psram_model.v` + `fpga-emul/rtl/psram_model.v`
+(`CE_HOLD_CYCLES` + `sck_en` port), `cocotb/hdl/tb_trouper_cocotb.v`
+(`sck_en` wiring), `cocotb/tests/test_dbg_write_collision.py` +
+`test_dbg_amask_wrap.py` (`FETCH_SUBCYCLES` 31→33). `src/top/trouper_top.v`
+was NOT changed by this update (its `psram_sio_in_q` addition predates
+this session) — only touched transiently for a since-removed diagnostic.
+
+**Next:** (1) `array_sync`/`remod_backoff` still need someone to actually
+determine whether they're pre-existing (most likely, given no plausible
+connection to anything changed here) or a real, separate regression;
+(2) retest on real hardware with the QPI-level ILA variant — note the fix
+in *this* update addresses a simulation-model-only bug (a testbench race),
+not a real hardware behavior; whether real silicon improves is a separate
+question the RTL split from the previous update (not this model fix) is
+the candidate for answering, per that update's own guidance.
+
+**2026-09-14, same day, later still — reconciled against concurrent
+real-hardware work, which changes the whole picture: the CE#-hold-margin
+theory this session has been chasing in simulation was already tried on
+real silicon (write side) and did not fix the fault.**
+`planning/psram-external-hardware-bringup-2026-09-13.md` Part 6 (same
+day, a separate/concurrent bring-up session, real Arty A7 + APS6404L)
+independently implemented essentially the same class of fix as this
+session's read-side RTL split — a CE#-low/SCK-quiet guard cycle after the
+final data nibble, before deassert — but applied it to the **write** side
+(capture write, replay write, debug write), which Part 3 of that same doc
+had already isolated as the actual fault site (not read-side: raising
+`PSRAM_RD_TRIM` made things monotonically *worse*, and re-reading a
+failing address repeatedly returns the same stable wrong content each
+time, ruling out read jitter — **the write itself is intermittently not
+committing to the chip**, even though `DBG_BUSY` reports `WR_TRIG`
+completing normally). Their guard passed simulation cleanly (PSRAM model
+64/64, cocotb write/read-back test green — consistent with everything
+this session found) but **on real hardware the fault remained** (payload
+corruption changed shape, `...10 20` → `...10 22`, not disappeared) — their
+own conclusion: "a conventional post-write flush or an extra
+CE#-low/SCK-quiet termination cycle is not sufficient to repair the
+fault... it is not a corrective fix." A follow-up QPI-clock-divider
+experiment (slowing the bus to ~8 MHz, which should help if this were a
+plain timing-margin problem) also failed, and changed the corruption to a
+clean byte-shift (`5A DE AD BE EF 10 27 00`) rather than removing it.
+
+**What this means for this session's own read-side work:** the read-side
+`sck_stop` extension (attempted, then found broken — see above) has been
+**reverted**, leaving only the clean 2-state FSM split (capture, then
+deassert, no `sck_stop`) on the three read bursts. Rationale: (1) it never
+worked correctly in the model regardless (structural bug, not just
+unverified); (2) real hardware evidence now shows this whole *class* of
+fix — CE#/SCK hold-margin guards — does not fix the observed fault on the
+side (write) where it's actually been tried on silicon, so there is no
+remaining reason to believe the read-side version would fare differently;
+(3) the actual fault is confirmed write-side, not read-side, making the
+read-side fix's real-world relevance moot regardless of its own
+correctness. The read-side FSM split itself is left in place as a
+plausible, independently-defensible RTL correctness improvement (matches
+the write burst's own pre-existing sub23/sub24 separation), but is
+explicitly **not claimed to fix this risk's actual symptom** — that
+claim was never supportable and is now actively contradicted by hardware
+evidence for the equivalent write-side case.
+`src/control/psram_buf_ctrl.v`'s `sck_stop` register (a one-cycle CE#-low/
+SCK-quiet guard) is Part 6's own write-side mechanism, left untouched and
+correctly attributed in a revised comment at its declaration.
+
+**Redirected focus — the real open question per Part 6:** why does the
+write intermittently fail to commit despite `DBG_BUSY` reporting success,
+and why did slowing the QPI clock change the corruption's *shape* rather
+than removing it? Part 3 noted an unexplained periodicity (one run failed
+at i=1,4,7,10,13 — every 3rd attempt; a second run reproduced the same
+period-3 cadence at a different phase, i=57,60,63,66,69) that was flagged
+but never chased. This is a concrete, checkable clue: a period-3 failure
+pattern implies something else in the system has a period that aligns
+with every 3rd write attempt, not a fixed per-write margin violation
+(which would fail near-uniformly, not periodically). Candidate next steps,
+all simulation-testable without hardware: (1) instrument a simulation of
+repeated `CMD_WRITE_VERIFY_PULSE`-equivalent write attempts with the real
+background capture-write noise driver active (matching the real bring-up
+test's own setup) and look for a period-3 (or similar) pattern in which
+writes land correctly vs corrupted, correlating against `wr_ptr`/
+`del_offset_r`/any other periodic internal counter that could plausibly
+have a period near 3 attempts; (2) directly measure, in simulation, the
+real `CE#`-high gap width (in cycles) between a debug/replay write's
+completion and the very next capture write's assert in the documented
+"always collides" scenario (`psram_buf_ctrl.v` header: "any debug read
+triggered in idle mode collides with the very next capture write, every
+time") — if this gap is only 1 controller cycle (31.25 ns) against the
+APS6404L's 18 ns `tCPH` minimum, real cable/pad-relaunch propagation delay
+eating into that already-thin margin is a plausible, previously
+unconsidered candidate distinct from the read-sampling margin
+`PSRAM_RD_TRIM` already addresses.
+
+**2026-09-14, same day, later still — candidate (2) checked directly:
+the minimum-margin collision case is not a rare edge case, it is nearly
+half of all transactions.** A temporary cycle counter on `ce_n` (removed
+after use), run against the debug write/read-back test with its normal
+background capture-write noise driver active, tallied every CE#-high gap
+between transactions over one run: **235 of 476 gaps (49%) were exactly 1
+controller cycle — 31.25 ns at 32 MHz** — the documented minimum, matching
+"any debug/other op collides with the very next capture write, every
+time" occurring at high frequency, not as an occasional corner case. (The
+other common value, 233/476 gaps at exactly 18 cycles/562.5 ns, is the
+normal non-colliding idle case; a handful of longer gaps — 32, 48, 55, 502
+cycles — correspond to rarer paths like QE_INIT.)
+
+31.25 ns against the APS6404L's 18 ns `tCPH` minimum leaves only ~13 ns of
+slack **in an idealized, zero-propagation-delay simulation.** This is
+exactly the kind of razor-thin margin that real cable/pad-relaunch
+propagation delay — already established as a real, measured sensitivity
+for this specific bring-up rig (Part 1 of the hardware bring-up doc: "a
+cable-length-dependent read-capture timing margin") — could plausibly
+consume entirely, on a mechanism structurally distinct from (and not
+addressed by) `PSRAM_RD_TRIM`, which only delays the read-sampling point,
+not the inter-transaction `CE#`-high time. This does not yet explain the
+period-3 failure cadence from Part 3 on its own (a fixed-margin violation
+would be expected to correlate with *whichever* transactions happen to
+collide, which is itself timing-dependent and not obviously periodic) —
+that connection, if any, is still open.
+
+**Not yet done:** (1) real-hardware confirmation — scope `CE#` directly
+during a live failing write to measure the *actual* high-time pulse width
+including real cable delay, not just the controller's own cycle count;
+(2) check whether the specific transactions that fail in the real
+period-3 pattern are disproportionately the ones landing in this 1-cycle
+collision case (would need per-attempt CE#-gap logging correlated with
+per-attempt pass/fail, not yet built); (3) if confirmed, the fix would be
+widening the collision-case margin specifically (e.g. deferring the next
+capture write's launch by a few extra idle cycles when it would otherwise
+collide immediately with a just-finished debug/replay op) rather than
+anything already tried (`PSRAM_RD_TRIM`, the write-side `sck_stop` guard).
+
+**2026-09-14, same day, later still — item (1) done: real hardware
+confirms the short CE#-high gap is genuine, periodic, and occurs on
+*every* sample cycle, not as a rare case.** Board reflashed with a known
+firmware/bitstream (`arty_dsp_emul_risk72_qpitrace.bit`, external PSRAM,
+own UDP register-access commands confirmed working:
+`REGR: 0x71 => 0x0A`, `PSRAM_INIT_DONE=1`) rather than continuing to guess
+at whatever the concurrent Part-6 hardware session had left loaded.
+Injection mode enabled (`CMD_SET_INJ_EN`) and a continuous synthetic I/Q
+stream pushed over UDP 5007 to drive real, repeated background captures
+on this AFE-less bench rig (no live antenna signal otherwise reaches
+`iq_valid` at all) — the earlier session's first scope attempt, before
+this, caught only one CE# transition in a 2.5 µs window because the board
+was genuinely idle with no injected samples flowing.
+
+With injection active, a Tektronix TDS210 (re-enumerated to
+`/dev/ttyUSB0`; the earlier serial-control failure was simply the wrong
+device path, not a scope problem) captured CE# directly, decoding the
+binary waveform block itself (`WFMPRE` `YMULT`/`YOFF`/`YZERO`, correcting
+an initial field-order mixup) rather than reading the screen. Six
+consecutive captures all show the **identical periodic pattern**, total
+period ≈2000 ns — an exact match to the R=64 decimator's `iq_valid` rate
+at 32 MHz (64 cycles = 2000 ns):
+
+```
+CE# high  626 ns  →  CE# low  591 ns  →  CE# high   33 ns  →  CE# low  749 ns  →  (repeat)
+```
+
+**The ~33 ns high-time gap recurs on every single sample cycle** — not a
+49%-of-transactions statistical case as the earlier simulation-only
+estimate suggested, but a deterministic, always-present feature of the
+normal per-sample QPI transaction pattern once real (not synthetic
+cocotb-noise-driven) periodic captures are running. Real hardware value:
+**33 ns**, close to but not exactly the simulated 1-cycle 31.25 ns
+(consistent with real threshold-crossing/measurement effects, not a
+discrepancy worth chasing further) — comfortably above the APS6404L's
+18 ns `tCPH` minimum (~15 ns of real, measured margin), so this specific
+measurement is **not itself a spec violation**. It is, however, by a wide
+margin the tightest point in the whole per-sample cycle (591 ns and 749 ns
+low, 626 ns and only 33 ns high) — exactly the kind of margin most likely
+to be consumed by real cable/pad-relaunch delay under different
+conditions (different breadboard wiring, temperature, etc.) than this one
+measurement captured.
+
+**Not yet done:** (1) capture this same waveform during an actual failing
+`CMD_WRITE_VERIFY_PULSE` attempt specifically (this measurement was taken
+during ordinary background injection traffic, not a live failure) to see
+whether the 33 ns gap narrows further, disappears, or is otherwise
+different right before/after a real corruption event; (2) the period-3
+failure-cadence correlation from Part 3 is still unconnected to this
+measurement; (3) whether 33 ns is itself the true minimum or whether rarer
+cycles (not caught in six captures) go tighter still is unknown — a longer
+unattended capture run or a statistics-mode acquisition would settle that.
+Scripts (session scratchpad, not committed): `scope_ctl.py` (TDS210
+serial control + Tek binary block decode), `wide_capture.py` (250 ns/div
+single-shot capture + edge-to-edge pulse width decode),
+`inject_stream.py` (continuous synthetic I/Q injection over UDP 5007 to
+drive real background captures on this AFE-less rig).
+
+**2026-09-14, same day, item (1) done — the 33 ns gap is unperturbed at
+the exact moment of a real, synchronized corruption event; this rules out
+the CE#-margin hypothesis with real hardware evidence, not just
+statistical population sampling.** `CMD_WRITE_VERIFY_PULSE` (cmd=15, an
+existing firmware bring-up op — see
+`planning/psram-external-hardware-bringup-2026-09-13.md` Part 6) writes an
+8-byte pattern to the debug port, reads it back, and on mismatch pulses
+`rffe_nss_en` (J15) high for ~20 µs — repurposed here as a scope trigger
+source since Part 6 found this fast all-SPI path fails at a much higher
+rate (near-100%) than the slow UDP/UART path (~8%). With the board on
+`arty_dsp_emul_risk72_qpitrace.bit`, injection running (`inject_stream.py`
+driving background PSRAM traffic), CH1 on J15 (trigger, rising edge) and
+CH2 on CE#: every fired `CMD_WRITE_VERIFY_PULSE` did mismatch (readback
+`00 00 00 00 00 00 00 00` against the written `A5 5A DE AD BE EF 10 27` —
+**all-zero, not the previously-characterized last-byte-wrong signature**;
+see note below) and reliably pulsed J15, confirming the fast path's
+near-100% failure rate directly. Two capture geometries, both triggered on
+the same J15 edge:
+
+- **Wide (20 µs/div, 200 µs window, 100 ns/sample — too coarse to resolve
+  the fine structure):** CE# is a uniform, unbroken 626 ns-HIGH /
+  1374 ns-LOW aggregate pattern (2000 ns period) for the entire ±100 µs
+  around the mismatch-triggered pulse — repeated twice, identical both
+  times. No visible timing perturbation anywhere near the corrupting
+  event's own read-back sequence (the last ~40 µs of 8 debug-register pops
+  at 5 µs spacing falls inside this window).
+- **Zoomed (250 ns/div, 2.5 µs window, 1 ns/sample — same resolution as
+  the earlier background-only measurement):** captured straddling t=0 (the
+  J15 rising edge, i.e. the exact cycle in which the mismatch was decided
+  and the pulse fired) shows `627 ns HIGH → 749 ns LOW → 33 ns HIGH →
+  591 ns LOW` — **the identical four-segment pattern and the identical
+  ~33 ns tightest gap** measured earlier during ordinary background
+  traffic, present and unchanged right at the moment of an actual,
+  confirmed corruption.
+
+**Conclusion:** the CE#-high timing margin is not tightening, collapsing,
+or otherwise behaving differently at the instant a real corruption is
+caught — it looks exactly like every other cycle. This is now real,
+time-correlated (not just statistical) evidence against the CE#-hold-
+margin class of explanation for this risk's root cause on real hardware,
+consistent with Part 6's own write-side-guard-didn't-fix-it finding. The
+fault most likely lives in the data path (SIO content) or in
+debug-index/pop-sequencing bookkeeping racing the background loop —
+matching the firmware's own committed hypothesis in `fpga-emul/sw/main.c`
+(`CMD_WRITE_VERIFY_PULSE` handler comments) that debug pops faster than
+one background ~2 µs cycle apart can race `dbg_idx`'s advance — rather
+than anything CE#-timing-related.
+
+**New, unexplained wrinkle:** this fast all-SPI-loop path's failure
+signature is **all-zero readback**, not the last-byte-wrong signature
+characterized earlier (which came from the slower UDP/UART path). All-
+zero readback reads like the debug write never landed at all (reading
+back a freshly-reset or never-written region) rather than a read-timing
+race — this is new support for "maybe write actually has issues" as
+posed earlier this session, separate from the read-side race work above.
+Not yet chased further: whether this is because `WR_TRIG` itself doesn't
+complete before the fixed 5 ms settle window's `RD_TRIG` starts, or
+`dbg_idx`/`dbg_buf` state is stale/wrong at write time, is unknown.
+
+**Not yet done:** (2) connect this to Part 3's period-3 failure cadence;
+(3) find whether 33 ns is the true floor or rarer/tighter cycles exist;
+(4) chase the all-zero-vs-last-byte-wrong signature difference between the
+fast (SPI-loop) and slow (UDP/UART) paths — same corruption class or two
+different bugs sharing one symptom is still open. Scripts (session
+scratchpad, not committed): `capture_wvp_trigger.py` (wide, J15-triggered),
+`capture_wvp_zoom.py` (fine, J15-triggered, retries the arm/fire race that
+made the first 1-2 attempts miss at fast timebases), `send_wvp.py`
+(single one-shot `CMD_WRITE_VERIFY_PULSE` sender for UART-log checks).
+
+**2026-09-28 — leading cause: slow edges through PMOD JA's 200 Ω resistors, fix in progress.** SCK rise/fall measured 6.7/7.2 ns vs the APS6404L's tKHKL ≤ 1.5 ns; moving SCK to JB took write-verify from 5/5 FAIL to 10/10 PASS and removed the nibble slips. Remaining toggling/high-data failures match SIO still on JA: "1"s reach only 2.64–2.80 V at the SCK edge vs VIH = VDD−0.4 V (the rest of the bus is being moved). The 8 MHz divider test does not add write-data setup margin, so it doesn't bear on this. Separately, the capture ring zeroes debug data within ~2 s unless `PSRAM_EN=0`. Moving the whole bus to JB/JC then exposed SCK ringing, 4-line simultaneous switching and scope-ground artifacts in turn; bench closed on 2026-09-28 as a breadboard-interconnect limit, not RTL. The AFE PCB routes PSRAM via Arty JA's 200 Ω resistors and should be expected to hit the slow-edge failure (Part 7). Detail: `planning/psram-external-hardware-bringup-2026-09-13.md` Part 7.
+
+**2026-11-18 — JB/JC breadboard retest: the stuck-high fault is read-side.** `PSRAM_RD_TRIM` works (0 is correct); full-drive build 8/20 lines exact, weak-drive build loses QPI on the first `0F` line; reading a stored `0F…` line from shifted start addresses shows the corruption follows each read's first 3–4-line 0→1 nibble, not the stored image; no VDD sag or VSS bounce tied to the bursts. A 200 MHz pad-sampling ILA build (`RISK72_OVERSAMPLE`) shows why: after the PSRAM's own 4-line simultaneous 0→1 output edge (~30 ns ringing) the chip stops driving SIO and the bus floats high (SCK-locked crosstalk dips; a passing read shows none). APS6404L drive is fixed 50 Ω, so the fix is board-side (series R at the SIO pins, decoupling, ground). A 4,877-trial campaign gives the dose-response: abort hazard 0/14,148 for 2 lines rising, 11.9% for 3, 99.7% for 4, falling edges ~harmless, plus a separate `0→7` nibble-slip mode (51.5%). Still a breadboard limit, not RTL, **for the working tree**. **A/B: the `/final` RTL (`7d0e749`, pre-#72 fixes) fails 363/364 trials and the reference line 0/8 on the same bench while the pins carry correct data** — its bare-pad rising-edge read capture lands on the data transition (the working tree's `psram_sio_in_q` falling-edge capture fixes it). Do not assume `/final` reads PSRAM correctly until the fix is in a new P&R or #69 STA closes it. SCK rings +6.5/−2.2 V at the PSRAM; damping it (probe load or 100 Ω series) removes all 3-line failures, while the 4-line rise still aborts 100%, so SCK SI is the main bench mechanism and board-level SCK/SIO termination is required. Detail: bring-up doc Part 8.
+
+### 73. Full functional replay test (real receive chain through real PSRAM) does not achieve `sc_lock` — new gap, root cause not yet found
+
+Running the documented acceptance test (`fpga-emul/tools/run_replay_sweep.py`
+against the known-good `lora_20260621_092907_SF7-BW250-Pre8.npy` capture,
+`fpga-emul/TODO.md`'s own reproduce command) through the real receive chain
+(decimator → dc_removal → `sc_detector` → `psram_buf_ctrl` delay-line →
+combiner) with the real APS6404L breadboard chip in the loop — as opposed to
+the isolated debug-port write/read pokes Open Risks #72 tracks — never
+reaches `sc_lock`. Reproduced 3 times, including after a full firmware
+reboot to rule out state pollution from #72's stress testing.
+
+**Likely not a regression from this session's RTL:** the `TODO.md`
+"hardware-validated 2026-09-06" result for this exact test predates the
+discovery (Open Risks #72, Part 1) that `BENCH_CLK=1` alone ties
+`USE_EXT_PSRAM=0` — that original validation almost certainly ran against
+the on-chip BRAM stub, not real silicon. This may be the first time this
+test has been run against the real chip at all, i.e. a previously-untested
+gap rather than something newly broken.
+
+A register-level health check (`PSRAM_STATUS`, `RX_HOLD`, `BRINGUP_CTRL`,
+`SF_CFG`/`BW_CFG`, `SC_THR`) found nothing obviously misconfigured. Polling
+the live `SC_STAT` correlation-metric register throughout a replay read
+exactly zero every time, but that register is documented as volatile
+(changeable between any two SCK edges) and the polling rate used
+(~50-100 ms/read over UDP+UART) is far too slow relative to a 500 kHz
+sample rate to be trusted as evidence either way — **inconclusive, not a
+finding**, flagged explicitly so it isn't later mistaken for one.
+
+**Risk:** unknown severity until root-caused — could be the same underlying
+QPI write/read margin issue as #69/#72 simply being far more consequential
+here (a del-line read happens on every sample, continuously, vs. a one-off
+debug operation), or something unrelated to PSRAM timing entirely (e.g. an
+injection-path or CDC issue specific to the replay/bench-clock configuration).
+
+**Action:** a proper 32 MHz ILA trace synced to `CMD_REPLAY_START`,
+capturing `sc_pipe_active`/`sc_hit_dbg`/`c_i0`/`c_q0`/`timing_ref`/
+`del_valid` across the full ~16 ms replay window (the same technique that
+resolved #72's write-side question in Part 4), rather than further
+Ethernet/UART register polling. Needs careful arm-timing around the
+UDP/firmware dispatch latency before `CMD_START` actually takes effect.
+
+**Found:** 2026-09-13, `planning/psram-external-hardware-bringup-2026-09-13.md`
+Part 5.
+
+**2026-09-13, later — ILA trace + independent statistics converge on a single
+explanation:** two follow-ups closed most of the open questions above.
+
+First, a 500-trial statistical sweep of the debug write/read-back at
+`PSRAM_RD_TRIM=0` (Open Risks #72) found the failure mode is **not** varied
+corruption — all 41/500 (8.2%) failures were the *identical* all-zero
+signature, never a shift or bit-flip. A single, deterministic failure
+signature at a stable rate is inconsistent with random electrical noise and
+consistent with either a repeatable FSM race or the chip silently rejecting
+a command (e.g. an internal self-managed-refresh collision), not a marginal
+cable-length/setup-time effect — ruling out further `PSRAM_RD_TRIM` sweeps
+as productive (short breadboard leads at 32 MHz make cable delay an unlikely
+culprit regardless).
+
+Second, the SC-detector trace ILA (retargeted from Part 4's write trace to
+`sc_stat`/`sc_pipe_active`/`sc_hit_dbg`/`dcr_valid`/`psram_del_valid`, 4096
+samples @ 32 MHz native — see `fpga-emul/rtl/fpga_dsp_wrap.v` and
+`fpga-emul/vivado/risk73_sc_capture.tcl`) triggered on `sc_stat != 0` and
+caught a real, non-boot-artifact event 19 real seconds after arming: the
+correlator produced `sc_stat = 26` against a threshold of 460 — a genuine
+but very weak metric, with `tdm_busy` active and `dcr_valid` toggling
+throughout, confirming the SC engine **is** processing real replayed
+samples, not dormant. Separately, a direct Python check (Schmidl-Cox-style
+autocorrelation at lag `M=256` on the exact 8192-sample window
+`run_replay_sweep.py` uploads) found the source data itself carries a
+near-perfect preamble (normalized correlation ≈0.998 across a wide plateau)
+— ruling out "wrong capture window" as the explanation.
+
+**The gap between a clean, high-SNR source signal and a correlator metric
+at ~6% of threshold is best explained by the same real PSRAM QPI read
+unreliability already proven via ILA in Part 4, now degrading the
+*continuous* delay-line reads `sc_detector` needs for every sample of the
+correlation window** — a one-off debug operation mostly survives an ~8%
+per-transaction miss rate; a correlator needing hundreds of consecutive
+clean delayed samples does not. This unifies #72 and #73 under one root
+cause rather than two separate hardware problems, though it remains
+unconfirmed at the waveform level (would need del-line read content itself
+traced, e.g. `del_i0`/`del_q0`/`del_valid` correctness against the known
+source, not just SC's aggregate metric).
+
+**2026-09-13, later still — refresh-collision theory tested directly, FPGA
+side cleared (null result that strengthens the theory):** two more checks.
+
+A 500-trial statistical sweep of the debug write/read-back at
+`PSRAM_RD_TRIM=0` found the failure mode is not varied corruption -- all
+41/500 (8.2%) failures were the *identical* all-zero signature, never a
+shift or bit-flip, at a stable rate independent of trim. A single
+deterministic failure signature argues against random electrical noise and
+toward a repeatable external event (chip-side refresh collision, or an FSM
+race), and rules out further `PSRAM_RD_TRIM` sweeping as productive (short
+breadboard leads at 32 MHz make cable delay an unlikely culprit regardless).
+Within this sweep, three consecutive attempts (16/17/18 of a smaller,
+separate 19-attempt run) failed back-to-back -- at an 8.2% independent rate
+that's a ~1-in-1800 coincidence, suggesting failures cluster in time rather
+than landing independently at random.
+
+To test whether the CE#-idle gap preceding a transaction predicts failure
+(the refresh-collision mechanism would need the chip to still be mid-refresh
+when CE# next asserts), captured the full CE#-toggle pattern for the
+9.6 us immediately before 3 failing and 5 passing debug writes (same
+write-trace ILA as Part 4, `TRIGGER_POSITION` shifted to maximise
+pre-trigger history). **Result: the gap pattern is statistically identical
+between fail and pass captures** -- same count (10-11 gaps), same dominant
+630 ns spacing repeating 4 times, no detectable difference. This is a null
+result on the timing signature, but not on the theory: `psram_buf_ctrl` is a
+fixed, open-loop state machine with no RWDS/wait-state feedback from the
+chip, so its own driven CE# timing is identical every sample period
+regardless of what the chip does internally -- if the deciding factor lives
+entirely inside the chip during an invisible refresh window, host-side
+timing looking identical between pass and fail is exactly the expected
+signature, not evidence against it.
+
+This is the limit of what an FPGA-internal ILA can resolve. Confirming or
+refuting the refresh-collision mechanism from here needs either a physical
+scope on the chip's actual pins/power rails during a captured failure, or
+swapping in a second physical APS6404L to test "any unit behaves this way"
+against "this specific part is marginal" -- neither done this session.
+
+**2026-09-13, later still -- datasheet check weakens the refresh-collision
+theory (`resources/APS6404L_3SQR.pdf`):** the part has **no RWDS or
+wait-state pin at all** (plain SPI/QPI PSRAM, not HyperRAM-style), so there
+was never a busy signal `psram_buf_ctrl` could have used even if it wanted
+to. More importantly, the two documented timing requirements that bound
+host-refresh interaction are both cleared with large margin by the current
+controller: `tCPH` (CE# HIGH between subsequent burst operations) = **18 ns
+min**, against a measured 460-630 ns actual idle gap (>25x margin); `tCEM`
+(max CE# LOW pulse width) = **4 us (extended grade) / 8 us (standard
+grade)**, against transactions that run under 1 us. The datasheet describes
+refresh as "seamless" and states the device "does not require the support
+of DRAM refresh from system host" -- i.e. AP Memory's own documented claim
+is that a host meeting these two numbers (ours does, comfortably) should
+never see a refresh-induced failure. No errata section exists in this
+datasheet revision (Rev. 2.3, Apr 2020).
+
+This doesn't rule out refresh collision (datasheet "seamless" claims aren't
+always the full story at the margins), but it removes the datasheet as
+supporting evidence for it, and shifts weight back toward either a
+genuinely marginal physical issue specific to this breadboard chip/wiring,
+or an as-yet-unidentified mechanism. Next: physical oscilloscope
+investigation (Tektronix TDS 210 available at the bench) on the chip's
+actual pins during a live failure -- see the follow-up entry below once
+that's underway.
+
+**2026-09-13, later still -- oscilloscope on the physical pins (Tektronix
+TDS 210, 60 MHz / 1 GS/s, RS-232 remote control over a CH340 USB-serial
+adapter):**
+
+`SIO3`/`SCK` (CH1/CH2) both show clean periodic ~32 MHz toggling with proper
+rail-to-rail swing (peak-to-peak ~2.8 V on SCK, ~3.9 V on SIO3, both in the
+expected 3.3 V logic range) -- no stuck line, no obviously dead signal.
+**Caveat: the TDS 210's 60 MHz bandwidth is too close to 32 MHz to resolve
+genuine high-frequency ringing/overshoot** -- the scope's own bandwidth
+limit rounds off higher harmonics, making the displayed waveform look
+smoother/more sinusoidal than the true edge shape regardless of what's
+actually there. This instrument cannot confirm or rule out fast signal-
+integrity glitches at this clock rate; it can only confirm gross signal
+presence and rail-to-rail levels, which it did.
+
+Moved CH1 to the PSRAM's VDD pin (AC-coupled, to see ripple/transients on
+top of the ~3.3 V DC level) as a better use of this scope's real bandwidth
+-- a supply-side event is a low-frequency phenomenon well within its range,
+and it's something no digital ILA could ever see. Result: **0.16 V peak-to-
+peak ripple, stdev ~43 mV, over a 10 ms window** (~3% of VDD), with
+recurring ~0.10-0.11 V excursions at irregular ~0.2-1.3 ms spacing. This is
+real, measurable ripple -- elevated for a clean digital supply, plausible
+for an unshielded breadboard rig -- but not a dramatic single glitch, and
+**not yet correlated with an actual failing write**: this was a passive,
+untriggered capture, unlike the software-linked ILA loop, so it's
+circumstantial support for "marginal breadboard power contributing to (or
+causing) the failures," not proof. Confirming the correlation would need a
+capture triggered on a write-specific signal (CE#/SCK) with the write-test
+loop running simultaneously, timed to catch VDD's behavior *during* a
+transaction -- not done this session; would need careful arm-per-attempt
+orchestration similar to the ILA loop, complicated by this scope having no
+software linkage to the pass/fail verdict and a slow (~15-20 s) RS-232
+per-capture transfer time.
+
+**2026-09-14 -- pacing sensitivity found: fast write+read is far less
+reliable than slow, and it's not a simple settle-time gap:** added
+`CMD_WRITE_VERIFY_PULSE` to `sw/main.c` (`fpga-emul/sw/main.c`, UDP port
+5008 cmd 15) -- a debug write+read+compare done entirely in firmware C,
+back-to-back over the real SPI bus with no UDP/UART round trip between
+individual register accesses, pulsing `rffe_nss_en` (J15, otherwise idle
+during no-AFE bench testing) on a detected mismatch. This calls the
+*identical* `reg_write`/`reg_read` C functions the slow UDP path already
+used (that path just triggers each one from a separate UDP packet, with
+network/UART latency between them), isolating pacing as the only variable.
+
+Result: **near-100% failure** (50/50, 70/70 across two batches) at
+`PSRAM_RD_TRIM=0`, versus ~8.2% for the slow UDP-paced path doing the exact
+same register sequence. The corruption is also more varied under fast
+pacing than the slow path's single ALL_ZERO signature: mostly a
+`0x27`->`0x20` last-byte clip (bits[2:0] zeroed), plus recurring
+`0x27`->`0x22`, occasional ALL_ZERO, and the old nibble-shift pattern from
+Part 1/2 -- multiple failure signatures, not one.
+
+Tested and ruled out two settle-time hypotheses directly, each rebuilt and
+retested on hardware: a settle read inserted between each of the 8
+`PSRAM_DBG_WDATA` pushes and around the `WR_TRIG`/`RD_TRIG` busy-poll (no
+change); and an explicit busy-wait between write-done and read-start, first
+~50 us then ~5 ms -- comparable to the slow path's typical per-operation
+gap -- with **no change either time**, still ~100% failure.
+
+Re-verified via the same write-trace ILA used in Part 4: on a captured
+fast-path failure, **the write command on the wire is still byte-perfect**
+(reconstructed nibble stream `02 00 F8 00 A5 5A DE AD BE EF 10 27` for a
+mismatch that read back `...10 20`) -- confirming the corruption is not in
+command formation even under fast pacing, matching the earlier slow-path
+result.
+
+**Conclusion so far:** this isn't a single missing delay at one point in
+the sequence -- pacing of the *whole* multi-step operation matters in a way
+two targeted single-point delays didn't capture. This sharpens the picture
+considerably (a large, reproducible pacing effect, not just an 8%
+background rate) but the exact mechanism and the specific step(s) needing
+more time remain unresolved. Next step: bisect by inserting delays at each
+individual step (address write, each WDATA push, WR_TRIG-to-busy-clear,
+RD_TRIG-to-busy-clear, each DBG_DATA pop) one at a time rather than only at
+the write/read boundary, to localize which specific gap actually matters --
+not done this session given the hour.
+
+**2026-09-14, immediately after -- delay bisection made it worse, pointing
+away from `psram_buf_ctrl` and toward `axi_quad_spi_1` pacing:** replaced
+the register-read placeholders above with real ~5 us timed delays between
+each of the 8 `WDATA` pushes and each of the 8 `DBG_DATA` pops
+individually (not just at the write/read boundary). Result: still 100/100
+failing, and the corruption became *more* varied, not less -- the nibble-
+shift signature (`A5 5A DE AD BE EF 10 27` -> `AA 55 AD EA DB EE F1 02`,
+the whole pattern rotated one nibble) now dominates, plus a new variant
+(`...10 70`) never seen before. More delay making things worse rules out
+a `psram_buf_ctrl`-side settle-time explanation entirely.
+
+This nibble-shift signature is the same family Codex's session found via
+its **raw JTAG-to-AXI register-poke harness** in the original Part 2
+investigation (`planning/psram-external-hardware-bringup-2026-09-13.md`),
+which explicitly flagged `axi_quad_spi_1`'s internal FIFO/state-machine
+behavior on tightly-paced back-to-back transfers as an unresolved suspect
+and never finished probing it. The common factor between that harness and
+this session's fast firmware C loop -- and the one thing neither shares
+with the slow UDP path -- is **tightly-paced, back-to-back SPI transactions
+through `axi_quad_spi_1` itself**, not `psram_buf_ctrl`. That's a more
+promising lead than further `psram_buf_ctrl` delay-guessing: next step is
+an ILA trace of `axi_quad_spi_1`'s own TX/RX FIFO and state signals (not
+`psram_buf_ctrl`'s) during a fast-paced failure, exactly as Codex's Part 2
+originally proposed. Not done this session.
+
+**Correction after checking Codex's own session log further:** `spi_slave.v`
+does explicitly document a **"2 MHz maximum"** host-SPI clock assumption
+for its toggle-CDC settling margins (comments at the byte-complete-event
+toggle logic and the MISO `reg_rdata` settle time, both citing "at the
+2 MHz maximum"), and this bench's `axi_quad_spi_1` runs host-SPI at
+**6.25 MHz** (`C_SCK_RATIO=16` on the 100 MHz AXI clock) -- over 3x the
+documented envelope. This is a real, concrete mismatch worth recording.
+However, Codex's own session already tried the obvious fix
+(`HOST_SPI_SCK_RATIO=64` -> 1.5625 MHz, within the 2 MHz limit) and hit a
+hardware/IP wall: **this `axi_quad_spi` IP instance, in its current
+configuration, only accepts `C_SCK_RATIO` values of 2/4/8/16** -- 16 is
+already the slowest this bench can run without a different SPI mode/IP
+configuration (Codex's initial belief that ratio 64 was directly usable,
+citing PG153's stated max of 2048, turned out to apply to a different SPI
+mode setup, not this one; the original risk-72 write-up's claim that the
+harness "cannot be slowed below ratio 16" was correct). Codex pivoted from
+this dead end to the RTL-level `psram_sio_in_q`/`PSRAM_RD_TRIM` fix instead,
+which is what this session built on all night.
+
+**Net effect on tonight's picture:** the 2 MHz-vs-6.25 MHz mismatch remains
+a real, documented, unresolved discrepancy between this FPGA bench harness
+and the RTL's own design assumption -- plausible as a contributor to
+tonight's pacing-sensitivity finding, but not confirmed, and not something
+fixable by a quick config change. Closing it for real needs either
+reconfiguring `axi_quad_spi_1` for a wider divisor range (a different SPI
+mode in the IP customization GUI) or swapping to a different SPI master
+IP/approach on the FPGA side -- neither is a small change, and neither was
+done this session. Whether this bench-only discrepancy has any bearing on
+the real ASIC's host-SPI interface (a separate physical implementation, not
+`axi_quad_spi_1`) is a separate, open question this session did not address.

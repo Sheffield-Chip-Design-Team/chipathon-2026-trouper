@@ -1,0 +1,61 @@
+#0  __memset_avx2_unaligned_erms () at ../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S:328
+#1  0x00005723cbe058a9 in grt::FastRouteCore::routeMonotonicAll(int, int, float) ()
+#2  0x00005723cbddaea6 in grt::FastRouteCore::run() ()
+#3  0x00005723cbd59969 in grt::GlobalRouter::findRouting(std::vector<grt::Net*, std::allocator<grt::Net*> >&, int, int) ()
+#4  0x00005723cbd857d2 in grt::GlobalRouter::updateDirtyRoutes(bool) ()
+#5  0x00005723cbde03ca in est::EstimateParasitics::ensureWireParasitic(sta::Pin const*, sta::Net const*) ()
+#6  0x00005723cbce1f87 in rsz::Resizer::resizeToTargetSlew(sta::Pin const*) ()
+#7  0x00005723cbd169ac in rsz::RepairDesign::makeRepeater(char const*, int, int, sta::LibertyCell*, bool, int, sta::Vector<sta::Pin const*>&, float&, float&, float&, sta::Net*&, sta::Pin*&, sta::Pin*&) ()
+#8  0x00005723cbd32c6d in rsz::RepairDesign::repairNetWire(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#9  0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#10 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#11 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#12 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#13 0x00005723cbd2d01c in rsz::RepairDesign::repairNet(std::shared_ptr<rsz::BufferedNet> const&, sta::Pin const*, float, int, sta::Corner const*) ()
+#14 0x00005723cbd2d4e5 in rsz::RepairDesign::repairNet(sta::Net*, sta::Pin const*, sta::Vertex*, bool, bool, bool, int, bool, sta::Corner*, int&, int&, int&, int&, int&) ()
+#15 0x00005723cbd301c4 in rsz::RepairDesign::repairDriver(sta::Vertex*, bool, bool, bool, int, bool, sta::Corner*, int&, int&, int&, int&, int&) ()
+#16 0x00005723cbd30e29 in rsz::RepairDesign::repairDesign(double, double, double, bool, bool, int&, int&, int&, int&, int&) ()
+#17 0x00005723cbce1086 in rsz::Resizer::repairDesign(double, double, double, double, bool, bool) ()
+#18 0x00005723ca10ab2b in _wrap_repair_design_cmd ()
+#19 0x0000708e6bef22f9 in TclNRRunCallbacks () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#20 0x0000708e6bef36bc in ?? () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#21 0x0000708e6bef310b in Tcl_EvalEx () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#22 0x0000708e6bef442a in Tcl_Eval () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#23 0x00005723ca1723fd in sta::sourceTclFile(char const*, bool, bool, Tcl_Interp*) ()
+#24 0x00005723cc52e1fe in tclAppInit(int&, char**, char const*, Tcl_Interp*) [clone .constprop.0] ()
+#25 0x0000708e6bfa9eea in Tcl_MainEx () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#26 0x00005723c9fc199a in main ()
+----
+#0  0x00005723cbf46db0 in sta::dbNetwork::id(sta::Pin const*) const ()
+#1  0x00005723ca1f7fbb in sta::Set<sta::Pin const*, sta::PinIdLess>::intersects(std::set<sta::Pin const*, sta::PinIdLess, std::allocator<sta::Pin const*> > const*, std::set<sta::Pin const*, sta::PinIdLess, std::allocator<sta::Pin const*> > const*, sta::PinIdLess) ()
+#2  0x00005723ca386f81 in sta::ExceptionThru::connectPinAfter(sta::PinSet*, sta::Network*) [clone .part.0] ()
+#3  0x00005723ca268aca in sta::Sdc::connectPinAfter(sta::Pin const*) ()
+#4  0x00005723ca305a87 in sta::Sta::connectPinAfter(sta::Pin const*) ()
+#5  0x00005723cc140e59 in odb::dbITerm::connect(odb::dbNet*) ()
+#6  0x00005723cc32aefa in odb::dbInsertBuffer::stitchLoadToDriver(odb::dbITerm*, odb::dbITerm*, std::set<odb::dbObject*, std::less<odb::dbObject*>, std::allocator<odb::dbObject*> > const&) ()
+#7  0x00005723cc32b3a8 in odb::dbInsertBuffer::rewireBufferLoadPins(std::set<odb::dbObject*, std::less<odb::dbObject*>, std::allocator<odb::dbObject*> > const&) ()
+#8  0x00005723cc32b6d0 in odb::dbInsertBuffer::insertBufferBeforeLoads(std::set<odb::dbObject*, std::less<odb::dbObject*>, std::allocator<odb::dbObject*> > const&, odb::dbMaster const*, odb::Point const*, char const*, char const*, odb::dbNameUniquifyType const&, bool) ()
+#9  0x00005723cc1a5168 in odb::dbNet::insertBufferBeforeLoads(std::set<odb::dbObject*, std::less<odb::dbObject*>, std::allocator<odb::dbObject*> > const&, odb::dbMaster const*, odb::Point const*, char const*, char const*, odb::dbNameUniquifyType const&, bool) ()
+#10 0x00005723cbcbd114 in rsz::Resizer::insertBufferBeforeLoads(odb::dbNet*, std::set<odb::dbObject*, std::less<odb::dbObject*>, std::allocator<odb::dbObject*> > const&, odb::dbMaster*, odb::Point const*, char const*, char const*, odb::dbNameUniquifyType const&, bool) ()
+#11 0x00005723cbcbd48f in rsz::Resizer::insertBufferBeforeLoads(sta::Net*, sta::PinSet*, sta::LibertyCell*, odb::Point const*, char const*, char const*, odb::dbNameUniquifyType const&, bool) ()
+#12 0x00005723cbd16897 in rsz::RepairDesign::makeRepeater(char const*, int, int, sta::LibertyCell*, bool, int, sta::Vector<sta::Pin const*>&, float&, float&, float&, sta::Net*&, sta::Pin*&, sta::Pin*&) ()
+#13 0x00005723cbd32c6d in rsz::RepairDesign::repairNetWire(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#14 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#15 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#16 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#17 0x00005723cbd31fd4 in rsz::RepairDesign::repairNetVia(std::shared_ptr<rsz::BufferedNet> const&, int, int&, sta::Vector<sta::Pin const*>&) ()
+#18 0x00005723cbd2d01c in rsz::RepairDesign::repairNet(std::shared_ptr<rsz::BufferedNet> const&, sta::Pin const*, float, int, sta::Corner const*) ()
+#19 0x00005723cbd2d4e5 in rsz::RepairDesign::repairNet(sta::Net*, sta::Pin const*, sta::Vertex*, bool, bool, bool, int, bool, sta::Corner*, int&, int&, int&, int&, int&) ()
+#20 0x00005723cbd301c4 in rsz::RepairDesign::repairDriver(sta::Vertex*, bool, bool, bool, int, bool, sta::Corner*, int&, int&, int&, int&, int&) ()
+#21 0x00005723cbd30e29 in rsz::RepairDesign::repairDesign(double, double, double, bool, bool, int&, int&, int&, int&, int&) ()
+#22 0x00005723cbce1086 in rsz::Resizer::repairDesign(double, double, double, double, bool, bool) ()
+#23 0x00005723ca10ab2b in _wrap_repair_design_cmd ()
+#24 0x0000708e6bef22f9 in TclNRRunCallbacks () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#25 0x0000708e6bef36bc in ?? () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#26 0x0000708e6bef310b in Tcl_EvalEx () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#27 0x0000708e6bef442a in Tcl_Eval () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#28 0x00005723ca1723fd in sta::sourceTclFile(char const*, bool, bool, Tcl_Interp*) ()
+#29 0x00005723cc52e1fe in tclAppInit(int&, char**, char const*, Tcl_Interp*) [clone .constprop.0] ()
+#30 0x0000708e6bfa9eea in Tcl_MainEx () from /lib/x86_64-linux-gnu/libtcl8.6.so
+#31 0x00005723c9fc199a in main ()
+----
