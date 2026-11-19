@@ -1,9 +1,20 @@
 # trouper_top — Final P&R Outputs
 
-Curated P&R outputs from **SGE job 5682**
-(`pnr_a40_v33_keepout_m2m3`, 2026-09-06), produced from the canonical
-`src/config/trouper_top.json` (signoff SDC v33) on the 1675 × 1110 µm A40
-die. They supersede the job-5674 collateral.
+Curated P&R outputs from **SGE job 5861**
+(`pnr_a40_irqsetwins_dcrsat`, 2026-10-10), produced from the canonical
+`src/config/trouper_top.json` (`CTS_APPLY_NDR=none`, `MAX_WIRE_LENGTH` 450,
+signoff SDC v33) on the 1675 × 1110 µm A40 die. They supersede the job-5682
+collateral.
+
+The run's `src/` snapshot is byte-identical to branch
+`rtl/psram-trim-backdate-ciff3` (PR #57). Since 5682 it adds: the PSRAM QPI
+read-capture split + `PSRAM_RD_TRIM` (0x7A) + falling-edge SIO capture
+(Open Risk #72), replay backdate `REPLAY_BACKDATE_SYMS` (0x7B, #81), the
+reg_bank IRQ set-wins fix, the `sd_remod` CIFF3 redesign, and `dc_removal`
+int8 saturation (#75).
+
+All out-of-flow gates below ran on `hpretl/iic-osic-tools:chipathon26`
+(asserted per job in its `manifest.json` `tool_image`).
 
 ## PDN-bridge routing keepout (`src/config/pdn_cfg.tcl`)
 
@@ -28,66 +39,34 @@ Two earlier keepout attempts failed and are recorded so they are not retried:
   except-pg, but the PDN generator (`add_pdn_ring` / `add_pdn_stripe`) carves
   around **any** obstruction regardless of the flag — ring still cut.
 
-**M2/M3-only** (this run) evicts the offending signal M3/via2 (all 16
-job-5653 violations were signal, verified per-net) while leaving M4/M5 free
-for the core ring. Verified on job 5682's routed DEF: VDD M5 north ring one
-continuous segment `x[8.1, 1666.8]`, VSS M4 west ring one segment
-`y[1.7, 1107.7]`, and **zero signal M4/M5 in either bridge zone**. After
-bridge insertion, the bridge M5 boxes merge with the VDD ring into one
-contiguous polygon and the bridge M4 boxes merge with the VSS ring — the
-bridges are connected.
-
-**Bridged-GDS LVS (job 5732, 2026-09-07).** The flow's Netgen LVS
-(`reports/lvs/lvs.netgen.rpt`) extracts from the **DEF** (`MAGIC_EXT_USE_GDS=0`),
-so it never sees the post-flow bridges. Re-run against the **bridged GDS**
-(md5 `c308505a…`) — Magic extraction with std cells LEF-abstracted (same
-top-level-interconnect class as the flow LVS) then Netgen `-blackbox` vs
-`pnl/trouper_top.pnl.v`: **`Circuits match uniquely`** — 39836 devices / 39823
-nets on both sides, identical; VDD, VSS and every signal pin match; 7 disconnected
-pins (benign tie/fill, as in the base run). The extracted device/instance/RC
-line set is byte-identical to the base-DEF extraction (127081 lines) — i.e. the
-bridges added **zero** connectivity (redundant metal on already-joined VDD/VSS),
-which is the correct signature of healthy bridges and rules out a short or a
-stray net (either would perturb the count). It does **not** by itself prove the
-bridges *connect* — that is the seam trace below + the DEF ring-continuity check
-above.
-
-*Negative control (job 5733):* a deliberate M1 VDD↔VSS box injected into the
-bridged GDS makes Magic emit `Ports "VSS" and "VDD" are electrically shorted`,
-the net count drop to 39821, and Netgen report `Netlists do not match / Top
-level cell failed pin matching` — so the harness demonstrably catches a real
-short, and 5732's clean pass is meaningful.
-Report + repro: `reports/bridged_macro_lvs/` (incl. `negctl_*`).
-
-**Tile-context seam check (job 5719, 2026-09-06).** For the A40 ↔ `SSCS_2026_01`
-padring boundary (not in the macro): the bridged A40 was swapped into the v6 tile
-GDS and a KLayout connectivity trace run over the whole die. A40 core VDD/VSS each
-extract as one net equal to the chip `A40_VDD` / shared `VSS` net (no open),
-distinct from each other (no rail short), carrying only power labels (no
-bridge/PDN-to-signal short over 25 signal nets), all 12 bridge stacks integral
-M2-foot→M5/M4-top; XOR confirms the swap perturbs nothing outside A40. Full
-device-level LVS of the A40-only tile is integrator scope. See
-`planning/a40-bridge-tile-lvs-selfcheck.md`.
+**M2/M3-only** (unchanged since job 5682) evicts signal M3/via2 from the
+bridge zones while leaving M4/M5 free for the core ring. **Re-verified on job
+5861's routed DEF:** VDD M5 north ring one continuous segment
+`x[8.12, 1666.84]`, VSS M4 west ring one segment `y[1.68, 1107.68]`, and
+**zero signal M4/M5 wires in either bridge zone**.
 
 ## GDS
 
-`gds/trouper_top.gds` is the job-5682 flow streamout with the 12 A40 power
-bridges inserted (`tools/build_a40_pdn_bridges.py`, unchanged). Adds geometry
-only — every standard-cell/macro coordinate is preserved. Layer deltas
-top-cell: M2 +24, Via2 +1152, M3 +24, Via3 +1152, M4 +18, Via4 +576, M5 +6.
+`gds/trouper_top.gds` is the job-5861 flow streamout with the 12 A40 power
+bridges inserted (`tools/build_a40_pdn_bridges.py`, unchanged; SGE job 8472).
+Adds geometry only — every standard-cell/macro coordinate is preserved. Layer
+deltas top-cell: M2 +24, Via2 +1152, M3 +24, Via3 +1152, M4 +18, Via4 +576,
+M5 +6 (identical to every previous promote).
 
-**md5 of `gds/trouper_top.gds`: `c308505a425acdce2e6704273c5c524a`**
-(streamout `f6b769928c72c65913872e6e2d980b34`).
+**md5 of `gds/trouper_top.gds`: `fd26d3cd6c3c8a55dc1930b46338fce1`**
+(streamout `7b779f66bcd75eddd135fed3e868ea35`).
 
-## KLayout 63-table DRC — job 5684
+## KLayout 63-table DRC — job 8475
 
-Full guarded run (`rtl-test/scripts/klayout_drc_guarded.sh`) against the exact
-bridged GDS above (md5 `c308505a…`, asserted in the job log). **63/63 tables
-ran, 0 violations** — `reports missing 0`, `truncated 0`, `exceptions 0`,
-`RESULT: PASS`, guard exit 0. Every table that could carry bridge geometry is
-zero: `metal3` (was 12× M3.2a) 0, `via2` (was 4× V2.1) 0,
-`metal4` / `metal5` / `via4` 0; `contact` (58 min) and `metal1` (40 min) also
-clean. First full genuine KLayout DRC pass on the shipped bridged GDS.
+Full guarded run (`rtl-test/scripts/klayout_drc_guarded.sh`, per-job copy)
+against the exact bridged GDS above (md5 `fd26d3cd…`, staged and checked before
+submit). **63/63 tables ran, 0 violations** — `reports missing 0`,
+`truncated 0`, `exceptions 0`, `RESULT: PASS`, guard exit 0.
+
+An earlier attempt (job 8468) landed on the scheduler's `2026.10` default
+image, whose PDK no longer has `rule_decks/layers_def.drc`; the guard refused
+to run (exit 1), as designed. The 2026.10 bridge/MCP/GLS jobs (8464–8467) were
+discarded and rerun on `chipathon26`.
 
 ## Signoff summary
 
@@ -97,88 +76,74 @@ clean. First full genuine KLayout DRC pass on the shipped bridged GDS.
 | Route DRC | 0 |
 | Magic DRC | 0 |
 | LVS (flow, base streamout / DEF) | 0 errors; circuits match uniquely |
-| LVS (bridged GDS, job 5732) | circuits match uniquely — 39836 dev / 39823 net both sides |
 | XOR (GDS vs flow) | 0 differences |
-| PDN power-grid violations | 0 (VDD, VSS) |
-| KLayout 63-table DRC (bridged GDS, job 5684) | 63/63 ran, 0 violations |
-| Hold (flow STA corners) | MET (WNS 0, TNS 0) — see note below |
-| Hold (`min_ff` out-of-flow, job 5687) | +0.12 ns, TNS 0 |
-| MCP scoped-exception audit (synth + route) | PASS — 14 groups each, no baseline delta |
-| Host-SPI post-route GLS/SDF (nom_tt, job 5686) | PASS |
+| PDN power-grid violations | 0 (VDD, VSS); worst IR drop 1.53 mV (0.05 %) |
+| KLayout 63-table DRC (bridged GDS, job 8475) | 63/63 ran, 0 violations |
+| Hold (flow STA corners) | MET (WNS 0, TNS 0); worst slack +0.106 ns at `max_ff` |
+| MCP scoped-exception audit (synth 8474 + route 8476) | PASS — 14 groups each; baseline re-approved (see below) |
+| Host-SPI post-route GLS/SDF (nom_tt, job 8473) | PASS |
+
+**MCP baseline re-approval.** Both stages first failed "resolved MCP object
+set changed". Reviewed before `--update-baseline`: per group, endpoint
+counts, `-through` object names and setup/hold multipliers are identical to
+the job-5682 baseline in both stages, and the endpoint registers (mapped
+through their Q nets) are the same set. The only change is the anonymised
+`_NNNNN_` instance numbering of the new netlist.
+
+**GLS (job 8473)** — netlist md5 `d6fbf31e…`, nom_tt SDF `fef61619…`: reset
+release, CHIP_ID `0xA7` / CHIP_REV `0x01`, MISO low after read, min-CS-hold
+write + readback, min CS-high gap, 8-byte W-bank burst + auto-inc readback,
+read-byte snapshot stability — all pass.
 
 ## Post-P&R timing
 
-| Corner | Setup WNS | Setup TNS |
-|---|---:|---:|
-| `nom_tt_025C_3v30` | MET | 0 |
-| `max_ff_n40C_3v60` | MET | 0 |
-| `max_ss_125C_3v00` | −12.899 ns | −1175.1 ns |
+| Corner | Setup WNS | Setup TNS | Hold WS |
+|---|---:|---:|---:|
+| `nom_tt_025C_3v30` | +5.447 ns | 0 | +0.575 ns |
+| `max_ff_n40C_3v60` | +8.479 ns | 0 | +0.106 ns |
+| `max_ss_125C_3v00` | **−19.062 ns** | −1199.1 ns | +1.521 ns |
 
 The `max_ss_125C_3v00` corner is the FD 5 V-cell voltage problem (#1/#40),
-pursued as a waiver — not a closure claim. This run's SS WNS/TNS/DRV are the
-best of the keepout series (5674 was −14.02 / −1263 / 13-4).
+pursued as a waiver — not a closure claim. The worst SS path is in `u_remod`
+(CIFF3).
 
-**SS setup closes at the raised core rail — this exact netlist (job 5742,
-2026-09-07).** Liberty-swap STA reload of `nl/trouper_top.nl.v` (md5
-`d3cdcb86…`) + this run's `max` SPEF + signoff SDC v33
-(`src/config/pnr_32m_scoped_v25_b6_signoff.sdc`, md5 `740e1b15…`), only the
-SS liberty changed:
+## Not re-run for this netlist
 
-| SS liberty | Setup WNS | Setup TNS | Hold WNS (max SPEF) |
-|---|---:|---:|---:|
-| `ss_125C_3v00` (control) | −12.888 ns | −1166.2 ns | +1.74 ns |
-| `ss_125C_4v50` | **+3.390 ns** | **0.0** | +0.88 ns |
+These were established on the job-5682 GDS/netlist and have **not** been
+repeated against job 5861. Treat them as owed, not carried:
 
-The `3v00` control reproduces the flow's post-PnR −12.899 ns / −1175.1 ns to
-0.011 ns (WNS) / ~0.8 % (TNS) — harness faithful. At `ss_125C_4v50` the same
-placed-and-routed netlist meets 32 MHz setup outright, +3.39 ns, zero
-violating endpoints. Consistent with the prior finding on predecessor
-netlists (`project_vdd_closes_ss_timing`: +0.52 / +1.17 / +2.70 ns at
-jobs 2201 / B1 / 5200).
-
-Caveats: (a) STA liberty swap of the 3.0 V-optimised netlist, **not** a
-re-P&R targeting 4.5 V — a bare 4.5 V-targeted run under-drives to ≈ −7…−8 ns
-without a ~9 ns resizer setup margin (`area-reduction-roadmap.md` "RAISE SS
-ONLY"). (b) `ss_125C_4v50` is the only PDK SS corner above `3v00` (others:
-`1v62`, `3v00`) — there is no `3v60` / lower-`T_j` liberty, so a smaller rail
-bump cannot be signed off, only interpolated. (c) The core stdcell library
-`gf180mcu_fd_sc_mcu7t5v0` is 5 V-designed ("5v0") run under-voltage at 3.0 V,
-so 4.5 V is within its device ratings; the IO ring and the external
-SX1257 (3.9 V abs-max) / APS6404L (4.0 V) / RPi interfaces stay on a
-separate 3.3 V rail — dual-rail, Open Risks #27. (d) Hold WNS above is with
-the slow (`max`) SPEF, not the true fast/min-RC corner; a proper hold
-re-check at the raised rail is still owed (Open Risks #41/#54), though the
-flow hold signoff is already clean at 3.3 V (below).
-Job log: `/srv/eda/logs/timothyn-dev/job-5742.o`.
-
-Hold is met at the three **flow** STA corners (`nom_tt`, `max_ss`, `max_ff`).
-None is a min-RC fast corner, so that is not the true hold sign-off; the real
-fast/hold corner is checked out of flow — standalone OpenROAD STA on this
-run's routed ODB + min-RC SPEF + `ff_n40C_3v60` liberty (job 5687): **worst
-hold slack +0.12 ns, hold TNS 0.00**. `STA_CORNERS` cannot host `min_ff`
-directly (Open Risks #41/#54).
+- **Bridged-GDS LVS** (job 5732 + negative control 5733,
+  `reports/bridged_macro_lvs/`): the flow LVS above extracts from the DEF and
+  never sees the bridges. The bridge geometry and the keepout are unchanged,
+  and the DEF ring check above passes, but the bridged-GDS extraction itself
+  has not been rerun.
+- **A40 tile seam trace** (job 5719, `planning/a40-bridge-tile-lvs-selfcheck.md`).
+- **Standalone `min_ff` hold STA** (min-RC SPEF + `ff_n40C_3v60`; job 5687
+  gave +0.12 ns on 5682). The flow corners above are not a min-RC fast corner
+  (Open Risks #41/#54).
+- **SS at the raised rail** (`ss_125C_4v50` liberty swap; job 5742 gave
+  +3.39 ns on 5682).
 
 ## Known gaps (carried, not signed off)
 
-- **SS setup WNS/TNS** at `max_ss_125C_3v00` (above) — the #1/#40 voltage
-  problem; pursued as a waiver. This netlist meets SS setup outright at
-  `ss_125C_4v50` (+3.39 ns, job 5742 — see "Post-P&R timing" above).
+- **SS setup WNS/TNS** at `max_ss_125C_3v00`: −19.06 ns / −1199 ns, a
+  **regression from −12.90 ns / −1175 ns** on job 5682. Job 5842 (same PSRAM
+  RTL, older `reg_bank`) reached −15.21 ns, so the RTL since 5682 accounts for
+  the gap. The worst path is `u_remod`. The #1/#40 voltage waiver applies.
 - **Max slew / max cap**, flow STA:
 
   | Corner | Max slew | Max cap |
   |---|---:|---:|
-  | `nom_tt_025C_3v30` | 0 | 0 |
-  | `max_ff_n40C_3v60` | 0 | 0 |
-  | `max_ss_125C_3v00` | 9 | 2 |
+  | `nom_tt_025C_3v30` | 4 | 3 |
+  | `max_ff_n40C_3v60` | 4 | 3 |
+  | `max_ss_125C_3v00` | 9 | 5 |
 
-  The 9+2 collapse to **2 nets**: `training_acc.n_acc` update-enable gating
-  (slew −1.46 ns / cap −0.018 pF) and the `packet_ctrl_fsm`
-  `iq_samp_cnt`↔`lat_timing_ref` replay comparator (slew −0.26 ns / cap
-  −0.012 pF). Both MCP-relaxed quasi-static cones with a ≥2-cycle budget.
-  Raising Vdd does not help — it tightens the `max_transition` limit faster
-  than it speeds the edges (job 5689: 4.5 V limit 7.0 ns vs 3.0 V 15.6 ns,
-  slew violations 9 → ~140). Standalone waiver, subset of the ~15-pin
-  residual accepted at the job-5105 signoff.
+  Job 5682 had 0/0 at nom_tt and max_ff. The violators are three
+  `nor4_1` → `and3/and4` drivers in the `reg_bank` SPI read mux feeding
+  `u_spi.miso_shreg[4]`, `[6]` and the MISO output flop: worst slew −1.06 ns
+  at nom_tt and −6.13 ns at SS. A fourth, at SS only, is the `rpl_valid`
+  D-input cone (−0.75 ns). This is Open Risk #82. The read mux is a
+  2 MHz SPI-domain path with ample setup margin, but the DRV is not waived.
 
 ## Contents
 
@@ -190,7 +155,6 @@ directly (Open Risks #41/#54).
 | `lib/<corner>/` | Per-corner timing libraries |
 | `reports/sta/` | Post-P&R STA reports for all three corners |
 | `reports/drc/`, `reports/lvs/`, `reports/irdrop/` | Flow signoff reports (base streamout / DEF) |
-| `reports/bridged_macro_lvs/` | Netgen LVS of the **bridged** GDS vs `pnl/` (job 5732) — match uniquely |
 | `metrics.json`, `metrics.csv` | Full flow metrics |
 | `render/trouper_top.png` | Layout render |
 
