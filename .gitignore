@@ -47,6 +47,7 @@ rtl-test/*.vvp
 
 # Synthesis output netlists (regenerable; keep .log/.txt reports)
 rtl-test/syn_*/out_*/netlist.v
+rtl-test/syn_mimo_per_module/out_remod_ef2/
 
 # SymbiYosys formal-proof run output (source .sby/.sv tracked; run dirs regenerable)
 formal/*/
@@ -113,3 +114,15 @@ fpga-emul/replay_*.csv
 # fpga-emul: dated .bak copies of build handoffs (base *.xsa/*.elf already ignored above)
 fpga-emul/sw/*.xsa.*.bak
 fpga-emul/sw/*.elf.*.bak
+
+# Local scratch / tool droppings (2026-11-19)
+codex-session-*.md
+fpga-emul/.Xil/
+fpga-emul/*.ltx
+fpga-emul/tools/risk72_bench/caps/
+fpga-emul/tools/risk72_bench/*.log
+src/config/*.bak
+rtl-test/gl_item54_inputs/
+rtl-test/syn_mimo_per_module/out_*/
+sim/gf180_xyce_stdcell_smoke.*
+!sim/gf180_xyce_stdcell_smoke.cir
