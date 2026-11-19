@@ -50,7 +50,13 @@ from test_noise_trig import _StimMode, _noise_or_cw_driver
 from test_psram_ops import _model_byte
 
 CLK_PER_IQ       = 64   # production half-band decimator: iq_valid every 64 clocks
-FETCH_SUBCYCLES  = 31   # fixed debug-fetch length (header comment / RTL)
+# 2026-09-14 (Open Risks #72): the debug-read burst's final state (capture +
+# CE# deassert combined, zero hold-margin cycles) was split into two states
+# so the last nibble gets the same one-cycle margin the write burst already
+# had -- see src/control/psram_buf_ctrl.v. That adds one sub-cycle to every
+# debug fetch: dbg_end - dbg_start (a half-open [dbg_start, dbg_end) cycle
+# count) is now empirically 33, not 31.
+FETCH_SUBCYCLES  = 33   # fixed debug-fetch length (header comment / RTL)
 
 
 @cocotb.test()

@@ -14,7 +14,7 @@ TESTS                := $(DESIGN_ROOT)/cocotb/tests
 
 VERILOG_SOURCES      := $(SRC)/frontend/dc_removal.v
 EXTRA_ARGS           += --timing -Wno-fatal
-PYTHONPATH           := $(TESTS)
+PYTHONPATH           := $(TESTS):$(DESIGN_ROOT)
 COCOTB_RESULTS_FILE  := results.xml
 
 include $(shell cocotb-config --makefiles)/Makefile.sim

@@ -11,7 +11,8 @@
 // Preserves the same physical response as the R=128 design (τ = 16 samples
 // × 4 µs/sample = 64 µs); sample_shift doubles sample rate, alpha halves.
 //
-// The update adds the full diff to the accumulator (no deadband).
+// The update adds the full diff to the accumulator (no deadband). The output
+// is the same 9-bit diff saturated to int8.
 // Max steady-state acc = 127 × 32 = 4064, fits in 13-bit signed (−4096..+4095).
 // SC startup hold-off must be ≥ 128 output samples (4 × τ = 4 × 32).
 //
@@ -39,8 +40,10 @@ module dc_removal_chan (
             sample_out <= 8'sd0;
         end else if (sample_valid) begin
             dc_est_acc <= dc_est_acc + dc_est_step;
-            // Output uses DC estimate from previous cycle (acc before update).
-            sample_out <= sample_in - dc_est;
+            // Output uses DC estimate from previous cycle (acc before update),
+            // saturated to int8 (Open Risk #75: a wrap sign-flips the sample).
+            sample_out <= (diff >  9'sd127) ?  8'sd127 :
+                          (diff < -9'sd128) ? -8'sd128 : diff[7:0];
         end
     end
 

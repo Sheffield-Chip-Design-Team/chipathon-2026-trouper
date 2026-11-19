@@ -1,6 +1,18 @@
 // sd_remod.v
-// 2x half-band droop-compensating interpolator + 4th-order CIFF sigma-delta
+// 2x half-band droop-compensating interpolator + 3rd-order CIFF sigma-delta
 // re-modulator core, for the Trouper->SX1302 receive path.
+//
+// CIFF3 REDESIGN 2026-10-03 (planning/sd-remod-ciff3-redesign-2026-10-03.md):
+//   - the loop core is now a genuine 3rd-order CIFF (see
+//     sd_remod_multiplierless.v). The 2026-09-05 "4th-order" core had
+//     A3=A4=-8, which put a real closed-loop pole at ~+1.2: s3/s4 ran to the
+//     sat16 rail within ~30 clocks and the loop behaved as a 2nd-order shaper.
+//   - the interpolator keeps FRAC_BITS=2 extra fractional bits (10-bit
+//     output, x4 scale). Rounding the new even-phase samples back to int8
+//     cost ~1.0 dB of in-channel SNR over the int8 input floor; with two
+//     fraction bits the remod path sits on that floor (<0.1 dB).
+//   Everything below this block describes the 2026-09-05 promotion; the
+//   interpolator arithmetic is unchanged except the final shift/saturation.
 //
 // PROMOTED TO CANONICAL 2026-09-05, superseding the plain 4th-order-only
 // sd_remod.v (see planning/sd-remod-4th-order-fix-2026-09-04.md for that
@@ -109,8 +121,8 @@ module sd_remod (
 
     // 19=16+2+1, 73=64+8+1, 312=256+32+16+8.  Accumulating
     // one shifted term per clock turns all three constant products into one
-    // shared adder/subtractor.  The initial +256 implements round-to-nearest
-    // before the final divide by 512.
+    // shared adder/subtractor.  The initial +64 implements round-to-nearest
+    // before the final divide by 128 (512 / 2^FRAC_BITS).
     reg signed [19:0] term_value;
     reg               term_subtract;
     always @(*) begin
@@ -135,16 +147,18 @@ module sd_remod (
                                   ? mac_acc - term_value
                                   : mac_acc + term_value;
 
-    function signed [7:0] sat8;
+    function signed [9:0] sat10;
         input signed [19:0] v;
         begin
-            if      (v > 20'sd127)  sat8 = 8'sd127;
-            else if (v < -20'sd128) sat8 = -8'sd128;
-            else                    sat8 = v[7:0];
+            if      (v > 20'sd511)  sat10 = 10'sd511;
+            else if (v < -20'sd512) sat10 = -10'sd512;
+            else                    sat10 = v[9:0];
         end
     endfunction
 
-    reg signed [7:0] interp_i, interp_q;
+    // FRAC_BITS=2: even phase = sat10(acc >>> 7) with a +64 rounding
+    // preload; odd phase = x[n-2] << 2. Output scale is 4x int8.
+    reg signed [9:0] interp_i, interp_q;
     reg              interp_valid;
     reg              odd_pending;
     reg        [5:0] half_count;
@@ -186,16 +200,16 @@ module sd_remod (
                 mac_busy <= 1'b1;
                 mac_q <= 1'b0;
                 term_step <= 0;
-                mac_acc <= 20'sd256;
+                mac_acc <= 20'sd64;
             end else if (mac_busy) begin
                 if (term_step == 4'd9) begin
                     if (!mac_q) begin
-                        interp_i <= sat8(acc_next >>> 9);
+                        interp_i <= sat10(acc_next >>> 7);
                         mac_q <= 1'b1;
                         term_step <= 0;
-                        mac_acc <= 20'sd256;
+                        mac_acc <= 20'sd64;
                     end else begin
-                        interp_q <= sat8(acc_next >>> 9);
+                        interp_q <= sat10(acc_next >>> 7);
                         interp_valid <= 1'b1;
                         mac_busy <= 1'b0;
                         mac_q <= 1'b0;
@@ -212,8 +226,8 @@ module sd_remod (
                 if (half_count == 6'd1) begin
                     // Centre-tap phase: 2*(512/1024) = 1, so this is an
                     // exact delayed input copy with no arithmetic.
-                    interp_i <= zi2;
-                    interp_q <= zq2;
+                    interp_i <= {zi2, 2'b00};
+                    interp_q <= {zq2, 2'b00};
                     interp_valid <= 1'b1;
                     odd_pending <= 1'b0;
                     half_count <= 0;

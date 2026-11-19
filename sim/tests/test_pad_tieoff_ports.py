@@ -23,7 +23,8 @@ CTRL_SUFFIXES = ("_PU", "_PD", "_IE", "_OE", "_CS", "_SL", "_PDRV0", "_PDRV1")
 # a bi_t control suffix, as of 2026-09-03 (DBG1 merged onto the IRQ_OUT pad, so
 # no DBG1_* control ports; ARRAY_ACQ_N present with a dynamic OE):
 #   111 constant tie-offs
-# +   5 dynamic  (4 PSRAM_SIO_n_IE = ~PSRAM_SIO_OE[n]; ARRAY_ACQ_N_OE = the
+# +   5 dynamic  (4 PSRAM_SIO_n_IE = ~psram_sio_oe_q[n], the negedge-relaunched
+#                 OE that reaches the pad (Open Risk #69); ARRAY_ACQ_N_OE = the
 #                 open-drain drive request)
 # +   4 functional PSRAM_SIO_n_OE (driven by a concatenation from psram_buf_ctrl)
 # = 120
@@ -111,11 +112,15 @@ def test_tieoff_drivers_are_constants(ports):
         f"ARRAY_ACQ_N_OE is '{dynamic['ARRAY_ACQ_N_OE']}', expected 'array_acq_drive_oe'"
     )
     # The IE=OE=1 state is uncharacterized for gf180mcu_fd_io__bi_t, so each
-    # lane's IE must be exactly the inversion of its own OE.
+    # lane's IE must be exactly the inversion of its own OE.  The OE that
+    # reaches the pad is the negedge-relaunched vector psram_sio_oe_q (Open
+    # Risk #69: the half-cycle relaunch that pulls the SIO write/turnaround
+    # arc off the critical path), so IE inverts that same register -- not the
+    # posedge-domain PSRAM_SIO_OE port.
     for n in range(4):
-        assert dynamic[f"PSRAM_SIO_{n}_IE"] == f"~PSRAM_SIO_OE[{n}]", (
+        assert dynamic[f"PSRAM_SIO_{n}_IE"] == f"~psram_sio_oe_q[{n}]", (
             f"PSRAM_SIO_{n}_IE is '{dynamic[f'PSRAM_SIO_{n}_IE']}', "
-            f"expected '~PSRAM_SIO_OE[{n}]'"
+            f"expected '~psram_sio_oe_q[{n}]'"
         )
 
 

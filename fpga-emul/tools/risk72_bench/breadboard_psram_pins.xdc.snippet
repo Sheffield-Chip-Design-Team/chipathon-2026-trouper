@@ -1,0 +1,14 @@
+# 2026-09-28 (Open Risks #72): SCK moved off JA (200 ohm series gave a 3-6 ns
+# edge vs APS6404L tKHKL <= 1.5 ns) to JB pin 1, which has no series resistor.
+set_property PACKAGE_PIN E15  [get_ports {psram_sck}]     ;# PSRAM_SCLK  JB pin 1 (was JA pin 4 / D12)
+set_property SLEW FAST        [get_ports {psram_sck}]
+set_property DRIVE 4          [get_ports {psram_sck}]     ;# weak drive = built-in series R: damps ringing on the bare breadboard lead (was 16: 4.8 V/-1.0 V overshoot, double-clocking)
+# 2026-09-28: rest of the bus off JA too -- through 200 ohm a 0->1 SIO edge
+# reached only 2.64-2.80 V at the SCK rising edge vs APS6404L VIH = VDD-0.4.
+set_property PACKAGE_PIN C15  [get_ports {psram_ce_n}]    ;# PSRAM_nCE   JB pin 4  (was JA pin 7 / D13)
+set_property PACKAGE_PIN J17  [get_ports {psram_sio[0]}]  ;# SI  / SIO0  JB pin 7  (was JA pin 3 / A11)
+set_property PACKAGE_PIN K15  [get_ports {psram_sio[1]}]  ;# SO  / SIO1  JB pin 9  (was JA pin 1 / G13)
+set_property PACKAGE_PIN U12  [get_ports {psram_sio[2]}]  ;# SIO2        JC pin 1  (was JA pin 2 / B11)
+set_property PACKAGE_PIN V10  [get_ports {psram_sio[3]}]  ;# SIO3        JC pin 3  (was JA pin 10 / K16)
+set_property SLEW FAST        [get_ports {psram_ce_n psram_sio[*]}]
+set_property DRIVE 8          [get_ports {psram_ce_n psram_sio[*]}]  ;# softer 4-line simultaneous switching (first all-ones nibble failed)

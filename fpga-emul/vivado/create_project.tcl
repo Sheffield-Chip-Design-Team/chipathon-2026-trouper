@@ -27,6 +27,13 @@ set proj_name  "arty_dsp_emul"
 set proj_dir   [file normalize "[file dirname [info script]]/../vivado_proj"]
 set rtl_dir    [file normalize "[file dirname [info script]]/../rtl"]
 set asic_rtl   [file normalize "[file dirname [info script]]/../../src"]
+# ASIC_SRC_DIR env override: build the ASIC RTL from another src/ tree, e.g. a
+# `git archive <commit> src` extract, for A/B bench tests of an older revision
+# (2026-11-19: /final's commit 7d0e749 vs the working tree). Unset = repo src/.
+if {[info exists ::env(ASIC_SRC_DIR)] && $::env(ASIC_SRC_DIR) ne ""} {
+    set asic_rtl [file normalize $::env(ASIC_SRC_DIR)]
+    puts "## ASIC_SRC_DIR override: $asic_rtl"
+}
 set afe_bd_dir [file normalize "[file dirname [info script]]/../../../claude/fpga-afe-eval/build/vivado/arty_afe_eval/arty_afe_eval.srcs"]
 set part       "xc7a100tcsg324-1"
 
@@ -68,6 +75,14 @@ set asic_srcs [list \
     "$asic_rtl/control/reg_bank.v"            \
 ]
 
+# Bench-only override (Open Risks #72 slow-QPI test): PSRAM_BUF_CTRL_SRC swaps
+# in a scratch copy of psram_buf_ctrl.v without touching src/. Unset = src/.
+if {[info exists ::env(PSRAM_BUF_CTRL_SRC)] && $::env(PSRAM_BUF_CTRL_SRC) ne ""} {
+    set pbc_src [file normalize $::env(PSRAM_BUF_CTRL_SRC)]
+    puts "## PSRAM_BUF_CTRL_SRC override: $pbc_src"
+    set asic_srcs [lreplace $asic_srcs 4 4 $pbc_src]
+}
+
 add_files -norecurse $emul_srcs
 add_files -norecurse $asic_srcs
 set_property file_type {Verilog} [get_files *.v]
@@ -75,6 +90,22 @@ set_property file_type {Verilog} [get_files *.v]
 # Constraints
 add_files -fileset constrs_1 -norecurse \
     "[file dirname [info script]]/arty_dsp_emul.xdc"
+# PSRAM_PIN_XDC env override: an extra XDC read AFTER arty_dsp_emul.xdc, so its
+# PACKAGE_PIN/SLEW/DRIVE settings win -- e.g. the JB/JC breadboard pinout in
+# tools/risk72_bench/breadboard_psram_pins_jball.xdc. Unset = JA pinout as before.
+if {[info exists ::env(PSRAM_PIN_XDC)] && $::env(PSRAM_PIN_XDC) ne ""} {
+    set pin_xdc [file normalize $::env(PSRAM_PIN_XDC)]
+    puts "## PSRAM_PIN_XDC override: $pin_xdc"
+    add_files -fileset constrs_1 -norecurse $pin_xdc
+}
+# RISK72_OVERSAMPLE (see the clk_wiz and ILA sections): 200 MHz pad-sampling ILA.
+set risk72_oversample 0
+if {[info exists ::env(RISK72_OVERSAMPLE)] && $::env(RISK72_OVERSAMPLE) ne "" && $::env(RISK72_OVERSAMPLE) ne "0"} {
+    set risk72_oversample 1
+    set os_xdc "[file dirname [info script]]/risk72_oversample.xdc"
+    add_files -fileset constrs_1 -norecurse $os_xdc
+    set_property USED_IN_SYNTHESIS false [get_files $os_xdc]
+}
 
 # ============================================================================
 # Create block design
@@ -107,18 +138,43 @@ current_bd_design [get_bd_designs system]
 #             (TI DP83848, MII mode) on eth_ref_clk / pin G18. Without it the PHY
 #             PLL never starts → no link, no link LED.
 # VCO = 100*8 = 800 MHz gives integer divides for all three (8, 25, 32).
+# BENCH_CLK_MHZ env override: rerate CLKOUT2 (the bench-mode dsp_clk, which
+# psram_sck is directly gated from -- PSRAM_SCK_OUT = psram_sck_en_q & clk in
+# trouper_top.v) to something other than 32 MHz. Added for the 2026-09-13
+# external-PSRAM cable-margin diagnostic: does the debug write/read-back
+# one-byte shift go away at a lower SCLK, confirming it's propagation delay
+# over the flying leads rather than an RTL bug (the RTL was independently
+# cleared by cocotb/psram_ops::test_dbg_write_readback_roundtrip, which is
+# bit-exact at zero cable delay regardless of frequency). 800 MHz VCO divides
+# integer-clean at 8/16/32; other values may not -- check the Vivado log for
+# an achieved-vs-requested frequency mismatch warning.
+set bench_clk_mhz 32.000
+if {[info exists ::env(BENCH_CLK_MHZ)] && $::env(BENCH_CLK_MHZ) ne ""} {
+    set bench_clk_mhz $::env(BENCH_CLK_MHZ)
+    puts "## BENCH_CLK_MHZ set: CLKOUT2 (bench dsp_clk / psram_sck) <- ${bench_clk_mhz} MHz"
+}
 set clk_wiz [create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 clk_wiz_0]
 set_property -dict [list \
     CONFIG.PRIM_IN_FREQ              {100.000} \
     CONFIG.NUM_OUT_CLKS             {3} \
     CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {100.000} \
     CONFIG.CLKOUT2_USED              {true} \
-    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {32.000} \
+    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ $bench_clk_mhz \
     CONFIG.CLKOUT3_USED              {true} \
     CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {25.000} \
     CONFIG.RESET_TYPE                {ACTIVE_LOW} \
     CONFIG.RESET_PORT                {resetn} \
 ] $clk_wiz
+# RISK72_OVERSAMPLE: add CLKOUT4 = 200 MHz (VCO 800 / 4) to clock the pad-sampling
+# ILA. Only in that build, so every other image keeps the 3-output MMCM.
+if {$risk72_oversample} {
+    puts "## RISK72_OVERSAMPLE set: clk_wiz CLKOUT4 = 200 MHz for the pad-sampling ILA"
+    set_property -dict [list \
+        CONFIG.NUM_OUT_CLKS              {4} \
+        CONFIG.CLKOUT4_USED              {true} \
+        CONFIG.CLKOUT4_REQUESTED_OUT_FREQ {200.000} \
+    ] $clk_wiz
+}
 
 # Connect external 100 MHz board clock to clk_wiz primary input
 create_bd_port -dir I -type clk -freq_hz 100000000 clk100mhz
@@ -168,6 +224,13 @@ set ctrl_clk [get_bd_pins clk_wiz_0/clk_out2]
 #   unset) keeps dsp_clk = SX1257 CLK_OUT. The sx_clk_out port + BUFG are still
 #   created either way so arty_dsp_emul.xdc stays valid; in bench mode the F4
 #   BUFG output is simply unused.
+#   BENCH_CLK also implies USE_EXT_PSRAM=0 (on-chip BRAM psram_model, JA pads
+#   tied off -- see below) unless FORCE_EXT_PSRAM overrides it. Standalone
+#   external-APS6404L bring-up (no AFE board, real chip on JA) needs BOTH env
+#   vars: `BENCH_CLK=1 FORCE_EXT_PSRAM=1`. Verified against real hardware
+#   2026-09-10/13 on the Arty A7 + APS6404L breakout on JA (see
+#   fpga-emul/HARDWARE_SETUP.md) -- full QPI round-trip bit-exact once all
+#   four SIO lines were seated; CE#/SCK/SIO measured directly on JA.
 set bench_clk 0
 if {[info exists ::env(BENCH_CLK)] && $::env(BENCH_CLK) ne "" && $::env(BENCH_CLK) ne "0"} {
     set bench_clk 1
@@ -313,8 +376,19 @@ connect_bd_net [get_bd_pins axi_gpio_nss_en_0/gpio_io_o] [get_bd_ports rffe_nss_
 # this IP's instantiation template with each setting. We need a plain
 # discrete SCK pin to wire straight to fpga_dsp_wrap, not the STARTUP path.
 set spi_host [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_quad_spi:3.2 axi_quad_spi_1]
+# HOST_SPI_SCK_RATIO env override (2026-09-13 harness-vs-hardware isolation):
+# default 16 (100 MHz ext_spi_clk / 16 = 6.25 MHz host-SPI). Valid C_SCK_RATIO
+# values are powers of 2 from 2 to 1024. Used to test whether the PSRAM debug
+# port's read-pop (0x76) needs more margin between host-SPI bytes than 6.25 MHz
+# gives it -- unrelated to psram_sck/the PSRAM's own QPI bus, which this does
+# not touch.
+set host_spi_sck_ratio 16
+if {[info exists ::env(HOST_SPI_SCK_RATIO)] && $::env(HOST_SPI_SCK_RATIO) ne ""} {
+    set host_spi_sck_ratio $::env(HOST_SPI_SCK_RATIO)
+    puts "## HOST_SPI_SCK_RATIO set: axi_quad_spi_1 C_SCK_RATIO <- $host_spi_sck_ratio"
+}
 set_property -dict [list \
-    CONFIG.C_SCK_RATIO      {16} \
+    CONFIG.C_SCK_RATIO      $host_spi_sck_ratio \
     CONFIG.C_NUM_SS_BITS    {1} \
     CONFIG.C_SPI_MODE       {0} \
     CONFIG.C_USE_STARTUP    {0} \
@@ -332,7 +406,21 @@ connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins axi_quad_spi_1/ext_
 # BRAM-backed PSRAM model as well as the MMCM DSP clock; otherwise the SC
 # delay line has no memory and acquisition can never lock.
 set dsp_wrap [create_bd_cell -type module -reference fpga_dsp_wrap fpga_dsp_wrap_0]
-set_property CONFIG.USE_EXT_PSRAM [expr {$bench_clk ? 0 : 1}] [get_bd_cells fpga_dsp_wrap_0]
+# FORCE_EXT_PSRAM env override: keep the MMCM 32 MHz bench clock (no AFE board)
+# but still bring the real APS6404L pads out on JA, for standalone external-PSRAM
+# bring-up. Without it, BENCH_CLK implies the on-chip BRAM psram_model.
+set force_ext_psram 0
+if {[info exists ::env(FORCE_EXT_PSRAM)] && $::env(FORCE_EXT_PSRAM) ne "" && $::env(FORCE_EXT_PSRAM) ne "0"} {
+    set force_ext_psram 1
+    puts "## FORCE_EXT_PSRAM set: external APS6404L pads on JA despite BENCH_CLK"
+}
+set_property CONFIG.USE_EXT_PSRAM [expr {($bench_clk && !$force_ext_psram) ? 0 : 1}] [get_bd_cells fpga_dsp_wrap_0]
+set psram_qpi_clk_div 1
+if {[info exists ::env(PSRAM_QPI_CLK_DIV)] && $::env(PSRAM_QPI_CLK_DIV) ne ""} {
+    set psram_qpi_clk_div $::env(PSRAM_QPI_CLK_DIV)
+    puts "## PSRAM_QPI_CLK_DIV set: external QPI pin rate <- dsp_clk / ${psram_qpi_clk_div}"
+}
+set_property CONFIG.PSRAM_QPI_CLK_DIV $psram_qpi_clk_div [get_bd_cells fpga_dsp_wrap_0]
 connect_bd_net $dsp_clk [get_bd_pins fpga_dsp_wrap_0/clk]
 connect_bd_net [get_bd_pins rst_32m/peripheral_aresetn] \
                [get_bd_pins fpga_dsp_wrap_0/rst_n]
@@ -399,17 +487,120 @@ set dbg_ila [create_bd_cell -type ip -vlnv xilinx.com:ip:ila:6.2 ila_debug_pins]
 # Three 1-bit probes fit in one RAMB36 at 4096 samples.  The bench image
 # already consumes 134/135 RAMB36 sites, so 16k samples (two RAMB36s)
 # over-utilises the Arty A7-100T by one block.
-set_property -dict [list \
-    CONFIG.C_DATA_DEPTH {4096} \
-    CONFIG.C_NUM_OF_PROBES {3} \
-    CONFIG.C_PROBE0_WIDTH {1} \
-    CONFIG.C_PROBE1_WIDTH {1} \
-    CONFIG.C_PROBE2_WIDTH {1} \
-] $dbg_ila
-connect_bd_net $dsp_clk [get_bd_pins ila_debug_pins/clk]
-connect_bd_net [get_bd_pins fpga_dsp_wrap_0/dbg0] [get_bd_pins ila_debug_pins/probe0]
-connect_bd_net [get_bd_pins fpga_dsp_wrap_0/dbg1] [get_bd_pins ila_debug_pins/probe1]
-connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_valid] [get_bd_pins ila_debug_pins/probe2]
+set risk72_ila 0
+if {[info exists ::env(RISK72_ILA)] && $::env(RISK72_ILA) ne "" && $::env(RISK72_ILA) ne "0"} {
+    set risk72_ila 1
+}
+set risk73_sc_trace 0
+if {[info exists ::env(RISK73_SC_TRACE)] && $::env(RISK73_SC_TRACE) ne "" && $::env(RISK73_SC_TRACE) ne "0"} {
+    set risk73_sc_trace 1
+}
+set risk72_spi_trace 0
+if {[info exists ::env(RISK72_SPI_TRACE)] && $::env(RISK72_SPI_TRACE) ne "" && $::env(RISK72_SPI_TRACE) ne "0"} {
+    set risk72_spi_trace 1
+}
+set risk72_qpi_trace 0
+if {[info exists ::env(RISK72_QPI_TRACE)] && $::env(RISK72_QPI_TRACE) ne "" && $::env(RISK72_QPI_TRACE) ne "0"} {
+    set risk72_qpi_trace 1
+}
+if {$risk72_oversample} {
+    # Open Risks #72, 2026-11-18: the stuck-high readback fault is read-side, so
+    # look at what the FPGA input buffers actually see between SCK edges.
+    # Same risk72_trace bus as RISK72_QPI_TRACE ([31] ce_n, [30] sck, [29:26]
+    # sio_out, [25:22] sio_in straight off the IOBUF O pins, [2:0] context),
+    # but sampled on a 200 MHz MMCM clock (6.25 samples per 32 MHz SCK
+    # period, 5 ns resolution) instead of once per dsp_clk. The dsp_clk ->
+    # 200 MHz crossing is false-pathed in risk72_oversample.xdc -- it is a logic
+    # analyser, not a synchronous path. 2048 samples = 10.24 us.
+    puts "## RISK72_OVERSAMPLE set: 2048-sample QPI pad capture at 200 MHz (RD_TRIG-triggered)"
+    set_property -dict [list \
+        CONFIG.C_DATA_DEPTH {2048} \
+        CONFIG.C_NUM_OF_PROBES {2} \
+        CONFIG.C_PROBE0_WIDTH {1} \
+        CONFIG.C_PROBE1_WIDTH {32} \
+    ] $dbg_ila
+    connect_bd_net [get_bd_pins clk_wiz_0/clk_out4] [get_bd_pins ila_debug_pins/clk]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trigger] [get_bd_pins ila_debug_pins/probe0]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trace] [get_bd_pins ila_debug_pins/probe1]
+} elseif {$risk72_qpi_trace} {
+    # Open Risks #72 follow-up, part 3: the host-SPI wire was already proven
+    # clean (RISK72_SPI_TRACE build) -- the wrong debug-read byte is already
+    # on MISO before axi_quad_spi_1/firmware touch it. This variant traces
+    # one layer deeper: psram_buf_ctrl's own dbg_idx/dbg_addr_cur read
+    # pointer plus the raw QPI SIO pins to the PSRAM chip (fpga_dsp_wrap_0/
+    # risk72_trace retargeted -- see fpga_dsp_wrap.v). All native to
+    # dsp_clk (32 MHz, same domain as ps_sck), so sample dsp_clk directly --
+    # no CDC, no oversampling needed. 16384 samples @ 32 MHz = 512 us.
+    puts "## RISK72_QPI_TRACE set: 16384-sample QPI/dbg_idx capture at 32 MHz (RD_TRIG-triggered)"
+    set_property -dict [list \
+        CONFIG.C_DATA_DEPTH {16384} \
+        CONFIG.C_NUM_OF_PROBES {2} \
+        CONFIG.C_PROBE0_WIDTH {1} \
+        CONFIG.C_PROBE1_WIDTH {32} \
+    ] $dbg_ila
+    connect_bd_net $dsp_clk [get_bd_pins ila_debug_pins/clk]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trigger] [get_bd_pins ila_debug_pins/probe0]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trace] [get_bd_pins ila_debug_pins/probe1]
+} elseif {$risk72_spi_trace} {
+    # Open Risks #72 follow-up: host-SPI bus trace (fpga_dsp_wrap_0/risk72_trace
+    # retargeted to sel_spi_sck/sel_spi_mosi/miso_w/sel_host_cs -- see
+    # fpga_dsp_wrap.v). Sampled at 100 MHz (axi_quad_spi_1's ext_spi_clk),
+    # ~16x oversampling the 6.25 MHz host SCK. 2026-09-14: doubling depth to
+    # 32768 to fit the whole write+read burst blew the ILA's BRAM budget
+    # ("more instantiated block-RAMs than device capacity"); switched the
+    # trigger to the READ debug op specifically (risk72_trigger now =
+    # dbg_mode && !dbg_wr_mode) so the write side (already proven clean) no
+    # longer eats into the window -- back to the known-good 16384 depth.
+    puts "## RISK72_SPI_TRACE set: 16384-sample host-SPI capture at 100 MHz (RD_TRIG-triggered)"
+    set_property -dict [list \
+        CONFIG.C_DATA_DEPTH {16384} \
+        CONFIG.C_NUM_OF_PROBES {2} \
+        CONFIG.C_PROBE0_WIDTH {1} \
+        CONFIG.C_PROBE1_WIDTH {32} \
+    ] $dbg_ila
+    connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ila_debug_pins/clk]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trigger] [get_bd_pins ila_debug_pins/probe0]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trace] [get_bd_pins ila_debug_pins/probe1]
+} elseif {$risk73_sc_trace} {
+    # Open Risks #73: SC-detector path (fpga_dsp_wrap_0/risk72_trace is
+    # retargeted to sc_stat/sc_lock/sc_pipe_active/dcr_valid/... for this
+    # build -- see fpga_dsp_wrap.v). These are all native dsp_clk-domain
+    # (32 MHz) signals, so sample at dsp_clk directly (no CDC, no oversample
+    # needed) to maximise real-time window: 4096 samples @ 32 MHz = 128 us.
+    puts "## RISK73_SC_TRACE set: 4096-sample SC-detector capture at 32 MHz"
+    set_property -dict [list \
+        CONFIG.C_DATA_DEPTH {4096} \
+        CONFIG.C_NUM_OF_PROBES {2} \
+        CONFIG.C_PROBE0_WIDTH {1} \
+        CONFIG.C_PROBE1_WIDTH {32} \
+    ] $dbg_ila
+    connect_bd_net $dsp_clk [get_bd_pins ila_debug_pins/clk]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trigger] [get_bd_pins ila_debug_pins/probe0]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trace] [get_bd_pins ila_debug_pins/probe1]
+} elseif {$risk72_ila} {
+    puts "## RISK72_ILA set: 1024-sample QPI capture at 100 MHz"
+    set_property -dict [list \
+        CONFIG.C_DATA_DEPTH {1024} \
+        CONFIG.C_NUM_OF_PROBES {2} \
+        CONFIG.C_PROBE0_WIDTH {1} \
+        CONFIG.C_PROBE1_WIDTH {32} \
+    ] $dbg_ila
+    connect_bd_net [get_bd_pins clk_wiz_0/clk_out1] [get_bd_pins ila_debug_pins/clk]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trigger] [get_bd_pins ila_debug_pins/probe0]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/risk72_trace] [get_bd_pins ila_debug_pins/probe1]
+} else {
+    set_property -dict [list \
+        CONFIG.C_DATA_DEPTH {4096} \
+        CONFIG.C_NUM_OF_PROBES {3} \
+        CONFIG.C_PROBE0_WIDTH {1} \
+        CONFIG.C_PROBE1_WIDTH {1} \
+        CONFIG.C_PROBE2_WIDTH {1} \
+    ] $dbg_ila
+    connect_bd_net $dsp_clk [get_bd_pins ila_debug_pins/clk]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/dbg0] [get_bd_pins ila_debug_pins/probe0]
+    connect_bd_net [get_bd_pins fpga_dsp_wrap_0/dbg1] [get_bd_pins ila_debug_pins/probe1]
+    connect_bd_net [get_bd_pins axi_inj_ctrl_0/inj_valid] [get_bd_pins ila_debug_pins/probe2]
+}
 
 # --- axi_clk_sync_mon (CLK_OUT phase-lock measurement, 32 MHz DSP domain) ---
 # De-risks the single-clock ASIC: the DSP domain is clocked from one SX1257

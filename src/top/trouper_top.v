@@ -31,7 +31,11 @@
 
 `default_nettype none
 
-module trouper_top (
+module trouper_top #(
+    // FPGA bring-up override: divide only the off-chip QPI transaction rate.
+    // ASIC/default builds retain one QPI edge per 32 MHz controller clock.
+    parameter integer PSRAM_QPI_CLK_DIV = 1
+) (
     // ---- Clock and reset ----
     input  wire        IQ_CLK,       // 32 MHz from PCB TCXO buffer
     input  wire        RESETB,       // active-low chip reset
@@ -256,6 +260,7 @@ module trouper_top (
     wire [3:0] psram_sio_out_c, psram_sio_oe_c;   // combinational from u_psram (posedge domain)
     wire       psram_ce_n_c, psram_sck_en_c;
     reg  [3:0] psram_sio_out_q, psram_sio_oe_q;   // negedge-relaunched -> pads
+    reg  [3:0] psram_sio_in_q;                    // falling-edge read capture
     reg        psram_ce_n_q, psram_sck_en_q;
     // (the negedge relaunch process is with the other clk/rst_n logic below)
 
@@ -460,11 +465,17 @@ module trouper_top (
         if (!rst_n) begin
             psram_sio_out_q <= 4'd0;
             psram_sio_oe_q  <= 4'd0;
+            psram_sio_in_q  <= 4'd0;
             psram_ce_n_q    <= 1'b1;
             psram_sck_en_q  <= 1'b0;
         end else begin
             psram_sio_out_q <= psram_sio_out_c;
             psram_sio_oe_q  <= psram_sio_oe_c;
+            // APS6404L read data is launched after SCK rises (tACLK up to
+            // 5.5 ns).  Capture in the middle of the high phase rather than
+            // racing it at that same rising edge; u_psram consumes this
+            // registered nibble on the following posedge.
+            psram_sio_in_q  <= PSRAM_SIO_IN;
             psram_ce_n_q    <= psram_ce_n_c;
             psram_sck_en_q  <= psram_sck_en_c;
         end
@@ -544,6 +555,7 @@ module trouper_top (
     wire [7:0]  rb_pkt_timeout_syms;
     wire [3:0]  rb_tacc_window_syms;
     wire [15:0] rb_replay_delay_samples;
+    wire [1:0]  rb_replay_backdate_syms; // 0x7B REPLAY_BACKDATE_SYMS (Open Risk #81)
     wire        rb_w_commit_pulse;
     wire [2:0]  rb_comb_post_gain_shift;
     wire [1:0]  rb_remod_backoff_shift;
@@ -553,6 +565,7 @@ module trouper_top (
     wire        rb_psram_dbg_auto_inc;
     wire        rb_psram_dbg_rd_trig;
     wire        rb_psram_dbg_wr_trig;
+    wire [3:0]  rb_psram_rd_trim;   // 0x7A PSRAM_RD_TRIM: extra QPI-read wait cycles (2026-09-13)
 
     // =========================================================================
     // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128, no FIR.
@@ -984,7 +997,9 @@ module trouper_top (
     wire              psram_sample_skip;
     wire [2:0]        psram_state_dbg;
 
-    psram_buf_ctrl u_psram (
+    psram_buf_ctrl #(
+        .QPI_CLK_DIV (PSRAM_QPI_CLK_DIV)
+    ) u_psram (
         .clk_32m      (clk),
         .rst_n        (rst_n),
         .psram_en     (rb_psram_ctrl[0]),
@@ -1004,6 +1019,7 @@ module trouper_top (
         .iq_sample_cnt(iq_samp_cnt),
         .training_done(training_done),
         .replay_delay_samples(rb_replay_delay_samples),
+        .replay_backdate_syms(rb_replay_backdate_syms),
         .W_commit     (W_commit_hw),
         .packet_end   (packet_done_pulse),
         .clr_err      (rb_psram_ctrl[1]),
@@ -1011,7 +1027,7 @@ module trouper_top (
         .sck_en_o     (psram_sck_en_c),
         .ce_n         (psram_ce_n_c),
         .sio_out      (psram_sio_out_c),
-        .sio_in       (PSRAM_SIO_IN),
+        .sio_in       (psram_sio_in_q),
         .sio_oe       (psram_sio_oe_c),
         // SC delay-line outputs (replace frontend_buf_ctrl + on-chip SRAM)
         .cur_i0       (psram_cur_i0),
@@ -1042,7 +1058,8 @@ module trouper_top (
         .dbg_data     (psram_dbg_data_w),
         .dbg_wdata      (psram_dbg_wdata_w),
         .dbg_wdata_push (psram_dbg_wdata_push_w),
-        .dbg_wr_trig    (rb_psram_dbg_wr_trig)
+        .dbg_wr_trig    (rb_psram_dbg_wr_trig),
+        .rd_wait_trim   (rb_psram_rd_trim)
     );
 
     // -------------------------------------------------------------------------
@@ -1409,11 +1426,13 @@ module trouper_top (
         .psram_dbg_auto_inc(rb_psram_dbg_auto_inc),
         .psram_dbg_rd_trig(rb_psram_dbg_rd_trig),
         .psram_dbg_wr_trig(rb_psram_dbg_wr_trig),
+        .psram_rd_trim   (rb_psram_rd_trim),
         .sc_force_lock   (rb_sc_force_lock),
         .rx_hold         (rb_rx_hold),
         .noise_trig      (rb_noise_trig),
         .tacc_window_syms (rb_tacc_window_syms),
-        .replay_delay_samples (rb_replay_delay_samples)
+        .replay_delay_samples (rb_replay_delay_samples),
+        .replay_backdate_syms (rb_replay_backdate_syms)
     );
 
     // =========================================================================

@@ -137,7 +137,9 @@ async def _assert_measured_replay_alignment(dut, rec, timing_ref, tag):
     """Require the first 32 replay samples to be one constant small offset
     from the recorded measured-capture stream at ``timing_ref``.
 
-    ``timing_ref - 1`` is the defined current implementation relation; the
+    ``timing_ref`` here is the replay anchor: sc_detector's timing_ref
+    backdated by REPLAY_BACKDATE_SYMS whole symbols (Open Risk #81).
+    ``anchor - 1`` is the defined current implementation relation; the
     ±3 search accounts only for sampling/register observation skew, while the
     all-32 exact-match condition detects a wrong packet base, byte-lane swap,
     or a replay sample slip.
@@ -306,7 +308,10 @@ async def test_capture_playback(dut):
     # stored stream before touching the combiner.  Unlike the historical CW
     # replay test, this stimulus is not periodic, so the value comparison
     # binds the packet origin as well as the per-sample ordering.
-    timing_ref = int(dut.u_dut.u_psram.timing_ref.value)
+    p_bb = dut.u_dut.u_psram
+    timing_ref = int(p_bb.timing_ref.value) - (
+        int(p_bb.replay_backdate_syms.value)
+        << (int(p_bb.sf.value) + int(p_bb.sample_shift.value)))   # replay anchor (Open Risk #81)
     await _assert_measured_replay_alignment(dut, rec, timing_ref, tag)
 
     # -- per-branch energy: ZDIAG_k = Σ|raw_k|² ------------------------------

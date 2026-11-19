@@ -163,6 +163,27 @@ bench_bitstream: vivado_project_bench vivado_synth
 	@echo "NOTE: arty_dsp_emul.bit now holds the BENCH build. Rebuild the"
 	@echo "      silicon-accurate default with: make vivado_project && make vivado_synth"
 
+# Bench bitstream, external-PSRAM variant: same no-AFE MMCM 32 MHz clocking as
+# bench_bitstream above, but with the real APS6404L pads brought out on JA
+# instead of the on-chip BRAM psram_model (FORCE_EXT_PSRAM override in
+# create_project.tcl). For standalone psram_buf_ctrl <-> APS6404L bring-up on
+# an Arty + PSRAM breakout, no SX1257/AFE board needed. Verified against real
+# hardware 2026-09-10/13 (bit-exact QPI read/write round-trip once all four
+# SIO lines were seated -- see fpga-emul/HARDWARE_SETUP.md). CAVEAT (2026-09-13):
+# that result was at low/moderate psram_sck rates; at full 32 MHz DSP-domain
+# speed the debug write intermittently (~6-9%) fails to commit to the real
+# chip -- see Open Risks #69/#72.
+.PHONY: vivado_project_bench_extpsram bench_bitstream_extpsram
+vivado_project_bench_extpsram:
+	BENCH_CLK=1 FORCE_EXT_PSRAM=1 $(VIVADO) -mode batch -source vivado/create_project.tcl 2>&1 | tee vivado_create.log
+
+bench_bitstream_extpsram: vivado_project_bench_extpsram vivado_synth
+	cp -f arty_dsp_emul.bit arty_dsp_emul_extpsram.bit
+	@echo "External-PSRAM bench bitstream -> fpga-emul/arty_dsp_emul_extpsram.bit"
+	@echo "  (DSP on MMCM 32 MHz, no AFE, real APS6404L pads live on JA)"
+	@echo "NOTE: arty_dsp_emul.bit now holds this build. Rebuild the"
+	@echo "      silicon-accurate default with: make vivado_project && make vivado_synth"
+
 # ============================================================================
 # Bare-metal MicroBlaze test firmware (sw/test_fw.c)
 # Built with mb-gcc + crt0.S + lscript.ld — no Vitis BSP / -lxil dependency.

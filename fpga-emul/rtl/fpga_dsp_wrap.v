@@ -56,7 +56,10 @@
 module fpga_dsp_wrap #(
     // 0 = internal BRAM PSRAM model (sim / no-daughterboard); 1 = external
     // APS6404L via IOBUFs on psram_sio/psram_sck/psram_ce_n (board bitstream).
-    parameter USE_EXT_PSRAM = 0
+    parameter USE_EXT_PSRAM = 0,
+    // Keep the controller/host SPI at 32 MHz but slow QPI pin transitions
+    // for external-PSRAM characterization.
+    parameter integer PSRAM_QPI_CLK_DIV = 1
 ) (
     input  wire        clk,
     input  wire        rst_n,
@@ -133,13 +136,51 @@ module fpga_dsp_wrap #(
     // as internal FPGA nets (the receive-only daughterboard has no spare
     // physical debug routing); create_project.tcl connects them to an ILA.
     output wire        dbg0,
-    output wire        dbg1
+    output wire        dbg1,
+
+    // FPGA-only Risk #72 instrumentation. These expose the QPI debug engine
+    // to the bench ILA without changing any ASIC-visible behaviour.
+    output wire        risk72_trigger,
+    output wire [31:0] risk72_trace
 );
 
     // QPI pad nets between trouper_top's psram_buf_ctrl and the selected
     // back-end (internal BRAM model or external IOBUFs — see generate below).
     wire        ps_sck, ps_ce_n;
     wire [3:0]  ps_sio_out, ps_sio_in, ps_sio_oe;
+
+    // 2026-09-14 Open Risks #72 follow-up, part 3: the host-SPI wire was
+    // proven clean (previous trace variant, see git history/Open Risks.md)
+    // -- the wrong debug-read byte is already present on MISO before
+    // axi_quad_spi_1 or firmware ever touch it. This variant moves one
+    // layer deeper: trace psram_buf_ctrl's own internal read pointer
+    // (dbg_idx, dbg_addr_cur) and the raw QPI SIO pins to the PSRAM chip
+    // itself, to see whether the debug engine is reading the WRONG address
+    // (a stale/aliased read -- dbg_addr_cur has drifted from the base the
+    // firmware wrote) or the RIGHT address but wrong data comes back over
+    // the QPI SIO lines (i.e. the chip itself, or a pad-launch timing
+    // issue, and not the debug engine's own bookkeeping).
+    //
+    // All of these signals are native to dsp_clk (psram_buf_ctrl's own
+    // clock domain, same as ps_sck) -- create_project.tcl samples this ILA
+    // directly off dsp_clk (no CDC, no oversampling needed), matching the
+    // RISK73_SC_TRACE precedent. Trigger stays on the RD_TRIG-specific
+    // dbg_mode && !dbg_wr_mode edge from the previous variant.
+    wire risk72_dbg_read_active = u_top.u_psram.dbg_mode && !u_top.u_psram.dbg_wr_mode;
+    assign risk72_trigger = risk72_dbg_read_active;
+    assign risk72_trace = {
+        ps_ce_n,                          // [31]
+        ps_sck,                           // [30]
+        ps_sio_out,                       // [29:26]
+        ps_sio_in,                        // [25:22]
+        u_top.u_psram.dbg_idx,            // [21:19] byte index within the 8-byte dbg burst
+        u_top.u_psram.dbg_addr_cur[15:0], // [18:3]  low 16 bits of the address the debug
+                                           //         engine is actually driving to the PSRAM
+                                           //         (base 0x00F800 for this WVP test)
+        u_top.u_psram.dbg_mode,           // [2]  context: is a debug op in flight
+        u_top.u_psram.dbg_wr_mode,        // [1]  context: write (vs read) debug op
+        u_top.u_psram.qpi_busy            // [0]  context
+    };
 
     // =========================================================================
     // Injection path: 4x sd_remod turn paced int8 samples into a 1-bit stream,
@@ -185,7 +226,9 @@ module fpga_dsp_wrap #(
     // ports are wired here; the unconnected pad-control *outputs* are covered by
     // --Wno-PINMISSING (see Makefile). Every trouper_top *input* pad is tied off
     // explicitly below so nothing floats.
-    trouper_top u_top (
+    trouper_top #(
+        .PSRAM_QPI_CLK_DIV (PSRAM_QPI_CLK_DIV)
+    ) u_top (
         .IQ_CLK        (clk),
         .RESETB        (rst_n),
         .IQ_DATA_I_0   (muxed_iq_i[0]),
@@ -249,8 +292,8 @@ module fpga_dsp_wrap #(
     //     chip's read data on ps_sio_in otherwise. sck/ce_n are plain outputs.
     //   USE_EXT_PSRAM=0 : BRAM-backed model, no external pins. The board pads
     //     are parked (sck low, ce_n high, sio high-Z) so an unconstrained/
-    //     unconnected build is still safe. sck is unused by the same-domain
-    //     model. (No IOBUF here → Verilator/iverilog clean.)
+    //     unconnected build is still safe. (No IOBUF here →
+    //     Verilator/iverilog clean.)
     // =========================================================================
     generate
     if (USE_EXT_PSRAM) begin : g_ext_psram
@@ -275,7 +318,9 @@ module fpga_dsp_wrap #(
             .ce_n    (ps_ce_n),
             .sio_out (ps_sio_out),
             .sio_oe  (ps_sio_oe),
-            .sio_in  (ps_sio_in)
+            .sio_in  (ps_sio_in),
+            .sck     (ps_sck),
+            .sck_en  (u_top.psram_sck_en_q)
         );
     end
     endgenerate

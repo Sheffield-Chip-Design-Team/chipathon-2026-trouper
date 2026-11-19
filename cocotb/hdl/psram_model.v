@@ -29,7 +29,17 @@ module psram_model #(
     // model launches read data, so the first data nibble is stable at the
     // controller's first sio_in sampling edge. Tuned in simulation against
     // psram_buf_ctrl's 6-dummy-cycle read timing.
-    parameter RD_LAUNCH_SKIP = 3   // validated in tb_psram_model cosim (0 errors)
+    parameter RD_LAUNCH_SKIP = 5,
+    // Open Risks #72 (2026-09-14): minimum whole clk_32m cycles that must
+    // elapse between this model launching its last valid read-data nibble
+    // and CE# rising, modelling (in cycle-count terms, not real ns -- see
+    // the block below) a real chip's finite output-hold-time-after-CE#
+    // requirement. This model previously had NO such requirement at all,
+    // which is why every cocotb suite using it was structurally blind to
+    // the same-cycle CE#-deassert/final-nibble-capture pattern static RTL
+    // review found in psram_buf_ctrl.v's three read state machines. Set to
+    // 0 to restore the old (unenforced) behaviour.
+    parameter CE_HOLD_CYCLES = 1
 ) (
     input  wire        clk_32m,
     input  wire        rst_n,
@@ -37,7 +47,11 @@ module psram_model #(
     input  wire [3:0]  sio_out,     // controller → model (valid when sio_oe=1)
     input  wire [3:0]  sio_oe,      // 1 = controller driving, 0 = model drives
     output reg  [3:0]  sio_in,      // model → controller (read data)
-    input  wire        sck          // real gated PSRAM clock (Open Risk #69 guardrail only)
+    input  wire        sck,         // real gated PSRAM clock (Open Risk #69 guardrail only)
+    input  wire        sck_en       // raw (non-clock-gated) SCK enable -- see
+                                     // the 2026-09-14 fix comment below for why
+                                     // the main transaction logic gates on this
+                                     // instead of `sck`
 );
     // Nibble-addressed memory: every QPI access moves exactly one 4-bit nibble,
     // so a single full-word read/write per cycle keeps this a clean, inferable
@@ -55,6 +69,27 @@ module psram_model #(
     reg        oe_released;     // saw sio_oe go to 0 during a read
     reg [5:0]  rd_skip;         // countdown after bus release before driving data
     reg [3:0]  rd_started;      // read-data nibble index once launched (0 = not yet)
+    reg [7:0]  cyc_since_rd;    // cycles since the last valid read nibble was launched
+    reg        hold_violation;  // CE_HOLD_CYCLES violated -- sio_in forced to X next cycle
+
+    // 2026-09-14 fix: `sck` (as wired from the testbench) is a live
+    // `sck_en_q & clk` signal derived combinationally from the exact same
+    // clock this model's own main always block triggers on -- a
+    // self-referential gated-clock race (the same class of hazard as the
+    // real-hardware `ps_sck` aliasing found in Open Risks #72's ILA
+    // captures this session, but here causing a simulator race: Icarus was
+    // observed to never see `sck` go high in this block, so `active` never
+    // asserted and writes/reads silently never touched `mem[]`). A first
+    // attempt to fix this by capturing `sck` on the opposite (negedge)
+    // clock edge was itself wrong: `clk` is deterministically 0 at its own
+    // negedge, so `sck_en_q & clk` sampled there is *always* 0, not merely
+    // racy. The real fix needs the raw enable, not the clock-gated pin --
+    // `sck_en` (new port, see the port list) is wired by the testbench to
+    // a hierarchical peek at trouper_top's internal `psram_sck_en_q`
+    // register (a plain registered value, not clock-derived, so race-free
+    // against this model's own posedge clk_32m sampling). The original
+    // `sck` port is left untouched for the Open Risk #69 guardrail below,
+    // which needs the true gated-clock level, not the enable.
 
     wire [ADDR_BITS-1:0] amask = addr[ADDR_BITS-1:0];
 
@@ -76,19 +111,38 @@ module psram_model #(
             rd_skip     <= 6'd0;
             rd_started  <= 4'd0;
             sio_in      <= 4'h0;
+            cyc_since_rd   <= 8'd0;
+            hold_violation <= 1'b0;
         end else begin
             if (ce_n) begin
-                // Idle / between transactions.
+                // Idle / between transactions. Open Risks #72 (2026-09-14):
+                // if a read was in flight and CE# rose fewer than
+                // CE_HOLD_CYCLES after the last valid nibble was launched,
+                // flag it -- sio_in is corrupted to X below, from next cycle.
+                if (active && is_read && oe_released &&
+                    (cyc_since_rd < CE_HOLD_CYCLES[7:0])) begin
+                    hold_violation <= 1'b1;
+`ifndef SYNTHESIS
+                    $display("%0t %m: PSRAM_MODEL CE_HOLD_CYCLES VIOLATION -- ce_n rose %0d cycle(s) after the last read-data nibble launch (need >= %0d). Modelling as a corrupted read.",
+                              $time, cyc_since_rd, CE_HOLD_CYCLES);
+`endif
+                end else begin
+                    hold_violation <= 1'b0;
+                end
                 active      <= 1'b0;
                 nib         <= 6'd0;
                 is_write    <= 1'b0;
                 is_read     <= 1'b0;
                 oe_released <= 1'b0;
                 rd_started  <= 4'd0;
-            end else begin
-                // ce_n low — a transaction is active.
+                cyc_since_rd<= 8'd0;
+            end else if (sck_en) begin
+                // Only advance on a forwarded-SCK rising edge.  CE# may stay
+                // low while the controller deliberately holds SCK low during
+                // the write-termination interval.
                 active <= 1'b1;
                 nib    <= nib + 6'd1;
+                hold_violation <= 1'b0;
 
                 // ---- Command + address assembly (first 8 nibbles) ----
                 if (nib == 6'd0) cmd[7:4] <= sio_out;
@@ -109,17 +163,31 @@ module psram_model #(
                 if (is_read) begin
                     if (sio_oe == 4'h0) begin
                         if (!oe_released) begin
-                            oe_released <= 1'b1;
-                            rd_skip     <= RD_LAUNCH_SKIP[5:0];
+                            oe_released  <= 1'b1;
+                            rd_skip      <= RD_LAUNCH_SKIP[5:0];
+                            cyc_since_rd <= 8'd0;
                         end else if (rd_skip != 6'd0) begin
-                            rd_skip <= rd_skip - 6'd1;
+                            rd_skip      <= rd_skip - 6'd1;
+                            cyc_since_rd <= cyc_since_rd + 8'd1;
                         end else begin
-                            sio_in     <= mem[rd_naddr];   // clean registered read
-                            rd_started <= rd_started + 4'd1;
+                            sio_in       <= mem[rd_naddr];   // clean registered read
+                            rd_started   <= rd_started + 4'd1;
+                            cyc_since_rd <= 8'd0;
                         end
                     end
                 end
+            end else if (active && is_read && oe_released) begin
+                // The controller deliberately stops SCK for the final
+                // capture/CE# hold interval.  That quiet cycle still counts
+                // toward the PSRAM output-hold margin; it must not be lost
+                // merely because no forwarded clock edge occurred.
+                cyc_since_rd <= cyc_since_rd + 8'd1;
             end
+            // If the previous cycle flagged a hold-time violation, corrupt
+            // sio_in from this cycle on. Placed last so it takes priority
+            // over any read-data write above (there shouldn't normally be
+            // one on the cycle right after CE# rose, but keep this explicit).
+            if (hold_violation) sio_in <= 4'bxxxx;
         end
     end
 

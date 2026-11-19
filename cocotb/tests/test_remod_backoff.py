@@ -40,7 +40,7 @@ reliable full-scale test input.
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import ClockCycles, RisingEdge, Timer
 
 from test_trouper_top import (CLK_NS, spi_read, spi_write, spi_burst_write,
                               sdm_driver, release_rx_hold)
@@ -64,6 +64,14 @@ STUCK_HEALTHY = 20     # output stuck-run below this = still dithering (~4x marg
                        # the 54-cycle degraded case).
 STUCK_DEGRADED = 35    # shift=0 at forced near-full-scale measured 54 -- clearly
                        # above STUCK_HEALTHY with margin in both directions.
+# CIFF3 redesign 2026-10-03 (planning/sd-remod-ciff3-redesign-2026-10-03.md):
+# thresholds unchanged, but each phase now discards SETTLE_CYCLES after the
+# COMB_CFG write. Leaving the shift=0 overload (0.97 FS, outside TRPR-RMD-004)
+# the loop needs < 1,024 clocks to unwind; measuring from the write caught that
+# transient (job 5822: shift=1 run 64 on I, 5 on Q). The legacy core had the
+# same transient (bit-true model: 22-55 cycles) and passed by stimulus luck.
+# Steady state after settle: 5 cycles for both cores (model sweep, 25 tones).
+SETTLE_CYCLES = 2048
 
 
 async def _set_comb_cfg(dut, shift, pgs=7):
@@ -124,14 +132,12 @@ async def _monitor_remod(dut, cycles):
     comb_y (to confirm saturation is actually happening), and REMOD_A_I
     toggling, so the caller can classify healthy vs. railed.
 
-    Note: sd_remod's integrator states (s1/s2/s3) turn out NOT to be a
-    usable instability signal on their own -- s3 in particular sits near
-    the sat16 rail (+-32767) essentially all the time even in totally
-    healthy, low-amplitude, already-proven-good operating conditions
-    (job 3292 diagnostic: duty=0.85 at comb_y peak=30, the same amplitude
-    test_trouper_top.py's run_scenario already passes its REMOD toggle
-    check at). That's normal CIFF cascade-integrator behavior, not a fault.
-    The real, unambiguous instability signal is the 1-bit OUTPUT losing its
+    Note: integrator states are recorded for debug but not used as the
+    instability signal. Before the 2026-10-03 CIFF3 redesign s3 sat on the
+    sat16 rail even at low amplitude (job 3292: duty=0.85 at comb_y
+    peak=30) -- that was a wrong-sign loop tap pinning s3/s4, not normal
+    CIFF behaviour, but the conclusion stands: the real, unambiguous
+    instability signal is the 1-bit OUTPUT losing its
     dither -- getting stuck at a constant value for an extended run -- so
     this tracks REMOD_A_I/Q's bit sequence for that instead."""
     s1i, s2i, s3i = [], [], []
@@ -305,6 +311,7 @@ async def test_remod_backoff(dut):
     #     broken -- only the amplitude x backoff combination matters.
     for shift in (0, 1):
         await _set_comb_cfg(dut, shift=shift, pgs=1)
+        await ClockCycles(dut.IQ_CLK, SETTLE_CYCLES)
         rec = await _monitor_remod(dut, MONITOR_CYCLES)
         run_i = _longest_stuck_run(rec["out_i_bits"])
         run_q = _longest_stuck_run(rec["out_q_bits"])
@@ -321,17 +328,18 @@ async def test_remod_backoff(dut):
     #     tried first and over-clips comb_y into a near-square, harmonic-rich
     #     wave that overloads sd_remod even at shift=1, job 3290 -- a
     #     misleading result caused by the forcing method, not a real RTL
-    #     finding). sd_remod's integrator states (s1/s2/s3) also turned out
-    #     to be a red herring here: s3 sits near the sat16 rail almost all
-    #     the time even in the definitely-healthy 2a case above (job 3292:
-    #     duty=0.85 at comb_y peak=30) -- normal CIFF cascade behavior, not
-    #     a fault signature. The real, unambiguous instability signal is the
+    #     finding). Integrator states are not used as the signal: the
+    #     pre-2026-10-03 core railed s3/s4 even at zero input (a wrong-sign
+    #     tap, not normal CIFF behaviour -- see the CIFF3 redesign doc), and
+    #     a healthy loop may legitimately touch a rail above its MSA. The
+    #     real, unambiguous instability signal is the
     #     1-bit quantizer OUTPUT losing its dither (frozen for an extended
     #     run), so this compares shift=0 vs shift=1 on output stuck-run
     #     length instead.
     results = {}
     for shift in (0, 1):
         await _set_comb_cfg(dut, shift=shift, pgs=3)
+        await ClockCycles(dut.IQ_CLK, SETTLE_CYCLES)
         rec = await _monitor_remod(dut, MONITOR_CYCLES)
         assert rec["comb_peak"] >= SAT_FLOOR, \
             f"shift={shift}: comb_y peak={rec['comb_peak']} did not reach near-full-scale -- forcing config failed"

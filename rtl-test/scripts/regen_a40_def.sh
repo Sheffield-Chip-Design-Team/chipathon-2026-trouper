@@ -15,7 +15,10 @@
 #                                      variant (currently ACV, 1675 x 1110 um)
 #
 # Outputs (copied into the repo)
-#   rtl-test/ol_trouper_top/a40_integrator/   raw generator artifacts (provenance)
+#   rtl-test/ol_trouper_top/a40_integrator/   raw generator artifacts. Not just
+#     provenance any more: A40_ACV_padring.v is elaborated by the
+#     cocotb/padring_integration suite and cross-checked by
+#     sim/tests/test_padring_connectivity.py, so keep it in step after a regen.
 #   rtl-test/ol_trouper_top/A40_ACV_rtlnames.def   FP_DEF_TEMPLATE for P&R
 #   src/config/A40_ACV_rtlnames.def                (identical copy)
 #

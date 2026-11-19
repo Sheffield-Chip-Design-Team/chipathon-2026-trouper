@@ -148,7 +148,7 @@ The accumulator is 13-bit Q8.5 signed (α = 1/32). The integer DC estimate is `a
 | TRPR-DCR-004 | C | F | Input and output word widths SHALL both be int8 signed (8 bits). | I |
 | TRPR-DCR-005 | C | P | Effective time constant SHALL be τ = 32 samples (α = 1/32) = **64 µs** at 500 kS/s; 90% settling within ~74 samples. | A |
 | TRPR-DCR-006 | C | P | Steady-state output DC SHALL be < 1 LSB (int8) after 256 samples of constant input. | T |
-| TRPR-DCR-007 | H | F | Output saturation is not currently implemented. `raw − dc_est` is bounded within int8 in steady state, but during a full-scale step transient (signal peak + \|DC\| > 127, a cliff at \|DC\| ≈ 38 counts under the TRPR-MRC-009 AGC contract) the 9-bit difference wraps to a sign-flipped output. Whether a clamp is required is gated on the AFE PCB DC-vs-LNA-gain measurement (change R2, `planning/dsp-block-review-changes-2026-07.md`; measurement in `planning/AFE Characterisation Board.md`). | A |
+| TRPR-DCR-007 | H | F | The output SHALL be `raw − dc_est` saturated to int8, so a full-scale transient against a non-zero DC estimate clips instead of wrapping to a sign-flipped sample. | T |
 | TRPR-DCR-008 | H | F | Maximum accumulator value at full-scale input (+127 raw, sustained) SHALL be 127 × 32 = 4064, which fits within the 13-bit signed range (±4095). No accumulator overflow is possible for int8 inputs. | A |
 | TRPR-DCR-009 | H | F | All four branches (I and Q independently) SHALL use the same fixed α = 1/32 coefficient with no runtime configurability. | I |
 | TRPR-DCR-010 | H | P | AC passband droop SHALL be < 0.1 dB across the LoRa signal band (filter corner ≈ 2.5 kHz for α=1/32 at 500 kS/s). | A |
@@ -166,12 +166,12 @@ Generates `sc_lock` and `timing_ref` using a full-symbol Schmidl-Cox detector on
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-SCD-001 | C | F | The detector SHALL compute a per-symbol complex autocorrelation `C[s] = Σ_{n=0}^{M-1} x_0[n] · conj(x_0[n−M])` on antenna branch 0, where `M = 1 << (SF + sample_shift)` for all supported `SF7–SF12` and both BWs. | I |
+| TRPR-SCD-001 | C | F | The detector SHALL compute a per-symbol complex autocorrelation `C[s] = Σ_{n=0}^{M-1} x[n] · conj(x[n−M])` on the antenna branch selected by `SC_ANT_SEL` (0x1B[1:0], reset 0), where `M = 1 << (SF + sample_shift)` for all supported `SF7–SF12` and both BWs. | I |
 | TRPR-SCD-002 | C | F | The detector SHALL form the Schmidl-Cox hit test without an explicit divider: `|C[s]|² >= THR_eff · E[s]`, where `E[s] = (Σ_{n in S_s} |x_0[n]|²) · (Σ_{n in S_s} |x_0[n−M]|²)`. | T |
 | TRPR-SCD-003 | C | F | The detector SHALL evaluate one hit decision per completed symbol using the full `M` delayed samples supplied by the PSRAM path. | I |
 | TRPR-SCD-004 | C | F | `sc_lock` SHALL assert after `SC_HITS_REQ+1` consecutive symbol-hit decisions. | T |
 | TRPR-SCD-005 | C | F | `timing_ref` SHALL back-calculate the first symbol boundary of the qualifying hit run as `lock_sample - (SC_HITS_REQ+1)·M + 1`. | T |
-| TRPR-SCD-006 | C | F | The current RTL SHALL operate on antenna branch 0 only. Four-branch diversity gain begins after lock in the training accumulator and combiner path; the SC detector itself is not pooled across branches. | I |
+| TRPR-SCD-006 | C | F | The detector SHALL correlate one branch at a time (the `SC_ANT_SEL` branch); it is not pooled across branches. Four-branch diversity gain begins after lock in the training accumulator and combiner path. | I |
 | TRPR-SCD-007 | H | I | `SC_THR` SHALL remain writable through `SC_THR_HI` (0x0C) and `SC_THR_LO` (0x0D), but the current RTL consumes only `SC_THR[11:0]`. Firmware SHALL program the effective threshold in the low 12 bits (`0x0000`–`0x0FFF`). The reset default SHALL be `0x01CC`, the scaled 12-bit-safe equivalent of the legacy `0x7333` threshold (`0x7333 / 64`, rounded down). Note the RTL hit comparison additionally halves the \|C\|² side (`eval_mag_acc[27:1]`); this fixed ÷2 is part of the effective threshold scale and must be carried in any re-derivation of `SC_THR` from first principles. | I |
 | TRPR-SCD-008 | H | I | `SC_HITS_REQ` SHALL be configurable via register 0x0E. The hardware locks after `SC_HITS_REQ+1` consecutive symbol hits: firmware-supported normal-operation values 1–3 therefore require 2–4 hits. Raw value 0 is an unclamped **diagnostic-only one-hit mode**; firmware SHALL use it only for controlled bring-up/characterisation and restore a value of 1–3 before normal reception because its false-lock immunity is substantially reduced. | T |
 | TRPR-SCD-009 | H | F | `SC_STAT_HI/LO` (0x24–0x25) SHALL expose the detector's current `|C[s]|²` telemetry snapshot (`sym_mag_sc[27:13]` with a zero-padded LSB). It is not a normalised `Λ²` register in the current RTL. | I |
@@ -337,7 +337,7 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
 | TRPR-MRC-001 | C | F | The combiner SHALL compute ŷ[n] = Σ_{k=0}^{3} w_k · x_k[n] where x_k is int8 and w_k is int8 Q0.7 complex. The conjugation required for MRC is applied by firmware, which writes W pre-conjugated (TRPR-WGN-005) — the combiner itself performs a plain complex multiply-accumulate. | T |
-| TRPR-MRC-002 | C | F | The accumulator SHALL be 18-bit signed (16-bit product sign-extended + 2 guard bits for 4 additions). The final output SHALL be produced by a single combined arithmetic right-shift of `(8 − pgs)` bits applied to the accumulator, then saturated to int8. `pgs` is `COMB_POST_GAIN_SHIFT` (0–7); combined shift ∈ [1,8], always a right shift. | T |
+| TRPR-MRC-002 | C | F | Each complex product SHALL be 17-bit signed and the accumulator 19-bit signed (the all-−128 corner reaches +131072). The output SHALL be a single arithmetic right-shift of `(8 − pgs)` bits, then saturated to int8. `pgs` is `COMB_POST_GAIN_SHIFT` (0–7); combined shift ∈ [1,8], always a right shift. | T |
 | TRPR-MRC-003 | C | F | The combiner SHALL operate sample-by-sample at 500 kS/s (one output per `iq_valid` strobe). | T |
 | TRPR-MRC-004 | C | F | The combiner SHALL consume the live W register bank at `0x30–0x3F`; no separate `W_ACTIVE` copy is implemented. Firmware SHALL write the complete vector, then pulse `WGT_CTRL.W_COMMIT` to assert `W_VALID`. While `W_VALID` is high, writes to `0x30–0x3F` SHALL be rejected and set sticky `WGT_CTRL.W_WR_REJECTED` (bit 5), preventing a partially updated live vector. | T |
 | TRPR-MRC-005 | C | F | Before any W_COMMIT, the combiner SHALL output the bypass signal (lowest-enabled antenna int8 sample, no weighting). | T |
@@ -352,11 +352,11 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 
 ### 4.9 ΣΔ Re-modulator (`sd_remod.v`) — TRPR-RMD
 
-2x droop-compensating interpolator ahead of a 4th-order CIFF ΣΔ modulator core (not SX1257 Figure 6-3's 3rd order — see `sd_remod.v` header; the SX1302 receive-side interface it actually drives does not encode a modulator order). Converts int8 combined output back to 1-bit I+Q streams for SX1302.
+2x droop-compensating interpolator (10-bit output) ahead of a 3rd-order CIFF ΣΔ modulator core. Converts int8 combined output back to 1-bit I+Q streams for SX1302.
 
 | ID | Pri | Type | Requirement | Verif |
 |---|---|---|---|---|
-| TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 2x droop-compensating interpolator ahead of a 4th-order CIFF ΣΔ modulator core, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. (Core was 3rd order; raised 2026-09-04 to compensate the loop's real one-sample excess loop delay — a 3rd-order loop filter cannot meet TRPR-RMD-005/006/007 once that delay is accounted for. Interpolator promoted 2026-09-05 to close the STF gain droop at fs/4; core arithmetic rewritten shift/add-only the same day to fix the resulting SS timing regression, bit-exact verified. See `sd_remod.v` header and `planning/sd-remod-interp2x-pnr-investigation-2026-09-05.md`. **Verification status:** the SQNR / dither / re-demod evidence for TRPR-RMD-001/003/005/006/007 predates this rewrite and MUST be re-run against the 4th-order + interpolator topology before signoff — see `planning/Traceability.md` §4.9 open item 5.) | T |
+| TRPR-RMD-001 | C | F | The re-modulator SHALL implement a 2x droop-compensating interpolator (10-bit output) ahead of a 3rd-order CIFF ΣΔ modulator core, converting int8 I and int8 Q inputs to 1-bit I and 1-bit Q outputs. (2026-10-03: the prior "4th-order" core was effectively 2nd order — wrong-sign A3/A4 railed s3/s4; see `planning/sd-remod-ciff3-redesign-2026-10-03.md`.) | T |
 | TRPR-RMD-002 | C | F | The re-modulator SHALL operate at 32 MS/s output rate with OSR=64 (int8 at 500 kS/s → 1-bit at 32 MS/s). | T |
 | TRPR-RMD-003 | C | F | All integrators SHALL use saturating arithmetic. Wrap-around addition is prohibited; a wrapped integrator will cause permanent instability. | T |
 | TRPR-RMD-004 | C | P | Input amplitude SHALL be constrained to strictly < −3 dBFS (< 90 counts int8) by AGC (TRPR-MRC-009) plus `REMOD_BACKOFF_SHIFT`. No on-chip over-range flag exists and none is feasible: integrator states sit near-rail even in healthy operation, so they are not a valid instability signal (see `cocotb`/`test_remod_backoff.py`). | T |
@@ -365,7 +365,7 @@ Computes ŷ[n] = w^H · x[n] per sample in the time domain.
 | TRPR-RMD-007 | H | P | Re-demodulated output (Python decimation of 1-bit stream) SHALL match int8 input to within ±1 LSB RMS at −6 dBFS. | T |
 | TRPR-RMD-008 | M | F | When Mode 1 (passthrough) is active, the re-modulator SHALL receive the single-antenna int8 stream directly. | T |
 | TRPR-RMD-009 | C | F | Except at first-ever lock after `RESETB`, the re-modulator's input SHALL NOT jump backward in signal time-index during normal operation (silence→signal and mid-stream weight changes are fine; replaying already-sent time-index is not). Met 2026-07-12 by the continuous-delay replay (`planning/psram-replay-continuous-delay-redesign.md`, implemented; monotonic-`rd_ptr` check in `cocotb/tests/test_replay_delay.py`). | T |
-| TRPR-RMD-010 | M | F | While `en=0` the re-modulator SHALL hold its integrators and 1-bit outputs at their reset state, so re-enabling is bit-identical to starting from a fresh reset (verified `cocotb/remod_en/`). `trouper_top` ties `en` high; the port serves other integrations. | T |
+| TRPR-RMD-010 | M | F | While `en=0` the re-modulator SHALL hold its integrators and 1-bit outputs at their reset state. Re-enable is not required to be bit-identical to a fresh reset (the input latch is not cleared); `trouper_top` ties `en` high. | T |
 
 ---
 

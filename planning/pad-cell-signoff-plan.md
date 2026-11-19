@@ -1,8 +1,52 @@
 # Pad-Cell Signoff Plan — SPICE LVS, DRC and Simulation
 
-**Status:** planned, **gated on the integrator confirming the IO padframe**.
-Nothing here can start until we have the real padring: the cell instances, their
-slot assignment, and the assembled die. See "Entry criteria".
+**Status:** entry criteria **met** (Open Risk #52 closed 2026-09-04 — integrator
+confirmed **27** slots, `A40_ACV.def` regenerated from the integrator tooling,
+first full A40 P&R against it clean on job 5511). The generator artifacts —
+`A40_ACV_padring.v`, `A40_ACV_pad_map.yaml`, `A40_ACV_interface.yaml` — are in
+`rtl-test/ol_trouper_top/a40_integrator/`, so the cell-per-slot map and the
+per-terminal contract are now pinned.
+
+- **Work item 1 (LVS across the pad boundary) is integrator-owned** (2026-09) —
+  the integrator runs the assembled-die LVS. Trouper's job is the boundary
+  contract + the pre-LVS connectivity check (`test_padring_connectivity.py`),
+  then confirming the integrator's LVS result covers the A40 slot arc.
+- **Work items 2–3 (Magic DRC on the assembled die, targeted SPICE)** remain
+  Trouper-side and are ready to start.
+- Residual: a literal integrator human sign-off on the 27 slot names / bonding
+  (Open Risk #52 note).
+
+**Note on pad count:** this document predates the 2026-09-03 cut to 27 pads —
+`DBG1` was merged onto the `IRQ_OUT` pad and has no slot or control ports of its
+own. N15 = `ARRAY_ACQ_N`, N16 = `DBG0`; there is no N17 functional slot. Read
+"28" / "N17" / "`DBG1_OUT`" below as historical.
+
+### Simulation-tier coverage now in place (2026-09)
+
+Logic-level, not a substitute for work items 1–3 (which are the electrical /
+layout signoff), but they close the "no run has ever exercised a pad cell" gap
+for functional behaviour:
+
+- `cocotb/io_cell_controls/` — legal-mode + PU/PD + PDRV smoke bench for all
+  four signal cells (`bi_t`, `bi_24t`, `in_c`, `in_s`) against the pinned PDK
+  model.
+- `cocotb/padring_integration/` — `trouper_top` driven **through**
+  `A40_ACV_padring.v` + the `gf180mcu_fd_io` models at the physical pad nets
+  (icarus): reset + CHIP_ID over pad-net SPI, PSRAM QPI init through the four
+  `bi_t` SIO pads, `sc_lock` through the `in_c` IQ path, and one full
+  end-to-end packet.
+- `sim/tests/test_padring_connectivity.py` — static, non-circular cross-check
+  that every `trouper_top` pad-control port maps 1:1 to the right
+  `A40_ACV_padring.v` cell terminal with the right direction, that the cell type
+  matches `io_type`, and that the RTL tie-off values are electrically legal for
+  the assigned cell.
+
+### Full-die DRC still owed
+
+The reticle-level review DRC (`tools/run_a40_full_gds_drc.sh` over
+`SSCS_2026_01`) has **not** been re-run for the v6 tile drop — SGE jobs
+5663/5664 (2026-09-06) came back CANCELLED. A re-run is owed (work item 2
+territory); it is not executed as part of the simulation-tier work above.
 
 ## Why this exists
 
@@ -24,7 +68,7 @@ That distinction is easy to lose in the word "pad". Vocabulary used from here:
 
 | Term | Means |
 |---|---|
-| **slot** | A position in the A40 padring allocated to this project (28 of them) |
+| **slot** | A position in the A40 padring allocated to this project (27 of them) |
 | **boundary pin** | A `PINS` entry on the Trouper macro edge; what our P&R places and checks |
 | **pad cell** | A `gf180mcu_fd_io__*` instance in the padring; **not** in any Trouper netlist or layout |
 | **pad-control signal** | A core output that drives a pad cell's control input |
@@ -54,41 +98,49 @@ reading and inference, not simulation. Specifically:
    asks for a `bi_t` cross-check, because `bi_24t` needed an extended `pfet_06v0`
    W bin (a documented PDK deviation) and `bi_t` fits the stock bin.
 
-## Entry criteria — none of this starts before all of these
+## Entry criteria — met 2026-09-04
 
-- [ ] Integrator confirms the **28-slot assignment**, including N15/N16/N17
-      (`ARRAY_ACQ_N`, `DBG0_OUT`, `DBG1_OUT`) — Open Risks #52, #57.
-- [ ] Integrator supplies a regenerated `A40_ACV.def` containing all 28 pads, so
-      our locally extended template
-      (`src/config/A40_ACV_rtlnames_dbgpins.def`) can be retired.
-- [ ] Integrator confirms the **cell type per slot** — which slots are `bi_t`,
-      `bi_24t`, `in_c`, `in_s`. `io_type` in `info.yaml` is our request; the
-      padring is what actually gets built.
-- [ ] The padring submodule (`ip/chipathon-2026-gf180mcu-padring`) is populated
-      with the assembled padring, or the integrator provides its GDS/netlist.
-
-Until then this document is the record of what is owed, not a task list to pick
-up.
+- [x] Integrator slot assignment confirmed — **27 slots** (N15 `ARRAY_ACQ_N`,
+      N16 `DBG0`; `DBG1` merged onto `IRQ_OUT`). Open Risk #52 closed.
+- [x] Regenerated `A40_ACV.def` (159 Metal2 `PINS`, functional names matching
+      `trouper_top.v` verbatim) — `src/config/A40_ACV_rtlnames.def`, produced by
+      `rtl-test/scripts/regen_a40_def.sh`. The synthetic-coordinate stopgap
+      (`A40_ACV_rtlnames_dbgpins.def` + `a40_append_provisional_pads.py`) is
+      retired.
+- [x] Cell type per slot confirmed — `A40_ACV_pad_map.yaml`: `in_c` W13–W21,
+      `in_s` W22/N09–N11, `bi_t` N01/N02/N04–N08/N12/N13/N15/N16, `bi_24t` N03,
+      `dvdd` N14, `dvss` W12.
+- [x] Padring netlist available — `ip/chipathon-2026-padring-system` submodule
+      +  the generated `rtl-test/ol_trouper_top/a40_integrator/A40_ACV_padring.v`.
+- [ ] Residual: a literal integrator human sign-off on the 27 slot names / IO
+      cell types / bonding (Open Risk #52 note).
 
 ## Work items
 
-### 1. SPICE-level LVS across the pad boundary
+### 1. SPICE-level LVS across the pad boundary — INTEGRATOR-OWNED
 
-Today's LVS compares the Trouper macro against itself. The check that matters
-for silicon is the **assembled die**: core macro + padring, layout versus a
-netlist that instantiates the pad cells.
+**Ownership resolved (2026-09): the integrator runs the full-chip / assembled-die
+LVS**, including across the pad boundary (core macro + padring, layout vs. a
+netlist that instantiates the `gf180mcu_fd_io__*` cells). Trouper does **not**
+run this and does not need to — Trouper's job is to hand over a correct
+contract for the integrator to LVS against, which is:
 
-- Build a chip-level source netlist that instantiates `gf180mcu_fd_io__*` per the
-  confirmed slot map and connects each to the corresponding Trouper boundary pin.
-- Run netgen LVS on the assembled GDS against that netlist.
-- **Pass criterion:** circuits match uniquely, with no unmatched pins, nets or
-  devices *across the pad boundary* — in particular every `_OE`/`_IE`/`_CS`/
-  `_SL`/`_PU`/`_PD`/`_PDRV*` connection landing on the intended cell terminal.
-  A tie-off wired to the wrong terminal is exactly the class of error today's
-  macro-only LVS cannot see.
-- Ownership is likely shared: the integrator may run die-level LVS. **Confirm who
-  owns it** rather than assuming — a check both parties believe the other is
-  doing is the worst outcome.
+- `src/config/A40_ACV_rtlnames.def` — the 159-pin boundary template, functional
+  names matching `trouper_top.v` verbatim (`regen_a40_def.sh`).
+- `A40_ACV_pad_map.yaml` / `A40_ACV_interface.yaml` — slot ↔ pin ↔ cell ↔
+  terminal, machine-readable.
+- `sim/tests/test_padring_connectivity.py` — asserts, pre-LVS, that every
+  `trouper_top` pad-control port maps 1:1 to the right `A40_ACV_padring.v` cell
+  terminal with the right direction and cell type. This is the Trouper-side
+  check that the contract we give the integrator is internally consistent; the
+  integrator's LVS is what proves the assembled GDS matches it.
+
+The class of error this closes — a `_OE`/`_IE`/`_CS`/`_SL`/`_PU`/`_PD`/`_PDRV*`
+tie-off landing on the wrong cell terminal in layout — is caught by the
+integrator's die-level LVS, not by anything in this repo (Trouper's own LVS has
+0 IO cells, Open Risk #48). **Action for Trouper: confirm the integrator's LVS
+result covers the A40 slot arc once it is available, and record the job/report
+reference here.**
 
 ### 2. Magic DRC over the assembled die
 
@@ -133,6 +185,7 @@ ESD, latch-up, and pad-ring IR drop remain foundry/databook questions, already
 tracked in Open Risks #27 and #47. SPICE on a cell netlist does not answer them.
 
 **See:** Open Risks #27 (IO level-shift / `bi_t` cross-check), #47 (IR drop),
-#52 (slot availability), #53 (`ARRAY_ACQ_N` pad electrics), #54 (28/28 full,
-slots unconfirmed); `planning/Pinout.md`;
-`planning/two-pin-digital-debug-plan.md`; `planning/array-acquisition-sync.md`.
+#52 (slot allocation — closed), #53 (`ARRAY_ACQ_N` pad electrics);
+`planning/Pinout.md`; `planning/a40-padframe-integration-2026-08.md`;
+`planning/two-pin-digital-debug-plan.md`; `planning/array-acquisition-sync.md`;
+`planning/padring-gls-extension.md`.

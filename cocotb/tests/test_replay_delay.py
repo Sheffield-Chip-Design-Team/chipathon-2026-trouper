@@ -192,6 +192,41 @@ async def test_commit_late_sets_late_flag(dut):
 
 
 @cocotb.test()
+async def test_commit_late_cleared_by_psram_clr_err(dut):
+    """W_COMMIT_LATE's second documented clear path (Register Map 0x1E[4] /
+    0x70[1]): a PSRAM_CLR_ERR pulse clears the latched flag mid-replay without
+    stopping the replay or undoing the MRC upgrade. (The formal harness only
+    proves the flag HOLDS absent a clear; nothing exercised the clear.)"""
+    tag = "late_clr_err"
+    sym_ns = await _reset_and_lock(dut, mode=0, ant_mask=0xF, tag=tag,
+                                   pkt_timeout_syms=PKT_TIMEOUT_SYMS,
+                                   replay_delay=32)
+    await _wait_irq(dut, 0x02, 40, sym_ns, tag, "training_done")
+    await _wait_replay_active(dut, 40, sym_ns, tag)
+    await spi_burst_write(dut, 0x30, [0x40] * 16)
+    await spi_write(dut, 0x1E, 0x01)
+
+    for _ in range(20):
+        await Timer(sym_ns // 8, unit="ns")
+        if (await spi_read(dut, 0x1E)) & 0x10:
+            break
+    else:
+        assert False, f"{tag}: W_COMMIT_LATE never latched"
+
+    await spi_write(dut, 0x70, 0x03)          # PSRAM_EN=1 + CLR_ERR W1P
+    wgt = await spi_read(dut, 0x1E)
+    assert not (wgt & 0x10), f"{tag}: PSRAM_CLR_ERR did not clear W_COMMIT_LATE (0x{wgt:02X})"
+    assert wgt & 0x02, f"{tag}: CLR_ERR disturbed W_VALID (0x{wgt:02X})"
+    st = await spi_read(dut, 0x71)
+    assert st & 0x10, f"{tag}: CLR_ERR stopped the replay (PSRAM_STATUS=0x{st:02X})"
+    await Timer(3 * 64 * CLK_NS, unit="ns")
+    assert int(dut.u_dut.u_comb.use_mrc_r.value) == 1, f"{tag}: MRC upgrade undone by CLR_ERR"
+    wgt = await spi_read(dut, 0x1E)
+    assert not (wgt & 0x10), f"{tag}: W_COMMIT_LATE re-set with no new commit (0x{wgt:02X})"
+    dut._log.info(f"{tag}: PASS -- CLR_ERR clears W_COMMIT_LATE, replay + MRC intact")
+
+
+@cocotb.test()
 async def test_commit_on_time_no_flags(dut):
     """Rung 1: commit lands before the margin expires. The whole replayed
     packet is MRC-weighted from its first sample; neither W_COMMIT_LATE nor
@@ -203,6 +238,13 @@ async def test_commit_on_time_no_flags(dut):
                                    pkt_timeout_syms=PKT_TIMEOUT_SYMS,
                                    replay_delay=600)
 
+    # PCFSM plan row #26: PACKET_STATUS live readback of phase 1 (PREAMBLE_ACQ)
+    # -- the training window is >= 8 symbols, so right after lock the FSM is
+    # still acquiring: ACTIVE=1, PHASE=1, W_VALID=0.
+    ps = await spi_read(dut, 0x1C)
+    assert ps & 0x0F == 0x03 and not (ps & 0x40), \
+        f"{tag}: PACKET_STATUS=0x{ps:02X} right after lock, expected ACTIVE=1 PHASE=1 W_VALID=0"
+
     await _wait_irq(dut, 0x02, 40, sym_ns, tag, "training_done")
 
     await spi_burst_write(dut, 0x30, [0x40] * 16)
@@ -210,6 +252,10 @@ async def test_commit_on_time_no_flags(dut):
 
     wgt = await spi_read(dut, 0x1E)
     assert wgt & 0x02, f"{tag}: W_VALID not latched after in-time commit (0x{wgt:02X})"
+    # Row #26: the same W_VALID=1 must be visible in PACKET_STATUS[6] too.
+    ps = await spi_read(dut, 0x1C)
+    assert ps & 0x40 and ps & 0x01, \
+        f"{tag}: PACKET_STATUS=0x{ps:02X} after commit, expected W_VALID[6]=1 ACTIVE=1"
     assert not (wgt & 0x10), \
         f"{tag}: W_COMMIT_LATE set on an in-time commit (0x{wgt:02X}) -- commit " \
         f"landed before replay start, flag must stay clear"

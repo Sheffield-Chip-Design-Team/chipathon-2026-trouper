@@ -1,0 +1,1344 @@
+// psram_buf_ctrl.v
+// Same-packet MRC PSRAM buffer controller for APS6404L-3SQR (64 Mbit QPI PSRAM).
+//
+// SRAM-free design: the on-chip FD SRAM has been removed.  PSRAM serves both:
+//   (a) SC detector delay line — per iq_valid, write 8 bytes then read back
+//       del_i0/del_q0 (one branch, selected by sc_ant_sel) from N samples ago.
+//       cur_i0/cur_q0 are captured from the write data at write-done time,
+//       same branch.  sc_ant_sel (reg_bank SC_ANT_SEL 0x1B[1:0]) is
+//       write-locked during a packet — the SC correlator itself is still
+//       single-antenna, this just lets firmware route it away from a
+//       known-bad branch instead of always hardcoding antenna 0 (Open
+//       Risk #9).
+//   (b) Same-packet MRC replay — continuous-delay redesign (TRPR-RMD-009, see
+//       planning/psram-replay-continuous-delay-redesign.md): at the
+//       training_done rising edge a margin wait of replay_delay_samples
+//       captured samples is armed; when it expires, switch to S_REPLAY:
+//       interleaved write (live) + 8-byte read starting at buf_base and
+//       advancing in lockstep with the writes — a fixed-depth delay line that
+//       never rewinds, feeding rpl_* to the combiner.  W_commit no longer
+//       starts replay (it only gates W_valid in the combiner); the margin
+//       expiry doubles as a weight-arrival timeout — replay runs in combiner
+//       bypass until weights land, and a commit arriving after replay has
+//       started sets the sticky w_commit_late flag (WGT_CTRL[4]).
+//
+// Sub-cycle budget (32 MHz, fixed half-band decimator R=64 → iq_valid every
+// 64 cycles — CLAUDE.md; this comment previously (and incorrectly) budgeted
+// against the old CIC-only R=128 chain):
+//   S_WRITE  : 26 write + 20 del-read  = 46 sub-cycles  (18 spare)  ✓
+//   S_REPLAY : 26 write + 32 rpl-read  = 58 sub-cycles  ( 6 spare)  ✓
+// (each read burst grew by one sub-cycle 2026-09-14, Open Risks #72: the
+// final data-capture state and the CE# deassert used to be combined into
+// one state with zero hold-margin cycles between them; split into two,
+// matching the write burst's own existing sub23/sub24 separation.)
+// Debug fetch (below) is a FIXED 32 sub-cycles once launched and does not
+// abort/restart on an arriving iq_valid — that does not fit inside the
+// 19-cycle idle margin above, so any debug read triggered in idle mode
+// collides with the very next capture write, every time (Open Risks #30).
+// This is a confirmed, deterministic, and harmless tradeoff, not a bug:
+// sample_skip correctly flags the dropped write (silently and cleanly
+// skipped, not partially executed/corrupted), the debug fetch itself still
+// returns correct data, and normal capture resumes right after — verified
+// cycle-accurately by cocotb/dbg_write_collision/test_dbg_write_collision.py
+// (verification-plan row #16, SGE jobs 3548-3550).
+//
+// QPI init sequence (SPI serial mode on SIO[0]):
+//   RSTEN(0x66) → RST(0x99) → tRST wait → Enter QPI(0x35)
+//
+// Sample format in PSRAM (8 bytes/sample):
+//   byte 0=i0, 1=q0, 2=i1, 3=q1, 4=i2, 5=q2, 6=i3, 7=q3
+//
+// SC delay:
+//   N = 2^(SF+sample_shift) samples (one full LoRa symbol in the decimated sample domain).
+//   del_offset_bytes = N × 8 = 8 << (SF+sample_shift).
+//   del_rdy fires after N completed capture writes since qe_init_done (not
+//   raw iq_valid pulses -- a sample dropped by a qspi_owner pause or a
+//   debug-fetch collision does not count, and del_rdy re-arms if a capture
+//   is ever missed after it has already gone high).
+//
+// Debug readback path (no PicoRV32 / Grouper required):
+//   When packet_active=0 (IDLE) and QSPI_OWNER=0, the host RPi can read arbitrary
+//   PSRAM addresses via the SPI slave register bridge:
+//     0x72 PSRAM_DBG_ADDR_LO  [7:0]   — byte address bits [7:0]
+//     0x73 PSRAM_DBG_ADDR_MID [7:0]   — byte address bits [15:8]
+//     0x74 PSRAM_DBG_ADDR_HI  [6:0]   — byte address bits [22:16] (23-bit = 8 MB)
+//     0x75 PSRAM_DBG_CTRL     R/W     — [0] RD_TRIG (strobe, self-clearing)
+//                                        [1] AUTO_INC (re-arm after each 8-byte drain)
+//                                        [7] DBG_BUSY (read-only, clears when data ready)
+//     0x76 PSRAM_DBG_DATA     R only  — auto-incrementing byte window; 8 consecutive
+//                                        reads drain one full 8-byte IQ sample; address
+//                                        advances by 8 if AUTO_INC=1, else holds.
+//   Sequence: write 0x72-0x74, write 0x75[0]=1, poll 0x75[7]=0, read 0x76 ×8.
+//   Trigger and auto-inc refetch requests are latched into dbg_pend and serviced
+//   only in the S_WRITE idle slot, with capture writes taking priority — a debug
+//   fetch never starts in the same cycle an iq_valid write starts.
+//   Debug reads are blocked (DBG_BUSY held) while packet_active=1, while
+//   QSPI_OWNER=1 (pad handover), and before qe_init_done.
+//
+// Debug WRITE path (bring-up only — write-verify the device without a live
+// capture stream, e.g. marching / address-in-payload bus-fault patterns):
+//     0x79 PSRAM_DBG_WDATA   W only — one byte per SPI write into an 8-byte
+//                                     shadow; 8 writes fill one line in the
+//                                     same order 0x76 drains (i0,q0,..,i3,q3).
+//                                     Does NOT auto-increment the SPI burst.
+//     0x75[2] WR_TRIG        W1P    — commit the shadow to PSRAM at 0x72-0x74.
+//   Sequence: write 0x72-0x74, write 0x79 ×8, write 0x75[2]=1, poll 0x75[7]=0.
+//   The commit is latched into dbg_wr_pend and serviced from the same S_WRITE
+//   idle slot as debug reads (after capture writes and after a pending fetch),
+//   shares dbg_fetch_busy / DBG_BUSY, and is blocked by the same three gates
+//   (packet_active, QSPI_OWNER, !qe_init_done).  AUTO_INC (0x75[1]) has no
+//   effect on writes — every WR_TRIG commits to the address in 0x72-0x74.
+//
+// QPI read-capture trim (2026-09-13, real-hardware follow-up, see
+// rd_wait_trim port comment below):
+//     0x7A PSRAM_RD_TRIM [3:0] R/W — extra wait cycles (0-15) inserted after
+//                                    the datasheet-mandated 6-cycle window,
+//                                    before the first QPI read capture, on
+//                                    all three read sub-FSMs (debug read,
+//                                    del-read, replay cur_rd read). Default
+//                                    0 = unchanged datasheet-exact timing.
+//
+// Interface must remain QPI (not SPI): at 250 kHz iq_valid rate (128-cycle period),
+// one period must fit both a write (25 cyc QPI) and an SC delay read (19 cyc QPI) = 44 cyc.
+// SPI equivalents are ~96 cyc write + ~104 cyc read = 200 cyc — 1.56× over budget.
+// SIO[3:0] occupy 4 dedicated pads (TRPR-PHY-003), so QPI costs zero extra pads
+// vs SPI; there is no pin-count reason to downgrade.
+//
+// GF180MCU, 3.3V, 32 MHz
+
+module psram_buf_ctrl #(
+    // QPI state/SCK rate divider.  Production default is one controller clock
+    // per QPI edge (32 MHz).  FPGA bring-up can lower only the off-chip QPI
+    // rate while retaining the 32 MHz controller and host-SPI domains.
+    parameter integer QPI_CLK_DIV = 1
+) (
+    input  wire        clk_32m,
+    input  wire        rst_n,
+
+    // Config
+    input  wire        psram_en,     // 1 = capture and replay enabled
+    input  wire        init_start,   // start init when the local controller owns the pads
+    input  wire        qspi_owner,   // 1 = ownership transferred away from local controller
+    input  wire [3:0]  sf,           // spreading factor (7–12), for del address
+    input  wire [1:0]  sample_shift, // BW offset: 1=250 kHz, 2=125 kHz; N=2^(SF+sample_shift)
+    input  wire [1:0]  sc_ant_sel,   // which branch (0-3) feeds cur_i0/cur_q0/del_i0/del_q0
+
+    // Live IQ stream (4 branches, 8-bit signed)
+    input  wire signed [7:0] iq_i0, iq_i1, iq_i2, iq_i3,
+    input  wire signed [7:0] iq_q0, iq_q1, iq_q2, iq_q3,
+    input  wire        iq_valid,
+
+    // Packet control
+    input  wire        sc_lock,
+    input  wire [31:0] timing_ref,    // preamble-start sample index from sc_detector
+    input  wire [31:0] iq_sample_cnt, // free-running iq_valid counter from trouper_top
+    input  wire        training_done, // level from training_acc; rising edge arms the margin wait
+    input  wire [15:0] replay_delay_samples, // margin: samples after training_done before replay starts
+    input  wire        W_commit,
+    input  wire        packet_end,
+    input  wire        packet_active,
+    input  wire        clr_err,       // write-1 pulse: clear sticky error flags
+
+    // QPI pad interface.  ce_n / sio_out / sio_oe and the raw sck_en are all
+    // posedge-clk_32m here; trouper_top relaunches them onto negedge at the pad
+    // boundary (Open Risk #69) so the PSRAM samples a stable bus on the SCK
+    // rising edge.  `sck` is the pre-#69 posedge-gated clock, kept for the
+    // FORMAL harness / block-level use; the chip's PSRAM_SCK pad is driven from
+    // sck_en_o in trouper_top, not from this port.
+    output wire        sck,           // PSRAM clock (32 MHz, gated internally)
+    output wire        sck_en_o,      // raw SCK gate-enable, for the pad-boundary relaunch
+    output reg         ce_n,          // PSRAM CE# active-low
+    output reg  [3:0]  sio_out,       // SIO[3:0] output to PSRAM
+    input  wire [3:0]  sio_in,        // SIO[3:0] input from PSRAM
+    output reg  [3:0]  sio_oe,        // output-enable (1=ASIC drives, 0=PSRAM drives)
+
+    // SC detector delay-line outputs (replaces frontend_buf_ctrl + on-chip SRAM)
+    output reg  signed [7:0] cur_i0, cur_q0,  // branch 0, latched at write-done
+    output reg  signed [7:0] del_i0, del_q0,  // branch 0, N samples ago
+    output reg         del_valid,     // pulses when cur/del pair is ready (gated on del_rdy)
+
+    // Replay IQ output — muxed into combiner during REPLAY
+    output reg  signed [7:0] rpl_i0, rpl_i1, rpl_i2, rpl_i3,
+    output reg  signed [7:0] rpl_q0, rpl_q1, rpl_q2, rpl_q3,
+    output reg         rpl_valid,     // one pulse per replayed sample
+
+    // Status
+    output reg         buf_active,    // sc_lock → packet_end
+    output reg         replay_active, // W_commit → packet_end
+    output reg         qe_init_done,
+    output reg         replay_missed, // sticky: packet_end before replay started (margin never met)
+    output reg         w_commit_late, // sticky per-packet: W_commit landed after replay start
+    output reg         overflow,      // sticky: wr_ptr lapped rd_ptr
+    output reg         sample_skip,   // sticky: iq_valid arrived while QPI busy (sample lost)
+    output reg  [2:0]  state_dbg,
+    output wire        del_rdy_dbg,   // debug-probe observability only (DBG_CTRL group 011/101)
+    input  wire [22:0] dbg_addr,
+    input  wire        dbg_auto_inc,
+    input  wire        dbg_rd_trig,
+    input  wire        dbg_data_pop,
+    output wire        dbg_busy,
+    output wire [7:0]  dbg_data,
+    // Debug WRITE port (bring-up only — mirror of the read path above).
+    //   dbg_wdata / dbg_wdata_push : one byte at a time into an 8-byte shadow
+    //     (dbg_wbuf); push is a single-cycle strobe, 8 pushes fill one line in
+    //     the same byte order the read path drains (i0,q0,i1,q1,i2,q2,i3,q3).
+    //   dbg_wr_trig : W1P — commit the shadow to PSRAM at dbg_addr.  Self-gated
+    //     on !dbg_fetch_busy (the 2-cycle reg_bank W1P fires the engine once).
+    //   Serviced from the S_WRITE idle slot after capture writes and pending
+    //   debug reads; shares dbg_fetch_busy / dbg_busy with the read path, so a
+    //   commit in flight holds DBG_BUSY (0x75[7]) exactly like a fetch.
+    input  wire [7:0]  dbg_wdata,
+    input  wire        dbg_wdata_push,
+    input  wire        dbg_wr_trig,
+
+    // QPI read-capture trim (2026-09-13, real-hardware follow-up): extra
+    // dummy cycles inserted after the datasheet-mandated 6-cycle wait window
+    // and before the first rd_data<=sio_in capture, on all three QPI read
+    // sub-FSMs (debug read, del-read, replay cur_rd read). Datasheet tACLK
+    // (Table 10, APS6404L-3SQR) is only 2-5.5 ns, so on a real short-trace
+    // PCB this should default to 0 and never need touching; it exists
+    // because the FPGA bring-up rig (long flying leads to a bare breakout)
+    // measured a real round-trip delay large enough to shift the QPI read
+    // capture point by 1-2 nibbles at 32 MHz SCLK -- confirmed NOT an RTL
+    // bug (cocotb/psram_ops::test_dbg_write_readback_roundtrip is bit-exact
+    // at zero simulated delay) but real physical margin that scales with
+    // clock period, not something datasheet cycle-counting alone catches.
+    // Unsigned/extra-only by design: the chip's own 6-cycle minimum is a
+    // hard floor (tACLK_min=2ns, no internal sync stage sits between
+    // sio_in and this capture -- see trouper_top.v's PSRAM_SIO_IN, a bare
+    // pad wire), so sampling *earlier* than sub14/39 can only race the chip
+    // harder, never help; only added delay is ever a legitimate compensation.
+    input  wire [3:0]  rd_wait_trim
+);
+
+    // -----------------------------------------------------------------------
+    // FSM states
+    // -----------------------------------------------------------------------
+    localparam S_UNINIT  = 3'd0;
+    localparam S_QE_INIT = 3'd1;
+    localparam S_WRITE   = 3'd2;
+    localparam S_REPLAY  = 3'd3;
+    reg [2:0] state;
+
+    // -----------------------------------------------------------------------
+    // PSRAM address pointers — 23-bit (8 MB = 2^23 bytes), circular
+    // -----------------------------------------------------------------------
+    localparam ABITS = 23;
+    localparam AMASK = 23'h7FFFFF;
+
+    reg [ABITS-1:0] wr_ptr;
+    reg [ABITS-1:0] rd_ptr;
+    reg [ABITS-1:0] buf_base;
+    reg             buf_base_valid;
+    reg             sc_lock_prev;
+
+    // buf_base write-arc retiming (timing_ref -> u_psram.buf_base, SS worst
+    // path -14.49 ns, jobs 5539/5541). The original single-cycle version
+    // computed back_bytes = (iq_sample_cnt - timing_ref) << 3 combinationally
+    // on the SAME edge as sc_lock, then registered buf_base = wr_ptr -
+    // back_bytes -- the same dishonest same-cycle-compute shape Open Risk #39
+    // fixed in packet_ctrl_fsm.v (lat_timing_ref). buf_base is only consumed
+    // at replay start, wait_cnt samples after training_done -- thousands of
+    // cycles later -- so nothing requires this arithmetic to finish in the
+    // same cycle sc_lock asserts.
+    // Fix: snapshot all three raw operands (timing_ref, iq_sample_cnt,
+    // wr_ptr) on the sc_lock edge, then do the subtract/shift/subtract on the
+    // FROZEN copies one cycle later -- provably identical result to the
+    // original formula (same inputs, same arithmetic), just retimed.  Unlike
+    // packet_ctrl_fsm's fix (which recomputes from LIVE sample_count after
+    // its dwell, needing an iq_tick correction for exactly this reason),
+    // freezing wr_ptr too avoids relying on wr_ptr and iq_sample_cnt staying
+    // in lockstep across the delay window -- they do NOT always (sample_skip
+    // desyncs them whenever an iq_valid arrives while the QPI engine is
+    // busy), so re-reading wr_ptr live one cycle later would be a real
+    // correctness change, not just a timing retime. Freezing it is not: same
+    // inputs captured at the same instant as today, only the arithmetic is
+    // spread over an extra cycle.
+    reg [31:0]      lat_timing_ref_bb;
+    reg [31:0]      lat_iq_sample_cnt_bb;
+    reg [ABITS-1:0] lat_wr_ptr_bb;
+    reg             bufbase_pending;
+
+    // Replay margin wait (continuous-delay redesign): armed at the
+    // training_done rising edge, counts replay_delay_samples captured
+    // samples (down-counter decremented at each write-done), then enters
+    // S_REPLAY at rd_ptr = buf_base independent of W_commit.
+    reg             training_done_prev;
+    reg             wait_armed;
+    reg [15:0]      wait_cnt;
+
+    // del address = wr_ptr − N×8, latched at iq_valid trigger
+    // del_offset = 8 << (sf+sample_shift)  (= N × 8 = 2^(SF+sample_shift) × 8)
+    //
+    // del_offset and del_n are REGISTERED (del_offset_r/del_n_r below), not live
+    // combinational wires.  sf/sample_shift are write-locked during a packet
+    // (quasi-static), so the variable shift '8 << (sf+sample_shift)' — a ~50-gate
+    // barrel-shifter cone that was the SS-corner worst path (rb_sf_cfg →
+    // del_addr/del_cnt, WNS -16.4 ns) — is computed once per config change into a
+    // register instead of on every per-cycle del_addr/del_cnt path.  Honest
+    // retiming: the shift settles long before the first iq_valid del-read uses it.
+    reg [ABITS-1:0] del_addr;
+    reg [ABITS-1:0] del_offset_r;
+    wire [ABITS-1:0] del_offset_c = ({{(ABITS-4){1'b0}}, 4'd8} << (sf[3:0] + sample_shift));
+
+    // del_rdy: true once N iq_valid pulses have accumulated since qe_init_done.
+    // Re-armed whenever sf or sample_shift changes so a BW/SF change cannot present
+    // a stale delayed sample before the new delay distance has been fully written.
+    reg             del_rdy;
+    assign del_rdy_dbg = del_rdy;
+    reg [14:0]      del_cnt;
+    reg [3:0]       sf_prev;
+    reg [1:0]       sample_shift_prev;
+    reg [14:0]      del_n_r;                                       // registered (see del_offset_r)
+    wire [14:0]     del_n_c = (15'd1 << (sf[3:0] + sample_shift)); // 2^(SF+shift), 256..16384 in-spec (SF_CFG 7-12, shift 1..2)
+
+    // -----------------------------------------------------------------------
+    // QPI transaction sub-cycle FSM
+    //   sub  0..25 : QPI write  (cmd 2 + addr 6 + data 16 + SCK-quiet
+    //                            CE#-low guard 1 + CE#-high 1)
+    //   sub 26..45 : del-read   (cmd 2 + addr 6 + dummy 6 + 2B data 4 +
+    //                            last-nibble latch 1 + CE#-high 1)
+    //                            S_WRITE only
+    //   sub 26..57 : rpl-read   (cmd 2 + addr 6 + dummy 6 + 8B data 16 +
+    //                            last-nibble latch 1 + CE#-high 1)
+    //                            S_REPLAY only
+    // The final data-capture and CE# deassert are separate sub-cycles (not
+    // combined into one, as they used to be) -- Open Risks #72, 2026-09-14:
+    // a combined state left zero hold-margin cycles between the last nibble
+    // capture and CE# rising, unlike the write burst's own sub23/sub24
+    // split, which this now mirrors for all three read paths (debug read
+    // has the same split, see its own case block below).
+    // -----------------------------------------------------------------------
+    reg [5:0] sub;
+    reg       qpi_busy;
+
+    reg [63:0] wr_data;  // {i0,q0,i1,q1,i2,q2,i3,q3} latched from iq_valid
+    reg [63:0] rd_data;  // accumulated nibbles from PSRAM during read phase
+    reg [3:0]  rd_extra_cnt;  // rd_wait_trim countdown, shared across all 3 QPI-read sub-FSMs
+
+    // sc_ant_sel-selected branch's byte pair out of wr_data, for cur_i0/cur_q0
+    wire [7:0] wr_data_ant_i = wr_data[63 - 16*sc_ant_sel -: 8];
+    wire [7:0] wr_data_ant_q = wr_data[55 - 16*sc_ant_sel -: 8];
+
+    reg         dbg_mode;
+    reg         dbg_fetch_busy;
+    reg         dbg_pend;     // latched fetch request (RD_TRIG or auto-inc refetch)
+    reg [22:0]  dbg_addr_cur;
+    reg [63:0]  dbg_buf;
+    reg [2:0]   dbg_idx;
+
+    // Debug WRITE staging.  dbg_wbuf assembles bytes MSB-first so that after 8
+    // pushes byte0 sits in [63:56], matching wr_data / the read-drain order.
+    reg         dbg_wr_mode;  // current debug burst is a commit (vs a fetch)
+    reg         dbg_wr_pend;  // latched commit request (WR_TRIG)
+    reg [63:0]  dbg_wbuf;
+    reg [2:0]   dbg_widx;
+
+    assign dbg_busy = qspi_owner || packet_active || dbg_fetch_busy || !qe_init_done;
+    assign dbg_data = dbg_busy ? 8'h00 :
+                      (dbg_idx == 3'd0) ? dbg_buf[63:56] :
+                      (dbg_idx == 3'd1) ? dbg_buf[55:48] :
+                      (dbg_idx == 3'd2) ? dbg_buf[47:40] :
+                      (dbg_idx == 3'd3) ? dbg_buf[39:32] :
+                      (dbg_idx == 3'd4) ? dbg_buf[31:24] :
+                      (dbg_idx == 3'd5) ? dbg_buf[23:16] :
+                      (dbg_idx == 3'd6) ? dbg_buf[15:8]  : dbg_buf[7:0];
+
+    // -----------------------------------------------------------------------
+    // QE_INIT sub-cycle FSM (32 sub-cycles, same as original)
+    // -----------------------------------------------------------------------
+    reg [5:0] init_sub;
+    reg [7:0] init_sr;
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+    localparam integer QPI_DIV_W = (QPI_CLK_DIV <= 1) ? 1 : $clog2(QPI_CLK_DIV);
+    reg [QPI_DIV_W-1:0] qpi_div_cnt;
+    wire qpi_step = (QPI_CLK_DIV <= 1) || (qpi_div_cnt == QPI_CLK_DIV-1);
+    reg  sck_en;
+    // Deferred-effect copy of qspi_owner for the pad clock gate (TRPR-PSR-011):
+    // latched only between QPI bursts, so an ownership request landing mid-burst
+    // lets the in-flight transaction complete with its clock running (CE# low
+    // with SCK frozen and SIO still driven is exactly the pad glitch the spec
+    // prohibits — that was the pre-2026-07-06 behavior). New bursts are blocked
+    // by the raw qspi_owner at every launch site, so nothing starts after the
+    // request; the effect lands at the first engine-idle boundary.
+    reg  qspi_owner_eff;
+    // sck_stop (2026-09-14, hardware bring-up session -- see
+    // planning/psram-external-hardware-bringup-2026-09-13.md Part 6): a
+    // one-cycle CE#-low/SCK-quiet guard after the final write-data nibble,
+    // before CE# deasserts, on the capture/replay/debug write bursts
+    // (their sub23 states, below). Tested on real hardware: the fault
+    // remained (corrupted byte changed shape, not disappeared) -- "not a
+    // corrective fix" per that doc's own conclusion. An equivalent
+    // extension to the three READ bursts was tried in this same session's
+    // simulation-only work and reverted: the behavioural model has no
+    // concept of a fixed per-burst nibble count, so a similar guard state
+    // (with SCK still enabled) just causes the model to drive/expect one
+    // extra spurious nibble instead of removing the hold-margin gap --
+    // see Open Risks #72's 2026-09-14 entries for the full account. Left
+    // in place here only for the write bursts, which is where it was
+    // actually validated (build + program, even though it didn't fix the
+    // real fault).
+    reg  sck_stop;
+    assign sck      = sck_en & clk_32m;
+    assign sck_en_o = sck_en;
+
+    wire [ABITS-1:0] cur_wr = wr_ptr;
+    wire [ABITS-1:0] cur_rd = rd_ptr;
+
+    // del_rdy warm-up gating wires (see the del_rdy counter block below for
+    // the full rationale). Both are keyed off the real capture path only —
+    // dbg_mode transactions (debug read/write bursts) also run through
+    // sub==43 of the busy S_WRITE case, but that branch is dbg_mode-gated
+    // separately (see the case(sub) structure), so del_read_done_now, which
+    // requires !dbg_mode, never fires for a debug burst.
+    //
+    // del_read_done_now: true exactly on the cycle a REAL (non-debug)
+    // capture transaction's own del-read completes (S_WRITE sub==43). This
+    // is deliberately the READ-completion point, not the write-LAUNCH point
+    // (sub==0) — see the del_rdy counter block for why the off-by-one only
+    // goes away when anchored here.
+    wire del_read_done_now = (state == S_WRITE) && qpi_busy && !dbg_mode &&
+                              (sub == 6'd44);
+
+    // capture_missed_now: true when a real capture attempt (iq_valid,
+    // psram_en, qe_init_done) could not launch this cycle because the QPI
+    // engine was still busy with a prior transaction (mirrors sample_skip's
+    // own condition) or because qspi_owner had the pads (writes are gated
+    // off by !qspi_owner in both S_WRITE and S_REPLAY, so nothing lands in
+    // PSRAM for the whole ownership window — and unlike the qpi_busy case,
+    // that window sets no sticky flag at all today). Used below to re-arm
+    // del_rdy after it has already gone high, since either condition opens
+    // a real gap in the circular buffer's sample history.
+    wire capture_missed_now = iq_valid && psram_en && qe_init_done &&
+                               (state == S_WRITE || state == S_REPLAY) &&
+                               (qpi_busy || qspi_owner);
+
+    always @(posedge clk_32m or negedge rst_n) begin
+        if (!rst_n) begin
+            state          <= S_UNINIT;
+            wr_ptr         <= {ABITS{1'b0}};
+            rd_ptr         <= {ABITS{1'b0}};
+            buf_base       <= {ABITS{1'b0}};
+            buf_base_valid <= 1'b0;
+            lat_timing_ref_bb    <= 32'd0;
+            lat_iq_sample_cnt_bb <= 32'd0;
+            lat_wr_ptr_bb        <= {ABITS{1'b0}};
+            bufbase_pending      <= 1'b0;
+            sc_lock_prev   <= 1'b0;
+            training_done_prev <= 1'b0;
+            wait_armed     <= 1'b0;
+            wait_cnt       <= 16'd0;
+            del_addr       <= {ABITS{1'b0}};
+            del_offset_r   <= {ABITS{1'b0}};
+            del_n_r        <= 15'd1;
+            del_rdy        <= 1'b0;
+            del_cnt        <= 15'd0;
+            sf_prev        <= 4'd0;
+            sample_shift_prev <= 2'd0;
+            sub            <= 6'd0;
+            qpi_busy       <= 1'b0;
+            wr_data        <= 64'd0;
+            rd_data        <= 64'd0;
+            rd_extra_cnt   <= 4'd0;
+            init_sub       <= 6'd0;
+            init_sr        <= 8'd0;
+            dbg_mode       <= 1'b0;
+            dbg_fetch_busy <= 1'b0;
+            dbg_pend       <= 1'b0;
+            dbg_addr_cur   <= 23'd0;
+            dbg_buf        <= 64'd0;
+            dbg_idx        <= 3'd0;
+            dbg_wr_mode    <= 1'b0;
+            dbg_wr_pend    <= 1'b0;
+            dbg_wbuf       <= 64'd0;
+            dbg_widx       <= 3'd0;
+            sck_en         <= 1'b0;
+            qpi_div_cnt    <= {QPI_DIV_W{1'b0}};
+            qspi_owner_eff <= 1'b0;
+            sck_stop       <= 1'b0;
+            ce_n           <= 1'b1;
+            sio_out        <= 4'd0;
+            sio_oe         <= 4'd0;
+            cur_i0 <= 8'sd0; cur_q0 <= 8'sd0;
+            del_i0 <= 8'sd0; del_q0 <= 8'sd0;
+            del_valid      <= 1'b0;
+            rpl_i0 <= 8'sd0; rpl_q0 <= 8'sd0;
+            rpl_i1 <= 8'sd0; rpl_q1 <= 8'sd0;
+            rpl_i2 <= 8'sd0; rpl_q2 <= 8'sd0;
+            rpl_i3 <= 8'sd0; rpl_q3 <= 8'sd0;
+            rpl_valid      <= 1'b0;
+            buf_active     <= 1'b0;
+            replay_active  <= 1'b0;
+            qe_init_done   <= 1'b0;
+            replay_missed  <= 1'b0;
+            w_commit_late  <= 1'b0;
+            overflow       <= 1'b0;
+            sample_skip    <= 1'b0;
+            state_dbg      <= 3'd0;
+        end else begin
+            if (qpi_step)
+                qpi_div_cnt <= {QPI_DIV_W{1'b0}};
+            else
+                qpi_div_cnt <= qpi_div_cnt + {{(QPI_DIV_W-1){1'b0}}, 1'b1};
+            sc_lock_prev      <= sc_lock;
+            training_done_prev <= training_done;
+            sf_prev           <= sf;
+            sample_shift_prev <= sample_shift;
+            // Registered barrel-shift outputs (quasi-static; off the per-cycle
+            // path).  Loaded ONLY when sf/sample_shift have been stable for a
+            // cycle (sf==sf_prev), so the '<<' cone has a guaranteed >=2-cycle
+            // settle window before capture — this makes the SDC MCP=2 on
+            // del_offset_c/del_n_c honest (the dest FF never latches a half-
+            // settled barrel-shift result on the config-change boundary).  Any
+            // residual transient is further masked by the del_rdy warm-up gate.
+            if (sf == sf_prev && sample_shift == sample_shift_prev) begin
+                del_offset_r <= del_offset_c;
+                del_n_r      <= del_n_c;
+            end
+            rpl_valid    <= 1'b0;
+            del_valid    <= 1'b0;
+            state_dbg    <= state;
+
+            // S_QE_INIT is excluded from the deferred-owner update: qpi_busy
+            // is never set to 1 during S_QE_INIT (only S_WRITE/S_REPLAY touch
+            // it), so without this exclusion qspi_owner_eff tracked live
+            // qspi_owner with only a 1-cycle lag throughout the whole init
+            // sequence -- not deferred to a burst boundary at all. That let
+            // an ownership request landing mid-QE_INIT drop sck_en (freezing
+            // SCK) one cycle later while the init_sub case statement (which
+            // has no qspi_owner gate of its own) kept driving ce_n low and
+            // toggling sio_out through the RSTEN/RST/Enter-QPI bytes -- CE#
+            // low with SCK frozen and SIO still changing is exactly the pad
+            // glitch qspi_owner_eff exists to prevent. QE_INIT is also a
+            // hardware-interlocked 3-command sequence (RSTEN must be
+            // immediately followed by RST or the PSRAM abandons the reset
+            // arm) -- there is no safe mid-sequence boundary to hand off at,
+            // so the fix defers the whole handoff to the state boundary at
+            // sub==29 (state <- S_WRITE), same as every other in-flight-
+            // burst deferral in this design.
+            if (!qpi_busy && state != S_QE_INIT) qspi_owner_eff <= qspi_owner;
+            sck_en <= qpi_step && ((state == S_QE_INIT) || qpi_busy) &&
+                      !qspi_owner_eff && !sck_stop;
+            // One-cycle-wide default; the three read bursts' "one before the
+            // new capture-only state" cycles override this to 1'b1 below
+            // (last assignment in program order wins for a given var within
+            // one always-block invocation, so this default is always safe
+            // to state first).
+            sck_stop <= 1'b0;
+
+            // Sticky error clear (write-1 pulse via PSRAM_CLR_ERR). Placed before
+            // the per-state error sets below and before sample_skip detection, so a
+            // genuine error landing in the same cycle as a clear is not lost.
+            if (clr_err) begin
+                overflow      <= 1'b0;
+                replay_missed <= 1'b0;
+                w_commit_late <= 1'b0;
+                sample_skip   <= 1'b0;
+            end
+
+            // Late-commit detection: W_commit landing while the delay-line
+            // replay is already running means some prefix of the packet was
+            // combined in bypass (partial MRC loss) — flag it for firmware.
+            // replay_active (not a rd_ptr != buf_base compare) is the
+            // replay-started marker: registered, cleared at packet_end, and
+            // immune to stale pointer values from a previous packet.
+            if (W_commit && replay_active)
+                w_commit_late <= 1'b1;
+
+            // Sample-skip detection: a live sample arrived while the QPI engine was
+            // still busy with a prior transaction, so it could not be captured.
+            // Within the supported 125/250 kHz envelope the timing budget
+            // (TRPR-PSR-014) guarantees this never fires; the flag makes any
+            // out-of-budget condition observable (TRPR-PSR-020).
+            if (iq_valid && qpi_busy && psram_en && qe_init_done && !qspi_owner)
+                sample_skip <= 1'b1;
+
+            // del_rdy counter: accumulate completed CAPTURE transactions
+            // (del_read_done_now) after init. An sf or sample_shift change
+            // re-arms the warm-up so the SC detector never sees a delayed
+            // sample from an address not yet written with N =
+            // 2^(SF+sample_shift) fresh samples at the new delay distance.
+            //
+            // Anchored on del_read_done_now (the completing transaction's OWN
+            // del-read-done point, sub==43), not on the write LAUNCH (sub==0)
+            // of that same transaction. This matters for an off-by-one: at
+            // launch, del_addr is computed from the PRE-increment wr_ptr (the
+            // slot this transaction is about to write), so on the Nth
+            // transaction del_addr = wr_ptr_N - N*8 lands one slot BEFORE the
+            // oldest genuinely-written sample (slot -1, not slot 0) — counting
+            // at launch would let del_rdy go high 43 cycles before that same
+            // transaction's own (still-corrupted) del-read reaches sub==43,
+            // so `del_valid <= del_rdy;` there would expose the garbage read.
+            // Counting at sub==43 instead means: on the Nth transaction's own
+            // completion, `del_valid <= del_rdy;` (in the case(sub) block)
+            // reads del_rdy's PRE-edge value (still 0, nonblocking) in the
+            // exact same cycle del_rdy is being set here — so THIS
+            // transaction's contaminated read is correctly suppressed, and
+            // del_rdy is 1 by the time transaction N+1 launches. N+1's own
+            // del_addr = wr_ptr_(N+1) - N*8 = N*8 - N*8 = 0, correctly the
+            // oldest real sample — N+1 becomes the first valid pair.
+            //
+            // del_rdy is also re-armed (dropped back to 0, restarting the
+            // count from zero) if a capture is ever missed AFTER del_rdy has
+            // already gone high: a qspi_owner ownership pause or a debug-
+            // fetch collision (sample_skip) opens a real gap in the circular
+            // buffer's history, so the "N valid samples of unbroken history"
+            // invariant del_rdy encodes no longer holds and must not be left
+            // silently stuck high — that would expose a discontinuous/stale
+            // delay line for up to the gap's own length after resumption,
+            // with no flag anywhere to say so. Before del_rdy first goes
+            // high, a miss needs no special handling: del_cnt already only
+            // advances on del_read_done_now, so a missed cycle just doesn't
+            // increment it (correctly), and counting resumes cleanly once
+            // real captures do.
+            if (!qe_init_done) begin
+                del_rdy <= 1'b0;
+                del_cnt <= 15'd0;
+            end else if (sf != sf_prev || sample_shift != sample_shift_prev) begin
+                del_rdy <= 1'b0;
+                del_cnt <= 15'd0;
+            end else if (del_rdy && capture_missed_now) begin
+                del_rdy <= 1'b0;
+                del_cnt <= 15'd0;
+            end else if (!del_rdy && del_read_done_now) begin
+                if (del_cnt + 15'd1 >= del_n_r)
+                    del_rdy <= 1'b1;
+                else
+                    del_cnt <= del_cnt + 15'd1;
+            end
+
+            // Debug-data pop: advance the byte index; on the eighth byte with
+            // AUTO_INC set, request a refetch of the next sample.  The fetch
+            // itself starts only from the S_WRITE idle slot below — never here —
+            // so it cannot collide with a capture-write start or fire in a
+            // state that would leave qpi_busy/dbg_fetch_busy orphaned.
+            if (!dbg_busy && dbg_data_pop) begin
+                if (dbg_idx == 3'd7) begin
+                    dbg_idx <= 3'd0;
+                    if (dbg_auto_inc) begin
+                        dbg_addr_cur   <= (dbg_addr_cur + 23'd8) & AMASK;
+                        dbg_fetch_busy <= 1'b1;
+                        dbg_pend       <= 1'b1;
+                    end
+                end else begin
+                    dbg_idx <= dbg_idx + 3'd1;
+                end
+            end
+
+            // RD_TRIG: latch a fetch request whenever the debug engine is idle.
+            // Pends until the S_WRITE idle slot services it, so a trigger that
+            // lands while the QPI bus is busy is not lost.
+            if (dbg_rd_trig && !dbg_fetch_busy && !packet_active && !qspi_owner
+                && qe_init_done) begin
+                dbg_addr_cur   <= dbg_addr;
+                dbg_fetch_busy <= 1'b1;
+                dbg_pend       <= 1'b1;
+            end
+
+            // Debug-write byte assembly: each push shifts one byte into the
+            // shadow (MSB-first).  Independent of the QPI bus — safe to fill
+            // while a prior commit is still draining; that fill lands in the
+            // next line.  dbg_widx is a convenience wrap counter for firmware
+            // that watches it; it is re-zeroed at commit completion.
+            if (dbg_wdata_push) begin
+                dbg_wbuf <= {dbg_wbuf[55:0], dbg_wdata};
+                dbg_widx <= dbg_widx + 3'd1;
+            end
+
+            // WR_TRIG: latch a commit request (same idle-engine gate and
+            // self-gating as RD_TRIG — dbg_fetch_busy is shared).  A trigger
+            // that lands while the engine is busy is dropped, not queued;
+            // firmware polls DBG_BUSY (0x75[7]) before triggering.
+            if (dbg_wr_trig && !dbg_fetch_busy && !packet_active && !qspi_owner
+                && qe_init_done) begin
+                dbg_addr_cur   <= dbg_addr;
+                dbg_fetch_busy <= 1'b1;
+                dbg_wr_pend    <= 1'b1;
+            end
+
+            case (state)
+
+                // ------------------------------------------------------------
+                S_UNINIT: begin
+                    ce_n   <= 1'b1;
+                    sio_oe <= 4'd0;
+                    if (init_start && !qspi_owner) begin
+                        state    <= S_QE_INIT;
+                        init_sub <= 6'd0;
+                        init_sr  <= 8'h66; // RSTEN
+                    end
+                end
+
+                // ------------------------------------------------------------
+                // S_QE_INIT — one-time PSRAM software-reset + QPI-mode-entry
+                // handshake (APS6404L datasheet §12 "Reset Operation" + §11.3
+                // "QPI Quad Mode Exit/Entry"). Bit-banged over legacy 1-wire
+                // SPI mode (sio_oe=4'b0001, SIO[0] only) because the PSRAM
+                // does not understand QPI-encoded commands until after the
+                // Enter-QPI command below has been sent the slow way — none
+                // of these three commands has a data phase, the PSRAM sends
+                // nothing back, each is command-byte-only, MSB-first, one bit
+                // per sub-cycle.
+                //
+                //   1. RSTEN (0x66), sub 0-8   — "Reset Enable": arms the
+                //      device for a reset. By itself does nothing; datasheet:
+                //      "Reset command has to immediately follow the
+                //      Reset-Enable command... any command other than Reset
+                //      after RSTEN will cause the device to exit Reset-Enable
+                //      state and abandon reset" — a two-step arm/fire
+                //      interlock so a stray bus glitch can't reset the PSRAM.
+                //   2. RST (0x99), sub 9-19    — "Reset": actually fires the
+                //      reset, returning the PSRAM to default SPI-mode
+                //      standby. Must follow RSTEN with no other command in
+                //      between (see above). CE# is then held high for one
+                //      idle sub-cycle (sub 19) before the next command is
+                //      allowed, satisfying the datasheet's tRST spec ("Time
+                //      between end of RST CMD to next valid CMD, min 50 ns")
+                //      — sub 18->21 is ~3 cycles at 32 MHz (~94 ns) of CE#
+                //      high time, comfortably over the 50 ns minimum.
+                //   3. Enter QPI (0x35), sub 20-28 — switches the PSRAM from
+                //      1-wire SPI mode into 4-wire QPI mode. Only after this
+                //      completes (sub 29) does the PSRAM accept the QPI
+                //      commands (0x02 write, 0xEB fast quad read) used by
+                //      every S_WRITE/S_REPLAY transaction for the rest of
+                //      chip operation.
+                //
+                // Not handled here: the datasheet's separate power-up
+                // self-init (§7) — 150 us with CE# held high after VDD first
+                // stabilizes, before ANY command is valid. That is a
+                // board/power-sequencing concern outside this FSM; S_QE_INIT
+                // only implements the software reset triggered by init_start.
+                // ------------------------------------------------------------
+                S_QE_INIT: begin
+                    sio_oe <= 4'b0001;
+                    if (qpi_step) begin
+                    case (init_sub)
+                        // ---- RSTEN (0x66): 8 bits MSB-first on SIO[0] ----
+                        6'd0:  begin ce_n <= 1'b0; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd1; end
+                        6'd1:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd2; end
+                        6'd2:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd3; end
+                        6'd3:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd4; end
+                        6'd4:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd5; end
+                        6'd5:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd6; end
+                        6'd6:  begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd7; end
+                        6'd7:  begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd8; end
+                        // ---- RSTEN done: CE# high, no data phase, no response expected ----
+                        6'd8:  begin ce_n <= 1'b1; sio_oe <= 4'd0; init_sub <= 6'd9; end
+                        // ---- RST (0x99): 8 bits MSB-first, must follow RSTEN immediately ----
+                        6'd9:  begin init_sr <= 8'h99; init_sub <= 6'd10; end
+                        6'd10: begin ce_n <= 1'b0; sio_oe <= 4'b0001; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd11; end
+                        6'd11: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd12; end
+                        6'd12: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd13; end
+                        6'd13: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd14; end
+                        6'd14: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd15; end
+                        6'd15: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd16; end
+                        6'd16: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd17; end
+                        6'd17: begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd18; end
+                        // ---- RST done: CE# high, then hold >=tRST (50 ns min) before next CMD ----
+                        6'd18: begin ce_n <= 1'b1; sio_oe <= 4'd0; init_sub <= 6'd19; end
+                        6'd19: init_sub <= 6'd20; // idle sub-cycle — the tRST gap
+                        // ---- Enter QPI (0x35): 8 bits MSB-first, switches SIO bus to 4-wire ----
+                        6'd20: begin init_sr <= 8'h35; init_sub <= 6'd21; end
+                        6'd21: begin ce_n <= 1'b0; sio_oe <= 4'b0001; sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd22; end
+                        6'd22: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd23; end
+                        6'd23: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd24; end
+                        6'd24: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd25; end
+                        6'd25: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd26; end
+                        6'd26: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd27; end
+                        6'd27: begin sio_out <= {3'd0, init_sr[7]}; init_sr <= {init_sr[6:0],1'b0}; init_sub <= 6'd28; end
+                        6'd28: begin sio_out <= {3'd0, init_sr[7]}; init_sub <= 6'd29; end
+                        // ---- Enter QPI done: CE# high, PSRAM now in 4-wire QPI mode ----
+                        6'd29: begin
+                            ce_n         <= 1'b1;
+                            sio_oe       <= 4'd0;
+                            qe_init_done <= 1'b1;
+                            state        <= S_WRITE;
+                        end
+                        default: init_sub <= init_sub + 6'd1;
+                    endcase
+                    end
+                end
+
+                // ------------------------------------------------------------
+                // S_WRITE — circular write + del-read every iq_valid.
+                // Sub 0..25:  QPI write 8 bytes at wr_ptr (including a
+                //              CE#-low, SCK-quiet final-nibble guard cycle)
+                // Sub 26..45: QPI read 2 bytes (del_i0/del_q0) from del_addr
+                // sc_lock rising edge: snapshot buf_base.
+                // training_done rising edge: arm the margin wait; when
+                // wait_cnt captured samples have elapsed → S_REPLAY at
+                // buf_base, independent of W_commit.
+                // ------------------------------------------------------------
+                S_WRITE: begin
+                    // Stage 1 (sc_lock edge): snapshot the raw operands, and
+                    // set buf_active immediately -- UNCHANGED timing from the
+                    // original single-cycle version, and load-bearing:
+                    // packet_ctrl_fsm.v raises packet_active on this identical
+                    // sc_lock edge (formal's m_buf_active_implies_packet_active
+                    // comment), so buf_active must track that same edge, not
+                    // lag it -- delaying buf_active into stage 2 (tried first)
+                    // opened a 1-cycle gap where the per-module formal harness
+                    // can't yet constrain packet_active, and BMC found a real
+                    // counterexample on a_buf_active_needs_en through it. No
+                    // arithmetic happens here, only the raw operand snapshot.
+                    // Stage 2 below does the actual subtract/shift/subtract
+                    // on the frozen snapshots -- see the buf_base declaration
+                    // comment for the full write-arc-retiming rationale.
+                    if (sc_lock && !sc_lock_prev && psram_en) begin
+                        lat_timing_ref_bb    <= timing_ref;
+                        lat_iq_sample_cnt_bb <= iq_sample_cnt;
+                        lat_wr_ptr_bb        <= wr_ptr;
+                        bufbase_pending      <= 1'b1;
+                        buf_active           <= 1'b1;
+                        w_commit_late        <= 1'b0;  // per-packet sticky, cleared at packet start
+                    end
+
+                    // Stage 2: compute buf_base from the frozen stage-1
+                    // snapshots, one cycle after the sc_lock edge that
+                    // captured them -- same formula, same operand values,
+                    // just retimed off sc_lock's own edge. buf_base_valid now
+                    // lags buf_active by one cycle (it didn't before); see the
+                    // updated a_buf_base_valid_matches_active in the formal
+                    // harness for the corrected relationship.
+                    if (bufbase_pending) begin : blk_bufbase_compute
+                        reg [22:0] back_bytes;
+                        back_bytes = (lat_iq_sample_cnt_bb - lat_timing_ref_bb) << 3;
+                        buf_base        <= (lat_wr_ptr_bb - back_bytes) & AMASK;
+                        buf_base_valid  <= 1'b1;
+                        bufbase_pending <= 1'b0;
+                    end
+
+                    // Arm the replay margin wait at the training_done rising
+                    // edge.  Gate on buf_active (not buf_base_valid) so a
+                    // packet is locked -- gates out noise-mode training runs
+                    // (TACC_NOISE_TRIG fires training_done without sc_lock)
+                    // the same way buf_base_valid used to. buf_active is used
+                    // here specifically because, post buf_base-retiming
+                    // (2-stage pipeline above), buf_base_valid now lags
+                    // buf_active by one cycle (the bufbase_pending window);
+                    // gating on buf_base_valid left a real 1-cycle hole where
+                    // a training_done edge landing in that window would be
+                    // silently missed. buf_base itself is only read at
+                    // replay start, wait_cnt (thousands of) cycles later, so
+                    // by then buf_base_valid is certainly 1 -- this gate only
+                    // ever needs to mean "a packet is locked", which is what
+                    // buf_active means from the same cycle sc_lock asserts.
+                    if (training_done && !training_done_prev &&
+                        buf_active && psram_en && !packet_end) begin
+                        wait_armed <= 1'b1;
+                        wait_cnt   <= replay_delay_samples;
+                    end
+
+                    // Margin met → start the delay-line replay.  Gated on
+                    // !qpi_busy so the state switch lands between QPI bursts
+                    // (the del-read and rpl-read sub-cycle sequences differ),
+                    // and on !packet_end so a same-cycle packet end wins —
+                    // entering S_REPLAY on the packet_end pulse would miss its
+                    // own exit condition and zombie into the idle period.
+                    if (wait_armed && wait_cnt == 16'd0 && !qpi_busy &&
+                        psram_en && !packet_end) begin
+                        rd_ptr        <= buf_base;
+                        wait_armed    <= 1'b0;
+                        replay_active <= 1'b1;
+                        state         <= S_REPLAY;
+                    end
+
+                    if (packet_end) begin
+                        // Replay never started this packet: margin never met
+                        // (short packet / training_done never fired) — clean
+                        // fallback, flagged for firmware via REPLAY_MISSED.
+                        // Gate on buf_active, not buf_base_valid: same 1-cycle
+                        // post-retiming hole as the training_done arm above --
+                        // a packet_end landing in the bufbase_pending window
+                        // (buf_active=1, buf_base_valid=0) genuinely means "a
+                        // lock happened and replay never started", so
+                        // REPLAY_MISSED must still fire; buf_base_valid alone
+                        // would silently miss it.
+                        if (buf_active) replay_missed <= 1'b1;
+                        buf_base_valid  <= 1'b0;
+                        buf_active      <= 1'b0;
+                        bufbase_pending <= 1'b0;  // abort stage 2 if a lock
+                                                   // just armed it this cycle
+                                                   // (keeps buf_active ==
+                                                   // (buf_base_valid ||
+                                                   // bufbase_pending) intact)
+                        wait_armed      <= 1'b0;
+                    end
+
+                    if (!qpi_busy) begin
+                        ce_n   <= 1'b1;
+                        sio_oe <= 4'd0;
+                        // Capture writes take priority; pending debug fetches
+                        // are serviced in the spare idle cycles between them.
+                        if (iq_valid && psram_en && qe_init_done && !qspi_owner) begin
+                            wr_data  <= {iq_i0, iq_q0, iq_i1, iq_q1,
+                                         iq_i2, iq_q2, iq_i3, iq_q3};
+                            // Word-aligned base (del_offset_r is a multiple of
+                            // 8) ORed with the 2-byte lane for sc_ant_sel — safe
+                            // since the low 3 bits of the base are always 0.
+                            del_addr <= ((wr_ptr - del_offset_r) & AMASK) |
+                                        {20'd0, sc_ant_sel, 1'b0};
+                            dbg_mode <= 1'b0;
+                            qpi_busy <= 1'b1;
+                            sub      <= 6'd0;
+                        end else if (dbg_pend && !packet_active && !qspi_owner
+                                     && qe_init_done) begin
+                            dbg_pend    <= 1'b0;
+                            dbg_mode    <= 1'b1;
+                            dbg_wr_mode <= 1'b0;
+                            qpi_busy    <= 1'b1;
+                            sub         <= 6'd0;
+                        end else if (dbg_wr_pend && !packet_active && !qspi_owner
+                                     && qe_init_done) begin
+                            // Freeze the shadow for the burst so a concurrent
+                            // push cannot corrupt an in-flight commit (mirrors
+                            // the wr_data latch on the capture path).
+                            dbg_wr_pend <= 1'b0;
+                            dbg_mode    <= 1'b1;
+                            dbg_wr_mode <= 1'b1;
+                            wr_data     <= dbg_wbuf;
+                            qpi_busy    <= 1'b1;
+                            sub         <= 6'd0;
+                        end
+                    end else if (qpi_step) begin
+                        if (dbg_mode && dbg_wr_mode) begin
+                            // ---- DEBUG QPI WRITE: CMD 0x02, 8 bytes at
+                            //      dbg_addr_cur, payload from wr_data (frozen
+                            //      copy of dbg_wbuf).  Same wire sequence as the
+                            //      capture write, duplicated here so the
+                            //      timing-critical capture arcs stay untouched.
+                            case (sub)
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
+                            6'd2:  begin sio_out<=dbg_addr_cur[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=dbg_addr_cur[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=dbg_addr_cur[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=dbg_addr_cur[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=dbg_addr_cur[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=dbg_addr_cur[3:0];   sub<=6'd8; end
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            // Stop SCK for a complete CE#-low guard cycle
+                            // after the last write-data edge.  This is a
+                            // hardware experiment for the APS6404L breakout:
+                            // it tests whether the final nibble was being
+                            // truncated by the CE# transaction boundary.
+                            6'd23: begin sio_out<=wr_data[3:0]; sub<=6'd24; sck_stop<=1'b1; end
+                            6'd24: begin sub<=6'd25; end // CE# low, SCK quiet
+                            6'd25: begin
+                                ce_n          <= 1'b1;
+                                sio_oe        <= 4'd0;
+                                dbg_fetch_busy<= 1'b0;
+                                dbg_mode      <= 1'b0;
+                                dbg_wr_mode   <= 1'b0;
+                                dbg_widx      <= 3'd0;
+                                qpi_busy      <= 1'b0;
+                                sub           <= 6'd0;
+                            end
+                            default: sub <= 6'd0;
+                            endcase
+                        end else if (dbg_mode) begin
+                            case (sub)
+                                6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd1; end
+                                6'd1:  begin sio_out<=4'hB; sub<=6'd2; end
+                                6'd2:  begin sio_out<=dbg_addr_cur[22:20]; sub<=6'd3; end
+                                6'd3:  begin sio_out<=dbg_addr_cur[19:16]; sub<=6'd4; end
+                                6'd4:  begin sio_out<=dbg_addr_cur[15:12]; sub<=6'd5; end
+                                6'd5:  begin sio_out<=dbg_addr_cur[11:8];  sub<=6'd6; end
+                                6'd6:  begin sio_out<=dbg_addr_cur[7:4];   sub<=6'd7; end
+                                6'd7:  begin sio_out<=dbg_addr_cur[3:0];   sub<=6'd8; end
+                                6'd8:  begin sio_oe<=4'd0; sub<=6'd9; end
+                                6'd9:  sub<=6'd10;
+                                6'd10: sub<=6'd11;
+                                6'd11: sub<=6'd12;
+                                6'd12: sub<=6'd13;
+                                // rd_wait_trim extra-margin cycles (see port comment): 0 = unchanged
+                                // datasheet-exact timing, straight to sub14.
+                                6'd13: begin
+                                    if (rd_wait_trim == 4'd0) sub <= 6'd14;
+                                    else begin rd_extra_cnt <= rd_wait_trim; sub <= 6'd63; end
+                                end
+                                6'd63: begin
+                                    if (rd_extra_cnt <= 4'd1) sub <= 6'd14;
+                                    else rd_extra_cnt <= rd_extra_cnt - 4'd1;
+                                end
+                                // sio_in is captured at the pad on SCK's falling
+                                // edge.  Sub14/15 cover the last wait edge and
+                                // the first data-launch edge; consume the returned
+                                // nibbles in sub16..31.
+                                6'd14: sub<=6'd15;
+                                6'd15: sub<=6'd16;
+                                6'd16: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd17; end
+                                6'd17: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd18; end
+                                6'd18: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd19; end
+                                6'd19: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd20; end
+                                6'd20: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd21; end
+                                6'd21: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd22; end
+                                6'd22: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd23; end
+                                6'd23: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd24; end
+                                6'd24: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd25; end
+                                6'd25: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd26; end
+                                6'd26: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd27; end
+                                6'd27: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd28; end
+                                6'd28: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd29; end
+                                6'd29: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd30; end
+                                6'd30: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd31; end
+                                // Open Risks #72 (2026-09-14): the final data
+                                // capture and the CE# deassert used to share
+                                // this one state -- zero cycles of hold margin
+                                // after the last nibble, unlike every other
+                                // read/write burst in this module. Split into
+                                // two states (capture, then deassert) so the
+                                // last nibble gets exactly the same one-cycle
+                                // margin as every earlier nibble/the write
+                                // burst's own sub23/sub24 split.
+                                6'd31: begin dbg_buf<={rd_data[59:0],sio_in}; sub<=6'd32; end
+                                6'd32: begin
+                                    ce_n          <= 1'b1;
+                                    sio_oe        <= 4'd0;
+                                    dbg_idx       <= 3'd0;
+                                    dbg_fetch_busy<= 1'b0;
+                                    dbg_mode      <= 1'b0;
+                                    qpi_busy      <= 1'b0;
+                                    sub           <= 6'd0;
+                                end
+                                default: sub <= 6'd0;
+                            endcase
+                        end else begin
+                            case (sub)
+                            // ---- QPI WRITE: CMD 0x02 ----
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
+                            // ---- WRITE ADDR ----
+                            6'd2:  begin sio_out<=cur_wr[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=cur_wr[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=cur_wr[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=cur_wr[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=cur_wr[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=cur_wr[3:0];   sub<=6'd8; end
+                            // ---- WRITE DATA (8 bytes = 16 nibbles) ----
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            // Keep CE# asserted through one whole SCK-quiet
+                            // cycle after the final data nibble.  This gives
+                            // the external part a full-cycle termination guard
+                            // rather than merely delaying the next command.
+                            6'd23: begin sio_out<=wr_data[3:0]; sub<=6'd24; sck_stop<=1'b1; end
+                            6'd24: begin sub<=6'd25; end // CE# low, SCK quiet
+                            6'd25: begin
+                                ce_n    <= 1'b1;
+                                sio_oe  <= 4'd0;
+                                wr_ptr  <= (wr_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
+                                cur_i0  <= $signed(wr_data_ant_i);
+                                cur_q0  <= $signed(wr_data_ant_q);
+                                // Margin down-count: one captured sample =
+                                // wr_ptr advanced 8 bytes past the wait
+                                // reference.  wait_armed is registered, so an
+                                // arm landing this same cycle is not eaten.
+                                if (wait_armed && wait_cnt != 16'd0)
+                                    wait_cnt <= wait_cnt - 16'd1;
+                                sub     <= 6'd26;
+                            end
+                            // ---- DEL READ: CMD 0xEB ----
+                            6'd26: begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd27; end
+                            6'd27: begin sio_out<=4'hB; sub<=6'd28; end
+                            // ---- DEL READ ADDR ----
+                            6'd28: begin sio_out<=del_addr[22:20]; sub<=6'd29; end
+                            6'd29: begin sio_out<=del_addr[19:16]; sub<=6'd30; end
+                            6'd30: begin sio_out<=del_addr[15:12]; sub<=6'd31; end
+                            6'd31: begin sio_out<=del_addr[11:8];  sub<=6'd32; end
+                            6'd32: begin sio_out<=del_addr[7:4];   sub<=6'd33; end
+                            6'd33: begin sio_out<=del_addr[3:0];   sub<=6'd34; end
+                            // ---- 6 DUMMY CLOCKS ----
+                            6'd34: begin sio_oe<=4'd0; sub<=6'd35; end
+                            6'd35: sub<=6'd36;
+                            6'd36: sub<=6'd37;
+                            6'd37: sub<=6'd38;
+                            6'd38: sub<=6'd39;
+                            // rd_wait_trim extra-margin cycles (see port comment): 0 = unchanged.
+                            6'd39: begin
+                                if (rd_wait_trim == 4'd0) sub <= 6'd40;
+                                else begin rd_extra_cnt <= rd_wait_trim; sub <= 6'd63; end
+                            end
+                            6'd63: begin
+                                if (rd_extra_cnt <= 4'd1) sub <= 6'd40;
+                                else rd_extra_cnt <= rd_extra_cnt - 4'd1;
+                            end
+                            // ---- DEL READ DATA: 2 bytes = 4 nibbles ----
+                            // Falling-edge pad samples are consumed one state
+                            // later than the legacy raw-pad captures.
+                            6'd40: sub<=6'd41;
+                            6'd41: sub<=6'd42;
+                            6'd42: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd43; end
+                            6'd43: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd44; end
+                            6'd44: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd45; end
+                            // ---- DEL READ DONE: latch del, then CE# high ----
+                            // Open Risks #72 (2026-09-14): split from one
+                            // combined state (zero hold-margin cycles between
+                            // the last nibble capture and CE# deassert) into
+                            // two, matching the write burst's own sub23/sub24
+                            // separation -- see the identical split on the
+                            // debug-read burst above for the full rationale.
+                            6'd45: begin
+                                del_i0    <= $signed(rd_data[11:4]);
+                                del_q0    <= $signed({rd_data[3:0],sio_in});
+                                sub       <= 6'd46;
+                            end
+                            6'd46: begin
+                                ce_n      <= 1'b1;
+                                sio_oe    <= 4'd0;
+                                del_valid <= del_rdy;
+                                qpi_busy  <= 1'b0;
+                                sub       <= 6'd0;
+                            end
+                            default: sub <= 6'd0;
+                            endcase
+                        end
+                    end
+                end
+
+                // ------------------------------------------------------------
+                // S_REPLAY — interleaved write (live) + read (from buf_base).
+                // Sub 0..25:  QPI write 8 bytes at wr_ptr (including the
+                //              CE#-low, SCK-quiet final-nibble guard cycle)
+                // Sub 26..57: QPI read 8 bytes from rd_ptr → rpl_*
+                // packet_end → back to S_WRITE. It is the ONLY exit needed:
+                // sc_lock is level-held until sc_clr (= packet_end), so a new
+                // packet cannot re-lock while a replay is in flight — every
+                // acquisition passes through packet_end first (verified
+                // 2026-07-12, Open Risks #25).
+                // ------------------------------------------------------------
+                S_REPLAY: begin
+                    if (packet_end) begin
+                        buf_base_valid  <= 1'b0;
+                        buf_active      <= 1'b0;
+                        bufbase_pending <= 1'b0;  // defensive: bufbase_pending
+                                                   // is only driven in S_WRITE
+                                                   // and should already be 0
+                                                   // here, but clear it too so
+                                                   // the buf_active invariant
+                                                   // can't be left stale by a
+                                                   // late S_WRITE->S_REPLAY
+                                                   // transition
+                        replay_active   <= 1'b0;
+                        qpi_busy        <= 1'b0;
+                        sub            <= 6'd0;
+                        ce_n           <= 1'b1;
+                        sio_oe         <= 4'd0;
+                        state          <= S_WRITE;
+                    end else if (!qpi_busy) begin
+                        ce_n   <= 1'b1;
+                        sio_oe <= 4'd0;
+                        // !qspi_owner gate added 2026-07-06 (TRPR-PSR-010/011):
+                        // S_WRITE's launch had it, this one didn't — an owner
+                        // request mid-REPLAY never suspended the replay bursts.
+                        if (iq_valid && psram_en && !qspi_owner) begin
+                            wr_data  <= {iq_i0, iq_q0, iq_i1, iq_q1,
+                                         iq_i2, iq_q2, iq_i3, iq_q3};
+                            qpi_busy <= 1'b1;
+                            sub      <= 6'd0;
+                        end
+                    end else if (qpi_step) begin
+                        case (sub)
+                            // ---- QPI WRITE: CMD 0x02 ----
+                            6'd0:  begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'h0; sub<=6'd1; end
+                            6'd1:  begin sio_out<=4'h2; sub<=6'd2; end
+                            // ---- WRITE ADDR ----
+                            6'd2:  begin sio_out<=cur_wr[22:20]; sub<=6'd3; end
+                            6'd3:  begin sio_out<=cur_wr[19:16]; sub<=6'd4; end
+                            6'd4:  begin sio_out<=cur_wr[15:12]; sub<=6'd5; end
+                            6'd5:  begin sio_out<=cur_wr[11:8];  sub<=6'd6; end
+                            6'd6:  begin sio_out<=cur_wr[7:4];   sub<=6'd7; end
+                            6'd7:  begin sio_out<=cur_wr[3:0];   sub<=6'd8; end
+                            // ---- WRITE DATA (8 bytes = 16 nibbles) ----
+                            6'd8:  begin sio_out<=wr_data[63:60]; sub<=6'd9;  end
+                            6'd9:  begin sio_out<=wr_data[59:56]; sub<=6'd10; end
+                            6'd10: begin sio_out<=wr_data[55:52]; sub<=6'd11; end
+                            6'd11: begin sio_out<=wr_data[51:48]; sub<=6'd12; end
+                            6'd12: begin sio_out<=wr_data[47:44]; sub<=6'd13; end
+                            6'd13: begin sio_out<=wr_data[43:40]; sub<=6'd14; end
+                            6'd14: begin sio_out<=wr_data[39:36]; sub<=6'd15; end
+                            6'd15: begin sio_out<=wr_data[35:32]; sub<=6'd16; end
+                            6'd16: begin sio_out<=wr_data[31:28]; sub<=6'd17; end
+                            6'd17: begin sio_out<=wr_data[27:24]; sub<=6'd18; end
+                            6'd18: begin sio_out<=wr_data[23:20]; sub<=6'd19; end
+                            6'd19: begin sio_out<=wr_data[19:16]; sub<=6'd20; end
+                            6'd20: begin sio_out<=wr_data[15:12]; sub<=6'd21; end
+                            6'd21: begin sio_out<=wr_data[11:8];  sub<=6'd22; end
+                            6'd22: begin sio_out<=wr_data[7:4];   sub<=6'd23; end
+                            6'd23: begin sio_out<=wr_data[3:0]; sub<=6'd24; sck_stop<=1'b1; end
+                            6'd24: begin sub<=6'd25; end // CE# low, SCK quiet
+                            6'd25: begin
+                                ce_n   <= 1'b1;
+                                sio_oe <= 4'd0;
+                                wr_ptr <= (wr_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
+                                sub    <= 6'd26;
+                            end
+                            // ---- QPI READ: CMD 0xEB ----
+                            6'd26: begin ce_n<=1'b0; sio_oe<=4'hF; sio_out<=4'hE; sub<=6'd27; end
+                            6'd27: begin sio_out<=4'hB; sub<=6'd28; end
+                            // ---- READ ADDR ----
+                            6'd28: begin sio_out<=cur_rd[22:20]; sub<=6'd29; end
+                            6'd29: begin sio_out<=cur_rd[19:16]; sub<=6'd30; end
+                            6'd30: begin sio_out<=cur_rd[15:12]; sub<=6'd31; end
+                            6'd31: begin sio_out<=cur_rd[11:8];  sub<=6'd32; end
+                            6'd32: begin sio_out<=cur_rd[7:4];   sub<=6'd33; end
+                            6'd33: begin sio_out<=cur_rd[3:0];   sub<=6'd34; end
+                            // ---- 6 DUMMY CLOCKS ----
+                            6'd34: begin sio_oe<=4'd0; sub<=6'd35; end
+                            6'd35: sub<=6'd36;
+                            6'd36: sub<=6'd37;
+                            6'd37: sub<=6'd38;
+                            6'd38: sub<=6'd39;
+                            // rd_wait_trim extra-margin cycles (see port comment): 0 = unchanged.
+                            6'd39: begin
+                                if (rd_wait_trim == 4'd0) sub <= 6'd40;
+                                else begin rd_extra_cnt <= rd_wait_trim; sub <= 6'd63; end
+                            end
+                            6'd63: begin
+                                if (rd_extra_cnt <= 4'd1) sub <= 6'd40;
+                                else rd_extra_cnt <= rd_extra_cnt - 4'd1;
+                            end
+                            // ---- READ DATA: 8 bytes = 16 nibbles ----
+                            6'd40: sub<=6'd41;
+                            6'd41: sub<=6'd42;
+                            6'd42: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd43; end
+                            6'd43: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd44; end
+                            6'd44: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd45; end
+                            6'd45: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd46; end
+                            6'd46: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd47; end
+                            6'd47: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd48; end
+                            6'd48: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd49; end
+                            6'd49: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd50; end
+                            6'd50: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd51; end
+                            6'd51: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd52; end
+                            6'd52: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd53; end
+                            6'd53: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd54; end
+                            6'd54: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd55; end
+                            6'd55: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd56; end
+                            // ---- READ DONE: latch replay IQ, then CE# high,
+                            //      advance rd_ptr ----
+                            // Open Risks #72 (2026-09-14): split from one
+                            // combined state (zero hold-margin cycles between
+                            // the last nibble capture and CE# deassert) into
+                            // two, matching the write burst's own sub23/sub24
+                            // separation -- see the identical split on the
+                            // debug-read burst above for the full rationale.
+                            6'd56: begin rd_data<={rd_data[59:0],sio_in}; sub<=6'd57; end
+                            6'd57: begin
+                                rpl_i0    <= $signed(rd_data[59:52]);
+                                rpl_q0    <= $signed(rd_data[51:44]);
+                                rpl_i1    <= $signed(rd_data[43:36]);
+                                rpl_q1    <= $signed(rd_data[35:28]);
+                                rpl_i2    <= $signed(rd_data[27:20]);
+                                rpl_q2    <= $signed(rd_data[19:12]);
+                                rpl_i3    <= $signed(rd_data[11:4]);
+                                rpl_q3    <= $signed({rd_data[3:0],sio_in});
+                                sub       <= 6'd58;
+                            end
+                            6'd58: begin
+                                ce_n      <= 1'b1;
+                                sio_oe    <= 4'd0;
+                                rd_ptr    <= (rd_ptr + {{(ABITS-4){1'b0}}, 4'd8}) & AMASK;
+                                rpl_valid <= 1'b1;
+                                qpi_busy  <= 1'b0;
+                                sub       <= 6'd0;
+                                if (rd_ptr == wr_ptr) overflow <= 1'b1;
+                            end
+                            default: sub <= 6'd0;
+                        endcase
+                    end
+                end
+
+                default: state <= S_UNINIT;
+            endcase
+        end
+    end
+
+`ifdef FORMAL
+    // Formal-only checker instantiation (see formal/psram_buf_ctrl_formal.sv).
+    // Dead code in every real build: read_verilog defines FORMAL only when
+    // passed `-formal` (yosys's sby-driven proof flow); LibreLane synthesis
+    // and cocotb (Icarus/Verilator) never pass that flag and get SYNTHESIS
+    // instead, so this instantiation never exists outside `sby`. Deliberately
+    // NOT a `bind` — this yosys version silently drops `bind` statements
+    // (confirmed 2026-07-05), which made every bind-based proof vacuous.
+    // Do NOT delete this block (commit 0c0171a did, silently making the sby
+    // proof prove nothing while still reporting PASS).
+    psram_buf_ctrl_formal u_psram_formal (
+        .clk_32m        (clk_32m),
+        .rst_n          (rst_n),
+        .psram_en       (psram_en),
+        .qspi_owner     (qspi_owner),
+        .packet_active  (packet_active),
+        .sf             (sf),
+        .sample_shift   (sample_shift),
+        .iq_valid       (iq_valid),
+        .clr_err        (clr_err),
+        .W_commit       (W_commit),
+        .packet_end     (packet_end),
+        .sc_lock        (sc_lock),
+        .sc_lock_prev   (sc_lock_prev),
+        .iq_sample_cnt  (iq_sample_cnt),
+        .timing_ref     (timing_ref),
+        .training_done  (training_done),
+        .state          (state),
+        .wr_ptr         (wr_ptr),
+        .rd_ptr         (rd_ptr),
+        .buf_base       (buf_base),
+        .buf_base_valid (buf_base_valid),
+        .bufbase_pending(bufbase_pending),
+        .wait_armed     (wait_armed),
+        .wait_cnt       (wait_cnt),
+        .buf_active     (buf_active),
+        .replay_active  (replay_active),
+        .qe_init_done   (qe_init_done),
+        .replay_missed  (replay_missed),
+        .w_commit_late  (w_commit_late),
+        .overflow       (overflow),
+        .sample_skip    (sample_skip),
+        .dbg_busy       (dbg_busy),
+        .dbg_fetch_busy (dbg_fetch_busy),
+        .dbg_pend       (dbg_pend),
+        .dbg_rd_trig    (dbg_rd_trig),
+        .qpi_busy       (qpi_busy),
+        .del_rdy        (del_rdy),
+        .del_valid      (del_valid),
+        .del_cnt        (del_cnt),
+        .del_n_r        (del_n_r),
+        .sio_oe         (sio_oe),
+        .sub            (sub),
+        .ce_n           (ce_n)
+    );
+`endif
+
+endmodule

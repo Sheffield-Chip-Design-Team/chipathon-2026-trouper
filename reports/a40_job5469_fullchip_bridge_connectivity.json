@@ -1,0 +1,392 @@
+{
+  "pass": true,
+  "checks": [
+    {
+      "name": "VDD1 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VDD1 baseline M5 ring",
+      "pass": true
+    },
+    {
+      "name": "VDD1 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD1 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD1 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD1 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD1 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD1 via4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD1 m5 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VDD2 baseline M5 ring",
+      "pass": true
+    },
+    {
+      "name": "VDD2 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 via4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD2 m5 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VDD3 baseline M5 ring",
+      "pass": true
+    },
+    {
+      "name": "VDD3 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 via4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD3 m5 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VDD4 baseline M5 ring",
+      "pass": true
+    },
+    {
+      "name": "VDD4 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 via4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD4 m5 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VDD5 baseline M5 ring",
+      "pass": true
+    },
+    {
+      "name": "VDD5 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 via4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD5 m5 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VDD6 baseline M5 ring",
+      "pass": true
+    },
+    {
+      "name": "VDD6 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 via4 stack",
+      "pass": true
+    },
+    {
+      "name": "VDD6 m5 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS1 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VSS1 baseline M4 ring",
+      "pass": true
+    },
+    {
+      "name": "VSS1 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS1 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS1 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS1 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS1 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS2 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VSS2 baseline M4 ring",
+      "pass": true
+    },
+    {
+      "name": "VSS2 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS2 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS2 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS2 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS2 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS3 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VSS3 baseline M4 ring",
+      "pass": true
+    },
+    {
+      "name": "VSS3 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS3 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS3 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS3 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS3 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS4 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VSS4 baseline M4 ring",
+      "pass": true
+    },
+    {
+      "name": "VSS4 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS4 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS4 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS4 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS4 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS5 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VSS5 baseline M4 ring",
+      "pass": true
+    },
+    {
+      "name": "VSS5 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS5 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS5 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS5 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS5 m4 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS6 baseline macro M2",
+      "pass": true
+    },
+    {
+      "name": "VSS6 baseline M4 ring",
+      "pass": true
+    },
+    {
+      "name": "VSS6 m2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS6 via2 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS6 m3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS6 via3 stack",
+      "pass": true
+    },
+    {
+      "name": "VSS6 m4 stack",
+      "pass": true
+    }
+  ],
+  "failures": [],
+  "baseline_gds": "/data/SSCS_2026_01_a40_job5469_replacement.gds",
+  "trial_gds": "/data/SSCS_2026_01_a40_job5469_with_bridges.gds"
+}

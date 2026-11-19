@@ -59,13 +59,15 @@ module tb_trouper_cocotb (
         .DBG0_IN        (1'b0)
     );
 
-    psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(3)) u_psram (
+    psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(5)) u_psram (
         .clk_32m (IQ_CLK),
         .rst_n   (RESETB),
         .ce_n    (psram_ce_n),
         .sio_out (psram_sio_out),
         .sio_oe  (psram_sio_oe),
-        .sio_in  (psram_sio_in)
+        .sio_in  (psram_sio_in),
+        .sck     (u_dut.psram_sck_en_q & IQ_CLK),
+        .sck_en  (u_dut.psram_sck_en_q)
     );
 
 endmodule

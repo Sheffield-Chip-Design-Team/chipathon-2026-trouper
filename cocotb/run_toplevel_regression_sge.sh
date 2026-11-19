@@ -8,6 +8,8 @@
 #              ($SHARED_DIR/lora-mimo-captures/captures, read-only in every
 #              job). Slower: capture_two_packet alone is ~50 min because the
 #              two bursts are ~4.07 M capture samples apart.
+#   padring -- trouper_top through the real A40_ACV_padring.v + gf180mcu_fd_io
+#              cell models; icarus (the IO primitives do not build on Verilator).
 #
 # Default SUITE_GROUPS=core keeps a plain submit at the old turnaround; SUITE_GROUPS=all
 # runs the capture suites too. Every suite lives in exactly one group and the
@@ -22,7 +24,7 @@
 #         /foss/designs/cocotb/run_toplevel_regression_sge.sh
 #
 # Environment:
-#   SUITE_GROUPS  core | capture | all | "core capture"  (default core)
+#   SUITE_GROUPS  core | capture | xfail | padring | all | "core padring"  (default core)
 #   SUITES        explicit space-separated list; overrides SUITE_GROUPS
 #   JOBS          suites run concurrently (default 1; each needs ~1 core)
 #   DESIGN_ROOT   repo mount            (default /foss/designs)
@@ -42,14 +44,15 @@ export DESIGN_ROOT SHARED_DIR="$SHARED" RUN_DIR="$RUN_OUT"
 SUITES_CORE="trouper_top replay_data replay_delay reg_bank spi_cdc remod_en \
 array_sync dbg_probe bringup_src \
 packet_ctrl_fsm spi_slave w_missed warmup_rearm bypass_e2e bypass_antenna \
-noise_trig w_shadow_lock sc_force_lock sc_ant_sel sc_dbg reg_reset_sweep \
+noise_trig w_shadow_lock sc_force_lock sc_ant_sel sc_dbg sc_timing_golden reg_reset_sweep \
 psram_ops psram_en_glitch qspi_owner dbg_write dbg_write_collision \
 dbg_amask_wrap host_only_e2e pad_tieoffs io_cell_controls irq_pins \
-dc_removal comb_remod_transfer remod_backoff remod_sqnr tacc_window_clamp \
+dc_removal comb_remod_transfer remod_backoff remod_sqnr remod_golden remod_flatness remod_stability remod_lora remod_amp_sweep tacc_window_clamp \
 mcp_cfg_hold_settle mcp_decimator_settle mcp_iq_samp_cnt_settle \
 mcp_mrc_settle mcp_pcfsm_settle mcp_psram_bshift_settle mcp_sc_settle \
 mcp_tacc_settle \
-w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow sc_acc_overflow"
+w_valid_split bypass_backoff noise_window_edge tacc_acc_overflow sc_acc_overflow \
+decimator_golden mrc_golden tacc_golden"
 
 SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow mrc_absent_branch trouper_capture"
 
@@ -61,6 +64,11 @@ SUITES_CAPTURE="capture_two_packet weight_gen_spi_flow mrc_absent_branch trouper
 # Still open: #64 (pkt_timeout_states) and #67 (dbg_qpi_busy) -- both spec/doc
 # changes, no RTL fix, so their benches stay here as expected-fail markers.
 SUITES_XFAIL="pkt_timeout_states dbg_qpi_busy"
+
+# Padring integration: trouper_top driven THROUGH the real A40_ACV_padring.v +
+# gf180mcu_fd_io cell models (icarus). Its own group so a plain SUITE_GROUPS=core
+# submit keeps its turnaround -- run with SUITE_GROUPS=padring (or =all).
+SUITES_PADRING="padring_integration"
 
 # Per-suite extra make arguments. trouper_capture is the only suite whose
 # in-test defaults do not land on a packet burst -- the window below was
@@ -93,8 +101,9 @@ else
         core)    SELECTED="$SELECTED $SUITES_CORE" ;;
         capture) SELECTED="$SELECTED $SUITES_CAPTURE" ;;
         xfail)   SELECTED="$SELECTED $SUITES_XFAIL" ;;
-        all)     SELECTED="$SELECTED $SUITES_CORE $SUITES_CAPTURE" ;;
-        *) echo "unknown group '$g' (want: core, capture, xfail, all)"; exit 2 ;;
+        padring) SELECTED="$SELECTED $SUITES_PADRING" ;;
+        all)     SELECTED="$SELECTED $SUITES_CORE $SUITES_CAPTURE $SUITES_PADRING" ;;
+        *) echo "unknown group '$g' (want: core, capture, xfail, padring, all)"; exit 2 ;;
         esac
     done
 fi
@@ -107,7 +116,7 @@ UNASSIGNED=""
 for mk in "$DESIGN_ROOT"/cocotb/*/Makefile; do
     [ -e "$mk" ] || continue
     d=$(basename "$(dirname "$mk")")
-    case " $SUITES_CORE $SUITES_CAPTURE $SUITES_XFAIL " in
+    case " $SUITES_CORE $SUITES_CAPTURE $SUITES_XFAIL $SUITES_PADRING " in
         *" $d "*) ;;
         *) UNASSIGNED="$UNASSIGNED $d" ;;
     esac

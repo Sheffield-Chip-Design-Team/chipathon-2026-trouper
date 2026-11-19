@@ -8,7 +8,9 @@
 
 `timescale 1ns/1ps
 `default_nettype none
-module tb_psram_model;
+module tb_psram_model #(
+    parameter integer QPI_CLK_DIV = 1
+);
     localparam SF           = 7;      // smallest LoRa SF
     localparam SAMPLE_SHIFT = 1;      // 250 kHz BW, 2x oversample
     localparam N  = (1 << (SF + SAMPLE_SHIFT));  // 256 sample delay
@@ -23,7 +25,7 @@ module tb_psram_model;
     reg iq_valid = 1'b0;
 
     // QPI pad nets between controller and model.
-    wire        sck, ce_n;
+    wire        sck, sck_en, ce_n;
     wire [3:0]  sio_out, sio_oe;
     wire [3:0]  sio_in;
 
@@ -32,7 +34,9 @@ module tb_psram_model;
     wire              del_valid;
 
     // ---- DUT: PSRAM buffer controller ----
-    psram_buf_ctrl u_buf (
+    psram_buf_ctrl #(
+        .QPI_CLK_DIV (QPI_CLK_DIV)
+    ) u_buf (
         .clk_32m (clk), .rst_n (rst_n),
         .psram_en (1'b1), .init_start (1'b1), .qspi_owner (1'b0),
         .sf (SF[3:0]), .sample_shift (SAMPLE_SHIFT[1:0]),
@@ -41,10 +45,10 @@ module tb_psram_model;
         .iq_q0 (iq_q0), .iq_q1 (8'sd0), .iq_q2 (8'sd0), .iq_q3 (8'sd0),
         .iq_valid (iq_valid),
         .sc_lock (1'b0), .timing_ref (32'd0), .iq_sample_cnt (32'd0),
-        .training_done (1'b0), .replay_delay_samples (16'd0),
+        .training_done (1'b0), .replay_delay_samples (16'd0), .replay_backdate_syms (2'd0),
         .W_commit (1'b0), .packet_end (1'b0), .packet_active (1'b0),
         .clr_err (1'b0),
-        .sck (sck), .sck_en_o (), .ce_n (ce_n), .sio_out (sio_out),
+        .sck (sck), .sck_en_o (sck_en), .ce_n (ce_n), .sio_out (sio_out),
         .sio_in (sio_in), .sio_oe (sio_oe),
         .cur_i0 (cur_i0), .cur_q0 (cur_q0),
         .del_i0 (del_i0), .del_q0 (del_q0), .del_valid (del_valid),
@@ -62,10 +66,10 @@ module tb_psram_model;
     );
 
     // ---- Model: BRAM-backed PSRAM ----
-    psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(3)) u_psram (
+    psram_model #(.ADDR_BITS(16), .RD_LAUNCH_SKIP(5)) u_psram (
         .clk_32m (clk), .rst_n (rst_n),
         .ce_n (ce_n), .sio_out (sio_out), .sio_oe (sio_oe),
-        .sio_in (sio_in)
+        .sio_in (sio_in), .sck (sck), .sck_en (sck_en)
     );
 
     // Reference model of the expected delay: ring of the last N branch-0 samples.

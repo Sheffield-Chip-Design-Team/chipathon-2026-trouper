@@ -13,7 +13,11 @@ class ADCModel:
 
 class SigmaDeltaRemodulator:
     """
-    Stage 8 — CIFF ΣΔ re-modulator reference. STALE as of 2026-09-04: this class's
+    Stage 8 — CIFF ΣΔ re-modulator reference. For the deployed RTL use
+    sim/models/sd_remod.py (bit-true, cycle-accurate: 2x interpolator + 4th-order
+    registered-quantizer loop; diffed against RTL by cocotb/remod_golden).
+
+    STALE as of 2026-09-04: this class's
     cascade propagates each integrator stage's just-updated value within the same
     sample (zero extra loop delay) -- not physically realizable in a real clocked
     circuit, where the quantizer decision must be registered (see sd_remod.v
