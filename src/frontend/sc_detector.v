@@ -634,7 +634,18 @@ module sc_detector (
                 sym_cnt            <= 15'd0;
                 tdm_busy           <= 1'b0;
                 tdm_wait           <= 2'd0;
-                iq_inc_pending     <= 1'b0;
+                // iq_inc_pending is deliberately NOT cleared. It holds the
+                // count of a sample that already arrived (its iq_valid_r
+                // landed mid-burst); it is sample_count state, not detection
+                // state. The TDM burst runs ~24 clocks from delayed_valid
+                // (~44 clocks after iq_valid), so it overlaps the next
+                // sample, and trouper_top's packet_done_pulse reaches sc_clr
+                // ~3 clocks after a sample -- inside that window on EVERY
+                // packet end. Clearing it here dropped one count per packet,
+                // drifting timing_ref one sample early per packet relative to
+                // iq_samp_cnt / training_acc (cocotb/sc_sample_count{,_top},
+                // SGE job 8667). With tdm_busy cleared above, the parked
+                // increment lands on the next cycle via the pending branch.
                 eval_busy          <= 1'b0;
                 mul_start          <= 1'b0;
                 metric_valid_pulse <= 1'b0;
