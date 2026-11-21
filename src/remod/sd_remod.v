@@ -46,7 +46,8 @@
 //    sample rate is 64x slower than clk_32m, so parallel I/Q hardware here
 //    was pure area waste. No inferred general multipliers.
 //
-// 2. sd_remod_core (below): the 4th-order CIFF loop filter, with its Q8
+// 2. sd_remod_core (below): the then-4th-order CIFF loop filter (now the
+//    3rd-order CIFF3 core in sd_remod_multiplierless.v, see above), with its Q8
 //    feed-forward multiply cone rewritten as hand-factored shift/add
 //    networks instead of a general Verilog `*` against the 10-bit
 //    coefficients -- confirmed by tracing a completed full-chip P&R run's

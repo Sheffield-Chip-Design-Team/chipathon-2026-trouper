@@ -98,9 +98,10 @@
 //                                    del-read, replay cur_rd read). Default
 //                                    0 = unchanged datasheet-exact timing.
 //
-// Interface must remain QPI (not SPI): at 250 kHz iq_valid rate (128-cycle period),
-// one period must fit both a write (25 cyc QPI) and an SC delay read (19 cyc QPI) = 44 cyc.
-// SPI equivalents are ~96 cyc write + ~104 cyc read = 200 cyc — 1.56× over budget.
+// Interface must remain QPI (not SPI): at the 500 kS/s iq_valid rate (64-cycle
+// period), one period must fit a write (26 cyc QPI) plus an SC delay read (20 cyc)
+// = 46 cyc, or plus a replay read (32 cyc) = 58 cyc (budget table above).
+// SPI equivalents are ~96 cyc write + ~104 cyc read = 200 cyc — ~3× over budget.
 // SIO[3:0] occupy 4 dedicated pads (TRPR-PHY-003), so QPI costs zero extra pads
 // vs SPI; there is no pin-count reason to downgrade.
 //

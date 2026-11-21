@@ -1,6 +1,6 @@
 // training_acc.v
 // All-pairs cross-correlator + diagonal autocorrelator, fully serialised through
-// one shared 8×8 pipelined multiplier.
+// one shared pair of 8×8 registered multipliers (mulA, mulB).
 //
 // Outputs:
 //   Zpair_kl (6 complex int32 pairs)         → firmware eigenvector path
@@ -11,23 +11,23 @@
 // noise) and Zdiag_k ≈ σ²_k · n_acc (pure noise power). Use with noise_mode_r
 // gating so normal sc_lock disarm is suppressed.
 //
-// TDM: 6 cross-pairs × 4 sub-steps + 4 diagonal pairs × 2 sub-steps = 32 active
-// steps per sample.  Budget: iq_valid every ≥128 cycles (CIC R=128) — 95 idle.
+// TDM: 6 cross-pairs × 2 sub-steps + 4 diagonal pairs × 1 sub-step = 16 steps
+// per sample, each paced to 3 clocks (TDM_WAIT, honest MCP=3) = 48 clocks plus
+// the 1-step accumulate drain, inside the 64-clock iq_valid period (R=64).
 //
 // Pair table:
 //   Cross-pairs (a < b): 0=(0,1) 1=(0,2) 2=(0,3) 3=(1,2) 4=(1,3) 5=(2,3)
 //   Diagonal pairs:      6=Z_00  7=Z_11  8=Z_22  9=Z_33
 //
-// Sub-steps for cross-pairs (a,b):
-//   sub=0: I_a×I_b → p_latch
-//   sub=1: Q_a×Q_b → Zpair_i[pair] += p_latch+mul
-//   sub=2: Q_a×I_b → p_latch
-//   sub=3: I_a×Q_b → Zpair_q[pair] += p_latch−mul  (pair_a sign convention)
+// Sub-steps for cross-pairs (a,b), both products formed in the same step:
+//   sub=0: mulA = I_a×I_b, mulB = Q_a×Q_b → Zpair_i[pair] += mulA + mulB
+//   sub=1: mulA = Q_a×I_b, mulB = I_a×Q_b → Zpair_q[pair] += mulA − mulB
 //
-// Sub-steps for diagonal pairs (k = pair − 6):
-//   sub=0: I_k×I_k → p_latch
-//   sub=1: Q_k×Q_k → Zdiag[k] += p_latch + mul
-//          at pair=9 (k=3), last_samp: commit Zdiag_3 final value, assert training_done
+// Diagonal pairs (k = pair − 6), one step:
+//   mulA = I_k×I_k, mulB = Q_k×Q_k → Zdiag[k] += mulA + mulB
+//   at pair=9 (k=3), last_samp: commit Zdiag_3 final value, assert training_done
+//
+// All accumulates saturate (Open Risk #63), see sadd32/uadd32.
 //
 // Area optimisation: working accumulators merged with output snapshot registers.
 // The _a registers have been removed; accumulation happens directly into the output
@@ -67,7 +67,7 @@ module training_acc (
     output reg         noise_abort,        // 1-cycle: an armed noise window was
                                            // cancelled because sc_lock acquired a
                                            // real packet mid-measurement
-    output reg  [17:0] n_acc,  // up to 131072 samples (SF12+shift=2 = 2^(12+2+3))
+    output reg  [17:0] n_acc,  // up to 15 × 2^(12+2) = 245760 samples (TACC_WINDOW_SYMS=15, SF12/BW125)
     output wire        training_armed
 );
 

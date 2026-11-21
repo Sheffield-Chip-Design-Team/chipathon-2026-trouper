@@ -568,12 +568,13 @@ module trouper_top #(
     wire [3:0]  rb_psram_rd_trim;   // 0x7A PSRAM_RD_TRIM: extra QPI-read wait cycles (2026-09-13)
 
     // =========================================================================
-    // Stage 1: ΣΔ Decimator — shared TDM8 CIC N=3, fixed R=128, no FIR.
-    // Boxcar-4 front end + shared CIC back end reduces area versus 4×
-    // sd_decimator_cic_only.  This is the experimental TDM path.
-    // Folded area-reduction: sd_decimator_poly = polyphase HB delay lines
-    // (#2) + 14-bit CIC (#3), bit-exact vs the shared HB reference prototype (SGE 2099,
-    // -13.8% decimator area). See planning/decimator-hb-area-reduction.md.
+    // Stage 1: ΣΔ Decimator — fixed R=64 half-band chain, ×4 branches:
+    // 32 MS/s 1-bit IQ → CIC-3 R=16 (14-bit) → HB1 ÷2 → HB2 ÷2 → int8 IQ at
+    // 500 kS/s (one iq_valid per 64 clocks).  sd_decimator_poly = polyphase HB
+    // delay lines + 14-bit CIC, bit-exact vs the shared HB reference prototype
+    // (SGE 2099, -13.8% decimator area); HB MACs are paced for an honest MCP=3.
+    // See planning/decimator-hb-area-reduction.md and
+    // planning/decimator-hb-migration-impact-plan.md.
     // =========================================================================
     wire signed [7:0] dec_i [0:3];
     wire signed [7:0] dec_q [0:3];
@@ -602,7 +603,8 @@ module trouper_top #(
     assign dec_q[3] = dec_pack_q[31:24];
 
     // =========================================================================
-    // Stage 2: DC Removal ×4 — simplified IIR, α=2^{-4}, 12-bit Q8.4 accumulator.
+    // Stage 2: DC Removal ×4 — leaky-integrator IIR, α=2^{-5}, 13-bit Q8.5
+    // accumulator, int8-saturated output (Open Risk #75).
     // SX1257 is zero-IF with no on-chip receiver DC cancellation; this block
     // removes LO self-mixing offset before the correlator chain.
     // =========================================================================
@@ -667,7 +669,7 @@ module trouper_top #(
         .sc_hits_req    (rb_sc_hits_req),
         // Re-arm the detector when the packet FSM returns to IDLE, and hold it
         // cleared for as long as firmware asserts RX_HOLD.  sc_clr is
-        // level-sensitive (sc_detector.v:492 holds sc_lock/hit_count/all
+        // level-sensitive (sc_detector.v's sc_clr block holds sc_lock/hit_count/all
         // accumulators cleared while high), so the hold makes "config
         // writable" and "detector able to lock" mutually exclusive -- the
         // interlock the scoped-MCP settling exceptions rely on (Open Risks
@@ -1215,7 +1217,7 @@ module trouper_top #(
         else        packet_done_pulse <= packet_active_r && !packet_active;
 
     // Edge-detect the level-driven IRQ sources.  reg_bank re-ORs irq_set into
-    // IRQ_STATUS every CE (reg_bank.v:141), so a held level would immediately
+    // IRQ_STATUS every CE (reg_bank.v irq_status block), so a held level would immediately
     // undo an IRQ_CLEAR write (TRPR-IRQ-002).  sc_lock and training_done are
     // levels held for the rest of the packet; convert them to 1-cycle
     // rising-edge pulses.  (W_missed_packet, packet_done and sigma2_valid are
