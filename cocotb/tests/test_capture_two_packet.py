@@ -37,6 +37,19 @@ from test_capture_playback import capture_driver, _env_int
 import iq_capture
 
 
+def _timing_ref_top(dut):
+    """timing_ref converted into the iq_samp_cnt domain (0-based sample index).
+
+    timing_ref is produced in u_sc.sample_count units; its consumers compare it
+    against iq_samp_cnt / u_tacc.sample_count. Converting through the live
+    offset makes a counter drift show up as timing error instead of hiding in
+    the detector's private units.
+    """
+    top = dut.u_dut
+    off = int(top.iq_samp_cnt.value) - int(top.u_sc.sample_count.value)
+    return int(top.u_sc.timing_ref.value) + off - 1
+
+
 @cocotb.test()
 async def test_capture_two_packet(dut):
     # `.strip() or default`, NOT .get(name, default): the Makefile exports
@@ -75,6 +88,13 @@ async def test_capture_two_packet(dut):
     M          = 1 << (sf + sample_shift)
     clk_per_iq = 64
     tag        = f"CAP2PKT SF{sf}/BW{bw_khz}"
+    # Burst onsets in CAPTURE samples (default: the Pre8 capture above). Used
+    # to check each packet's timing_ref against where the packet really is,
+    # in the iq_samp_cnt domain. Override with CAPTURE_BURSTS="a,b" for
+    # another capture; set it to "" to skip the timing check.
+    bursts_env = os.environ.get("CAPTURE_BURSTS")
+    bursts = ([564185, 4630030] if bursts_env is None else
+              [int(b) for b in bursts_env.split(",") if b.strip()])
 
     # -- prepare stimulus (numpy, before any RTL time advances) --------------
     dut._log.info(f"{tag}: loading {npy} [{start}:{start + nsamp}] "
@@ -152,6 +172,7 @@ async def test_capture_two_packet(dut):
                           f"(~{poll_i * sym_ns / 1e6:.2f} ms)")
             break
     assert lock1_ok, f"{tag}: PK1-1 first sc_lock never fired in {max_polls} polls"
+    tref1 = _timing_ref_top(dut)
 
     # -- ARM-1: internal sc_lock de-asserts (packet FSM returns to IDLE) --------
     # Poll the SC detector's internal sc_lock directly (same signal
@@ -181,6 +202,30 @@ async def test_capture_two_packet(dut):
             break
     assert lock2_ok, \
         f"{tag}: PK2-1 second sc_lock never fired (receiver stuck one-shot on real data?)"
+    tref2 = _timing_ref_top(dut)
+
+    # -- TREF: timing_ref lands on each real burst, and packet 2 is no worse ---
+    # Expected decimated index of a burst onset: (burst - start) capture
+    # samples scaled to 500 kS/s. The decimator / DC-removal group delay and
+    # sc_detector's known late bias (grid evaluation, ~+0.6 sym at high SNR)
+    # put the RTL a little after it, so the window is [-1, +3] symbols. The
+    # packet-2 vs packet-1 comparison is the real drift guard: both packets
+    # see the same detector, so a counter drift across the re-arm shows up
+    # as packet 2 being systematically earlier. One symbol of slack covers
+    # the grid-phase difference between the two bursts.
+    if len(bursts) >= 2:
+        sr_in = float(meta.get("sample_rate_sps") or 2_000_000)
+        exp = [(b - start) * 500e3 / sr_in for b in bursts[:2]]
+        err = [tref1 - exp[0], tref2 - exp[1]]
+        dut._log.info(f"{tag}: TREF timing_ref(iq domain)={tref1},{tref2} "
+                      f"expected~{exp[0]:.0f},{exp[1]:.0f} err={err[0]:+.0f},{err[1]:+.0f} "
+                      f"samples ({err[0] / M:+.2f},{err[1] / M:+.2f} sym)")
+        for k, e in enumerate(err):
+            assert -M <= e <= 3 * M, \
+                f"{tag}: packet {k + 1} timing_ref {e / M:+.2f} sym from the burst onset"
+        assert abs(err[1] - err[0]) <= M, \
+            (f"{tag}: packet 2 timing error {err[1] / M:+.2f} sym vs packet 1 "
+             f"{err[0] / M:+.2f} sym -- timing_ref drifted across the re-arm")
 
     dut._log.info(f"{tag}: PASS — PK1-1 + ARM-1 + PK2-1 all confirmed on real capture")
     drv.cancel()
