@@ -350,6 +350,51 @@ module tb_trouper_cocotb #(
         .sck_en  (u_dut.psram_sck_en_q)
     );
 
+    // ---- Sample-counter agreement check (every suite on this harness) ------
+    // trouper_top keeps three counters of the same dcr_valid samples:
+    // iq_samp_cnt (packet FSM, psram buf_base), u_tacc.sample_count (training
+    // window) and u_sc.sample_count (the domain timing_ref is produced in).
+    // timing_ref is only meaningful to its consumers if their pairwise
+    // offsets never change after reset. Two bugs broke exactly that and both
+    // passed every suite: the 2026-07 double count, and the sc_clr
+    // iq_inc_pending drop (one lost count per packet end, cocotb/
+    // sc_sample_count, job 8667). Checked 20 clocks after each dcr_valid,
+    // when every deferred increment for that sample has landed. Baseline is
+    // re-taken at every reset. +NO_CNT_CHECK disables it for a suite that
+    // deliberately pokes a counter.
+    reg        cnt_chk_dis;
+    initial    cnt_chk_dis = $test$plusargs("NO_CNT_CHECK");
+    reg [4:0]  cnt_chk_dly;
+    reg        cnt_chk_have_base;
+    reg [31:0] cnt_base_sc, cnt_base_tacc;
+    wire [31:0] cnt_off_sc   = u_dut.iq_samp_cnt - u_dut.u_sc.sample_count;
+    wire [31:0] cnt_off_tacc = u_dut.iq_samp_cnt - u_dut.u_tacc.sample_count;
+    always @(posedge IQ_CLK or negedge RESETB) begin
+        if (!RESETB) begin
+            cnt_chk_dly       <= 5'd0;
+            cnt_chk_have_base <= 1'b0;
+            cnt_base_sc       <= 32'd0;
+            cnt_base_tacc     <= 32'd0;
+        end else begin
+            if (u_dut.dcr_valid)
+                cnt_chk_dly <= 5'd20;
+            else if (cnt_chk_dly != 5'd0)
+                cnt_chk_dly <= cnt_chk_dly - 5'd1;
+            if (cnt_chk_dly == 5'd1 && !cnt_chk_dis) begin
+                if (!cnt_chk_have_base) begin
+                    cnt_base_sc       <= cnt_off_sc;
+                    cnt_base_tacc     <= cnt_off_tacc;
+                    cnt_chk_have_base <= 1'b1;
+                end else if (cnt_off_sc != cnt_base_sc || cnt_off_tacc != cnt_base_tacc) begin
+                    $display("SAMPLE-COUNTER DRIFT at iq_samp_cnt=%0d: iq-u_sc %0d (base %0d), iq-u_tacc %0d (base %0d)",
+                             u_dut.iq_samp_cnt, $signed(cnt_off_sc), $signed(cnt_base_sc),
+                             $signed(cnt_off_tacc), $signed(cnt_base_tacc));
+                    $fatal(1, "sample counters drifted apart (timing_ref domain broken)");
+                end
+            end
+        end
+    end
+
     // The GF180 bi_t cell leaves IE=OE=1 uncharacterized.  Keep this
     // top-level check in the functional PSRAM wrapper, independent of the
     // separate foundry-I/O-cell model smoke test.
